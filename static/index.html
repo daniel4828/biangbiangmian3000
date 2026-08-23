@@ -807,6 +807,7 @@
         <option value="briefing" class="setup-mode-zh-only">🗞️ News flow — summary with German context</option>
         <option value="paste" class="setup-mode-zh-only">📋 Paste content — summarize anything</option>
         <option value="knowledge">🧠 Knowledge — build cards from a saved source</option>
+        <option value="book">📖 Book — chapter review</option>
         <option value="vocab">🔤 Words only — no story, single vocab</option>
       </select>
     </label>
@@ -856,6 +857,15 @@
       <div id="setup-podcast-selected" style="display:none;margin-bottom:6px"></div>
       <div id="setup-podcast-episodes" style="max-height:220px;overflow-y:auto;border:1px solid var(--border,#ddd);border-radius:6px;padding:4px 0"></div>
       <div id="setup-podcast-loading" style="display:none;padding:12px;text-align:center;color:var(--muted,#888);font-size:13px">Loading items…</div>
+    </div>
+    <!-- Book chapter selector (shown only in book mode, issue #865): pick a book, then a chapter -->
+    <div id="setup-book-section" style="display:none">
+      <label class="edit-label" style="margin:0">Book</label>
+      <select class="edit-input" id="setup-book-select" style="margin-bottom:6px" onchange="_onSetupBookChange()"></select>
+      <label class="edit-label" style="margin:0">Chapter</label>
+      <select class="edit-input" id="setup-book-chapter-select" style="margin-bottom:6px"></select>
+      <div id="setup-book-hint" style="display:none;font-size:12px;color:var(--muted,#888);margin:2px 0 6px"></div>
+      <div id="setup-book-loading" style="display:none;padding:12px;text-align:center;color:var(--muted,#888);font-size:13px">Loading…</div>
     </div>
     <label class="edit-label" id="setup-topic-label">Topic <span style="font-weight:400;text-transform:none">(optional)</span>
       <input class="edit-input" id="setup-topic" type="text" placeholder="e.g. a day at a coffee shop" onkeydown="if(event.key==='Enter')confirmStorySetup()">

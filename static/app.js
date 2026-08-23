@@ -866,7 +866,7 @@ function _updateStoryInfoRow() {
     // right of the counter (issue #452). Plain stories keep the topic.
     // podcast kept alongside knowledge (issue #654 renamed the mode identifier
     // going forward, but historical mode='podcast' stories still display fine).
-    const modeName = { kahneman: 'Kahneman', news: 'News', briefing: 'News flow', paste: 'Paste', podcast: 'Podcast', knowledge: 'Knowledge' }[_activeStoryMode()];
+    const modeName = { kahneman: 'Kahneman', news: 'News', briefing: 'News flow', paste: 'Paste', podcast: 'Podcast', knowledge: 'Knowledge', book: 'Book' }[_activeStoryMode()];
     const parts = [pos];
     if (modeName) {
       const date = String(story.date || story.generated_at || '').slice(0, 10);
@@ -5609,10 +5609,10 @@ function _resumeBackgroundReview(ctx) {
   deckName   = ctx.deckName;
   rootDeckId = ctx.rootDeckId;
   quickMode  = false;
-  _doStartReview(ctx.topic, ctx.maxHsk, ctx.model, ctx.grammarFocus, ctx.grammarPct, ctx.mode, ctx.chapterIds, null, ctx.episodeIds);
+  _doStartReview(ctx.topic, ctx.maxHsk, ctx.model, ctx.grammarFocus, ctx.grammarPct, ctx.mode, ctx.chapterIds, null, ctx.episodeIds, ctx.bookChapterId);
 }
 
-async function _doStartReview(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null) {
+async function _doStartReview(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null, bookChapterId = null) {
   if (quickMode) {
     setLoading('Loading audio…', true);
     try {
@@ -5642,19 +5642,19 @@ async function _doStartReview(topic, maxHsk, model, grammarFocus, grammarPct, mo
     const resumeCtx = {
       key: `${storyDeckId}/${storyCategory}`,
       deckId, category, deckName, rootDeckId, storyDeckId, storyCategory,
-      topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds,
+      topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId,
     };
     _bgLeaveRequested = false;
     _bgActiveResume = resumeCtx;
     _showLoadingBgButton();
 
-    const storyUrl = `/api/story/${storyDeckId}/${storyCategory}` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds);
+    const storyUrl = `/api/story/${storyDeckId}/${storyCategory}` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId);
     const bgUrl = storyUrl + (storyUrl.includes('?') ? '&' : '?') + 'background=true';
     let todayData, storyData;
     try {
       todayData = await api('GET', `/api/today/${deckId}/${category}${_langQP('?')}`);
       storyData = await _fetchStoryOrNewsRegen(storyDeckId, storyCategory, topic, maxHsk, model,
-        grammarFocus, grammarPct, mode, chapterIds, articles, bgUrl, episodeIds);
+        grammarFocus, grammarPct, mode, chapterIds, articles, bgUrl, episodeIds, bookChapterId);
     } catch (e) {
       await _startQuickFallback(e.message);
       return;
@@ -5732,10 +5732,10 @@ async function _startQuickFallback(reason) {
 // a session); news mode auto-fetches today's news server-side (issue #387).
 async function _fetchStoryOrNewsRegen(storyDeckId, storyCategory, topic, maxHsk, model,
                                       grammarFocus, grammarPct, mode, chapterIds, articles, bgUrl,
-                                      episodeIds) {
+                                      episodeIds, bookChapterId) {
   if (mode === 'paste' && articles && articles.length) {
     const url = `/api/story/${storyDeckId}/${storyCategory}/regenerate`
-      + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds);
+      + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId);
     return api('POST', url, { articles });
   }
   return _pollBackgroundStory(bgUrl);
@@ -5745,7 +5745,7 @@ async function _fetchStoryOrNewsRegen(storyDeckId, storyCategory, topic, maxHsk,
 // previously a single episodeId / `episode_id` param). Backend accepts the new
 // comma-joined `episode_ids` and still accepts the old singular `episode_id`,
 // but the frontend only ever sends the former now.
-function _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds) {
+function _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId) {
   const p = new URLSearchParams();
   if (topic)                              p.set('topic', topic);
   if (maxHsk !== 3)                       p.set('max_hsk', maxHsk);
@@ -5755,6 +5755,7 @@ function _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chap
   if (mode && mode !== 'story')           p.set('mode', mode);
   if (chapterIds && chapterIds.length)    p.set('chapter_ids', chapterIds.join(','));
   if (episodeIds && episodeIds.length)    p.set('episode_ids', episodeIds.join(','));
+  if (bookChapterId)                      p.set('book_chapter_id', bookChapterId);
   // Words per AI call (issue #563 podcast-only, #574 all modes) — persisted
   // per mode in localStorage (like setupModel) rather than yet another
   // positional parameter through every call chain. Unset = mode default.
@@ -5806,7 +5807,7 @@ async function startReviewMixed(id, name, noStory = false, quick = false) {
   }
 }
 
-async function _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', noStory = false, chapterIds = null, articles = null, episodeIds = null) {
+async function _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', noStory = false, chapterIds = null, articles = null, episodeIds = null, bookChapterId = null) {
   setLoading(noStory ? 'Loading…' : 'Generating stories…', !noStory);
   if (!noStory) {
     setLoadingStep(10, null, 'Sending request to AI…');
@@ -5827,8 +5828,8 @@ async function _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPc
       // Load a single unified story covering all categories (1 AI call instead of 3)
       try {
         story = (mode === 'paste' && articles && articles.length)
-          ? await api('POST', `/api/story/${rootDeckId}/unified/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds), { articles })
-          : await api('GET', `/api/story/${rootDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds));
+          ? await api('POST', `/api/story/${rootDeckId}/unified/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles })
+          : await api('GET', `/api/story/${rootDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId));
       } catch (e) {
         await _startQuickFallback(e.message);
         return;
@@ -5908,7 +5909,7 @@ async function startReviewUnfinished() {
   }
 }
 
-async function _doStartReviewUnfinished(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null) {
+async function _doStartReviewUnfinished(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null, bookChapterId = null) {
   unfinishedMode = true;
   setLoading('Loading cards…');
   // In "existing" story mode, never trigger generation — fetch cached stories only.
@@ -5929,9 +5930,9 @@ async function _doStartReviewUnfinished(topic, maxHsk, model, grammarFocus, gram
     try {
       if (!noGen && mode === 'paste' && articles && articles.length) {
         story = await api('POST', `/api/story/${firstDeckId}/unified/regenerate`
-          + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds), { articles });
+          + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles });
       } else {
-        let url = `/api/story/${firstDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds);
+        let url = `/api/story/${firstDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId);
         if (noGen) url += (url.includes('?') ? '&' : '?') + 'no_generate=true';
         story = await api('GET', url);
       }
@@ -8737,9 +8738,11 @@ function updateSetupMode() {
   const newsSection = document.getElementById('setup-news-section');
   const pasteSection = document.getElementById('setup-paste-section');
   const podcastSection = document.getElementById('setup-podcast-section');
+  const bookSection = document.getElementById('setup-book-section');
   newsSection.style.display = 'none';
   pasteSection.style.display = 'none';
   if (podcastSection) podcastSection.style.display = 'none';
+  if (bookSection) bookSection.style.display = 'none';
   _autoSwitchModelForMode(mode);
 
   // Words-only mode (issue #547): no story is generated, so the story-only
@@ -8808,6 +8811,12 @@ function updateSetupMode() {
     if (podcastSection) podcastSection.style.display = 'block';
     btn.textContent = 'Generate from source';
     _loadPodcastEpisodesForSetup();
+  } else if (mode === 'book') {
+    topicLabel.style.display = 'none';
+    kahnemanSection.style.display = 'none';
+    if (bookSection) bookSection.style.display = 'block';
+    btn.textContent = 'Generate from chapter';
+    _loadBooksForSetup();
   } else if (mode === 'vocab') {
     topicLabel.style.display = 'none';
     kahnemanSection.style.display = 'none';
@@ -8836,7 +8845,7 @@ let _modelBeforeNewsMode = null;
 // first-time default, then remembers whatever the user picked last. Since
 // #640 that default is DeepSeek (like kahneman) rather than gpt-5-mini — must
 // stay in sync with ai.DEFAULT_MODEL, which is the backend-side default.
-const MODE_MODEL_DEFAULTS = { knowledge: 'deepseek-v4-flash' };
+const MODE_MODEL_DEFAULTS = { knowledge: 'deepseek-v4-flash', book: 'deepseek-v4-flash' };
 let _modelSelMode = 'story';   // mode the model dropdown's current value belongs to
 
 function _autoSwitchModelForMode(mode) {
@@ -9093,6 +9102,22 @@ function _renderNewsBackSource(s) {
   if (ctx && url) {
     const c = el.querySelector('.news-back-context');
     if (c) c.onclick = () => window.open(url, '_blank', 'noopener');
+  }
+  // Book mode's clickable source title (issue #865): the same news-back-source
+  // slot knowledge mode uses, but a book chapter isn't an external page to open
+  // in a new tab — clicking it pops the chapter's own summary modal (#864's
+  // kahneman-style concept + summary), which is what Daniel actually asked for
+  // ("quick summary of this chapter while reviewing").
+  const bookLink = el.querySelector('a.news-source-line');
+  if (bookLink) {
+    const m = /^\/#book-(\d+)-chapter-(\d+)$/.exec(bookLink.getAttribute('href') || '');
+    if (m) {
+      bookLink.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openBookChapterSummary(parseInt(m[1], 10), parseInt(m[2], 10));
+      };
+    }
   }
 }
 
@@ -9419,6 +9444,96 @@ function _getSelectedChapterIds() {
     .map(cb => parseInt(cb.value));
 }
 
+// ── Book chapter picker (issue #865): two dropdowns, book then chapter — a
+// reading list makes no sense here (unlike knowledge mode's multi-select),
+// Daniel's ask was "pick a book, pick a chapter". Only EPUBs are listed
+// (PDFs have no chapter structure, #864) and only chapters with
+// status==='summarized' are selectable (an unsummarized chapter has no
+// material to build sentences from).
+let _setupBooks = null;          // null = not loaded yet; [] once loaded (possibly empty)
+let _setupBookChaptersCache = {}; // book id -> chapters response ({chapters, available, reason})
+
+async function _loadBooksForSetup() {
+  const bookSel = document.getElementById('setup-book-select');
+  const loading = document.getElementById('setup-book-loading');
+  if (!bookSel) return;
+  if (_setupBooks === null) {
+    if (loading) loading.style.display = 'block';
+    try {
+      const books = await api('GET', '/api/books');
+      _setupBooks = (books || []).filter(b => b.format === 'epub');
+    } catch (e) {
+      _setupBooks = [];
+    }
+    if (loading) loading.style.display = 'none';
+  }
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (!_setupBooks.length) {
+    bookSel.innerHTML = '<option value="">No books uploaded yet</option>';
+    bookSel.disabled = true;
+    _renderSetupBookChapters([], null);
+    return;
+  }
+  bookSel.disabled = false;
+  bookSel.innerHTML = _setupBooks.map(b => `<option value="${b.id}">${esc(b.title)}</option>`).join('');
+  await _onSetupBookChange();
+}
+
+async function _onSetupBookChange() {
+  const bookSel = document.getElementById('setup-book-select');
+  const loading = document.getElementById('setup-book-loading');
+  if (!bookSel || !bookSel.value) { _renderSetupBookChapters([], null); return; }
+  const bookId = parseInt(bookSel.value, 10);
+  if (!_setupBookChaptersCache[bookId]) {
+    if (loading) loading.style.display = 'block';
+    try {
+      _setupBookChaptersCache[bookId] = await api('GET', `/api/books/${bookId}/chapters`);
+    } catch (e) {
+      _setupBookChaptersCache[bookId] = { chapters: [], available: false, reason: 'Failed to load chapters.' };
+    }
+    if (loading) loading.style.display = 'none';
+  }
+  _renderSetupBookChapters(_setupBookChaptersCache[bookId].chapters, _setupBookChaptersCache[bookId]);
+}
+
+function _renderSetupBookChapters(chapters, data) {
+  const chapterSel = document.getElementById('setup-book-chapter-select');
+  const hint = document.getElementById('setup-book-hint');
+  if (!chapterSel) return;
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Only chapters that already have a summary can seed a story (issue #865) —
+  // an unsummarized chapter has no material for the AI to work from.
+  const summarized = (chapters || []).filter(ch => ch.status === 'summarized');
+  if (!chapters || !chapters.length) {
+    chapterSel.innerHTML = '<option value="">—</option>';
+    chapterSel.disabled = true;
+    if (hint) {
+      hint.style.display = 'block';
+      hint.textContent = (data && data.reason) || 'Select a book first.';
+    }
+    return;
+  }
+  if (!summarized.length) {
+    chapterSel.innerHTML = '<option value="">—</option>';
+    chapterSel.disabled = true;
+    if (hint) {
+      hint.style.display = 'block';
+      hint.textContent = '这本书还没有生成过章节摘要';
+    }
+    return;
+  }
+  if (hint) hint.style.display = 'none';
+  chapterSel.disabled = false;
+  chapterSel.innerHTML = summarized.map(ch =>
+    `<option value="${ch.id}">第${ch.number}章 · ${esc(ch.title_zh || ch.ref_label || '')}</option>`).join('');
+}
+
+function _getSelectedBookChapterId() {
+  const chapterSel = document.getElementById('setup-book-chapter-select');
+  const v = chapterSel && chapterSel.value;
+  return v ? parseInt(v, 10) : null;
+}
+
 // Podcast/video/article item picker (issue #482, multi-select since #752).
 // Reads from _setupSelectedEpisodes (not the DOM) so a selection made under
 // a different Source type/feed — currently not rendered — still counts.
@@ -9439,6 +9554,7 @@ function confirmStorySetup() {
   const chapterIds  = mode === 'kahneman' ? _getSelectedChapterIds() : null;
   const articles    = mode === 'paste' ? _collectPastedContents() : null;
   const episodeIds  = mode === 'knowledge' ? _getSelectedEpisodeIds() : null;
+  const bookChapterId = mode === 'book' ? _getSelectedBookChapterId() : null;
   // News mode never sends articles: today's news is auto-fetched server-side
   // (issue #387). Paste mode requires at least one non-empty text (issue #396).
   if (mode === 'paste' && !articles.length) {
@@ -9448,6 +9564,11 @@ function confirmStorySetup() {
   // Knowledge mode requires picking at least one source item (issue #482/#654/#752).
   if (mode === 'knowledge' && !episodeIds.length) {
     showError('Knowledge mode needs a source — select at least one first.');
+    return;
+  }
+  // Book mode requires picking a chapter (issue #865).
+  if (mode === 'book' && !bookChapterId) {
+    showError('Book mode needs a chapter — select one first.');
     return;
   }
   // Words per AI call (issue #563 podcast-only, #574 all modes): empty input
@@ -9488,20 +9609,20 @@ function confirmStorySetup() {
     return;
   }
   if (_setupIsDeckListRegen) {
-    _doRegenStoryForDeckList(_deckListRegenId, topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds);
+    _doRegenStoryForDeckList(_deckListRegenId, topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds, bookChapterId);
   } else if (_setupIsRegen) {
-    _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds);
+    _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds, bookChapterId);
   } else if (_setupIsUnfinished) {
-    _doStartReviewUnfinished(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds);
+    _doStartReviewUnfinished(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds, bookChapterId);
   } else if (_setupIsMixed) {
     // noStory=false: confirmStorySetup always wants a fresh generation, unlike
     // the `?scope=` quick paths above that call this with noStory=true directly.
     // (Pre-#482 this call under-supplied args, so chapterIds silently landed in
     // the noStory slot — harmless for story/paste/news since chapterIds was null
     // there, but it would have broken kahneman+podcast in mixed review.)
-    _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPct, mode, false, chapterIds, articles, episodeIds);
+    _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPct, mode, false, chapterIds, articles, episodeIds, bookChapterId);
   } else {
-    _doStartReview(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds);
+    _doStartReview(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, articles, episodeIds, bookChapterId);
   }
 }
 
@@ -10022,7 +10143,7 @@ async function regenerateStory() {
   }
 }
 
-async function _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null) {
+async function _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null, bookChapterId = null) {
   setLoading('Regenerating story…', true);
   setLoadingStep(10, null, 'Sending request to AI…');
   _startFakeProgress(10, 55, 45000);
@@ -10042,7 +10163,7 @@ async function _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct
     _startStoryProgressPoll(storyDeckId, storyCategory);
     let storyData;
     try {
-      storyData = await api('POST', `/api/story/${storyDeckId}/${storyCategory}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds), { articles });
+      storyData = await api('POST', `/api/story/${storyDeckId}/${storyCategory}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles });
     } catch (e) {
       _stopFakeProgress(); _stopStoryProgressPoll();
       _clearRegenBgState();
@@ -10176,7 +10297,7 @@ async function regenerateStoryFromList(deckId, category = 'unified') {
 // Regenerate a deck's story in the BACKGROUND: instead of a blocking full-screen
 // loader, show a small persistent banner and let the user keep reviewing. When
 // the new story is ready the banner turns into a clickable "open for review".
-async function _doRegenStoryForDeckList(deckId, topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null) {
+async function _doRegenStoryForDeckList(deckId, topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null, bookChapterId = null) {
   // Read (not a parameter): confirmStorySetup calls this positionally the same
   // way it's called for every other setup-modal path, and regenerateStoryFromList
   // already stashed the category here when the modal was opened (#857).
@@ -10195,7 +10316,7 @@ async function _doRegenStoryForDeckList(deckId, topic, maxHsk, model, grammarFoc
   }
 
   try {
-    await api('POST', `/api/story/${deckId}/${category}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds), { articles });
+    await api('POST', `/api/story/${deckId}/${category}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles });
     // Warm the audio cache in the background so review starts fast; don't block
     // the "ready" banner on it.
     _preloadWithProgress(deckId, category, () => {}).catch(() => {});

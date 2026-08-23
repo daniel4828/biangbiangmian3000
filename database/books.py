@@ -203,7 +203,7 @@ def derive_chapters(book_id: int) -> list[dict]:
 
 
 _CHAPTER_LIST_COLUMNS = (
-    "number, ref_label, title_zh, title_en, concept_zh, "
+    "id, number, ref_label, title_zh, title_en, concept_zh, "
     "start_page, end_page, status, error"
 )
 
