@@ -5252,6 +5252,14 @@ function _collectCategoryOverrides() {
   return result;
 }
 
+// The three category switches of an aggregating deck shown under several
+// language tabs (the root 'All') belong to the *active language's* preset, not
+// to the deck's own — otherwise turning Creating on under Français turns it on
+// under 中文 too (#898). The backend does the routing; it just needs to know
+// which tab we are on.
+function _optLangQ() { return _langQ() ? `?${_langQ()}` : ''; }
+
+
 function renderPresetSelect(selectedId) {
   const sel = document.getElementById('opt-preset-select');
   sel.innerHTML = allPresets.map(p =>
@@ -5263,7 +5271,7 @@ async function openOptions(deckId) {
   optDeckId = deckId;
   try {
     const [preset, presets] = await Promise.all([
-      api('GET', `/api/decks/${deckId}/preset`),
+      api('GET', `/api/decks/${deckId}/preset${_optLangQ()}`),
       api('GET', '/api/presets'),
     ]);
     allPresets = presets;
@@ -5279,7 +5287,7 @@ async function switchPreset(presetId) {
   presetId = parseInt(presetId);
   try {
     await api('PUT', `/api/decks/${optDeckId}/preset/assign?preset_id=${presetId}`);
-    const preset = await api('GET', `/api/decks/${optDeckId}/preset`);
+    const preset = await api('GET', `/api/decks/${optDeckId}/preset${_optLangQ()}`);
     loadPresetFields(preset);
   } catch (e) {
     showError('Failed to switch preset: ' + e.message);
@@ -5373,7 +5381,7 @@ async function saveOptions() {
   };
   try {
     const [savedPreset] = await Promise.all([
-      api('PUT', `/api/decks/${optDeckId}/preset`, fields),
+      api('PUT', `/api/decks/${optDeckId}/preset${_optLangQ()}`, fields),
     ]);
     const presetId = currentPresetId;
     // Save category overrides

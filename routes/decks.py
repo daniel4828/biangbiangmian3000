@@ -54,6 +54,31 @@ def _filter_tree_by_lang(tree: list, lang: str) -> list:
     return result
 
 
+# The three category switches (issue #898). They live on a deck preset, but the
+# aggregating root 'All' is a *single* deck row that every language tab shows
+# (see _filter_tree_by_lang above), so its preset's switches would otherwise be
+# shared: turning Creating on under Français turned it on under 中文 too.
+# Under a language tab they are read from / written to that language's own
+# preset instead (#806 gave every non-zh tree one). Deliberately only these
+# three: they answer "which review modes does this language have", a view
+# question. The scheduling fields stay on the deck's own preset — see #629 in
+# CLAUDE.md for what editing the wrong preset costs.
+_CATEGORY_SWITCHES = ("reading_enabled", "listening_enabled", "creating_enabled")
+
+
+def _lang_switch_preset(deck_id: int, lang: str | None, create: bool = False) -> dict | None:
+    """Preset owning this deck's category switches while viewed under `lang`.
+
+    None means "the deck's own preset" — either no language tab is in play, or
+    the deck already belongs to that language.
+    """
+    if not lang:
+        return None
+    if database.get_deck_lang(deck_id) == lang:
+        return None
+    return database.get_lang_preset(lang, create=create)
+
+
 def _attach_counts(flat_decks: list) -> None:
     """Compute due counts for all decks using bulk queries (O(1) DB round-trips)."""
     all_counts, susp_flags = database.count_due_all_decks()
@@ -136,16 +161,21 @@ def get_decks(unfinished_scope: str = "unfinished", lang: str | None = None):
     # Attach preset-derived fields first — _attach_counts needs the
     # *_enabled flags to skip disabled category leaves in parent aggregation
     presets = {p["id"]: p for p in database.list_presets()}
+    lang_preset = database.get_lang_preset(lang) if lang else None
     locked = database.get_locked_deck_ids()
     for deck in flat:
         pid = deck.get("preset_id")
         p = presets.get(pid, {})
+        # #898: decks from another language tree than the tab being viewed —
+        # in practice the aggregating root 'All' — take their category
+        # switches from this language's preset (see _CATEGORY_SWITCHES).
+        sp = lang_preset if (lang_preset and (deck.get("lang") or "zh") != lang) else p
         deck["bury_mode"] = deck.get("bury_quick_mode", "all")
         deck["new_review_order_override"] = deck.get("new_review_order_override")
         deck["category_order"] = p.get("category_order", "listening,reading,creating")
-        deck["reading_enabled"] = 1 if p.get("reading_enabled") else 0
-        deck["listening_enabled"] = 1 if p.get("listening_enabled", 1) else 0
-        deck["creating_enabled"] = 1 if p.get("creating_enabled", 1) else 0
+        deck["reading_enabled"] = 1 if sp.get("reading_enabled") else 0
+        deck["listening_enabled"] = 1 if sp.get("listening_enabled", 1) else 0
+        deck["creating_enabled"] = 1 if sp.get("creating_enabled", 1) else 0
     _attach_counts(flat)
     for deck in flat:
         # Future-dated daily decks are locked until their date — flag for the UI.
@@ -295,18 +325,30 @@ def delete_preset(preset_id: int):
 
 
 @router.get("/api/decks/{deck_id}/preset")
-def get_deck_preset(deck_id: int, category: str | None = None):
+def get_deck_preset(deck_id: int, category: str | None = None, lang: str | None = None):
     preset = database.get_preset_for_deck(deck_id, category)
     preset["category_overrides"] = database.get_category_overrides(preset["id"])
+    switch_preset = _lang_switch_preset(deck_id, lang)
+    if switch_preset:
+        preset.update({k: switch_preset.get(k) for k in _CATEGORY_SWITCHES})
     return preset
 
 
 @router.put("/api/decks/{deck_id}/preset")
-def update_deck_preset(deck_id: int, fields: dict):
+def update_deck_preset(deck_id: int, fields: dict, lang: str | None = None):
     deck = database.get_deck(deck_id)
+    switch_preset = _lang_switch_preset(deck_id, lang, create=True)
+    if switch_preset:
+        switches = {k: fields.pop(k) for k in _CATEGORY_SWITCHES if k in fields}
+        if switches:
+            database.update_preset(switch_preset["id"], switches)
     database.update_preset(deck["preset_id"], fields)
     queue_mgr.invalidate()
-    return database.get_preset(deck["preset_id"])
+    result = database.get_preset(deck["preset_id"])
+    if switch_preset:
+        result.update({k: database.get_preset(switch_preset["id"]).get(k)
+                       for k in _CATEGORY_SWITCHES})
+    return result
 
 
 @router.put("/api/decks/{deck_id}/preset/assign")
