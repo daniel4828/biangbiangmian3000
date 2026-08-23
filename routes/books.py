@@ -22,6 +22,7 @@ from fastapi import APIRouter, Form, HTTPException, UploadFile
 
 import books
 from books.paginate import paginate as paginate_book
+from books.rendition import ChapterRenditionError, get_or_create_chapter_rendition
 from knowledge.rendition import RenditionError, render_html
 from languages import DEFAULT_LANG, is_valid_lang
 from routes.utils import ai_disabled
@@ -258,15 +259,44 @@ _summarize_running: set[tuple[int, int]] = set()
 _summarize_lock = threading.Lock()
 
 
+def _localize_chapter_row(chapter: dict, lang: str) -> dict:
+    """Return `chapter` (a list_chapters() row) with title_zh/concept_zh
+    replaced by their `lang` translation — field names stay the same so the
+    frontend doesn't need a language-specific rendering path (#894).
+
+    Only summarized chapters have anything to translate. A translation
+    failure must not take down the whole list: the row keeps its Chinese
+    fields and gets a `rendition_error` the frontend can show inline."""
+    if chapter.get("status") != "summarized":
+        return chapter
+    out = dict(chapter)
+    try:
+        rendition = get_or_create_chapter_rendition(chapter, lang, fields="short")
+    except ChapterRenditionError as e:
+        out["rendition_error"] = str(e)
+        return out
+    if rendition["title"]:
+        out["title_zh"] = rendition["title"]
+    if rendition["concept"]:
+        out["concept_zh"] = rendition["concept"]
+    return out
+
+
 @router.get("/api/books/{book_id}/chapters")
-def get_book_chapters(book_id: int):
+def get_book_chapters(book_id: int, lang: str | None = None):
     """Table of contents, deriving it from book_pages on first call.
 
     available=False (with a human-readable reason) for PDFs — their
     ref_label is the real page number, not a chapter marker, so grouping it
     would yield one fake "chapter" per page — and for EPUBs with no
     detectable heading structure.
+
+    `lang` (#894): zh (default) reads title_zh/concept_zh untouched, exactly
+    as before. Any other language lazily translates and caches those two
+    short fields per chapter — the list view never touches summary_zh/
+    examples_zh, so it only ever pays for the cheap half of the translation.
     """
+    lang = _resolve_lang(lang)
     book = database.get_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -279,6 +309,8 @@ def get_book_chapters(book_id: int):
     if not chapters:
         return {"chapters": [], "available": False,
                 "reason": "这本书没有可识别的章节标题"}
+    if lang != DEFAULT_LANG:
+        chapters = [_localize_chapter_row(ch, lang) for ch in chapters]
     return {"chapters": chapters, "available": True, "reason": None}
 
 
@@ -332,14 +364,31 @@ def rescan_book_chapters(book_id: int):
 
 
 @router.get("/api/books/{book_id}/chapters/{number}")
-def get_book_chapter(book_id: int, number: int):
+def get_book_chapter(book_id: int, number: int, lang: str | None = None):
+    """One full chapter. `lang` (#894): zh (default) returns the _zh columns
+    untouched. Any other language lazily translates and caches all four
+    fields (title/concept/summary/examples); on failure the Chinese fields
+    are returned as-is plus a `rendition_error` explaining why."""
+    lang = _resolve_lang(lang)
     book = database.get_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     chapter = database.get_chapter(book_id, number)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    return chapter
+    if lang == DEFAULT_LANG or chapter.get("status") != "summarized":
+        return chapter
+    try:
+        rendition = get_or_create_chapter_rendition(chapter, lang, fields="full")
+    except ChapterRenditionError as e:
+        return {**chapter, "rendition_error": str(e)}
+    return {
+        **chapter,
+        "title_zh": rendition["title"] or chapter["title_zh"],
+        "concept_zh": rendition["concept"] or chapter["concept_zh"],
+        "summary_zh": rendition["summary"] or chapter["summary_zh"],
+        "examples_zh": rendition["examples"] or chapter["examples_zh"],
+    }
 
 
 @router.post("/api/books/{book_id}/chapters/{number}/summarize")
