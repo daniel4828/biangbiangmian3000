@@ -18,8 +18,10 @@ What is worth pinning down here:
 Each test gets an isolated temp DB by patching database.core.DB_PATH — never
 database.DB_PATH, which is only a wildcard-import copy (#615).
 """
+import json
 import os
 import sys
+import time
 import zipfile
 
 import pytest
@@ -27,6 +29,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import ai
 import books
 import database
 import knowledge.rendition
@@ -351,3 +354,201 @@ def test_pdf_paragraphs_rejoin_hard_wrapped_lines():
     text = "Dies ist eine sehr lan-\nge Zeile im Satz.\n\nZweiter Absatz."
     assert _paragraphs(text) == ["Dies ist eine sehr lange Zeile im Satz.",
                                  "Zweiter Absatz."]
+
+
+# --- chapters (#864) ---------------------------------------------------------
+
+def _make_book_with_chapters(tmp_path, char_budget=20):
+    """Two headed chapters, each split across a couple of pages by the small
+    char_budget, so derive_chapters has something real to group."""
+    path = tmp_path / "b.epub"
+    _write_epub(path, [
+        "<h1>Erstes Kapitel</h1><p>Ein Satz.</p><p>Noch ein Satz hier.</p>",
+        "<h1>Zweites Kapitel</h1><p>Dritter Satz.</p><p>Vierter Satz hier.</p>",
+    ])
+    return books.ingest_file(str(path), "b.epub", char_budget=char_budget)
+
+
+def test_derive_chapters_groups_consecutive_same_label(tmp_db, tmp_path):
+    book = _make_book_with_chapters(tmp_path)
+    bid = book["book_id"]
+    chapters = database.derive_chapters(bid)
+    assert [c["ref_label"] for c in chapters] == ["Erstes Kapitel", "Zweites Kapitel"]
+    assert [c["number"] for c in chapters] == [1, 2]
+    # Every page belongs to exactly one chapter, in order, covering the book.
+    assert chapters[0]["start_page"] == 1
+    assert chapters[1]["start_page"] == chapters[0]["end_page"] + 1
+    assert chapters[-1]["end_page"] == book["page_count"]
+
+    # Idempotent: calling again doesn't insert a second set of rows.
+    again = database.derive_chapters(bid)
+    assert again == chapters
+
+
+def test_chapters_endpoint_skips_derivation_entirely_for_pdf(tmp_db, tmp_path):
+    """A PDF's ref_label is a distinct real page number on every page —
+    grouping it would produce one fake chapter per page. The route must
+    never even call derive_chapters() for format='pdf', so book_chapters
+    stays empty rather than filling up with junk one-page "chapters"."""
+    book = _make_book(tmp_path)
+    conn = database.core.get_db()
+    conn.execute("UPDATE books SET format = 'pdf' WHERE id = ?", (book["book_id"],))
+    conn.execute("UPDATE book_pages SET ref_label = 'p. ' || page_no WHERE book_id = ?",
+                (book["book_id"],))
+    conn.commit()
+    conn.close()
+    resp = client.get(f"/api/books/{book['book_id']}/chapters")
+    assert resp.json()["available"] is False
+    assert database.list_chapters(book["book_id"]) == []
+
+
+def test_derive_chapters_returns_empty_when_all_labels_are_null(tmp_db, tmp_path):
+    book = _make_book(tmp_path)  # no <h1>, so ref_label is NULL throughout
+    assert database.derive_chapters(book["book_id"]) == []
+
+
+def test_chapters_endpoint_unavailable_for_pdf(tmp_db, tmp_path):
+    book = _make_book(tmp_path)
+    database.core.get_db()  # sanity: db reachable
+    conn = database.core.get_db()
+    conn.execute("UPDATE books SET format = 'pdf' WHERE id = ?", (book["book_id"],))
+    conn.commit()
+    conn.close()
+    resp = client.get(f"/api/books/{book['book_id']}/chapters")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["available"] is False
+    assert "EPUB" in body["reason"]
+    assert body["chapters"] == []
+
+
+def test_chapters_endpoint_missing_book_is_404(tmp_db):
+    assert client.get("/api/books/4242/chapters").status_code == 404
+
+
+def _fake_summary(**overrides):
+    result = {"title_zh": "第一章", "title_en": "Chapter One",
+              "concept_zh": "核心观点一句话。", "summary_zh": "详细摘要" * 20,
+              "examples_zh": ["原句一。", "原句二。"]}
+    result.update(overrides)
+    return result
+
+
+def test_summarize_chapter_success_writes_all_fields(tmp_db, tmp_path, monkeypatch):
+    import routes.books as book_routes
+
+    book = _make_book_with_chapters(tmp_path)
+    bid = book["book_id"]
+    database.derive_chapters(bid)
+
+    monkeypatch.setattr(book_routes.ai, "summarize_book_chapter",
+                        lambda text, **kw: _fake_summary())
+
+    resp = client.post(f"/api/books/{bid}/chapters/1/summarize")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "started"}
+
+    for _ in range(50):
+        chapter = database.get_chapter(bid, 1)
+        if chapter["status"] != "pending":
+            break
+        time.sleep(0.05)
+    assert chapter["status"] == "summarized"
+    assert chapter["title_zh"] == "第一章"
+    assert chapter["summary_zh"].startswith("详细摘要")
+    assert chapter["examples_zh"] == ["原句一。", "原句二。"]
+    assert chapter["summarized_at"] is not None
+
+    # The list view (no summary_zh/examples_zh) reflects the new status too.
+    listed = client.get(f"/api/books/{bid}/chapters").json()["chapters"]
+    assert listed[0]["status"] == "summarized"
+    assert listed[0]["title_zh"] == "第一章"
+
+
+def test_summarize_chapter_unparseable_reply_leaves_no_summary(tmp_db, tmp_path, monkeypatch):
+    """_call_api returning garbage must raise ValueError inside ai.py, which
+    the route turns into status='error' — and crucially must NOT leave a
+    half-written summary_zh behind."""
+    import routes.books as book_routes
+
+    book = _make_book_with_chapters(tmp_path)
+    bid = book["book_id"]
+    database.derive_chapters(bid)
+
+    monkeypatch.setattr("ai._call_api", lambda *a, **kw: "not json at all")
+    monkeypatch.setattr(book_routes.ai, "summarize_book_chapter", ai.summarize_book_chapter)
+
+    resp = client.post(f"/api/books/{bid}/chapters/1/summarize")
+    assert resp.status_code == 200
+
+    for _ in range(50):
+        chapter = database.get_chapter(bid, 1)
+        if chapter["status"] != "pending":
+            break
+        time.sleep(0.05)
+    assert chapter["status"] == "error"
+    assert chapter["summary_zh"] is None
+    assert chapter["error"]
+
+
+def test_summarize_chapter_missing_chapter_is_404(tmp_db, tmp_path):
+    book = _make_book_with_chapters(tmp_path)
+    resp = client.post(f"/api/books/{book['book_id']}/chapters/99/summarize")
+    assert resp.status_code == 404
+
+
+def test_summarize_chapter_rejects_concurrent_duplicate_submission(tmp_db, tmp_path, monkeypatch):
+    import threading as th
+
+    import routes.books as book_routes
+
+    book = _make_book_with_chapters(tmp_path)
+    bid = book["book_id"]
+    database.derive_chapters(bid)
+
+    release = th.Event()
+
+    def _slow_summary(text, **kw):
+        release.wait(timeout=2)
+        return _fake_summary()
+
+    monkeypatch.setattr(book_routes.ai, "summarize_book_chapter", _slow_summary)
+
+    first = client.post(f"/api/books/{bid}/chapters/1/summarize")
+    assert first.status_code == 200
+    second = client.post(f"/api/books/{bid}/chapters/1/summarize")
+    assert second.status_code == 409
+
+    release.set()
+    for _ in range(50):
+        if database.get_chapter(bid, 1)["status"] != "pending":
+            break
+        time.sleep(0.05)
+
+
+def test_ai_summarize_book_chapter_strips_html_and_parses(monkeypatch):
+    captured = {}
+
+    def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
+        captured["prompt"] = messages[0]["content"]
+        return json.dumps(_fake_summary())
+
+    monkeypatch.setattr(ai, "_call_api", _fake_call_api)
+    result = ai.summarize_book_chapter("<p>Hallo <b>Welt</b>.</p>", book_title="Testbuch",
+                                       chapter_label="Erstes Kapitel")
+    assert result["summary_zh"].startswith("详细摘要")
+    assert result["examples_zh"] == ["原句一。", "原句二。"]
+    assert "<p>" not in captured["prompt"]
+    assert "Hallo" in captured["prompt"] and "Welt" in captured["prompt"]
+
+
+def test_ai_summarize_book_chapter_raises_on_missing_summary_field(monkeypatch):
+    monkeypatch.setattr(ai, "_call_api",
+                        lambda *a, **kw: json.dumps({"title_zh": "x", "concept_zh": "y"}))
+    with pytest.raises(ValueError):
+        ai.summarize_book_chapter("<p>Text.</p>", book_title="T", chapter_label="Ch1")
+
+
+def test_ai_summarize_book_chapter_raises_on_empty_text():
+    with pytest.raises(ValueError):
+        ai.summarize_book_chapter("<p></p>", book_title="T", chapter_label="Ch1")

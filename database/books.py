@@ -148,3 +148,153 @@ def set_book_progress(book_id: int, lang: str, page_no: int) -> None:
     )
     conn.commit()
     conn.close()
+
+
+# ── Chapters (#864) ─────────────────────────────────────────────────────────
+# A book's table of contents is derived from book_pages.ref_label the first
+# time it's asked for, then cached in book_chapters — never re-derived, so a
+# chapter's start/end pages stay stable even if summaries are added later.
+
+def derive_chapters(book_id: int) -> list[dict]:
+    """Group this book's pages into chapters by consecutive ref_label and
+    store the grouping. Idempotent: if chapters already exist for this book,
+    they're returned as-is without touching book_pages again.
+
+    Returns [] (no rows inserted) when there's nothing to group into more
+    than one chapter — all-NULL ref_label (a PDF, or an EPUB with no
+    headings) or a single label spanning the whole book. Callers must not
+    treat an empty list as an error; it means "this book has no chapter
+    structure to show", which the route turns into available=False.
+    """
+    existing = list_chapters(book_id)
+    if existing:
+        return existing
+
+    conn = get_db()
+    pages = conn.execute(
+        "SELECT page_no, ref_label FROM book_pages WHERE book_id = ? ORDER BY page_no",
+        (book_id,),
+    ).fetchall()
+
+    groups: list[dict] = []
+    for row in pages:
+        label = row["ref_label"]
+        if groups and groups[-1]["ref_label"] == label:
+            groups[-1]["end_page"] = row["page_no"]
+        else:
+            groups.append({"ref_label": label, "start_page": row["page_no"],
+                           "end_page": row["page_no"]})
+
+    if len(groups) <= 1:
+        # Nothing to distinguish chapters by — a fabricated single chapter
+        # spanning the whole book would just be a worse page list.
+        conn.close()
+        return []
+
+    conn.executemany(
+        """INSERT INTO book_chapters (book_id, number, ref_label, start_page, end_page)
+           VALUES (?, ?, ?, ?, ?)""",
+        [(book_id, i, g["ref_label"], g["start_page"], g["end_page"])
+         for i, g in enumerate(groups, start=1)],
+    )
+    conn.commit()
+    conn.close()
+    return list_chapters(book_id)
+
+
+_CHAPTER_LIST_COLUMNS = (
+    "number, ref_label, title_zh, title_en, concept_zh, "
+    "start_page, end_page, status, error"
+)
+
+
+def list_chapters(book_id: int) -> list[dict]:
+    """Chapter list without the large text fields (summary_zh/examples_zh) —
+    the table-of-contents view doesn't need them, and a book with many
+    chapters shouldn't pull every summary just to render the list."""
+    conn = get_db()
+    rows = conn.execute(
+        f"SELECT {_CHAPTER_LIST_COLUMNS} FROM book_chapters "
+        "WHERE book_id = ? ORDER BY number",
+        (book_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_chapter(book_id: int, number: int) -> dict | None:
+    """One full chapter (including summary_zh/examples_zh), or None."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM book_chapters WHERE book_id = ? AND number = ?",
+        (book_id, number),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["examples_zh"] = json.loads(out["examples_zh"] or "[]")
+    except (ValueError, TypeError):
+        out["examples_zh"] = []
+    return out
+
+
+def get_chapter_by_id(chapter_id: int) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM book_chapters WHERE id = ?", (chapter_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["examples_zh"] = json.loads(out["examples_zh"] or "[]")
+    except (ValueError, TypeError):
+        out["examples_zh"] = []
+    return out
+
+
+def save_chapter_summary(book_id: int, number: int, *, title_zh: str, title_en: str,
+                         concept_zh: str, summary_zh: str, examples_zh: list) -> None:
+    conn = get_db()
+    conn.execute(
+        """UPDATE book_chapters SET
+               title_zh = ?, title_en = ?, concept_zh = ?, summary_zh = ?,
+               examples_zh = ?, status = 'summarized', error = NULL,
+               summarized_at = datetime('now','localtime')
+           WHERE book_id = ? AND number = ?""",
+        (title_zh, title_en, concept_zh, summary_zh,
+         json.dumps(examples_zh or [], ensure_ascii=False), book_id, number),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_chapter_error(book_id: int, number: int, error: str) -> None:
+    conn = get_db()
+    conn.execute(
+        "UPDATE book_chapters SET status = 'error', error = ? WHERE book_id = ? AND number = ?",
+        (error, book_id, number),
+    )
+    conn.commit()
+    conn.close()
+
+
+def chapter_source_text(book_id: int, number: int) -> str | None:
+    """The chapter's pages' source_text, concatenated in page order. None if
+    the chapter (or its pages) don't exist."""
+    conn = get_db()
+    chapter = conn.execute(
+        "SELECT start_page, end_page FROM book_chapters WHERE book_id = ? AND number = ?",
+        (book_id, number),
+    ).fetchone()
+    if not chapter:
+        conn.close()
+        return None
+    rows = conn.execute(
+        """SELECT source_text FROM book_pages
+           WHERE book_id = ? AND page_no BETWEEN ? AND ? ORDER BY page_no""",
+        (book_id, chapter["start_page"], chapter["end_page"]),
+    ).fetchall()
+    conn.close()
+    return "\n".join(r["source_text"] for r in rows)

@@ -840,3 +840,32 @@ CREATE TABLE IF NOT EXISTS book_progress (
 
 CREATE INDEX IF NOT EXISTS idx_book_pages_book ON book_pages(book_id, page_no);
 CREATE INDEX IF NOT EXISTS idx_book_renditions_lookup ON book_renditions(book_id, page_no, lang);
+
+-- Chapter table of contents + per-chapter Chinese summaries (#864), structured
+-- like data/kahneman_chapters.json so the same concept-card UI/prompting can
+-- read either source. Unlike book_pages (cut once at upload), chapters are
+-- *derived* lazily from book_pages.ref_label the first time they're asked
+-- for — an already-uploaded book doesn't need to be re-uploaded to gain a
+-- table of contents. EPUB only: PDF's ref_label is the real page number (a
+-- different string on every page), not a chapter marker, so grouping it
+-- would produce one "chapter" per page. See database/books.py.derive_chapters.
+CREATE TABLE IF NOT EXISTS book_chapters (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id       INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    number        INTEGER NOT NULL,        -- 1-based position in the book
+    ref_label     TEXT,                    -- book_pages.ref_label this chapter was grouped from
+    start_page    INTEGER NOT NULL,
+    end_page      INTEGER NOT NULL,
+    title_zh      TEXT,
+    title_en      TEXT,
+    concept_zh    TEXT,                    -- one-sentence core idea (<=60 chars)
+    summary_zh    TEXT,                    -- 300-500 char detailed Chinese summary
+    examples_zh   TEXT,                    -- JSON array of translated quote sentences
+    status        TEXT NOT NULL DEFAULT 'pending',  -- pending|summarized|error
+    error         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    summarized_at TEXT,
+    UNIQUE(book_id, number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_chapters_book ON book_chapters(book_id, number);

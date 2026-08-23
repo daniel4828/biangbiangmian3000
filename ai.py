@@ -3829,6 +3829,104 @@ def extract_article_metadata(text: str) -> dict:
     return out
 
 
+# The chapter's source_text is book_pages HTML (<p> paragraphs); the prompt
+# wants prose, and the tags would just eat into the character budget.
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+# ~40k German chars for a Kahneman-length chapter is normal; DeepSeek's
+# context handles far more, but there's no reason to pay for a whole book
+# if a chapter ever comes out unexpectedly huge.
+_CHAPTER_SOURCE_CHARS = 60000
+
+BOOK_CHAPTER_SUMMARY_PROMPT = """你在为一个中文学习者的读书笔记系统整理书籍章节摘要，
+结构必须和 Kahneman《思考，快与慢》的章节摘要完全一致。
+
+书名：{book_title}
+章节标记：{chapter_label}
+
+下面是这一章的原文（德语或英语）：
+---
+{text}
+---
+
+只返回一个 JSON 对象，不要 markdown 代码块，不要任何解释：
+{{"title_zh": "中文章节标题", "title_en": "英文章节标题（若原文本身是英文可直接照抄标题）",
+  "concept_zh": "一句话核心观点，不超过60个汉字",
+  "summary_zh": "300到500字的详细中文摘要，讲清本章的论点、举例和结论",
+  "examples_zh": ["从原文翻译的代表性句子1（不超过30个汉字）", "句子2", "句子3"]}}
+
+要求：
+- summary_zh 必须是连贯的一段中文，覆盖本章的核心论点、关键例子/实验、结论，不要分点罗列。
+- concept_zh 是全章浓缩成的一句话观点，不是标题，不超过60个汉字。
+- examples_zh 给 2 到 4 句，是从原文（德语/英语）翻译成中文的代表性句子或金句，每句不超过30个汉字，
+  不要逐字直译，要读起来像地道中文。
+- 全部输出用中文（title_en 除外）。"""
+
+
+def summarize_book_chapter(text: str, *, book_title: str, chapter_label: str,
+                           model: str | None = None) -> dict:
+    """One DeepSeek call (#864) to summarize a book chapter into the same
+    shape as data/kahneman_chapters.json: title_zh/title_en/concept_zh/
+    summary_zh/examples_zh.
+
+    Raises ValueError if the reply doesn't parse into that shape — routes/
+    books.py stores nothing and marks the chapter status='error' on failure,
+    same contract as dictionary_lookup(). A half-written chapter summary
+    (e.g. concept_zh but no summary_zh) would show up in the reader as a
+    a plausible-looking but broken concept card, which is worse than an
+    explicit error.
+    """
+    use_model = model or DEFAULT_MODEL
+    plain = _HTML_TAG_RE.sub(" ", text or "").strip()
+    if not plain:
+        raise ValueError("summarize_book_chapter: chapter has no source text")
+    sample = plain[:_CHAPTER_SOURCE_CHARS]
+
+    prompt = BOOK_CHAPTER_SUMMARY_PROMPT.format(
+        book_title=book_title, chapter_label=chapter_label or book_title, text=sample)
+
+    logger.info("[%s] summarize_book_chapter: %s / %s", use_model, book_title, chapter_label)
+    raw = _call_api(use_model, [{"role": "user", "content": prompt}], max_tokens=2000,
+                    purpose="book-chapter-summary", thinking=False)
+
+    stripped = _strip_code_fence(raw).strip()
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"summarize_book_chapter: could not parse AI response as JSON: {e}. "
+            f"Raw response (first 500 chars): {raw[:500]!r}"
+        )
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"summarize_book_chapter: expected a JSON object, got {type(data).__name__}. "
+            f"Raw response (first 500 chars): {raw[:500]!r}"
+        )
+
+    summary_zh = data.get("summary_zh")
+    concept_zh = data.get("concept_zh")
+    if not isinstance(summary_zh, str) or not summary_zh.strip():
+        raise ValueError(
+            f"summarize_book_chapter: missing non-empty 'summary_zh'. "
+            f"Raw response (first 500 chars): {raw[:500]!r}"
+        )
+    if not isinstance(concept_zh, str) or not concept_zh.strip():
+        raise ValueError(
+            f"summarize_book_chapter: missing non-empty 'concept_zh'. "
+            f"Raw response (first 500 chars): {raw[:500]!r}"
+        )
+
+    examples = data.get("examples_zh")
+    examples_zh = [e for e in examples if isinstance(e, str) and e.strip()] if isinstance(examples, list) else []
+
+    return {
+        "title_zh": (data.get("title_zh") or "").strip(),
+        "title_en": (data.get("title_en") or "").strip(),
+        "concept_zh": concept_zh.strip(),
+        "summary_zh": summary_zh.strip(),
+        "examples_zh": examples_zh,
+    }
+
+
 def translate_title(title: str) -> str | None:
     """One cheap DeepSeek call (issue #651) to translate a non-English episode
     title into English, stored in podcast_episodes.title_en — YouTube videos

@@ -497,7 +497,13 @@ main.browse-open {
   .play-icon-sm {
     font-size: 22px;
     padding: 8px 12px;
-    border-radius: 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  }
+  .play-icon-sm:active {
+    background: color-mix(in srgb, var(--primary) 30%, transparent);
   }
 }
 
@@ -5816,3 +5822,20 @@ table.fsrs-table td.ivl { font-weight: 700; }
   margin: 12px 0;
 }
 .book-reader-nav input[type="number"] { width: 4.5em; text-align: center; }
+
+/* Chapter table of contents (#864) */
+.book-chapter-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.book-chapter-row:last-child { border-bottom: none; }
+.book-chapter-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.book-chapter-number { font-weight: 600; opacity: 0.7; }
+.book-chapter-title { font-weight: 600; flex: 1 1 auto; }
+.book-chapter-concept { margin-top: 4px; }
+.book-chapter-error { margin-top: 4px; color: #dc2626; }

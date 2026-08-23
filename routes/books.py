@@ -16,12 +16,14 @@ import threading
 import time
 import uuid
 
+import ai
 import database
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 
 import books
 from knowledge.rendition import RenditionError, render_html
 from languages import DEFAULT_LANG, is_valid_lang
+from routes.utils import ai_disabled
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -211,6 +213,102 @@ def get_book_page(book_id: int, page_no: int, lang: str | None = None):
         raise HTTPException(status_code=502, detail=str(e))
     database.save_book_rendition(book_id, page_no, lang, text, new_words)
     return {**payload, "text": text, "new_words": new_words, "cached": False}
+
+
+# ── Chapters (#864) ──────────────────────────────────────────────────────────
+# One book chapter at a time, generated on demand (Daniel clicks a button —
+# nothing here runs automatically). Same "background thread + poll" shape as
+# upload, but there's no need for a job dict of its own: the chapter row
+# already carries status/error, so the poll just re-fetches the chapter list.
+_summarize_running: set[tuple[int, int]] = set()
+_summarize_lock = threading.Lock()
+
+
+@router.get("/api/books/{book_id}/chapters")
+def get_book_chapters(book_id: int):
+    """Table of contents, deriving it from book_pages on first call.
+
+    available=False (with a human-readable reason) for PDFs — their
+    ref_label is the real page number, not a chapter marker, so grouping it
+    would yield one fake "chapter" per page — and for EPUBs with no
+    detectable heading structure.
+    """
+    book = database.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if book["format"] != "epub":
+        return {"chapters": [], "available": False,
+                "reason": "PDF 没有章节信息，本功能目前只支持 EPUB"}
+
+    chapters = database.derive_chapters(book_id)
+    if not chapters:
+        return {"chapters": [], "available": False,
+                "reason": "这本书没有可识别的章节标题"}
+    return {"chapters": chapters, "available": True, "reason": None}
+
+
+@router.get("/api/books/{book_id}/chapters/{number}")
+def get_book_chapter(book_id: int, number: int):
+    book = database.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    chapter = database.get_chapter(book_id, number)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return chapter
+
+
+@router.post("/api/books/{book_id}/chapters/{number}/summarize")
+def summarize_book_chapter(book_id: int, number: int):
+    """Kick off DeepSeek summarization for one chapter in a background
+    thread; poll GET .../chapters or .../chapters/{number} for the result.
+
+    Repeat submissions while one is already running for this chapter get
+    409, not a second thread racing the first to write the same row.
+    """
+    if ai_disabled():
+        # Offline/hard-offline: edge cases aside, the call would just hang on
+        # a dead socket until it times out. Say so instead.
+        raise HTTPException(status_code=400, detail="AI is disabled (offline mode)")
+    book = database.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    chapter = database.get_chapter(book_id, number)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    key = (book_id, number)
+    with _summarize_lock:
+        if key in _summarize_running:
+            raise HTTPException(status_code=409, detail="This chapter is already being summarized")
+        _summarize_running.add(key)
+
+    def _run():
+        try:
+            text = database.chapter_source_text(book_id, number)
+            if not text or not text.strip():
+                database.set_chapter_error(book_id, number, "Chapter has no source text")
+                return
+            label = chapter.get("ref_label") or f"第{number}章"
+            result = ai.summarize_book_chapter(text, book_title=book["title"], chapter_label=label)
+            database.save_chapter_summary(
+                book_id, number,
+                title_zh=result["title_zh"], title_en=result["title_en"],
+                concept_zh=result["concept_zh"], summary_zh=result["summary_zh"],
+                examples_zh=result["examples_zh"],
+            )
+        except Exception as e:
+            logger.warning("books: chapter summary failed (book=%s, ch=%s) — %s", book_id, number, e)
+            database.set_chapter_error(book_id, number, str(e))
+        finally:
+            # A leaked entry here means this chapter can never be
+            # (re)generated again for the rest of the process's life.
+            with _summarize_lock:
+                _summarize_running.discard(key)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started"}
 
 
 @router.post("/api/books/{book_id}/progress")
