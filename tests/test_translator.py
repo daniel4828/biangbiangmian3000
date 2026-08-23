@@ -93,3 +93,73 @@ def test_over_long_single_text_still_returned(monkeypatch):
     assert len(out) == 2
     assert out[0] == huge  # 翻译失败 → 原样返回
     assert out[1] == "de:短句"
+
+
+# ── HTTP transport (#890) ────────────────────────────────────────────────────
+# Regression: deep-translator sent requests' default User-Agent, Google
+# answered with a JS-only page carrying no div.result-container, and every
+# translation in the app raised TranslationNotFound. translate_zh's
+# "return the original on failure" contract hid it everywhere except the book
+# reader, which 502s. These tests pin the parsing and the two error contracts;
+# the User-Agent itself is asserted on because it is the whole fix.
+import io
+
+import pytest
+
+
+_PAGE = ('<!DOCTYPE html><html><body><div class="header">x</div>'
+         '<div class="result-container">Bonjour le monde.\nMerci.</div>'
+         '<div class="footer">y</div></body></html>')
+_JS_ONLY_PAGE = '<!DOCTYPE html><html><body><div class="header">x</div></body></html>'
+
+
+def _fake_urlopen(body: str, seen: dict):
+    def _open(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["ua"] = req.get_header("User-agent")
+        seen["timeout"] = timeout
+        return io.BytesIO(body.encode("utf-8"))
+    return _open
+
+
+def _fresh(monkeypatch, body):
+    """A translator with an empty cache and a stubbed HTTP layer."""
+    seen: dict = {}
+    monkeypatch.setattr(translator, "_translators", {})
+    monkeypatch.setattr(translator.urllib.request, "urlopen", _fake_urlopen(body, seen))
+    return seen
+
+
+def test_translate_parses_result_container_and_keeps_line_count(monkeypatch):
+    seen = _fresh(monkeypatch, _PAGE)
+
+    out = translator.translate_strict("Hallo Welt.\nDanke.", target="fr", source="de")
+
+    assert out == "Bonjour le monde.\nMerci."
+    assert "sl=de" in seen["url"] and "tl=fr" in seen["url"]
+
+
+def test_request_sends_a_browser_user_agent(monkeypatch):
+    seen = _fresh(monkeypatch, _PAGE)
+
+    translator.translate_strict("Hallo", target="fr", source="de")
+
+    # python-requests/urllib defaults get a JS-only page back — see module docstring.
+    assert "Mozilla/" in seen["ua"]
+    assert "python" not in seen["ua"].lower()
+    assert seen["timeout"] == translator._REQUEST_TIMEOUT_SECONDS
+
+
+def test_missing_result_container_raises_for_strict(monkeypatch):
+    _fresh(monkeypatch, _JS_ONLY_PAGE)
+
+    with pytest.raises(Exception):
+        translator.translate_strict("Hallo", target="fr", source="de")
+
+
+def test_missing_result_container_returns_original_for_translate_zh(monkeypatch):
+    _fresh(monkeypatch, _JS_ONLY_PAGE)
+
+    # Deliberately lossy contract (see translate_zh's docstring): a missing
+    # gloss must not sink a whole story.
+    assert translator.translate_zh("Hallo", target="fr", source="de") == "Hallo"
