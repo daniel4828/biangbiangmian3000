@@ -149,3 +149,39 @@ def test_global_scope_excludes_story():
     scopes_block = _extract(r"const KEYMAP_SCOPES = \{.*?\n\};")
     global_line = _extract(r"global:\s*\[[^\]]*\]", scopes_block)
     assert "'story'" not in global_line
+
+
+# ── 录入 Shift+X 组合（议题 #885）─────────────────────────────────────────────
+
+def _settings_keydown_body():
+    """`_settingsKeydown()` 的函数体——快捷键重绑定时捕获下一次按键的地方。"""
+    return _extract(r"function _settingsKeydown\(e\) \{.*?\n\}")
+
+
+def test_capture_skips_lone_modifier_keydowns():
+    """按住 Shift 打 'W' 时，浏览器先发一次 {key:'Shift'} 的独立 keydown。
+
+    原来的录制器把它当成绑定收下并立刻结束，于是 Shift+X 这类组合根本绑不上
+    （#885）。修复是：纯修饰键的 keydown 直接返回，录制继续等真正的键。
+    """
+    body = _settings_keydown_body()
+    assert "KEYMAP_MODIFIER_KEYS.includes(e.key)" in body, (
+        "_settingsKeydown 不再跳过纯修饰键的 keydown —— Shift+X 又绑不上了（#885 回归）"
+    )
+    # 必须是「原样返回」，不能顺手清掉 _capturingAction —— 那等于取消录制。
+    skip_line = _extract(r"if \(KEYMAP_MODIFIER_KEYS\.includes\(e\.key\)\)[^\n]*", body)
+    assert "_capturingAction" not in skip_line, (
+        "跳过修饰键时结束了录制，用户随后按的键就丢了"
+    )
+
+
+def test_modifier_key_list_covers_the_real_modifiers():
+    block = _extract(r"const KEYMAP_MODIFIER_KEYS = \[[^\]]*\];")
+    keys = set(re.findall(r"'([^']+)'", block))
+    assert {"Shift", "Control", "Alt", "Meta"} <= keys
+
+
+def test_modifier_check_comes_before_the_binding_is_stored():
+    """顺序很重要：跳过检查必须在任何写入 _keymap 之前。"""
+    body = _settings_keydown_body()
+    assert body.index("KEYMAP_MODIFIER_KEYS") < body.index("_keymap[id] = key")

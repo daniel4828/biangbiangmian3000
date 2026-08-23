@@ -260,6 +260,9 @@ const KEYMAP_ACTIONS = [
 // Keys that can never be reassigned to: rating keys, and the fixed
 // navigation/editing keys used throughout the app.
 const KEYMAP_RESERVED = ['1','2','3','4','Enter','Tab','Escape'];
+// Modifier keys fire a keydown of their own before the key they modify (#885);
+// the rebinding capture must skip those instead of storing them as the binding.
+const KEYMAP_MODIFIER_KEYS = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'AltGraph'];
 function _loadKeymap() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('reviewKeymap') || '{}'); } catch (e) {}
@@ -4562,6 +4565,11 @@ function _settingsKeydown(e) {
   if (!_capturingAction) return;
   e.preventDefault(); e.stopPropagation();
   const id = _capturingAction;
+  // A modifier pressed on its own fires its own keydown first (#885): holding
+  // Shift to type 'W' sends {key:'Shift'} before {key:'W'}. Taking that first
+  // event as the binding ended the capture before the real key ever arrived —
+  // Shift+X combos were simply unbindable. Ignore them and keep capturing.
+  if (KEYMAP_MODIFIER_KEYS.includes(e.key)) return;
   if (e.key === 'Escape') { _capturingAction = null; _settingsMsg = ''; renderSettings(); return; }
   if (e.key === 'Backspace' || e.key === 'Delete') {
     _keymap[id] = null; _saveKeymap();
