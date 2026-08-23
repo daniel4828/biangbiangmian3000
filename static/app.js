@@ -2541,7 +2541,7 @@ function _wordRow(w) {
       `<button class="bw-unleech-btn" onclick="event.stopPropagation();browseUnleechWord(${w.id},this)"` +
       ` title="Clear the leech flag and unsuspend">✓ Unleech</button>`;
   } else if (w.cards.length === 0) {
-    rightHtml = `<button class="bw-add-btn" onclick="openAddToDeckModal(event,${w.id})" title="添加到牌组">＋ 添加</button>`;
+    rightHtml = `<button class="bw-add-btn" onclick="openAddToDeckModal(event,${w.id})" title="Add to deck">＋ Add</button>`;
   } else {
     const CAT_LETTER = { listening: 'L', reading: 'R', creating: 'C' };
     rightHtml = ['listening', 'reading', 'creating'].map(cat => {
@@ -2726,8 +2726,14 @@ function openAddToDeckModal(e, entryId) {
   e.stopPropagation();
   _addToDeckEntryId = entryId;
   const select = document.getElementById('add-to-deck-select');
-  const parentDecks = _browseDecks.filter(d => !d.category && !d.virtual);
-  if (!parentDecks.length) { showError('No decks available'); return; }
+  // Only decks that already own the three category leaf-decks can take a card:
+  // database.add_entry_to_deck() writes into '<parent> · Listening/Reading/Creating'
+  // and fails outright when they are missing. Tree roots ('All', 'Français') and
+  // the 'Saved' staging deck have none, so offering them guaranteed an error —
+  // and under a language tab the root was the *first* option in the list.
+  const parentDecks = _browseDecks.filter(
+    d => !d.category && !d.virtual && (d.children || []).some(c => c.category));
+  if (!parentDecks.length) { showError('No deck with Listening/Reading/Creating sub-decks available'); return; }
   select.innerHTML = parentDecks.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
   document.getElementById('add-to-deck-modal-overlay').style.display = '';
   document.getElementById('add-to-deck-modal').style.display = '';
