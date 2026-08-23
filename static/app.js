@@ -12593,13 +12593,16 @@ function _renderBookList(books) {
   const rows = books.map(b => {
     const progress = Object.entries(b.progress || {})
       .map(([lang, page]) => `${_escHtml(lang)} p.${page}`).join(' · ');
+    const chaptersBtn = b.format === 'epub'
+      ? `<button class="word-table-btn" onclick="openBookChapters(${b.id})" title="Chapter summaries">📖</button>`
+      : '';
     return `<tr>
       <td><a href="#" onclick="event.preventDefault();openBook(${b.id})">${_escHtml(b.title)}</a></td>
       <td>${_escHtml(b.author || '')}</td>
       <td>${_escHtml(b.format)} · ${_escHtml(b.source_lang)}</td>
       <td>${b.page_count}</td>
       <td class="keymap-hint">${progress || '—'}</td>
-      <td><button class="word-table-btn" onclick="deleteBook(${b.id})" title="Delete this book">🗑</button></td>
+      <td>${chaptersBtn}<button class="word-table-btn" onclick="deleteBook(${b.id})" title="Delete this book">🗑</button></td>
     </tr>`;
   }).join('');
 
@@ -12768,6 +12771,7 @@ function _renderBookPage(page) {
     <div class="book-reader-head">
       <button class="btn-secondary" onclick="openBooks()">← Books</button>
       <span class="book-reader-title">${_escHtml(page.title)}${page.author ? ` · ${_escHtml(page.author)}` : ''}</span>
+      <button class="btn-secondary" onclick="openBookChapters(${_bookState.bookId})" title="Chapter summaries">📖 Chapters</button>
       <select id="book-lang-select" onchange="changeBookLang(this.value)" title="Reading language">
         ${_bookLangOptions(page.lang)}
       </select>
@@ -12808,4 +12812,187 @@ function jumpToBookPage(value) {
 function changeBookLang(lang) {
   _bookState.lang = lang;
   _showBookPage(_bookState.pageNo);
+}
+
+// ── Chapters (#864) ──────────────────────────────────────────────────────────
+// Table of contents + per-chapter Chinese summary, generated on demand
+// (Daniel clicks "Generate", nothing runs automatically — a chapter is a
+// real AI call, unlike a page translation which is free Google Translate).
+let _bookChaptersTitle = '';
+
+async function openBookChapters(bookId) {
+  _bookState.bookId = bookId;
+  showView('books');
+  document.getElementById('view-books-content').innerHTML =
+    '<p class="keymap-hint">Loading chapters…</p>';
+  try {
+    const data = await api('GET', '/api/books');
+    const book = (data.books || []).find(b => b.id === bookId);
+    _bookChaptersTitle = book ? book.title : '';
+  } catch (e) { _bookChaptersTitle = ''; }
+
+  let data;
+  try {
+    data = await api('GET', `/api/books/${bookId}/chapters`);
+  } catch (e) {
+    document.getElementById('view-books-content').innerHTML = `
+      <div class="keymap-panel">
+        <p class="keymap-hint">Could not load chapters: ${_escHtml(e.message || 'error')}</p>
+        <button class="btn-secondary" onclick="openBooks()">← Back to books</button>
+      </div>`;
+    return;
+  }
+  _renderBookChapters(bookId, data);
+}
+
+function _renderBookChapters(bookId, data) {
+  const head = `
+    <div class="book-reader-head">
+      <button class="btn-secondary" onclick="openBook(${bookId})">← Reader</button>
+      <span class="book-reader-title">${_escHtml(_bookChaptersTitle)} — Chapters</span>
+    </div>`;
+
+  if (!data.available) {
+    document.getElementById('view-books-content').innerHTML = head + `
+      <div class="keymap-panel">
+        <p class="keymap-hint">${_escHtml(data.reason || 'No chapters available for this book.')}</p>
+      </div>`;
+    return;
+  }
+
+  const rows = data.chapters.map(ch => {
+    const label = ch.title_zh || ch.ref_label || `第${ch.number}章`;
+    const pages = `p.${ch.start_page}–${ch.end_page}`;
+    let action;
+    if (ch.status === 'summarized') {
+      action = `<button class="word-table-btn" onclick="openBookChapterSummary(${bookId}, ${ch.number})">阅读摘要</button>`;
+    } else if (ch.status === 'error') {
+      action = `<button class="word-table-btn" id="ch-sum-btn-${ch.number}" onclick="doSummarizeChapter(${bookId}, ${ch.number})">↻ 重试</button>`;
+    } else {
+      action = `<button class="word-table-btn" id="ch-sum-btn-${ch.number}" onclick="doSummarizeChapter(${bookId}, ${ch.number})">✨ 生成摘要</button>`;
+    }
+    const errorRow = ch.status === 'error' && ch.error
+      ? `<div class="keymap-hint book-chapter-error" id="ch-sum-err-${ch.number}">${_escHtml(ch.error)}</div>` : '';
+    const conceptRow = ch.status === 'summarized' && ch.concept_zh
+      ? `<div class="keymap-hint book-chapter-concept">${_escHtml(ch.concept_zh)}</div>` : '';
+    return `<div class="book-chapter-row" id="ch-row-${ch.number}">
+      <div class="book-chapter-main">
+        <span class="book-chapter-number">${ch.number}.</span>
+        <span class="book-chapter-title">${_escHtml(label)}</span>
+        <span class="keymap-hint">${pages}</span>
+        ${action}
+      </div>
+      ${conceptRow}
+      ${errorRow}
+    </div>`;
+  }).join('');
+
+  document.getElementById('view-books-content').innerHTML = head + `
+    <div class="keymap-panel">${rows}</div>`;
+}
+
+async function doSummarizeChapter(bookId, number) {
+  const btn = document.getElementById(`ch-sum-btn-${number}`);
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  // A regenerate must not leave the popup showing the previous summary.
+  delete _bookChapterCache[`${bookId}:${number}`];
+  try {
+    await api('POST', `/api/books/${bookId}/chapters/${number}/summarize`);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✨ 生成摘要'; }
+    showError(e.message || 'Could not start summarization');
+    return;
+  }
+  _pollBookChapter(bookId, number);
+}
+
+async function _pollBookChapter(bookId, number, attempt) {
+  attempt = attempt || 0;
+  let chapter;
+  try {
+    chapter = await api('GET', `/api/books/${bookId}/chapters/${number}`);
+  } catch (e) {
+    // Lost track — reload the whole list rather than polling forever.
+    openBookChapters(bookId);
+    return;
+  }
+  if (chapter.status === 'pending' && attempt < 120) {
+    setTimeout(() => _pollBookChapter(bookId, number, attempt + 1), 2000);
+    return;
+  }
+  // Re-render just this row's data via a full reload — chapter lists are
+  // short, and this keeps one source of truth for the row markup.
+  try {
+    const data = await api('GET', `/api/books/${bookId}/chapters`);
+    if (_bookState.bookId === bookId) _renderBookChapters(bookId, data);
+  } catch (e) { /* the button will just stay in its loading state */ }
+}
+
+const _bookChapterCache = {}; // `${bookId}:${number}` → full chapter
+
+async function openBookChapterSummary(bookId, number) {
+  const overlay = document.getElementById('kahneman-examples-overlay');
+  const modal   = document.getElementById('kahneman-examples-modal');
+  const titleEl = document.getElementById('kahneman-examples-title');
+  const bodyEl  = document.getElementById('kahneman-examples-body');
+  titleEl.textContent = `第${number}章`;
+  bodyEl.innerHTML = '<div class="kahneman-examples-loading">加载中…</div>';
+  overlay.style.display = '';
+  modal.style.display = '';
+
+  const key = `${bookId}:${number}`;
+  let chapter = _bookChapterCache[key];
+  if (!chapter) {
+    try {
+      chapter = await api('GET', `/api/books/${bookId}/chapters/${number}`);
+      _bookChapterCache[key] = chapter;
+    } catch (e) {
+      bodyEl.innerHTML = '';
+      bodyEl.appendChild(document.createTextNode('加载失败：' + (e.message || 'error')));
+      return;
+    }
+  }
+  if (modal.style.display === 'none') return; // closed while loading
+
+  titleEl.textContent = chapter.title_zh || `第${number}章`;
+  bodyEl.innerHTML = '';
+  if (chapter.title_en) {
+    const en = document.createElement('div');
+    en.className = 'kahneman-title-en';
+    en.textContent = chapter.title_en;
+    bodyEl.appendChild(en);
+  }
+  if (chapter.concept_zh) {
+    const concept = document.createElement('div');
+    concept.className = 'kahneman-summary';
+    concept.textContent = chapter.concept_zh;
+    bodyEl.appendChild(concept);
+  }
+  if (chapter.summary_zh) {
+    const label = document.createElement('div');
+    label.className = 'kahneman-examples-label';
+    label.textContent = '本章摘要';
+    bodyEl.appendChild(label);
+    const detail = document.createElement('div');
+    detail.className = 'kahneman-detail';
+    detail.textContent = chapter.summary_zh;
+    bodyEl.appendChild(detail);
+  }
+  if (chapter.examples_zh && chapter.examples_zh.length) {
+    const label = document.createElement('div');
+    label.className = 'kahneman-examples-label';
+    label.textContent = '书中原句';
+    bodyEl.appendChild(label);
+    chapter.examples_zh.forEach(ex => {
+      const p = document.createElement('p');
+      p.className = 'kahneman-example';
+      p.textContent = ex;
+      bodyEl.appendChild(p);
+    });
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'kahneman-examples-loading';
+    empty.textContent = '本章暂无原句摘录。';
+    bodyEl.appendChild(empty);
+  }
 }
