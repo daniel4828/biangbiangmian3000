@@ -327,7 +327,8 @@ word_analyses:
 `importer._normalize_romance_entry(entry, "fr")` 归一化后复用全部下游逻辑
 （`_normalize_fr_entry` 仍作为别名保留，向后兼容）；同一函数按 `lang` 参数
 也服务西班牙语（见下方「西班牙语格式」一节）。中文专属模块（汉字分解、
-量词、拼音、`word_analyses`）不适用。
+量词、拼音、`word_analyses`）不适用——取而代之的是顶层 `etymology:` 字段（议题
+ #906）：法语词没有汉字可拆，复习卡右栏那个位置显示的是词源。
 
 ### 与中文格式的字段差异
 
@@ -336,7 +337,8 @@ word_analyses:
 | `word` / `sentence` / `expression` | 词形字段（代替 `simplified`），按 `type` 取名 |
 | `level` | CEFR 等级字符串 `"A1"`–`"C2"`（代替 `hsk`），映射为 1–6 存入 `entries.hsk_level` |
 | `english` / `german` | 英/德释义（同中文格式） |
-| `note` | 德语使用说明，**建议在其中包含简短词源（Étymologie）**——法语没有独立词源列 |
+| `note` | 德语使用说明（用法、搭配、假朋友警告）。**不要**再往里塞词源——它有自己的字段 |
+| `etymology` | **词源**，德语散文块标量（`\|`），2–4 句，无列表、无 `**Étymologie:**` 标题（界面已有标签）。存入 `entries.etymology`（议题 #906）。内容：源词（拉丁语/希腊语/法兰克语/阿拉伯语…）及其原义、进入现代语言的路径、词义演变、学习者已认识的德语/英语同源词；源词用 `*星号*` 标出。词源不明就直说，不要编 |
 | `examples[]` | 每项 `{fr, german, english}`（`fr` 代替 `zh`，`german` 代替 `de`） |
 | `similar_sentences[]` | 同上，`{fr, german}`，仅 sentence 类型 |
 | `synonyms` / `antonyms` | 同中文格式：`{word, meaning}`（meaning 用德语） |
@@ -363,8 +365,9 @@ entries:
     register: neutral
     note: |
       Regelmäßiges Verb auf -er.
-
-      **Étymologie:** Vom lateinischen *parabolare* („in Gleichnissen reden").
+    etymology: |
+      Vom kirchenlateinischen *parabolare* („in Gleichnissen reden"), zu
+      griech. *parabolé*. Dasselbe Wort steckt in dt. „Parabel".
     examples:
       - fr: Je parle un peu français.
         english: I speak a little French.
@@ -494,7 +497,7 @@ entries:
 | `pos` | `verbo`、`sustantivo (m)`、`sustantivo (f)`、`adjetivo`、`adverbio`、`locución` … |
 | `conjugations` | 时态键：`presente`、`pretérito perfecto`、`pretérito indefinido`、`imperfecto`、`futuro`、`condicional`、`presente de subjuntivo` + `participio`/`gerundio`（无人称，纯字符串）。人称键固定 `yo`、`tú`、`él/ella`、`nosotros`、`vosotros`、`ellos/ellas` |
 | `forms` | 维度命名习惯用 `numero`（`plural`）+ `genero`（`femenino`、`femenino plural`）—— 与法语的 `nombre`/`genre` 同构，只是西班牙语拼写不带重音（数据库不关心具体拼法，`paradigm`/`slot` 原样存储） |
-| `note` | 词源行写 `**Etimología:** …`（法语是 `**Étymologie:**`） |
+| `etymology` | 同法语，独立的德语散文字段（不是 `note` 里的一行）；例词用西语视角（阿拉伯语借词、`*inšāʾ Allāh*` → `ojalá` 之类） |
 
 ### 完整示例
 
@@ -511,8 +514,9 @@ entries:
     register: neutral
     note: |
       Regelmäßiges Verb auf -ar.
-
-      **Etimología:** Vom lateinischen *fabulari*.
+    etymology: |
+      Vom lateinischen *fabulari* („erzählen, plaudern"), zu *fabula* —
+      dieselbe Wurzel wie dt. „Fabel".
     examples:
       - es: Hablo un poco de español.
         english: I speak a little Spanish.

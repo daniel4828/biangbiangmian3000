@@ -483,6 +483,10 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 - **语言族（#803）：** `languages.py` 里 `_SINITIC_BASE` / `_ROMANCE_BASE` 两个基底 dict，各语言用 `{**_ROMANCE_BASE, ...}` 继承再覆盖差异（`features` 必须显式合并，否则子语言会整块顶掉基底的开关）。中文是自成一族；法语、西班牙语同族，以后加葡语/意语就是再加一个条目。每种语言带 `family` / `annotator` / `features.conjugation|gender|inflection`
 - **形态表 `entry_forms`（#803）：** 统一存动词变位和名词/形容词词形，取代只有"时态 × 人称"的 `entry_conjugations`（该表保留但代码不再读写，**唯一事实来源是 `entry_forms`**）。`kind='conjugation'` 时 `paradigm`=时态、`slot`=人称；`kind='inflection'` 时 `paradigm`=维度（`nombre`/`genre`）、`slot`=值（`pluriel`/`féminin`）。`idx_entry_forms_form` 是必需的：知识库标注靠 `database.forms_lookup(词形, lang)` 判断"这个词形属不属于我学过的词"，每篇文章要查几百次——**罗曼语的生词判定不做词干还原，全靠这张表**，所以加词时必须把全部变位/词形都生成出来
 - **`entries.gender`（#803）：** 名词的阴阳性（`m`/`f`/`mf`），中文恒为 NULL
+- **`entries.etymology`（#906）：词源取代罗曼语的 Word Analysis**：法语词没有汉字可拆，那个区块只剩一行重复词头。现在 `lang != 'zh'` 时复习卡右栏与词条详情页**不渲染** Word Analysis，改渲染 Etymology（德语散文，`renderEtymologySection()`）。中文侧一个字节不变——中文的词源在 `characters.etymology`，是**按字**的，两者不是一回事，所以列名分开、AI 字段名也分开（`entry_etymology` vs `etymology`），否则 `routes/browse.py` 里每个分支都会变成二义的
+  - fr/es 的加词提示词输出**顶层 `etymology:` 块标量**，不再往 `note` 里塞 `**Étymologie:**` 行——藏在散文里的东西没法单独渲染，也没法单独重新生成
+  - ↺ 走 `ai.generate_entry_etymology()`（纯文本提问，不是 JSON）：`regenerate_entry_fields()` 是**中文词典**提示词，它的 "etymology" 指的是字级的，拿它去问 `parler` 的汉字组成纯属烧钱。模型返回空 → 抛 `ValueError`，不拿空白盖掉好答案
+  - **复习卡的行记录（`database/cards.py`）不 SELECT `etymology`**，所以复习中打开编辑框时该字段取自 `wordDetails`；两处都没有就整个字段隐藏、保存时也不发送——空文本框存回去会静默清空词源
 - **`known_words` 按语言（#803）：** 主键改为 `(word_zh, lang)`；`database` 里的四个函数都加了 `lang` 参数（默认 `zh`，中文调用点行为不变）
 - **总体设计见 `docs/multilang.md`** —— 为什么不分库、语言族模型、各阶段接口约定都在那里
 - **中文专属：** 汉字分解、量词、拼音、kahneman/paste/briefing 故事模式

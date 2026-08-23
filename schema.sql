@@ -192,6 +192,12 @@ CREATE TABLE IF NOT EXISTS entries (
     register        TEXT CHECK(register IN ('spoken', 'written', 'both', 'spoken_colloquial', 'spoken_neutral', 'neutral', 'formal_written', 'literary')),
                         -- language register: spoken=口语, written=书面语, both=通用, spoken_colloquial=口语俚语, spoken_neutral=中性口语, neutral=通用, formal_written=正式书面语, literary=文学语体
     gender          TEXT,           -- 'm' | 'f' | 'mf' | NULL — noun grammatical gender (French/Spanish; #803)
+    -- Word origin, German prose (issue #906). Romance languages only: a French
+    -- word has no characters to break down, so the review card's right-hand
+    -- panel shows this instead of the Chinese "Word Analysis" block. Chinese
+    -- entries keep NULL here — their etymology lives per character in
+    -- characters.etymology, which is a different thing entirely.
+    etymology       TEXT,
     UNIQUE(word_zh, lang)
 );
 

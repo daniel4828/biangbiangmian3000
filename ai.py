@@ -962,6 +962,50 @@ def regenerate_entry_fields(
         return {}
 
 
+def generate_entry_etymology(word: dict, model: str = DEFAULT_MODEL) -> str:
+    """Regenerate the entry-level etymology of a Romance-language word (#906).
+
+    Deliberately NOT part of regenerate_entry_fields(): that one is a Chinese
+    dictionary prompt whose "etymology" means *per character*, and it answers
+    in JSON so it can carry a whole characters[] array. Here there is exactly
+    one prose block to produce, so the model answers in plain text.
+
+    Raises ValueError when the model returns nothing usable — an empty
+    Etymology block written over a good one would be worse than an error.
+    """
+    lang = word.get("lang") or "zh"
+    cfg = languages.get_lang_config(lang)
+    headword = word.get("word_zh", "")
+    gloss = word.get("definition_de") or word.get("definition") or ""
+
+    prompt = (
+        f"You are an etymologist writing for a German-speaking learner of "
+        f"{cfg['name_en']} ({cfg['learner_level']}).\n\n"
+        f"Word: {headword}\n"
+        f"Meaning: {gloss}\n"
+        f"Part of speech: {word.get('pos') or '—'}\n\n"
+        "Write the word's origin as GERMAN PROSE — 2-4 sentences, no bullet "
+        "points, no heading, no markdown fences. Cover the source word "
+        "(Latin, Greek, Frankish, Arabic, …) with its original meaning, the "
+        "path into the modern language, how the meaning shifted, and any "
+        "German or English cognate the learner already knows. Mark foreign "
+        "source words with *asterisks*. If the origin is genuinely disputed "
+        "or unknown, say that in one sentence — never invent one.\n\n"
+        "Return ONLY the prose."
+    )
+
+    logger.info("[%s] generate_entry_etymology: %s (%s)", model, headword, lang)
+    raw = _call_api(model, [{"role": "user", "content": prompt}], max_tokens=600,
+                    purpose=f"etymology:{headword}")
+    text = (raw or "").strip()
+    # Strip an accidental markdown fence, and the heading the prompt forbids.
+    text = re.sub(r'^```[a-z]*\n?|```$', '', text).strip()
+    text = re.sub(r'^\*\*(Étymologie|Etimología|Etymologie|Etymology)\s*:?\*\*\s*', '', text)
+    if not text:
+        raise ValueError(f"AI returned no etymology for {headword!r}")
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Full dictionary entry as YAML (issue #627) — the in-app twin of the de-zh-bot
 # skill. The output goes straight into importer.import_yaml_content(), so it
@@ -1111,9 +1155,12 @@ _ENTRY_YAML_EXAMPLE_FR = """- type: word
     **Häufige Ausdrücke:**
     - parler couramment — fließend sprechen
     - entendre parler de — von etwas hören
-
-    **Étymologie:** Vom lateinischen *parabolare* („in Gleichnissen reden"),
-    abgeleitet von *parabola* — derselbe Ursprung wie dt. „Parabel".
+  etymology: |
+    Vom kirchenlateinischen *parabolare* („in Gleichnissen reden"), abgeleitet
+    von griech. *parabolé* („Vergleich, Gleichnis"). Dasselbe Wort steckt in
+    dt. „Parabel" und in span. *hablar*. Das nüchterne lateinische *loqui*
+    („sprechen") wurde dabei vollständig verdrängt — ein hübsches Beispiel
+    dafür, wie ein bildhafter Ausdruck das Normalwort ersetzt.
   examples:
     - fr: Je parle un peu français.
       english: I speak a little French.
@@ -1188,8 +1235,10 @@ _ENTRY_YAML_EXAMPLE_FR = """- type: word
   gender: m
   note: |
     Männliches Substantiv. Für weibliche Katzen sagt man "la chatte".
-
-    **Étymologie:** Vom lateinischen *cattus*.
+  etymology: |
+    Vom spätlateinischen *cattus*, das erst in der Kaiserzeit das ältere
+    *feles* verdrängte und wohl aus einer afrikanischen Sprache stammt.
+    Dieselbe Wurzel liegt dt. „Katze" und engl. *cat* zugrunde.
   examples:
     - fr: Le chat dort sur le canapé.
       english: The cat is sleeping on the couch.
@@ -1208,6 +1257,10 @@ _ENTRY_YAML_EXAMPLE_FR = """- type: word
   register: neutral
   note: |
     Regelmäßiges Adjektiv, stimmt in Genus und Numerus mit dem Substantiv überein.
+  etymology: |
+    Vom lateinischen *viridis* („grün, frisch"), zur Wurzel *virere*
+    („grünen, kräftig sein"). Verwandt sind engl. *verdant* und ital. *verde*;
+    im Deutschen gibt es keine direkte Entsprechung.
   examples:
     - fr: Le pull vert est à moi.
       english: The green sweater is mine.
@@ -1259,9 +1312,17 @@ LANGUAGE RULES — these fields MUST be German:
 
 CONTENT:
   - note (word/expression): German prose block scalar (|) covering usage,
-    common collocations, false-friend warnings, and a short
-    "**Étymologie:** …" line (1-2 sentences) — French has no separate
-    etymology column, so it belongs in the note.
+    common collocations and false-friend warnings. Do NOT put etymology here —
+    it has its own field (below).
+  - etymology: REQUIRED FOR EVERY word/expression, omitted for `sentence`.
+    German prose block scalar (|), 2-4 sentences, NO bullet points and NO
+    "**Étymologie:**" heading (the UI already labels the block). Cover: the
+    Latin/Greek/Frankish/Arabic … source word with its original meaning, the
+    path into French, how the meaning shifted, and — this is the part that
+    makes a word stick — related German or English cognates the learner
+    already knows (travailler < lat. *tripalium* — daher auch engl.
+    *travel*). Mark foreign source words with *asterisks*. If the origin is
+    genuinely unclear, say so in one sentence instead of inventing one.
   - examples: 2-4 sentences, EACH with all three keys fr, english, german
   - synonyms / antonyms: {{word, meaning}} items; include when they add real value
   - conjugations: REQUIRED FOR EVERY VERB, omitted for everything else.
@@ -1316,8 +1377,11 @@ _ENTRY_YAML_EXAMPLE_ES = """- type: word
     Regelmäßiges Verb auf -ar. Grundverb für „sprechen" — mit Sprache direkt
     danach (hablar español), mit „de" für „über etwas sprechen" (hablar de algo),
     mit „con" für den Gesprächspartner (hablar con alguien).
-
-    **Etimología:** Vom lateinischen *fabulari* („erzählen, plaudern").
+  etymology: |
+    Vom lateinischen *fabulari* („erzählen, plaudern"), zu *fabula*
+    („Erzählung") — dieselbe Wurzel wie dt. „Fabel". Das klassische *loqui*
+    („sprechen") ging unter, das umgangssprachliche Wort setzte sich durch.
+    Franz. *parler* ging denselben Weg, nur über *parabolare*.
   examples:
     - es: Hablo un poco de español.
       english: I speak a little Spanish.
@@ -1395,8 +1459,10 @@ _ENTRY_YAML_EXAMPLE_ES = """- type: word
   gender: m
   note: |
     Männliches Substantiv. Für weibliche Katzen sagt man "la gata".
-
-    **Etimología:** Vom lateinischen *cattus*.
+  etymology: |
+    Vom spätlateinischen *cattus*, das erst in der Kaiserzeit das ältere
+    *feles* verdrängte. Dieselbe Wurzel liegt dt. „Katze", engl. *cat* und
+    franz. *chat* zugrunde.
   examples:
     - es: El gato duerme en el sofá.
       english: The cat is sleeping on the couch.
@@ -1416,6 +1482,9 @@ _ENTRY_YAML_EXAMPLE_ES = """- type: word
   note: |
     Regelmäßiges Adjektiv. Endet auf -e, deshalb gleiche Form für Maskulin
     und Femininum — nur die Pluralform ändert sich.
+  etymology: |
+    Vom lateinischen *viridis* („grün, frisch"), zur Wurzel *virere*
+    („grünen, kräftig sein"). Verwandt sind engl. *verdant* und franz. *vert*.
   examples:
     - es: El jersey verde es mío.
       english: The green sweater is mine.
@@ -1465,9 +1534,17 @@ LANGUAGE RULES — these fields MUST be German:
 
 CONTENT:
   - note (word/expression): German prose block scalar (|) covering usage,
-    common collocations, false-friend warnings, and a short
-    "**Etimología:** …" line (1-2 sentences) — Spanish has no separate
-    etymology column, so it belongs in the note.
+    common collocations and false-friend warnings. Do NOT put etymology here —
+    it has its own field (below).
+  - etymology: REQUIRED FOR EVERY word/expression, omitted for `sentence`.
+    German prose block scalar (|), 2-4 sentences, NO bullet points and NO
+    "**Etimología:**" heading (the UI already labels the block). Cover: the
+    Latin/Greek/Arabic/Gothic … source word with its original meaning, the
+    path into Spanish, how the meaning shifted, and — this is the part that
+    makes a word stick — related German or English cognates the learner
+    already knows (*ojalá* < arab. *inšāʾ Allāh*). Mark foreign source words
+    with *asterisks*. If the origin is genuinely unclear, say so in one
+    sentence instead of inventing one.
   - examples: 2-4 sentences, EACH with all three keys es, english, german
   - synonyms / antonyms: {{word, meaning}} items; include when they add real value
   - conjugations: REQUIRED FOR EVERY VERB, omitted for everything else.

@@ -18,11 +18,11 @@ def insert_word(word: dict) -> int:
            (word_zh, lang, pinyin, definition, pos, hsk_level,
             traditional, definition_zh, source, note_type,
             notes, date_yaml, source_sentence, grammar_notes, register, definition_de, definition_fr,
-            gender)
+            gender, etymology)
            VALUES (:word_zh, :lang, :pinyin, :definition, :pos, :hsk_level,
                    :traditional, :definition_zh, :source, :note_type,
                    :notes, :date_yaml, :source_sentence, :grammar_notes, :register, :definition_de, :definition_fr,
-                   :gender)""",
+                   :gender, :etymology)""",
         {
             **word,
             "lang":            word.get("lang") or "zh",
@@ -43,6 +43,8 @@ def insert_word(word: dict) -> int:
             "definition_fr":   word.get("definition_fr"),
             # Noun grammatical gender (French/Spanish; #803/#805) — 'm'|'f'|'mf'|None
             "gender":          word.get("gender"),
+            # Entry-level word origin, Romance languages only (#906)
+            "etymology":       word.get("etymology"),
         },
     )
     # Backfill notes / date_yaml for entries that existed before these fields were added
@@ -55,6 +57,16 @@ def insert_word(word: dict) -> int:
         conn.execute(
             "UPDATE entries SET date_yaml = ? WHERE word_zh = ? AND date_yaml IS NULL",
             (word["date_yaml"], word["word_zh"]),
+        )
+    # Same backfill for etymology (#906): Romance entries imported before the
+    # column existed carry their origin inside `notes` and would otherwise show
+    # an empty Etymology block forever. Scoped by lang — unlike the two
+    # backfills above, which predate UNIQUE(word_zh, lang).
+    if word.get("etymology"):
+        conn.execute(
+            "UPDATE entries SET etymology = ? "
+            "WHERE word_zh = ? AND lang = ? AND (etymology IS NULL OR etymology = '')",
+            (word["etymology"], word["word_zh"], word.get("lang") or "zh"),
         )
     conn.commit()
     row = conn.execute("SELECT id FROM entries WHERE word_zh = ?", (word["word_zh"],)).fetchone()

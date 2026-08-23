@@ -437,6 +437,10 @@ def _build_word_dict(entry: dict, source: str, note_type: str = "vocabulary",
         # Noun grammatical gender (French/Spanish; #803/#805) — normalized to
         # m|f|mf|None in _normalize_romance_entry; absent (zh) stays None.
         "gender":          entry.get("gender"),
+        # Entry-level word origin (#906). Romance formats carry a top-level
+        # `etymology:` block scalar; the Chinese format has no such key (its
+        # etymology is per character, under `word_analyses`), so this stays None.
+        "etymology":       entry.get("etymology") if lang != "zh" else None,
     }
 
 
