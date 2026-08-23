@@ -12,6 +12,7 @@ schema.sql's knowledge_renditions table for storage.
 import logging
 import re
 
+import ai
 import annotate
 import database
 import languages
@@ -151,6 +152,17 @@ def get_or_create_rendition(episode_id: int, lang: str) -> dict:
     summary_de = (episode.get("summary_de") or "").strip()
     if not summary_de:
         raise RenditionError("episode has no German summary yet")
+    if not ai.summary_de_is_german(summary_de):
+        # The summary itself is in Chinese (#904). Translating de->fr leaves
+        # such text essentially untouched, so without this guard the page
+        # would show pinyin-annotated Chinese under a French label — exactly
+        # the "source-language text wearing a target-language label" this
+        # module refuses to serve. ai.py now rejects these at generation
+        # time; this guard covers the rows already in the database, which
+        # Daniel fixes with the detail page's "Regenerate summary" button.
+        raise RenditionError(
+            "the German summary is not in German (the model answered in "
+            "Chinese) — regenerate the summary first")
 
     try:
         annotated, new_words = render_html(summary_de, lang, source="de")

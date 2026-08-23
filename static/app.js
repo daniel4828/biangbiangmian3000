@@ -7855,6 +7855,92 @@ function pickExtraBlankWord(zh, excludeWord) {
   return zh.slice(idx, idx + 2);
 }
 
+// ── Non-zh target matching: dictionary form vs. inflected surface form ─────
+// Romance-language sentences rarely use the target's dictionary form verbatim
+// (target "réduire" appears as "a réduit"; target "la bourse" appears as just
+// "bourse" once the article is dropped/changed to fit the sentence). Chinese
+// word forms never change, so this whole module is a no-op for lang==='zh' —
+// callers keep using plain indexOf there (see resolveTargetSurfaces below).
+// Issue #903.
+
+// Leading articles/determiners a dictionary-form target may carry that the
+// sentence's inflected instance can drop or swap out (mirrors the set the
+// knowledge-mode sentence matcher accepts server-side, ai._ROMANCE_ARTICLE_PREFIXES,
+// plus a couple of the AI is also allowed to use e.g. "l'"/"des").
+const _ROMANCE_ARTICLE_PREFIXES = {
+  fr: ["le ", "la ", "les ", "l'", "l’", "un ", "une ", "des ", "du ", "de la ", "de l'", "de l’"],
+  es: ["el ", "la ", "los ", "las ", "un ", "una ", "unos ", "unas "],
+};
+
+function _stripLeadingArticle(word, lang) {
+  const prefixes = _ROMANCE_ARTICLE_PREFIXES[lang] || [];
+  const lower = word.toLowerCase();
+  for (const p of prefixes) {
+    if (lower.startsWith(p)) return word.slice(p.length);
+  }
+  return null;
+}
+
+// \b is unreliable on accented letters, so boundaries are hand-rolled:
+// neither neighbor may be a letter/digit/apostrophe (the latter so "l'or"
+// doesn't count as a boundary-having match for "or").
+function _findWordBoundaryMatch(text, candidate, searchFrom) {
+  if (!candidate) return null;
+  const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?<![\\p{L}\\p{N}'’])${escaped}(?![\\p{L}\\p{N}'’])`, 'giu');
+  let m;
+  while ((m = re.exec(text))) {
+    if (m.index >= searchFrom) return [m.index, m.index + m[0].length];
+    if (m[0].length === 0) re.lastIndex += 1; // guard against zero-width matches looping
+  }
+  return null;
+}
+
+// Locate one target part in `zh` starting at or after `searchFrom`, returning
+// a [start, end) character range or null if nothing matched. zh is a plain,
+// case-sensitive, no-boundary indexOf (identical to the pre-#903 behavior);
+// other languages try the dictionary form and every stored inflected form
+// (longest first, so a multi-word form wins over a bare headword prefix),
+// each on a word boundary and case-insensitively, then — if none of those
+// hit — strip a leading article from the dictionary form and try once more
+// (covers sentences that dropped/changed the article without otherwise
+// inflecting the word).
+function _locateTargetPart(zh, part, forms, lang, searchFrom) {
+  if (lang === 'zh') {
+    const idx = zh.indexOf(part, searchFrom);
+    return idx < 0 ? null : [idx, idx + part.length];
+  }
+  const candidates = [...new Set([part, ...(forms || [])])].sort((a, b) => b.length - a.length);
+  for (const candidate of candidates) {
+    const range = _findWordBoundaryMatch(zh, candidate, searchFrom);
+    if (range) return range;
+  }
+  const stripped = _stripLeadingArticle(part, lang);
+  if (stripped) {
+    const range = _findWordBoundaryMatch(zh, stripped, searchFrom);
+    if (range) return range;
+  }
+  return null;
+}
+
+// Resolve every separable part of `target` (see the "由...组成" handling
+// below) to its actual character range in `zh`, in left-to-right order.
+// Stops at the first part that can't be located, mirroring the original
+// buildWordBankOrder loop it replaces — callers pad any remaining parts with
+// blank targets. Pure function so tests can run it directly (issue #903).
+function resolveTargetSurfaces(zh, target, forms, lang) {
+  const targetParts = target.includes('...') ? target.split('...').filter(p => p.length > 0) : [target];
+  const ranges = [];
+  let searchFrom = 0;
+  for (const part of targetParts) {
+    const range = _locateTargetPart(zh, part, forms, lang, searchFrom);
+    if (!range) break;
+    ranges.push(range);
+    searchFrom = range[1];
+  }
+  return ranges;
+}
+
 // ── Word bank: locate the target word inside the sentence ──────────────────
 // Pure function (no DOM/global access) so tests can run it directly — see
 // tests/test_word_bank.py, which extracts this source and runs it in node.
@@ -7865,7 +7951,7 @@ function pickExtraBlankWord(zh, excludeWord) {
 // 活下 in "TÜV在严格监管中活下来。" is tokenized as …中活/下来…, i.e. the
 // suffix of one token plus the prefix of the next). Matching whole tokens
 // left the target unblanked, printed in plain sight above its own answer box.
-function buildWordBankOrder(zh, tokens, target) {
+function buildWordBankOrder(zh, tokens, target, forms = [], lang = 'zh') {
   // Separable words like "由...组成" — each part is located independently
   const targetParts = target.includes('...') ? target.split('...').filter(p => p.length > 0) : [target];
 
@@ -7874,15 +7960,10 @@ function buildWordBankOrder(zh, tokens, target) {
   let tokenTexts = (tokens && tokens.length) ? tokens.map(t => t[0]) : null;
   if (!tokenTexts || tokenTexts.join('') !== zh) tokenTexts = [...zh];
 
-  // Character ranges of the target parts, searched left to right
-  const ranges = [];
-  let searchFrom = 0;
-  for (const part of targetParts) {
-    const idx = zh.indexOf(part, searchFrom);
-    if (idx < 0) break;
-    ranges.push([idx, idx + part.length]);
-    searchFrom = idx + part.length;
-  }
+  // Character ranges of the target parts, searched left to right (issue #903:
+  // non-zh matching also tries stored conjugated/inflected forms and a word
+  // boundary, not just a bare indexOf of the dictionary form).
+  const ranges = resolveTargetSurfaces(zh, target, forms, lang);
 
   // Slice the token stream at those ranges
   const order = [];
@@ -7916,7 +7997,7 @@ async function _buildWordBank() {
   // No sentence for this card yet — clear stale state so the previous card's
   // word bank doesn't linger on screen (renderWordBankUI clears the DOM too).
   if (!zh || !card?.word_zh) { wordBankOrder = []; wordBankTokens = []; return; }
-  const order = buildWordBankOrder(zh, sentence.tokens, card.word_zh);
+  const order = buildWordBankOrder(zh, sentence.tokens, card.word_zh, card.word_forms || [], currentCardLang());
 
   const MAX_TILES = parseInt(document.getElementById('word-bank-slider')?.value ?? _wordBankTileDefault(), 10);
   // Chinese: a "word" tile is any CJK character. French (space-separated tokens):
@@ -8108,10 +8189,24 @@ function renderClozeSentence() {
   // Pick an extra word to blank out (chosen before any replacements)
   clozeExtraWord = pickExtraBlankWord(zh, card.word_zh);
 
-  // Use a temporary placeholder so the two replacements don't interfere
-  let text = zh.includes(card.word_zh)
-    ? zh.replace(card.word_zh, '\x00T\x00')
-    : `${zh} \x00T\x00`;
+  // Use a temporary placeholder so the two replacements don't interfere. zh
+  // keeps the exact pre-#903 literal-substring check; other languages locate
+  // the actual inflected surface form via the shared resolveTargetSurfaces()
+  // (also used by buildWordBankOrder) instead of matching the bare headword.
+  let text;
+  if (currentCardLang() === 'zh') {
+    text = zh.includes(card.word_zh)
+      ? zh.replace(card.word_zh, '\x00T\x00')
+      : `${zh} \x00T\x00`;
+  } else {
+    const ranges = resolveTargetSurfaces(zh, card.word_zh, card.word_forms || [], currentCardLang());
+    if (ranges.length) {
+      const [start, end] = ranges[0];
+      text = zh.slice(0, start) + '\x00T\x00' + zh.slice(end);
+    } else {
+      text = `${zh} \x00T\x00`;
+    }
+  }
 
   if (clozeExtraWord && text.includes(clozeExtraWord)) {
     const blank = `<span class="cloze-blank">${'＿'.repeat(clozeExtraWord.length)}</span>`;

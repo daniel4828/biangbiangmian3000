@@ -1,5 +1,8 @@
+import logging
 import sqlite3
 from .core import get_db
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +319,33 @@ def get_entry_forms(word_id: int) -> dict:
     for r in rows:
         grouped.setdefault(r["kind"], {}).setdefault(r["paradigm"], {})[r["slot"]] = r["form"]
     return grouped
+
+
+def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
+    """Every surface form that counts as "this word" in `lang`.
+
+    For conjugating languages a sentence may use any inflected/conjugated
+    form of the word (e.g. the knowledge story prompt explicitly allows the
+    model to adapt "réduire" -> "a réduit"), so matching on the dictionary
+    headword alone misses most valid sentences. #803 stores the full
+    conjugation/inflection table per entry in entry_forms; this returns the
+    headword plus everything stored there, longest first so a multi-word
+    form wins over a bare headword prefix. Chinese has no forms and skips
+    the lookup entirely — used by both the knowledge-mode sentence matcher
+    (ai._card_surface_forms) and the review-card cloze UI (issue #903).
+    """
+    if lang == "zh" or not word_id:
+        return [word]
+    forms = [word]
+    try:
+        grouped = get_entry_forms(word_id)
+        for paradigm in grouped.values():
+            for slots in paradigm.values():
+                forms.extend(f for f in slots.values() if f)
+    except Exception as e:
+        logger.warning("could not load stored forms for word %s — %s", word_id, e)
+        return [word]
+    return sorted({f for f in forms if f}, key=len, reverse=True)
 
 
 def forms_lookup(surface_forms: list[str], lang: str) -> set[str]:
