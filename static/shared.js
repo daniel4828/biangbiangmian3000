@@ -30,18 +30,175 @@ async function api(method, path, body) {
 // that must not pull in the 9000-line app bundle: two copies of this polling
 // logic would drift, and every fix would have to be made twice.
 //
-// onUpdate(state, text) is called with 'running' | 'done' | 'error'.
+// Confirmation modal shown when /api/add-word-ai reports the word already
+// exists and is about to move real cards (possibly wiping FSRS progress).
+// Deliberately NOT app.js's showConfirm(): /add (#668) and /dict (#746) load
+// shared.js WITHOUT app.js — being small is the whole point of those pages —
+// so this has to be self-contained: plain DOM, inline styles, and colours read
+// through var() fallback chains because the four pages name their theme
+// variables differently (--fg vs --text, --line vs --border).
+//
+// info is the GET /api/word/{id} response (or null if that lookup failed —
+// the confirmation still shows, just without the card overview). Resolves
+// true (continue) or false (cancel).
+function confirmExistingWord(info, action, wordZh, previousDecks, deckPath, reviewsDiscarded) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;' +
+      'display:flex;align-items:center;justify-content:center;padding:1rem;';
+
+    const box = document.createElement('div');
+    box.style.cssText =
+      'background:var(--card, #fff);color:var(--fg, var(--text, #1c1e21));' +
+      'max-width:min(560px, 94vw);max-height:86vh;overflow:auto;' +
+      'border-radius:12px;padding:1rem;box-shadow:0 10px 40px rgba(0,0,0,.3);' +
+      'font-family:inherit;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;font-size:1.05em;margin-bottom:.5rem;';
+    title.textContent = `${wordZh} — already in your collection`;
+    box.appendChild(title);
+
+    const warnLines = {
+      reset: `↺ Reset to new: cards move from ${previousDecks.join(', ')} → ${deckPath}. ` +
+             `This discards all scheduling progress (${reviewsDiscarded} review${reviewsDiscarded === 1 ? '' : 's'}).`,
+      listed: `★ Move to list: cards move from ${previousDecks.join(', ')} → Saved and are suspended. ` +
+              `Scheduling progress is kept.`,
+      promoted: `✓ Promote: cards move from Saved → ${deckPath}.`,
+    };
+    const warn = document.createElement('div');
+    warn.style.cssText = 'color:#c0392b;font-weight:500;margin-bottom:.75rem;';
+    warn.textContent = warnLines[action] || `Cards move to ${deckPath}.`;
+    box.appendChild(warn);
+
+    if (info) {
+      const head = document.createElement('div');
+      head.style.cssText = 'margin-bottom:.5rem;';
+      const wordLine = document.createElement('div');
+      wordLine.style.cssText = 'font-weight:600;';
+      let wordText = info.word_zh || wordZh;
+      if (info.pinyin) wordText += `  (${info.pinyin})`;
+      wordLine.textContent = wordText;
+      head.appendChild(wordLine);
+      const def = info.definition_de || info.definition;
+      if (def) {
+        const defLine = document.createElement('div');
+        defLine.style.cssText = 'color:var(--muted, #6b7075);font-size:.92em;';
+        defLine.textContent = def;
+        head.appendChild(defLine);
+      }
+      box.appendChild(head);
+
+      const cards = Array.isArray(info.cards) ? info.cards : [];
+      if (cards.length) {
+        const table = document.createElement('table');
+        table.style.cssText =
+          'width:100%;border-collapse:collapse;font-size:.85em;margin-bottom:.75rem;';
+        const cols = [
+          ['category', 'category'], ['deck_path', 'deck'], ['state', 'state'],
+          ['due', 'due'], ['interval', 'interval (d)'], ['lapses', 'lapses'],
+          ['repetitions', 'reps'],
+        ];
+        const thead = document.createElement('tr');
+        for (const [, label] of cols) {
+          const th = document.createElement('th');
+          th.style.cssText =
+            'text-align:left;border-bottom:1px solid var(--line, var(--border, #d7d9dd));' +
+            'padding:.25rem .4rem;font-weight:600;';
+          th.textContent = label;
+          thead.appendChild(th);
+        }
+        table.appendChild(thead);
+        for (const card of cards) {
+          const tr = document.createElement('tr');
+          for (const [key] of cols) {
+            const td = document.createElement('td');
+            td.style.cssText =
+              'padding:.25rem .4rem;border-bottom:1px solid var(--line, var(--border, #d7d9dd));';
+            const v = card[key];
+            td.textContent = (v === null || v === undefined || v === '') ? '–' : String(v);
+            tr.appendChild(td);
+          }
+          table.appendChild(tr);
+        }
+        box.appendChild(table);
+      }
+    }
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:.5rem;margin-top:.5rem;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText =
+      'padding:.5rem 1rem;border-radius:8px;border:1px solid var(--line, var(--border, #d7d9dd));' +
+      'background:transparent;color:inherit;cursor:pointer;';
+
+    const okBtn = document.createElement('button');
+    okBtn.textContent = action === 'reset' ? 'Reset anyway' : 'Continue';
+    okBtn.style.cssText = action === 'reset'
+      ? 'padding:.5rem 1rem;border-radius:8px;border:none;background:#c0392b;color:#fff;cursor:pointer;'
+      : 'padding:.5rem 1rem;border-radius:8px;border:none;background:var(--fg, var(--text, #1c1e21));' +
+        'color:var(--card, #fff);cursor:pointer;';
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(okBtn);
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const cleanup = (result) => {
+      document.removeEventListener('keydown', onKeydown);
+      overlay.remove();
+      resolve(result);
+    };
+    const onKeydown = (e) => { if (e.key === 'Escape') cleanup(false); };
+    document.addEventListener('keydown', onKeydown);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
+    cancelBtn.addEventListener('click', () => cleanup(false));
+    okBtn.addEventListener('click', () => cleanup(true));
+  });
+}
+
+// onUpdate(state, text) is called with 'running' | 'done' | 'error' | 'idle'.
+// 'idle' (#888) means the user cancelled a confirmation and nothing happened
+// at all — callers must reset any "Generating…" UI back to its start state.
 // lang (#726) picks the language's prompt and deck tree; omitted means Chinese,
 // so every pre-#726 call site keeps behaving exactly as before. A word already
 // in the database ignores it and moves inside its own language's tree.
 async function addWordViaAi(wordZh, day, onUpdate, lang) {
+  const post = (confirm) => {
+    const body = { word_zh: wordZh, day };
+    if (lang) body.lang = lang;
+    if (confirm) body.confirm = true;
+    return api('POST', '/api/add-word-ai', body);
+  };
+
   let result;
   try {
-    result = await api('POST', '/api/add-word-ai',
-                       lang ? { word_zh: wordZh, day, lang } : { word_zh: wordZh, day });
+    result = await post(false);
   } catch (e) {
     onUpdate('error', e.message || 'Failed to add word');
     return;
+  }
+
+  if (result.status === 'needs_confirmation') {
+    const info = await api('GET', `/api/word/${result.entry_id}`).catch(() => null);
+    const proceed = await confirmExistingWord(
+      info, result.action, result.word_zh, result.previous_decks,
+      result.deck_path, result.reviews_discarded,
+    );
+    if (!proceed) {
+      onUpdate('idle', '');
+      return;
+    }
+    try {
+      result = await post(true);
+    } catch (e) {
+      onUpdate('error', e.message || 'Failed to add word');
+      return;
+    }
   }
 
   // The deck list only exists in the full app; /add has nothing to refresh.

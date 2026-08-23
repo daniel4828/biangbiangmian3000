@@ -150,7 +150,7 @@ def test_known_word_is_reset_into_todays_deck_without_calling_the_ai(tmp_db):
     importer.import_yaml_content(ENTRY_YAML, other_deck)
 
     with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
-        r = client.post("/api/add-word-ai", json={"word_zh": "生态"})
+        r = client.post("/api/add-word-ai", json={"word_zh": "生态", "confirm": True})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "reset"
@@ -196,7 +196,7 @@ def test_reset_clears_fsrs_progress_and_reports_what_it_discarded(tmp_db):
     conn.close()
 
     with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
-        body = client.post("/api/add-word-ai", json={"word_zh": "生态"}).json()
+        body = client.post("/api/add-word-ai", json={"word_zh": "生态", "confirm": True}).json()
 
     assert body["status"] == "reset"
     assert body["reviews_discarded"] == 4 * n_cards
@@ -221,7 +221,7 @@ def test_saved_word_is_promoted_into_todays_deck(tmp_db):
     entry_id = r.json()["entry_id"]
 
     with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
-        r = client.post("/api/add-word-ai", json={"word_zh": "生态"})
+        r = client.post("/api/add-word-ai", json={"word_zh": "生态", "confirm": True})
     assert r.json()["status"] == "promoted"
 
     today = database.anki_today().isoformat()
@@ -264,7 +264,7 @@ def test_saved_word_promoted_to_tomorrow(tmp_db):
     entry_id = r.json()["entry_id"]
 
     with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
-        r = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "tomorrow"})
+        r = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "tomorrow", "confirm": True})
     assert r.json()["status"] == "promoted"
 
     tomorrow = (database.anki_today() + timedelta(days=1)).isoformat()
@@ -426,7 +426,7 @@ def test_listing_a_studied_word_suspends_it_without_discarding_progress(tmp_db):
     conn.close()
 
     with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
-        body = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "list"}).json()
+        body = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "list", "confirm": True}).json()
 
     assert body["status"] == "listed"
     assert body["reviews_discarded"] == 0
@@ -447,6 +447,153 @@ def test_listing_an_already_listed_word_is_reported_as_such(tmp_db):
     with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
         body = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "list"}).json()
     assert body["status"] == "already_listed"
+
+
+# ---------------------------------------------------------------------------
+# Confirm-before-mutating (#888): re-adding an existing word moves real cards
+# and, for today/tomorrow, irreversibly wipes FSRS memory. The first call
+# (no confirm) must report what WOULD happen without touching the database;
+# only a follow-up call with confirm=true is allowed to write anything.
+# ---------------------------------------------------------------------------
+
+def test_reset_needs_confirmation_and_does_not_touch_the_database(tmp_db):
+    """day='today' on a studied word previews a 'reset' — and leaves the cards
+    and their FSRS state exactly as they were until confirmed."""
+    import importer
+
+    other_deck = database.get_or_create_deck_path("Kouyu::Test")
+    importer.import_yaml_content(ENTRY_YAML, other_deck)
+    entry_id = database.get_word_by_zh("生态")["id"]
+
+    conn = database.get_db()
+    conn.execute(
+        """UPDATE cards SET state='review', repetitions=4, lapses=2, interval=30,
+           stability=42.0, difficulty=6.5, last_review='2026-08-01'
+           WHERE word_id=?""",
+        (entry_id,),
+    )
+    conn.commit()
+    before = {
+        r["id"]: dict(r)
+        for r in conn.execute(
+            "SELECT * FROM cards WHERE word_id=? AND deleted_at IS NULL", (entry_id,)
+        ).fetchall()
+    }
+    conn.close()
+
+    with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
+        r = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "today"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "needs_confirmation"
+    assert body["action"] == "reset"
+    assert body["entry_id"] == entry_id
+    assert any("Test" in name for name in body["previous_decks"])
+    assert body["reviews_discarded"] == 4 * len(before)
+
+    conn = database.get_db()
+    after = {
+        r["id"]: dict(r)
+        for r in conn.execute(
+            "SELECT * FROM cards WHERE word_id=? AND deleted_at IS NULL", (entry_id,)
+        ).fetchall()
+    }
+    conn.close()
+    assert after == before, "the preview call must not write anything"
+
+
+def test_list_needs_confirmation_and_leaves_cards_unsuspended(tmp_db):
+    """day='list' on a studied word previews a 'listed' move — the cards must
+    still be reachable in review until the move is confirmed."""
+    import importer
+
+    other_deck = database.get_or_create_deck_path("Kouyu::Test")
+    importer.import_yaml_content(ENTRY_YAML, other_deck)
+    entry_id = database.get_word_by_zh("生态")["id"]
+
+    conn = database.get_db()
+    before = {
+        r["id"]: dict(r)
+        for r in conn.execute(
+            "SELECT * FROM cards WHERE word_id=? AND deleted_at IS NULL", (entry_id,)
+        ).fetchall()
+    }
+    conn.close()
+
+    with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
+        r = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "list"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "needs_confirmation"
+    assert body["action"] == "listed"
+    assert any("Test" in name for name in body["previous_decks"])
+
+    conn = database.get_db()
+    after = {
+        r["id"]: dict(r)
+        for r in conn.execute(
+            "SELECT * FROM cards WHERE word_id=? AND deleted_at IS NULL", (entry_id,)
+        ).fetchall()
+    }
+    conn.close()
+    assert after == before, "the preview call must not move or suspend the cards"
+
+
+def test_already_listed_word_skips_confirmation(tmp_db):
+    """A word only staged in Saved has nothing to move — re-listing it is a
+    no-op, so it must not be gated behind a confirmation round trip."""
+    r = client.post("/api/save-word", json={"word_zh": "生态", "pinyin": "shēngtài"})
+    assert r.json()["status"] == "saved"
+    with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
+        body = client.post("/api/add-word-ai", json={"word_zh": "生态", "day": "list"}).json()
+    assert body["status"] == "already_listed"
+
+
+def test_confirm_true_behaves_like_the_pre_confirmation_flow(tmp_db):
+    """The confirmed call must produce exactly the old (pre-#888) result and
+    actually perform the move this time."""
+    import importer
+
+    other_deck = database.get_or_create_deck_path("Kouyu::Test")
+    importer.import_yaml_content(ENTRY_YAML, other_deck)
+    entry_id = database.get_word_by_zh("生态")["id"]
+
+    with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
+        preview = client.post(
+            "/api/add-word-ai", json={"word_zh": "生态", "day": "today"}
+        ).json()
+        assert preview["status"] == "needs_confirmation"
+
+        r = client.post(
+            "/api/add-word-ai", json={"word_zh": "生态", "day": "today", "confirm": True}
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "reset"
+    assert any("Test" in name for name in body["previous_decks"])
+
+    today = database.anki_today().isoformat()
+    leaf_ids = set(_today_leaf_decks().values())
+    conn = database.get_db()
+    rows = conn.execute(
+        "SELECT deck_id, state, due FROM cards WHERE word_id=? AND deleted_at IS NULL",
+        (entry_id,),
+    ).fetchall()
+    conn.close()
+    assert rows and {r["deck_id"] for r in rows} == leaf_ids
+    assert all(r["state"] == "new" and r["due"] == today for r in rows)
+
+
+def test_needs_confirmation_flow_is_only_implemented_in_shared_js(tmp_db):
+    """Same guard as test_add_word_pipeline_is_not_duplicated_in_app_js (#643):
+    the confirmation modal must live in shared.js, not get re-implemented in
+    app.js, or a fix would only land in one of the four pages that call it."""
+    import pathlib
+    app_js = pathlib.Path("static/app.js").read_text(encoding="utf-8")
+    shared_js = pathlib.Path("static/shared.js").read_text(encoding="utf-8")
+    assert "needs_confirmation" in shared_js
+    assert "function confirmExistingWord(" in shared_js
+    assert "function confirmExistingWord(" not in app_js
 
 
 def test_trashed_saved_deck_is_revived_instead_of_breaking_add_word(tmp_db):
@@ -738,7 +885,7 @@ def test_existing_word_ignores_a_wrong_lang_and_follows_its_own(tmp_db):
 
     with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
         body = client.post("/api/add-word-ai",
-                           json={"word_zh": "séjour", "lang": "zh"}).json()
+                           json={"word_zh": "séjour", "lang": "zh", "confirm": True}).json()
 
     assert body["deck_path"].startswith("Français::")
     conn = database.get_db()

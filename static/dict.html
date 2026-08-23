@@ -286,6 +286,12 @@
           btn.disabled = false;
           errMsg.textContent = text || 'Failed to add';
           errMsg.style.display = '';
+        } else if (state === 'idle') {
+          // Cancelled the "already in your collection" confirmation (#888) —
+          // nothing happened, so put the button back to its start state.
+          btn.classList.remove('running');
+          btn.textContent = '★';
+          btn.disabled = false;
         }
       }, wordLang || lang);
     };

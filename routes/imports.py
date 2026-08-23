@@ -300,7 +300,8 @@ def _validate_word_for_lang(word: str, lang: str) -> None:
 def add_word_ai(body: dict):
     """Add one word with an AI-generated entry.
 
-    Body: { word_zh, day?: "today"|"tomorrow"|"list", lang?: "zh"|"fr" }
+    Body: { word_zh, day?: "today"|"tomorrow"|"list", lang?: "zh"|"fr",
+            confirm?: bool }
       today/tomorrow → cards go into that day's daily deck, due then.
       list (#677)    → the entry is generated in full but its cards are parked
                        suspended in the Saved deck, so the word enters no review
@@ -309,9 +310,17 @@ def add_word_ai(body: dict):
                        language owns a parallel tree ('Daily::…' for zh,
                        'Français::…' for fr) because the app's language filters
                        key off decks.lang.
+      confirm (#888) → when the word already exists, re-adding it mutates real
+                       state (moves cards, and for today/tomorrow irreversibly
+                       wipes FSRS memory). Daniel wants a chance to see what is
+                       about to move before that happens, so the first call for
+                       an existing word (unless it's a no-op already_listed)
+                       does no writes at all and instead reports what WOULD
+                       happen; the caller re-POSTs with confirm=true to commit.
     Returns either {job_id, deck_path} — generation runs in the background,
     poll /api/add-word-ai/progress/{job_id} — or, when the word is already in
-    the database, a finished {status, ...} with no AI call at all.
+    the database, a finished {status, ...} with no AI call at all (status is
+    "needs_confirmation" on the first call, unless already_listed).
     """
     word_zh = (body.get("word_zh") or "").strip()
     if not word_zh:
@@ -370,23 +379,41 @@ def add_word_ai(body: dict):
         card_decks = _card_deck_ids(existing["id"])
         saved_deck_id = database.get_or_create_saved_deck(lang)
         was_only_saved = bool(card_decks) and card_decks <= {saved_deck_id}
-        # Count the progress about to be dropped *before* the reset clears it.
+        # Count the progress about to be dropped *before* anything writes —
+        # needed both for the real move and for the needs_confirmation preview.
         reps = _total_repetitions(existing["id"])
         deck_names = sorted(
             (database.get_deck(d) or {}).get("name") or f"deck {d}" for d in card_decks
         )
         if to_list:
+            status = "already_listed" if was_only_saved else "listed"
+        else:
+            # Saved cards carry no progress, so that move is a promotion, not a
+            # reset — the frontend words them differently.
+            status = "promoted" if was_only_saved else "reset"
+
+        # already_listed is a no-op (cards are already parked in Saved), so it
+        # never needs a confirmation round-trip. Everything else mutates real
+        # state — moves cards, and for reset/promoted wipes FSRS memory
+        # irreversibly — so Daniel gets to see the preview first (#888).
+        if status != "already_listed" and not body.get("confirm"):
+            return {
+                "status": "needs_confirmation",
+                "action": status,
+                "word_zh": word_zh, "entry_id": existing["id"],
+                "deck_path": deck_path, "deck_id": deck_id,
+                "previous_decks": deck_names,
+                "reviews_discarded": 0 if to_list else reps,
+            }
+
+        if to_list:
             # Parking suspends the cards but leaves their scheduling alone, so
             # nothing is discarded here — promoting later is what resets them.
             moved = database.stage_word_in_saved(existing["id"], saved_deck_id)
-            status = "already_listed" if was_only_saved else "listed"
             reps = 0
         else:
             leaf_decks = database.get_or_create_category_decks(deck_id, target_day)
             moved = database.reset_word_to_new(existing["id"], leaf_decks, target_day)
-            # Saved cards carry no progress, so that move is a promotion, not a
-            # reset — the frontend words them differently.
-            status = "promoted" if was_only_saved else "reset"
         # Same in-memory-queue staleness as promote_saved (#728): a card moved
         # into today has to reach a queue that may already have been built.
         queue_mgr.invalidate()

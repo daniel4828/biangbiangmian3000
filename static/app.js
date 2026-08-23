@@ -4458,6 +4458,15 @@ function doWordTableAdd(idx) {
   // lang (#804): file the word under the language it was actually read in,
   // not always Chinese — same reasoning as #726's addWordViaAi lang param.
   addWordViaAi(wordZh, 'list', (state, text) => {
+    // 'idle' (#888): the "already in your collection" confirmation was
+    // cancelled — nothing happened, so put the row's button back as if it
+    // had never been clicked.
+    if (state === 'idle') {
+      btn.disabled = false;
+      btn.textContent = '★ List';
+      btn.classList.remove('podcast-add-error');
+      return;
+    }
     btn.textContent = text;
     btn.classList.toggle('podcast-add-error', state === 'error');
     // Only a failure is worth retrying; a finished add is not repeatable.
@@ -7373,6 +7382,13 @@ function doQuickAdd(wordZh, btn) {
   // language — never to whatever tab the home page happens to be on (#726).
   addWordViaAi(wordZh, 'tomorrow', (state, text, deckPath) => {
     if (state === 'running') return;
+    // 'idle' (#888): the "already in your collection" confirmation was
+    // cancelled — nothing happened, so just clear the "Generating…" banner
+    // rather than reporting either success or failure.
+    if (state === 'idle') {
+      hideQuickAddBanner();
+      return;
+    }
     showQuickAddBanner(
       state === 'done' ? `✓ "${wordZh}" added to ${deckPath}` : `❌ "${wordZh}": ${text}`,
       state !== 'done');
@@ -7392,6 +7408,13 @@ function showQuickAddBanner(msg, isInfo) {
   el.style.display = 'block';
   clearTimeout(el._hideTimer);
   el._hideTimer = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+function hideQuickAddBanner() {
+  const el = document.getElementById('quick-add-banner');
+  if (!el) return;
+  clearTimeout(el._hideTimer);
+  el.style.display = 'none';
 }
 
 // ── Add a word from the header (#627) ───────────────────────────────────────
@@ -7508,6 +7531,15 @@ function submitAddWord() {
   // Always the ★ List (#715): every add-word entry point parks the word in
   // Saved, suspended, and activating it is a separate step in Browse.
   addWordViaAi(wordZh, 'list', (state, text, deckPath) => {
+    // 'idle' (#888): the "already in your collection" confirmation was
+    // cancelled — nothing happened, so drop the queued entry entirely rather
+    // than leaving it stuck on "Generating…".
+    if (state === 'idle') {
+      const idx = _addWordQueue.indexOf(item);
+      if (idx !== -1) _addWordQueue.splice(idx, 1);
+      _renderAddWordQueue();
+      return;
+    }
     _setAddWordItem(item, state, text);
     // The modal may already be closed; the banner is how the user finds out.
     if (state === 'done' &&
