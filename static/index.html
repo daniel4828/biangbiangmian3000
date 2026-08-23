@@ -167,6 +167,8 @@
               <div class="listen-hint-sentence" id="listen-hint-sentence"></div>
               <div class="listen-hint-slider-row">
                 <span class="listen-hint-label">Hint</span>
+                <button class="hint-mode-btn" id="hint-mode-btn" onclick="toggleListenHintMode()"
+                        title="Switch blanking mode (saved-words union vs. plain HSK)">Saved+HSK</button>
                 <input type="range" id="listen-hint-slider" min="0" max="6" value="4"
                        oninput="onListenHintSlider(this.value)">
                 <span class="listen-hint-pct" id="listen-hint-pct">Saved + HSK≤4</span>
