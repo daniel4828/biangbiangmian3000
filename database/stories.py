@@ -641,7 +641,9 @@ def get_due_cards_unified(deck_id: int, lang: str | None = None) -> list[dict]:
         ids = _leaf_ids(cat)
         if not ids:
             continue
-        cards = (get_due_cards_multi(ids, cat) if len(ids) > 1
+        # root_deck_id caps new cards across all leaf decks combined (#883) —
+        # the same rule get_due_cards_any_cat() applies for the review queue.
+        cards = (get_due_cards_multi(ids, cat, root_deck_id=deck_id) if len(ids) > 1
                  else get_due_cards(ids[0], cat))
         for c in cards:
             if c.get("note_type") == "sentence":

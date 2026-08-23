@@ -272,7 +272,11 @@ def _get_cards_for_story(deck_id: int, category: str, lang: str | None = None) -
             return []
         # sibling_suppression=True: each word appears only once across all categories
         # (the AI prompt should not receive the same word from both Listening and Reading)
-        cards = (database.get_due_cards_multi(ids, category)
+        # root_deck_id is mandatory (#883): without it every daily leaf deck lets
+        # through its own new_per_day quota, so a deck tree with dozens of dated
+        # leaves handed the AI hundreds of new words the queue caps at zero —
+        # paid for, never reviewed. The review queue passes it (routes/review.py).
+        cards = (database.get_due_cards_multi(ids, category, root_deck_id=deck_id)
                  if len(ids) > 1
                  else database.get_due_cards(ids[0], category))
         # Sentence notes are standalone — never embed them in AI-generated stories
