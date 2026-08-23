@@ -21,6 +21,7 @@ import database
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 
 import books
+from books.paginate import paginate as paginate_book
 from knowledge.rendition import RenditionError, render_html
 from languages import DEFAULT_LANG, is_valid_lang
 from routes.utils import ai_disabled
@@ -155,6 +156,39 @@ def upload_progress(job_id: str):
     return job
 
 
+@router.patch("/api/books/{book_id}")
+def patch_book(book_id: int, body: dict):
+    """Edit title/author/source_lang after upload (#882) — upload metadata is
+    frequently wrong (file metadata gives "AI" as a title, or nothing at
+    all). format/page_count/char_budget describe the actual pagination and
+    are deliberately not editable here — changing them would put the row at
+    odds with book_pages.
+    """
+    book = database.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    fields: dict = {}
+    if "title" in body:
+        title = (body.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        fields["title"] = title
+    if "author" in body:
+        fields["author"] = (body.get("author") or "").strip() or None
+    if "source_lang" in body:
+        source_lang = body.get("source_lang")
+        if source_lang not in _SOURCE_LANGS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"source_lang must be one of {', '.join(_SOURCE_LANGS)}")
+        fields["source_lang"] = source_lang
+
+    if fields:
+        database.update_book(book_id, **fields)
+    return database.get_book(book_id)
+
+
 @router.delete("/api/books/{book_id}")
 def delete_book(book_id: int):
     """Delete a book, its pages, its cached renditions and the uploaded file."""
@@ -246,6 +280,55 @@ def get_book_chapters(book_id: int):
         return {"chapters": [], "available": False,
                 "reason": "这本书没有可识别的章节标题"}
     return {"chapters": chapters, "available": True, "reason": None}
+
+
+@router.post("/api/books/{book_id}/rescan-chapters")
+def rescan_book_chapters(book_id: int):
+    """Re-read the original upload to pick up its table of contents (#881),
+    for a book uploaded before nav.xhtml/toc.ncx parsing existed.
+
+    Re-cutting an existing book's pages is exactly what #836 forbids — it
+    would shift every cached rendition and reading position by an unknown
+    amount — so this only ever touches ref_label. It re-parses and re-paginates
+    the original file with today's code and requires the result to be
+    byte-for-byte identical (same page count, same source_text per page) to
+    what's already stored; the same file, the same char_budget and the same
+    pagination code can only diverge if the underlying file changed since
+    upload, and that is exactly the case where silently re-slicing would be
+    unsafe. A mismatch changes nothing and reports 400.
+    """
+    book = database.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if book["format"] != "epub":
+        raise HTTPException(status_code=400, detail="只有 EPUB 支持章节重新识别")
+    path = book.get("file_path")
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail="找不到原始文件，请重新上传这本书")
+
+    try:
+        extracted = books.epub.extract(path)
+    except books.BookExtractionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    fresh_pages = paginate_book(extracted["blocks"], book["char_budget"])
+
+    existing = database.get_all_pages(book_id)
+    if len(fresh_pages) != len(existing) or any(
+            fp["source_text"] != ep["source_text"] for fp, ep in zip(fresh_pages, existing)):
+        raise HTTPException(
+            status_code=400,
+            detail="重新解析得到的分页与已存内容不一致，这本书需要重新上传才能识别章节")
+
+    database.update_page_ref_labels(book_id, [p.get("ref_label") for p in fresh_pages])
+    result = database.rescan_chapter_labels(book_id)
+    return {
+        "chapters": result["chapters"],
+        "available": bool(result["chapters"]),
+        # Same contract as GET .../chapters: an empty list always comes with a
+        # reason, or the page renders a blank panel that explains nothing.
+        "reason": None if result["chapters"] else "这本书没有可识别的章节标题",
+        "stale_summarized_count": result["stale_summarized_count"],
+    }
 
 
 @router.get("/api/books/{book_id}/chapters/{number}")

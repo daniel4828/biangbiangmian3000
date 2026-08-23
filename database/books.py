@@ -91,6 +91,66 @@ def get_page(book_id: int, page_no: int) -> dict | None:
     return dict(row) if row else None
 
 
+def get_all_pages(book_id: int) -> list[dict]:
+    """Every page in order, source_text included — used only by the chapter
+    rescan flow (#881) to byte-compare a fresh re-parse against what's
+    already stored before touching anything."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT page_no, source_text, ref_label FROM book_pages "
+        "WHERE book_id = ? ORDER BY page_no",
+        (book_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_page_ref_labels(book_id: int, ref_labels: list[str | None]) -> None:
+    """Overwrite ref_label page by page, positionally 1-based against
+    `ref_labels` (#881's chapter rescan). Never touches source_text or
+    page_no/page_count — re-cutting an existing book is exactly what #836
+    forbids, because it would shift every cached rendition and reading
+    position by an unknown amount. The caller (routes/books.py) has already
+    verified `ref_labels` has exactly as many entries as this book has pages."""
+    conn = get_db()
+    conn.executemany(
+        "UPDATE book_pages SET ref_label = ? WHERE book_id = ? AND page_no = ?",
+        [(label, book_id, i) for i, label in enumerate(ref_labels, start=1)],
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_book(book_id: int, *, title: str | None = None, author: str | None = None,
+                source_lang: str | None = None) -> bool:
+    """Patch editable metadata (#882). Deliberately narrow: format/page_count/
+    char_budget describe the actual pagination and are never touched here —
+    changing them would make the row disagree with book_pages. A field left
+    as None (not passed by the caller) is left alone; routes/books.py is
+    responsible for validating non-empty title / allowed source_lang before
+    calling this. Returns whether the book existed."""
+    conn = get_db()
+    fields, params = [], []
+    if title is not None:
+        fields.append("title = ?")
+        params.append(title)
+    if author is not None:
+        fields.append("author = ?")
+        params.append(author)
+    if source_lang is not None:
+        fields.append("source_lang = ?")
+        params.append(source_lang)
+    if not fields:
+        conn.close()
+        return get_book(book_id) is not None
+    params.append(book_id)
+    cur = conn.execute(f"UPDATE books SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    updated = cur.rowcount > 0
+    conn.close()
+    return updated
+
+
 def get_book_rendition(book_id: int, page_no: int, lang: str) -> dict | None:
     """Cached translation+annotation of one page, or None. `new_words` comes
     back already JSON-decoded (a malformed blob degrades to an empty list —
@@ -200,6 +260,74 @@ def derive_chapters(book_id: int) -> list[dict]:
     conn.commit()
     conn.close()
     return list_chapters(book_id)
+
+
+def rescan_chapter_labels(book_id: int) -> dict:
+    """Regroup this book's chapters from freshly-updated ref_labels (#881),
+    called right after update_page_ref_labels() during a rescan. Unlike
+    derive_chapters() this is never idempotent-short-circuited by existing
+    rows, because the whole point is to redo the grouping — but any chapter
+    that already has status='summarized' cost real AI money and is never
+    discarded or overwritten by this, only left in place.
+
+    Numbering matches derive_chapters(): sequential position among the
+    freshly-grouped chapters. A number already held by a summarized chapter
+    keeps that chapter's stored ref_label/start_page/end_page untouched; the
+    fresh group at that position is simply not inserted. Every other
+    position gets a fresh, freshly-derived row.
+
+    Returns {"chapters": [...], "stale_summarized_count": n} where n counts
+    summarized chapters whose stored start/end page no longer matches the
+    freshly-derived boundaries at their number — the caller surfaces that so
+    Daniel knows some of the table of contents may now be misaligned with an
+    old summary.
+    """
+    conn = get_db()
+    summarized = conn.execute(
+        "SELECT number, start_page, end_page FROM book_chapters "
+        "WHERE book_id = ? AND status = 'summarized'",
+        (book_id,),
+    ).fetchall()
+    kept = {r["number"]: (r["start_page"], r["end_page"]) for r in summarized}
+
+    conn.execute(
+        "DELETE FROM book_chapters WHERE book_id = ? AND status != 'summarized'",
+        (book_id,),
+    )
+    conn.commit()
+
+    pages = conn.execute(
+        "SELECT page_no, ref_label FROM book_pages WHERE book_id = ? ORDER BY page_no",
+        (book_id,),
+    ).fetchall()
+    groups: list[dict] = []
+    for row in pages:
+        label = row["ref_label"]
+        if groups and groups[-1]["ref_label"] == label:
+            groups[-1]["end_page"] = row["page_no"]
+        else:
+            groups.append({"ref_label": label, "start_page": row["page_no"],
+                           "end_page": row["page_no"]})
+
+    stale_summarized_count = 0
+    inserts = []
+    if len(groups) > 1:  # same "not worth it" threshold as derive_chapters
+        for number, g in enumerate(groups, start=1):
+            if number in kept:
+                if kept[number] != (g["start_page"], g["end_page"]):
+                    stale_summarized_count += 1
+                continue
+            inserts.append((book_id, number, g["ref_label"], g["start_page"], g["end_page"]))
+
+    if inserts:
+        conn.executemany(
+            """INSERT INTO book_chapters (book_id, number, ref_label, start_page, end_page)
+               VALUES (?, ?, ?, ?, ?)""",
+            inserts,
+        )
+        conn.commit()
+    conn.close()
+    return {"chapters": list_chapters(book_id), "stale_summarized_count": stale_summarized_count}
 
 
 _CHAPTER_LIST_COLUMNS = (

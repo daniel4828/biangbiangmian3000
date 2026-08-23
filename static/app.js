@@ -12951,7 +12951,7 @@ function _renderBookList(books) {
       <td>${_escHtml(b.format)} · ${_escHtml(b.source_lang)}</td>
       <td>${b.page_count}</td>
       <td class="keymap-hint">${progress || '—'}</td>
-      <td>${chaptersBtn}<button class="word-table-btn" onclick="deleteBook(${b.id})" title="Delete this book">🗑</button></td>
+      <td>${chaptersBtn}<button class="word-table-btn" onclick="editBook(${b.id})" title="Edit title / author / language">✏️</button><button class="word-table-btn" onclick="deleteBook(${b.id})" title="Delete this book">🗑</button></td>
     </tr>`;
   }).join('');
 
@@ -13039,6 +13039,41 @@ async function doBookUpload() {
     openBooks();
   };
   setTimeout(poll, 1500);
+}
+
+// Three sequential single-field prompts rather than a custom modal (#882):
+// this reuses the same showPrompt() every other rename flow in the app uses
+// (see renameDeck), instead of one-off modal markup for three fields.
+async function editBook(id) {
+  let book;
+  try {
+    const data = await api('GET', '/api/books');
+    book = (data.books || []).find(b => b.id === id);
+  } catch (e) { /* fall through to the not-found check below */ }
+  if (!book) { showError('Could not load this book'); return; }
+
+  const title = await showPrompt('Title', book.title);
+  if (title === null) return;
+  if (!title.trim()) { showError('Title cannot be empty'); return; }
+
+  const author = await showPrompt('Author (optional)', book.author || '');
+  if (author === null) return;
+
+  const sourceLang = await showPrompt('Source language: de or en', book.source_lang);
+  if (sourceLang === null) return;
+  if (!['de', 'en'].includes(sourceLang.trim())) {
+    showError('Source language must be "de" or "en"');
+    return;
+  }
+
+  try {
+    await api('PATCH', `/api/books/${id}`,
+      { title: title.trim(), author: author.trim(), source_lang: sourceLang.trim() });
+  } catch (e) {
+    showError(e.message || 'Could not update book');
+    return;
+  }
+  openBooks();
 }
 
 async function deleteBook(id) {
@@ -13168,6 +13203,7 @@ function changeBookLang(lang) {
 // (Daniel clicks "Generate", nothing runs automatically — a chapter is a
 // real AI call, unlike a page translation which is free Google Translate).
 let _bookChaptersTitle = '';
+let _bookChaptersFormat = '';
 
 async function openBookChapters(bookId) {
   _bookState.bookId = bookId;
@@ -13178,7 +13214,8 @@ async function openBookChapters(bookId) {
     const data = await api('GET', '/api/books');
     const book = (data.books || []).find(b => b.id === bookId);
     _bookChaptersTitle = book ? book.title : '';
-  } catch (e) { _bookChaptersTitle = ''; }
+    _bookChaptersFormat = book ? book.format : '';
+  } catch (e) { _bookChaptersTitle = ''; _bookChaptersFormat = ''; }
 
   let data;
   try {
@@ -13202,9 +13239,16 @@ function _renderBookChapters(bookId, data) {
     </div>`;
 
   if (!data.available) {
+    // Rescan (#881) only makes sense for EPUBs: a PDF's ref_label is its
+    // real page number, not a chapter marker, so "no chapters" there is
+    // permanent, not a stale pre-#881 upload.
+    const rescanBtn = _bookChaptersFormat === 'epub'
+      ? `<button class="btn-secondary" id="book-rescan-btn" onclick="doRescanBookChapters(${bookId})">↻ 重新识别章节</button>`
+      : '';
     document.getElementById('view-books-content').innerHTML = head + `
       <div class="keymap-panel">
         <p class="keymap-hint">${_escHtml(data.reason || 'No chapters available for this book.')}</p>
+        ${rescanBtn}
       </div>`;
     return;
   }
@@ -13238,6 +13282,19 @@ function _renderBookChapters(bookId, data) {
 
   document.getElementById('view-books-content').innerHTML = head + `
     <div class="keymap-panel">${rows}</div>`;
+}
+
+async function doRescanBookChapters(bookId) {
+  const btn = document.getElementById('book-rescan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '重新识别中…'; }
+  try {
+    await api('POST', `/api/books/${bookId}/rescan-chapters`);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ 重新识别章节'; }
+    showError(e.message || 'Could not rescan chapters');
+    return;
+  }
+  openBookChapters(bookId);
 }
 
 async function doSummarizeChapter(bookId, number) {
