@@ -7333,15 +7333,17 @@ function _getTargetPositions(zh) {
   return positions;
 }
 
-// Levels: 0=Off, 1=all saved words, 2..6 = saved words below HSK (8-level).
+// Words in the deck are always hidden; the slider adds easy words on top of
+// them (#862). "Not studied here" and "don't know it" are different things:
+// plenty of HSK1-4 words never entered the deck but Daniel has known them for
+// years, so leaving them visible just gives the sentence away.
+// 0 = saved words only, N = also every word at HSK <= N.
 function _hintLabelFor(level) {
-  if (level === 0) return 'Off';
-  if (level === 1) return 'All saved';
-  return `Saved <HSK${8 - level}`;
+  return level === 0 ? 'Saved only' : `Saved + HSK≤${level}`;
 }
 
 function _hintSavedDefault() {
-  return parseInt(localStorage.getItem('listenHideLevel') ?? '1', 10);
+  return parseInt(localStorage.getItem('listenHideLevel') ?? '4', 10);
 }
 
 function _updateHintStar(currentVal) {
@@ -7415,14 +7417,15 @@ function _renderListenHint(level) {
   // Sentence notes have no single "target word" to blank — reveal based on vocab only.
   const targetPositions = isSentenceNote && !sentence ? new Set() : _getTargetPositions(zh);
 
-  // Only words in the user's own vocab (#850) are eligible to be hidden — a
-  // word never seen before always shows, no matter how "hard" HSK thinks it is.
-  // level 1 hides every saved word; level N>=2 additionally requires
-  // HSK < (8-N) (words missing from the HSK table count as level 7, the
-  // hardest, so only level 1 hides them).
+  // Hidden = (in my deck) ∪ (HSK <= level), the union of the two rules (#862).
+  // The deck half catches what he is actively learning; the HSK half catches the
+  // everyday words he has known for years but that never entered the deck —
+  // leaving those visible hands him the sentence for free. What stays visible is
+  // the intersection's complement: words outside the deck that are HSK 5/6 or
+  // missing from the table entirely, which is exactly what has to be heard.
   const vocabSet = _vocabIndex || new Set();
   const hidePositions = new Set();
-  if (level > 0) {
+  {
     // Use story tokens when available; fall back to char-by-char for sentence notes.
     const tokens = sentence?.tokens?.length
       ? sentence.tokens
@@ -7433,10 +7436,9 @@ function _renderListenHint(level) {
       if (tokStart === -1) { pos += tok.length; continue; }
       const tokEnd = tokStart + tok.length;
       const overlapsTarget = [...Array(tok.length).keys()].some(k => targetPositions.has(tokStart + k));
-      if (!overlapsTarget && vocabSet.has(tok)) {
+      if (!overlapsTarget) {
         const hskLevel = _hskLevels ? _hskLevelOf(tok) : null;
-        const effectiveLevel = hskLevel === null ? 7 : hskLevel;
-        const shouldHide = level === 1 || effectiveLevel < (8 - level);
+        const shouldHide = vocabSet.has(tok) || (hskLevel !== null && hskLevel <= level);
         if (shouldHide) {
           for (let k = tokStart; k < tokEnd; k++) hidePositions.add(k);
         }
