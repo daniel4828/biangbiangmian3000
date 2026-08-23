@@ -5869,3 +5869,80 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .book-chapter-title { font-weight: 600; flex: 1 1 auto; }
 .book-chapter-concept { margin-top: 4px; }
 .book-chapter-error { margin-top: 4px; color: #dc2626; }
+
+/* ── Category switches in deck settings (#879) ───────────────────────────────
+   These three decide whether a category's cards reach the queue, the due
+   badges and the generated story at all — the widest-reaching switches in the
+   preset. As three 18px checkboxes among the numeric fields they read like a
+   minor parameter and were hard to hit on a phone. Now: three tiles, tap
+   anywhere, state visible at a glance.
+
+   The <input> stays in the DOM (visually hidden) so app.js keeps reading and
+   writing the same ids; the <label> wrapper does the toggling natively, so
+   there is no second click handler to drift out of sync. */
+.cat-tiles {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.cat-tile {
+  position: relative;   /* the visually-hidden input is absolute inside it */
+  flex: 1;
+  min-height: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 6px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--card, #fff);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  color: var(--muted);
+}
+/* The real checkbox: reachable by keyboard, invisible on screen. Not
+   display:none — that would drop it out of the tab order. */
+.cat-tile-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.cat-tile-glyph {
+  font-size: 24px;
+  line-height: 1.1;
+  font-weight: 600;
+}
+.cat-tile-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+.cat-tile-state {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+}
+.cat-tile:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.cat-tile:has(.cat-tile-input:checked) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+/* The word comes from CSS so it can never disagree with the checkbox — the
+   markup carries no state text of its own. */
+.cat-tile-state::after { content: 'off'; }
+.cat-tile:has(.cat-tile-input:checked) .cat-tile-state::after { content: 'on'; }
+.cat-tile:has(.cat-tile-input:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.cat-tiles-hint {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
