@@ -609,17 +609,33 @@
 
     <div class="opt-group">
       <div class="opt-group-label">Categories</div>
-      <div class="opt-row">
-        <span class="opt-label">Enable reading<br><span style="font-weight:400;font-size:11px;color:var(--muted)">off = no R pill, reading cards excluded from queues &amp; counts (cards are kept)</span></span>
-        <input type="checkbox" id="opt-reading-enabled" style="width:18px;height:18px;cursor:pointer">
+      <!-- Three tap-anywhere tiles (#879). The original checkboxes are still
+           here, only visually hidden: app.js reads and writes these exact ids
+           when loading and saving a preset, so wrapping them in a <label> keeps
+           one source of truth and needs no click handler of its own. -->
+      <div class="cat-tiles">
+        <label class="cat-tile">
+          <input type="checkbox" id="opt-reading-enabled" class="cat-tile-input">
+          <span class="cat-tile-glyph">读</span>
+          <span class="cat-tile-name">Reading</span>
+          <span class="cat-tile-state"></span>
+        </label>
+        <label class="cat-tile">
+          <input type="checkbox" id="opt-listening-enabled" class="cat-tile-input">
+          <span class="cat-tile-glyph">听</span>
+          <span class="cat-tile-name">Listening</span>
+          <span class="cat-tile-state"></span>
+        </label>
+        <label class="cat-tile">
+          <input type="checkbox" id="opt-creating-enabled" class="cat-tile-input">
+          <span class="cat-tile-glyph">创</span>
+          <span class="cat-tile-name">Creating</span>
+          <span class="cat-tile-state"></span>
+        </label>
       </div>
-      <div class="opt-row">
-        <span class="opt-label">Enable listening<br><span style="font-weight:400;font-size:11px;color:var(--muted)">off = no L pill, listening cards excluded from queues &amp; counts (cards are kept)</span></span>
-        <input type="checkbox" id="opt-listening-enabled" style="width:18px;height:18px;cursor:pointer">
-      </div>
-      <div class="opt-row">
-        <span class="opt-label">Enable creating<br><span style="font-weight:400;font-size:11px;color:var(--muted)">off = no C pill, creating cards excluded from queues &amp; counts (cards are kept)</span></span>
-        <input type="checkbox" id="opt-creating-enabled" style="width:18px;height:18px;cursor:pointer">
+      <div class="cat-tiles-hint">
+        Switching one off keeps its cards — they are just left out of queues,
+        due counts and the generated story.
       </div>
     </div>
 
