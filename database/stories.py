@@ -610,14 +610,26 @@ def get_due_cards_unified(deck_id: int, lang: str | None = None) -> list[dict]:
     Order matches review priority (state → category → due) so story sentence positions
     align with the order cards will be presented during the review session.
     `lang` restricts aggregation to leaf decks of that language (language tabs)."""
-    from .cards import get_due_cards, get_due_cards_multi, get_descendant_leaf_deck_ids, get_preset_for_deck
+    from .cards import (get_due_cards, get_due_cards_multi, get_descendant_leaf_deck_ids,
+                        get_preset_for_deck, category_disabled_deck_ids)
     from .decks import get_deck
+
+    # Same rule the review queue applies in _leaf_decks_with_category() (#871).
+    # Without it a category switched off in the preset still reached the AI: the
+    # story got sentences for creating cards the queue would never hand out —
+    # paid for, never seen, and taking room from words actually due.
+    disabled = {cat: category_disabled_deck_ids(cat)
+                for cat in ("listening", "reading", "creating")}
 
     def _leaf_ids(cat: str) -> list[int]:
         deck = get_deck(deck_id)
         if deck["category"] is None:
-            return get_descendant_leaf_deck_ids(deck_id, cat, lang=lang)
-        return [deck_id]
+            ids = get_descendant_leaf_deck_ids(deck_id, cat, lang=lang)
+        else:
+            # Called with a category leaf as the root: it must face the same
+            # check, or entering from the leaf sidesteps the filter entirely.
+            ids = [deck_id]
+        return [i for i in ids if i not in disabled[cat]]
 
     preset = get_preset_for_deck(deck_id)
     order_str = preset.get("category_order", "listening,reading,creating")
