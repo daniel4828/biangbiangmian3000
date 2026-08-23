@@ -167,9 +167,9 @@
               <div class="listen-hint-sentence" id="listen-hint-sentence"></div>
               <div class="listen-hint-slider-row">
                 <span class="listen-hint-label">Hint</span>
-                <input type="range" id="listen-hint-slider" min="0" max="6" value="3"
+                <input type="range" id="listen-hint-slider" min="0" max="6" value="4"
                        oninput="onListenHintSlider(this.value)">
-                <span class="listen-hint-pct" id="listen-hint-pct">HSK 3+</span>
+                <span class="listen-hint-pct" id="listen-hint-pct">Saved + HSK≤4</span>
                 <button class="hint-save-btn" id="hint-save-btn" onclick="saveListenHintDefault()" title="Save as default">☆</button>
               </div>
             </div>
@@ -267,6 +267,15 @@
                       style="display:none"
                       data-shortcut-action="star-sentence" data-shortcut-title="Star this sentence as a good example"
                       title="Star this sentence as a good example (Shift+F)">☆</button>
+              <!-- Flag a badly-written sentence as a negative example for prompt tuning (#854) -->
+              <button class="card-toggle-btn card-flag-btn" id="toggle-flag-btn" onclick="toggleSentenceFlag()"
+                      style="display:none"
+                      data-shortcut-action="flag-sentence" data-shortcut-title="Flag this sentence as a bad example"
+                      title="Flag this sentence as a bad example (Shift+G)">⚐</button>
+              <!-- Ask AI about this sentence (#853): grammar/naturalness questions,
+                   right where the sentence is. -->
+              <button class="card-toggle-btn" id="toggle-question-btn" onclick="openSentenceQuestionModal()"
+                      style="display:none" title="Ask AI about this sentence">？</button>
             </div>
 
             <!-- 2. Pinyin row (hidden by default; press p to toggle) -->
@@ -409,6 +418,9 @@
         <!-- Sentence-level view, not a word filter (#692) -->
         <button class="bs-status-item" id="bss-starred"   onclick="setBrowseStatusFilter('starred')"
                 title="Sentences you starred while reviewing — good examples for prompt tuning">⭐ Sentences</button>
+        <!-- Sentence-level view, mirror of starred (#854) -->
+        <button class="bs-status-item" id="bss-flagged"   onclick="setBrowseStatusFilter('flagged')"
+                title="Sentences you flagged while reviewing — bad examples for prompt tuning">⚑ Sentences</button>
       </div>
       <!-- Chinese-only: hidden under a non-zh language tab (#815) -->
       <div class="bs-section" id="bs-hanzi-section">
@@ -435,6 +447,8 @@
           <option value="leeched-asc" hidden>Leeched: oldest first</option>
           <option value="starred-desc" hidden>Starred: newest first</option>
           <option value="starred-asc" hidden>Starred: oldest first</option>
+          <option value="flagged-desc" hidden>Flagged: newest first</option>
+          <option value="flagged-asc" hidden>Flagged: oldest first</option>
         </select>
       </div>
       <div id="browse-action-bar">
@@ -1030,6 +1044,26 @@
     </div>
     <div id="add-word-status"></div>
     <div id="add-word-queue"></div>
+  </div>
+</div>
+
+<!-- Sentence-question modal (#853): ask AI about the sentence on the current
+     card's back — grammar/naturalness check, or a free-form question. -->
+<div id="sentence-question-overlay" onclick="closeSentenceQuestionModal()" style="display:none"></div>
+<div id="sentence-question-modal" style="display:none">
+  <div class="edit-modal-header">
+    <span class="edit-modal-title">Ask about this sentence</span>
+    <button class="edit-modal-close" onclick="closeSentenceQuestionModal()">✕</button>
+  </div>
+  <div id="sentence-question-body">
+    <div id="sentence-question-sentence"></div>
+    <div id="sentence-question-row">
+      <input id="sentence-question-input" type="text"
+             placeholder="Optional — leave blank to just check the sentence" autocomplete="off"
+             onkeydown="if (event.key === 'Enter') submitSentenceQuestion()">
+      <button id="sentence-question-submit" type="button" onclick="submitSentenceQuestion()">Ask</button>
+    </div>
+    <div id="sentence-question-answer"></div>
   </div>
 </div>
 

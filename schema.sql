@@ -450,6 +450,10 @@ CREATE TABLE IF NOT EXISTS story_sentences (
     -- starred during review as a good example to learn from when tuning prompts (#692)
     starred     INTEGER NOT NULL DEFAULT 0,
     starred_at  TEXT,
+    -- flagged during review as a bad example — grammar mistakes / awkward
+    -- phrasing worth fixing in the prompt (#854, the mirror image of starred)
+    flagged     INTEGER NOT NULL DEFAULT 0,
+    flagged_at  TEXT,
     UNIQUE(story_id, position)
 );
 

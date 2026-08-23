@@ -1804,6 +1804,53 @@ def dictionary_lookup(query: str, lang: str = "zh", model: str | None = None) ->
     return result, use_model
 
 
+SENTENCE_QUESTION_PROMPT = """You are helping Daniel, a German-speaking Chinese
+learner (HSK 4-5), understand a sentence from his flashcard review. Story
+sentences are AI-generated and occasionally come out grammatically wrong or
+unnatural — this feature exists precisely so he can catch that.
+
+Sentence: {sentence_zh}
+Target word being reviewed: {word_zh}
+
+Answer in two parts, in this order:
+1. First, judge the sentence itself: is it natural? Any grammar mistakes? Would
+   a native speaker actually say this? If something is off, say so plainly —
+   do not politely call a bad sentence good just to avoid conflict. If the
+   sentence is fine, say briefly that it's fine and move on; don't manufacture
+   a problem.
+2. Then answer this question about the sentence: {question}
+
+Write your whole answer in SIMPLE CHINESE using only HSK 4-5 vocabulary or
+easier. Never use Japanese. If you need a word above that level, append its
+reading and German meaning in parentheses right after it, like this:
+比较（bǐjiào - vergleichsweise）. Keep the answer short — a few sentences, not
+an essay. Plain text only, no markdown, no JSON."""
+
+
+def ask_about_sentence(sentence_zh: str, question: str = "", word_zh: str | None = None,
+                        lang: str = "zh", model: str = DEFAULT_MODEL) -> str:
+    """Answer a one-off question about a review sentence (issue #853).
+
+    Single-turn, no follow-up — same shape as dictionary_lookup(). The prompt
+    always asks the model to judge the sentence's own quality first (story
+    generation occasionally produces awkward or wrong sentences) before
+    answering whatever Daniel actually typed; an empty question defaults to
+    "is anything wrong with this sentence?".
+
+    lang is accepted for future non-Chinese decks but the answer language is
+    always simple Chinese per the issue — there is nothing to switch on yet.
+    Returns plain text (not JSON); callers render it with textContent.
+    """
+    q = question.strip() if question else "这句话有没有问题？"
+    prompt = SENTENCE_QUESTION_PROMPT.format(
+        sentence_zh=sentence_zh, word_zh=word_zh or "(none)", question=q,
+    )
+    logger.info("[%s] ask_about_sentence: %s", model, sentence_zh)
+    raw = _call_api(model, [{"role": "user", "content": prompt}], max_tokens=800,
+                    purpose="sentence_question", thinking=False)
+    return raw.strip()
+
+
 def generate_character_info(char: str, pinyin: str, model: str = DEFAULT_MODEL) -> dict:
     """
     Generate etymology and translation for a single Chinese character.

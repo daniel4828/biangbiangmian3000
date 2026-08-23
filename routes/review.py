@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException
 
+import ai
 import database
 import review_notify
 import srs
@@ -629,3 +630,32 @@ def session_timelines(body: dict):
     """Interval timelines for the cards reviewed in one session (summary graph)."""
     ids = [int(i) for i in body.get("ids", [])]
     return database.get_session_timelines(ids)
+
+
+@router.post("/api/sentence-question")
+def sentence_question(body: dict):
+    """Ask AI about the sentence currently showing on a card's back (#853).
+
+    Single-turn, no follow-up — same shape as /api/dict/lookup. An empty
+    question defaults to "is anything wrong with this sentence?" inside
+    ai.ask_about_sentence(), which is also told to judge the sentence's own
+    quality before answering — story generation occasionally produces
+    awkward or outright wrong sentences, and this button exists to catch that.
+    """
+    sentence_zh = (body.get("sentence_zh") or "").strip()
+    if not sentence_zh:
+        raise HTTPException(400, "sentence_zh required")
+    if ai_disabled():
+        raise HTTPException(400, "AI is disabled")
+
+    question = (body.get("question") or "").strip()
+    word_zh = body.get("word_zh")
+    lang = body.get("lang") or "zh"
+
+    try:
+        answer = ai.ask_about_sentence(sentence_zh, question=question, word_zh=word_zh, lang=lang)
+    except Exception as e:
+        logger.error("sentence_question failed for %r: %s", sentence_zh, e)
+        raise HTTPException(500, str(e))
+
+    return {"answer": answer}

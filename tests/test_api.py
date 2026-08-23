@@ -332,3 +332,39 @@ class TestUnleech:
     def test_bulk_unleech_with_no_words_is_a_noop(self, populated_db):
         r = client.post("/api/cards/bulk-unleech", json={"word_ids": []})
         assert r.json() == {"ok": True, "count": 0}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vocab-index (#850)
+# ---------------------------------------------------------------------------
+
+class TestVocabIndex:
+
+    def test_returns_word_forms_for_lang(self, populated_db):
+        r = client.get("/api/vocab-index", params={"lang": "zh"})
+
+        assert r.status_code == 200
+        words = r.json()["words"]
+        assert set(words) == {"你好", "谢谢"}
+
+    def test_defaults_to_zh_when_lang_omitted(self, populated_db):
+        r = client.get("/api/vocab-index")
+
+        assert r.status_code == 200
+        assert set(r.json()["words"]) == {"你好", "谢谢"}
+
+    def test_returns_empty_list_for_unused_lang(self, populated_db):
+        r = client.get("/api/vocab-index", params={"lang": "fr"})
+
+        assert r.status_code == 200
+        assert r.json()["words"] == []
+
+    def test_payload_is_just_word_forms_not_full_browse_rows(self, populated_db):
+        """This is the whole point of a dedicated endpoint (#850): no
+        definitions, no card state — just the list the front end needs to
+        test set membership for the listening-hint slider."""
+        r = client.get("/api/vocab-index", params={"lang": "zh"})
+
+        body = r.json()
+        assert list(body.keys()) == ["words"]
+        assert all(isinstance(w, str) for w in body["words"])

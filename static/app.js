@@ -196,6 +196,7 @@ const KEYMAP_DEFAULTS = {
   reasoning:           'g',
   'restart-server':    'R',
   'star-sentence':     'F',
+  'flag-sentence':     'G',
   'fsrs-inspector':    'S',
   // word-detail only
   relations:      'r',
@@ -239,6 +240,7 @@ const KEYMAP_ACTIONS = [
   { id: 'reasoning',         label: 'Background popup / news language', scope: 'review' },
   { id: 'restart-server',    label: 'Restart server',             scope: 'review' },
   { id: 'star-sentence',     label: 'Star this sentence',         scope: 'review' },
+  { id: 'flag-sentence',     label: 'Flag this sentence',         scope: 'review' },
   { id: 'fsrs-inspector',    label: 'FSRS scheduler inspector',   scope: 'review' },
 
   { id: 'relations',    label: 'Toggle relations',             scope: 'word-detail' },
@@ -1723,6 +1725,26 @@ function _catRRSpan(val) {
   return `<span class="cat-pill-rr ${cls}">${txt}</span>`;
 }
 
+// One category pill: suspend-badge + pill (review) + quick (speed mode) + gear
+// (options) + regen (issue #857 — regenerate just this category's story). Shared
+// by both branches of buildCategoryButtons below — they used to carry two
+// almost-identical copies of this template (one keyed on a leaf id, one on the
+// aggregating deck's id), which meant every future addition (like this ↺
+// button) had to be pasted in twice.
+function _catPillGroup(id, cat, label, safeName, c, allSusp, noStory, rr) {
+  const badgeIcon = allSusp ? '▶' : '⏸';
+  const badgeClass = allSusp ? 'cat-susp-badge cat-badge-suspended' : 'cat-susp-badge cat-badge-active';
+  const pillClass = allSusp ? 'cat-pill cat-pill-dimmed' : 'cat-pill';
+  const title = allSusp ? `Unsuspend all ${label} cards` : `Suspend all ${label} cards`;
+  // Hidden for no_story categories (nothing to regenerate) and offline (the
+  // regeneration is an AI call, so it can only fail — same reasoning as the
+  // deck-level ↺ and the review header's ↺, #612).
+  const regenBtn = (!noStory && !_offlineMode)
+    ? `<button class="cat-pill-regen" onclick="event.stopPropagation();regenerateStoryFromList(${id},'${cat}')" title="Regenerate ${label} story">↺</button>`
+    : '';
+  return `<span class="cat-pill-group"><button class="${badgeClass}" onclick="event.stopPropagation();toggleCategorySuspension(${id},'${cat}')" title="${title}">${badgeIcon}</button><span class="cat-pill-wrap"><button class="${pillClass}" onclick="event.stopPropagation();startReview(${id},'${cat}','${safeName}',${!!noStory})"><span class="cat-pill-label">${label}</span><span class="cat-pill-counts">${countHtml(c)}</span>${_catRRSpan(rr)}</button><button class="cat-pill-quick" onclick="event.stopPropagation();startReview(${id},'${cat}','${safeName}',${!!noStory},true)" title="Speed mode — words only, no sentences">⚡</button><button class="cat-pill-gear" onclick="event.stopPropagation();openOptions(${id})" title="Options">⚙</button>${regenBtn}</span></span>`;
+}
+
 // Build 3 inline pills (L/R/C) for any deck. Uses direct cat leaves if present, else aggregates.
 function buildCategoryButtons(deck) {
   const DEFAULT_ORDER = ['listening', 'reading', 'creating'];
@@ -1741,24 +1763,16 @@ function buildCategoryButtons(deck) {
     if (leaf) {
       const c = leaf.counts || { new: 0, learning: 0, review: 0 };
       const allSusp = !!leaf.all_suspended;
-      const badgeIcon = allSusp ? '▶' : '⏸';
-      const badgeClass = allSusp ? 'cat-susp-badge cat-badge-suspended' : 'cat-susp-badge cat-badge-active';
-      const pillClass = allSusp ? 'cat-pill cat-pill-dimmed' : 'cat-pill';
-      const title = allSusp ? `Unsuspend all ${label} cards` : `Suspend all ${label} cards`;
       const rr = _leavesRR([leaf]);
-      return `<span class="cat-pill-group"><button class="${badgeClass}" onclick="event.stopPropagation();toggleCategorySuspension(${leaf.id},'${cat}')" title="${title}">${badgeIcon}</button><span class="cat-pill-wrap"><button class="${pillClass}" onclick="event.stopPropagation();startReview(${leaf.id},'${cat}','${safeName}',${!!leaf.no_story})"><span class="cat-pill-label">${label}</span><span class="cat-pill-counts">${countHtml(c)}</span>${_catRRSpan(rr)}</button><button class="cat-pill-quick" onclick="event.stopPropagation();startReview(${leaf.id},'${cat}','${safeName}',${!!leaf.no_story},true)" title="Speed mode — words only, no sentences">⚡</button><button class="cat-pill-gear" onclick="event.stopPropagation();openOptions(${leaf.id})" title="Options">⚙</button></span></span>`;
+      return _catPillGroup(leaf.id, cat, label, safeName, c, allSusp, leaf.no_story, rr);
     }
     const c = aggregateCounts(deck, cat);
     const hasCards = getDeepCategoryLeaves(deck).some(l => l.category === cat);
     if (!hasCards) return `<button class="cat-pill" disabled><span class="cat-pill-label">${label}</span><span class="cat-pill-counts"><span class="n-zero">—</span></span></button>`;
     const leaves = getDeepCategoryLeaves(deck).filter(l => l.category === cat);
     const allSusp = leaves.length > 0 && leaves.every(l => !!l.all_suspended);
-    const badgeIcon = allSusp ? '▶' : '⏸';
-    const badgeClass = allSusp ? 'cat-susp-badge cat-badge-suspended' : 'cat-susp-badge cat-badge-active';
-    const pillClass = allSusp ? 'cat-pill cat-pill-dimmed' : 'cat-pill';
-    const title = allSusp ? `Unsuspend all ${label} cards` : `Suspend all ${label} cards`;
     const rr = _leavesRR(leaves);
-    return `<span class="cat-pill-group"><button class="${badgeClass}" onclick="event.stopPropagation();toggleCategorySuspension(${deck.id},'${cat}')" title="${title}">${badgeIcon}</button><span class="cat-pill-wrap"><button class="${pillClass}" onclick="event.stopPropagation();startReview(${deck.id},'${cat}','${safeName}',${!!deck.no_story})"><span class="cat-pill-label">${label}</span><span class="cat-pill-counts">${countHtml(c)}</span>${_catRRSpan(rr)}</button><button class="cat-pill-quick" onclick="event.stopPropagation();startReview(${deck.id},'${cat}','${safeName}',${!!deck.no_story},true)" title="Speed mode — words only, no sentences">⚡</button><button class="cat-pill-gear" onclick="event.stopPropagation();openOptions(${deck.id})" title="Options">⚙</button></span></span>`;
+    return _catPillGroup(deck.id, cat, label, safeName, c, allSusp, deck.no_story, rr);
   }).join('');
 }
 
@@ -1817,7 +1831,10 @@ function renderDecks(decks) {
     filteredHtml += `
       <div class="tree-row tree-parent">
         <span class="tree-toggle"></span>
-        <span class="tree-name" onclick="startReviewMixed(${allDeck.id},'${safeName}')" style="cursor:pointer">All</span>
+        <span class="tree-name-wrap">
+          <span class="tree-name" onclick="startReviewMixed(${allDeck.id},'${safeName}')" style="cursor:pointer">All</span>
+          ${!allDeck.no_story && !_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${allDeck.id})" title="Regenerate story">↺</button>` : ''}
+        </span>
         <span class="deck-counts">${_mixNewBtn(allDeck.id, allDeck.new_review_order_override)}<span class="n-new">${(allDeck.counts||{}).new||0}</span><span class="n-lrn">${lrnCount(allDeck.counts)}</span><span class="n-rev">${(allDeck.counts||{}).review||0}</span></span>
         ${allRRBadge}
         <button class="${allBuryClass}" onclick="event.stopPropagation();toggleBury(${allDeck.id})" title="${allBuryTitle}">${allBuryIcon}</button>
@@ -1917,7 +1934,7 @@ function renderDeckRows(decks, depth, sortMode) {
         <span class="tree-name-wrap">
           <span class="tree-name" onclick="startReviewMixed(${deck.id},'${safeName}',${!!deck.no_story})" style="cursor:pointer">${deck.name}</span>
           ${deck.lang === 'fr' ? `<span class="deck-lang-chip" title="French deck">FR</span>` : ''}
-          ${!deck.no_story ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${deck.id})" title="Regenerate story">↺</button>` : ''}
+          ${!deck.no_story && !_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${deck.id})" title="Regenerate story">↺</button>` : ''}
         </span>
         ${deckCounts}
         ${rrBadge}
@@ -2161,29 +2178,34 @@ function _sortWords(words) {
 
 function onBrowseSort(val) {
   _browseSort = val;
-  // Picking a starred-* option re-sorts the sentence list in place — it must
-  // NOT leave the starred view, unlike every other sort option (#773).
+  // Picking a starred-*/flagged-* option re-sorts the sentence list in place —
+  // it must NOT leave that sentence view, unlike every other sort option (#773,
+  // generalized to flagged in #854).
   if (val.startsWith('starred-') && _browseCardStatus === 'starred') { renderStarredSentences(); return; }
-  _leaveStarredView();  // the sort options are word fields (pinyin/hanzi), #692
+  if (val.startsWith('flagged-') && _browseCardStatus === 'flagged') { renderFlaggedSentences(); return; }
+  _leaveSentenceView();  // the sort options are word fields (pinyin/hanzi), #692
   const q = document.getElementById('browse-search').value.trim();
   if (_browseMode === 'hanzi') renderHanziList(_allHanzi, q);
   else if (q) onBrowseSearch(q); else renderBrowseWords(_filteredBrowseWords());
 }
 
-// The Leeched and ⭐ Sentences views sort by a timestamp the other views
-// don't have (leeched_at / starred_at), so their options only appear while
-// that view is active, and switching away falls back to the default word
-// sort (#773). Must run BEFORE the list is (re)rendered so _browseSort is
-// already correct.
+// The Leeched, ⭐ Sentences and ⚑ Sentences views sort by a timestamp the other
+// views don't have (leeched_at / starred_at / flagged_at), so their options only
+// appear while that view is active, and switching away falls back to the default
+// word sort (#773, generalized to flagged in #854). Must run BEFORE the list is
+// (re)rendered so _browseSort is already correct.
 function _syncSortOptions() {
   const showLeeched = _browseCardStatus === 'leech';
   const showStarred = _browseCardStatus === 'starred';
+  const showFlagged = _browseCardStatus === 'flagged';
   document.querySelectorAll('#browse-sort option[value^="leeched-"]').forEach(o => o.hidden = !showLeeched);
   document.querySelectorAll('#browse-sort option[value^="starred-"]').forEach(o => o.hidden = !showStarred);
+  document.querySelectorAll('#browse-sort option[value^="flagged-"]').forEach(o => o.hidden = !showFlagged);
   if (showLeeched && !_browseSort.startsWith('leeched-')) _browseSort = 'leeched-desc';
   else if (showStarred && !_browseSort.startsWith('starred-')) _browseSort = 'starred-desc';
-  else if (!showLeeched && !showStarred &&
-           (_browseSort.startsWith('leeched-') || _browseSort.startsWith('starred-'))) {
+  else if (showFlagged && !_browseSort.startsWith('flagged-')) _browseSort = 'flagged-desc';
+  else if (!showLeeched && !showStarred && !showFlagged &&
+           (_browseSort.startsWith('leeched-') || _browseSort.startsWith('starred-') || _browseSort.startsWith('flagged-'))) {
     _browseSort = DEFAULT_BROWSE_SORT;
   }
   const sel = document.getElementById('browse-sort');
@@ -2255,7 +2277,7 @@ function setBrowseFilter(mode, filter) {
   _browseMode   = mode;
   _browseFilter = filter;
   _browseDeckId = null;
-  _leaveStarredView();
+  _leaveSentenceView();
   _syncSortOptions();
   // Update sidebar active state
   document.querySelectorAll('.bs-item').forEach(el => el.classList.remove('bs-active'));
@@ -2279,18 +2301,22 @@ function setBrowseStatusFilter(status) {
   document.getElementById('browse-search').value = '';
   _browseSelected.clear();
   _updateBrowseActionBar();
-  // 'starred' lists sentences, not words, so it can't go through the word filter
-  // chain in _filteredBrowseWords() — it's its own rendering branch (#692).
+  // 'starred'/'flagged' list sentences, not words, so they can't go through the
+  // word filter chain in _filteredBrowseWords() — they're their own rendering
+  // branch (#692, generalized to flagged in #854).
   if (status === 'starred') { renderStarredSentences(); return; }
+  if (status === 'flagged') { renderFlaggedSentences(); return; }
   if (_browseMode === 'notes') renderBrowseWords(_filteredBrowseWords());
 }
 
-// Any word-level filter action leaves the sentence view: it lists a different
-// kind of thing, so silently keeping its tab highlighted would be a lie (#692).
-function _leaveStarredView() {
-  if (_browseCardStatus !== 'starred') return;
+// Any word-level filter action leaves the current sentence view (starred or
+// flagged): it lists a different kind of thing, so silently keeping its tab
+// highlighted would be a lie (#692, generalized from _leaveStarredView in #854).
+function _leaveSentenceView() {
+  if (_browseCardStatus !== 'starred' && _browseCardStatus !== 'flagged') return;
   _browseCardStatus = 'all';
   _starredSentencesCache = null;  // stale on next entry — re-fetch (#773)
+  _flaggedSentencesCache = null;
   _syncSortOptions();
   document.querySelectorAll('.bs-status-item').forEach(el => el.classList.remove('bs-active'));
   document.getElementById('bss-all')?.classList.add('bs-active');
@@ -2298,7 +2324,7 @@ function _leaveStarredView() {
 
 function setBrowseDeckFilter(deckId) {
   _closeBrowseDrawer();
-  _leaveStarredView();
+  _leaveSentenceView();
   if (_browseDeckId === deckId) {
     _browseDeckId = null;
     document.querySelectorAll('.bs-deck-item').forEach(el => el.classList.remove('bs-active'));
@@ -2344,6 +2370,7 @@ async function openBrowse() {
     _browseSelected.clear();
     _browseCardStatus = 'all';
     _starredSentencesCache = null;  // fresh browse open — re-fetch, don't reuse a stale list (#773)
+    _flaggedSentencesCache = null;
     _syncSortOptions();
     showView('browse');
     // Always land on the list, not on the filter drawer (#827).
@@ -2431,7 +2458,7 @@ function toggleBrowseDeckExpand(deckId) {
 
 function onBrowseSearch(val) {
   clearTimeout(_browseSearchTimer);
-  _leaveStarredView();  // searching is word-level (#692)
+  _leaveSentenceView();  // searching is word-level (#692)
   const q = val.trim();
   if (_browseMode === 'hanzi') { renderHanziList(_allHanzi, q); return; }
   if (!q) { renderBrowseWords(_filteredBrowseWords()); return; }
@@ -2700,21 +2727,46 @@ async function browseDeleteWord(e, wordId) {
   } catch (err) { showError('Delete failed: ' + err.message); }
 }
 
-// ── Starred sentences view (#692) ────────────────────────────────────────────
-// Sentences starred during review, newest first, each with the generation
-// context that makes it useful: which mode/model produced it and from which
-// source material. That's what you read when deciding how to change a prompt.
+// ── Starred / Flagged sentences views (#692, #854) ───────────────────────────
+// Two independent judgments only possible in the instant you read a sentence
+// during review: ★ a good one worth keeping as a positive prompt-tuning example,
+// ⚑ a bad one (grammar mistake, awkward phrasing) worth keeping as a negative
+// one. Both list sentences, not words, so they share one rendering branch that
+// none of the word filters above can handle — this config drives that branch.
+const _SENTENCE_VIEWS = {
+  starred: {
+    field: 'starred', tsField: 'starred_at', apiPath: '/api/starred-sentences',
+    toggleUrl: id => `/api/story-sentence/${id}/star`,
+    icon: '★', emptyIcon: '☆', emptyShortcut: 'Shift+F', emptyLabel: 'starred',
+    undoTitle: 'Remove the star', undoVerb: 'Unstar',
+  },
+  flagged: {
+    field: 'flagged', tsField: 'flagged_at', apiPath: '/api/flagged-sentences',
+    toggleUrl: id => `/api/story-sentence/${id}/flag`,
+    icon: '⚑', emptyIcon: '⚐', emptyShortcut: 'Shift+G', emptyLabel: 'flagged',
+    undoTitle: 'Remove the flag', undoVerb: 'Unflag',
+  },
+};
 
 let _starredSentencesCache = null;  // avoids a refetch when only the sort changes (#773)
+let _flaggedSentencesCache = null;  // same idea, for the flagged view (#854)
 
-// starred-asc = oldest first; anything else (including the default) = newest
-// first. Sentences without a starred_at (shouldn't happen, but defensive)
-// sort last regardless of direction, same rule as the leeched sort.
-function _sortStarredSentences(sentences) {
-  const asc = _browseSort === 'starred-asc';
+function _sentenceCache(kind) {
+  return kind === 'starred' ? _starredSentencesCache : _flaggedSentencesCache;
+}
+function _setSentenceCache(kind, val) {
+  if (kind === 'starred') _starredSentencesCache = val; else _flaggedSentencesCache = val;
+}
+
+// {kind}-asc = oldest first; anything else (including the default) = newest
+// first. Sentences without a timestamp (shouldn't happen, but defensive) sort
+// last regardless of direction, same rule as the leeched sort.
+function _sortSentenceView(kind, sentences) {
+  const cfg = _SENTENCE_VIEWS[kind];
+  const asc = _browseSort === `${kind}-asc`;
   const sorted = [...sentences];
   sorted.sort((a, b) => {
-    const ka = a.starred_at || '', kb = b.starred_at || '';
+    const ka = a[cfg.tsField] || '', kb = b[cfg.tsField] || '';
     if (!ka && !kb) return 0;
     if (!ka) return 1;
     if (!kb) return -1;
@@ -2725,36 +2777,43 @@ function _sortStarredSentences(sentences) {
 }
 
 // Single paint path for both the fetched and the cached list, so the empty
-// state can't go missing on one of them (unstarring the last sentence goes
+// state can't go missing on one of them (removing the last sentence goes
 // through the cached branch).
-function _paintStarredList(sentences) {
+function _paintSentenceView(kind, sentences) {
+  const cfg = _SENTENCE_VIEWS[kind];
   const list = document.getElementById('browse-list');
   if (!sentences.length) {
-    list.innerHTML = '<div class="browse-empty">No starred sentences yet — press Shift+F ' +
-                     'or tap ☆ while reviewing to keep a good one.</div>';
+    list.innerHTML = `<div class="browse-empty">No ${cfg.emptyLabel} sentences yet — press ${cfg.emptyShortcut} ` +
+                     `or tap ${cfg.emptyIcon} while reviewing to mark one.</div>`;
     return;
   }
-  list.innerHTML = `<div class="bw-list">${_sortStarredSentences(sentences).map(_starredSentenceRow).join('')}</div>`;
+  list.innerHTML = `<div class="bw-list">${_sortSentenceView(kind, sentences).map(s => _sentenceRow(kind, s)).join('')}</div>`;
 }
 
-async function renderStarredSentences() {
+async function _renderSentenceView(kind) {
+  const cfg = _SENTENCE_VIEWS[kind];
   const list = document.getElementById('browse-list');
-  if (_starredSentencesCache) { _paintStarredList(_starredSentencesCache); return; }
+  const cached = _sentenceCache(kind);
+  if (cached) { _paintSentenceView(kind, cached); return; }
   list.innerHTML = '<div class="browse-empty">Loading…</div>';
   let sentences;
   try {
-    const r = await api('GET', `/api/starred-sentences${_langQP('?')}`);
+    const r = await api('GET', `${cfg.apiPath}${_langQP('?')}`);
     sentences = r.sentences;
   } catch (e) {
-    list.innerHTML = `<div class="browse-empty">Could not load starred sentences: ${_escHtml(e.message)}</div>`;
+    list.innerHTML = `<div class="browse-empty">Could not load ${cfg.emptyLabel} sentences: ${_escHtml(e.message)}</div>`;
     return;
   }
-  if (_browseCardStatus !== 'starred') return;  // user switched tabs while loading
-  _starredSentencesCache = sentences;
-  _paintStarredList(sentences);
+  if (_browseCardStatus !== kind) return;  // user switched tabs while loading
+  _setSentenceCache(kind, sentences);
+  _paintSentenceView(kind, sentences);
 }
 
-function _starredSentenceRow(s) {
+function renderStarredSentences() { return _renderSentenceView('starred'); }
+function renderFlaggedSentences() { return _renderSentenceView('flagged'); }
+
+function _sentenceRow(kind, s) {
+  const cfg = _SENTENCE_VIEWS[kind];
   const trans = s.sentence_de || s.sentence_fr || s.sentence_en || '';
   const words = (s.words || []).map(w => _escHtml(w.word_zh)).join('、');
   const source = s.source_url
@@ -2769,8 +2828,8 @@ function _starredSentenceRow(s) {
     source,
   ].filter(Boolean).join('<span class="ss-dot">·</span>');
 
-  // The prompt link is the point of the whole feature (#697) — a good sentence
-  // is only actionable next to the prompt that produced it.
+  // The prompt link is the point of the whole feature (#697) — a starred or
+  // flagged sentence is only actionable next to the prompt that produced it.
   const promptBtn = s.has_prompt
     ? `<button class="ss-prompt-btn" title="Show the prompt that generated this sentence"
                onclick="showStoryPrompt(${s.story_id})">📝 Prompt</button>`
@@ -2785,24 +2844,29 @@ function _starredSentenceRow(s) {
     </div>
     <div class="ss-actions">
       ${promptBtn}
-      <button class="ss-unstar" title="Remove the star"
-              onclick="unstarSentence(${s.id}, this)">★</button>
+      <button class="ss-unstar" title="${cfg.undoTitle}"
+              onclick="_removeFromSentenceView('${kind}', ${s.id}, this)">${cfg.icon}</button>
     </div>
   </div>`;
 }
 
-async function unstarSentence(sentenceId, btn) {
+async function _removeFromSentenceView(kind, sentenceId, btn) {
+  const cfg = _SENTENCE_VIEWS[kind];
   btn.disabled = true;
   try {
-    await api('POST', `/api/story-sentence/${sentenceId}/star`, { starred: false });
-    if (_starredSentencesCache) _starredSentencesCache = _starredSentencesCache.filter(s => s.id !== sentenceId);
+    await api('POST', cfg.toggleUrl(sentenceId), { [cfg.field]: false });
+    const cached = _sentenceCache(kind);
+    if (cached) _setSentenceCache(kind, cached.filter(s => s.id !== sentenceId));
     btn.closest('.ss-row')?.remove();
-    if (!document.querySelector('.ss-row')) renderStarredSentences();  // back to empty state
+    if (!document.querySelector('.ss-row')) _renderSentenceView(kind);  // back to empty state
   } catch (e) {
     btn.disabled = false;
-    showError('Unstar failed: ' + e.message);
+    showError(`${cfg.undoVerb} failed: ` + e.message);
   }
 }
+
+function unstarSentence(sentenceId, btn) { return _removeFromSentenceView('starred', sentenceId, btn); }
+function unflagSentence(sentenceId, btn) { return _removeFromSentenceView('flagged', sentenceId, btn); }
 
 function renderBrowseSearchResults(primary, secondary, q) {
   const list = document.getElementById('browse-list');
@@ -7344,7 +7408,7 @@ function submitAddWord() {
   }, _addWordLang);
 }
 
-// ── Listening hint slider (HSK-aware) ───────────────────────────────────────
+// ── Listening hint slider (vocab-aware, #850) ───────────────────────────────
 let _hskLevels = null; // {word: hsk_level_number} — loaded once from static file
 
 async function _loadHskLevels() {
@@ -7355,6 +7419,25 @@ async function _loadHskLevels() {
   } catch {
     _hskLevels = {};
   }
+}
+
+// Set of word forms in the user's deck for a given language (#850). Loaded
+// once per language and cached — reloaded only when the reviewed card's
+// language changes (e.g. switching from a Chinese to a French deck).
+let _vocabIndex = null;
+let _vocabIndexLang = null;
+
+async function _loadVocabIndex(lang) {
+  if (_vocabIndex && _vocabIndexLang === lang) return;
+  try {
+    const r = await api('GET', `/api/vocab-index?lang=${encodeURIComponent(lang)}`);
+    _vocabIndex = new Set(r.words || []);
+  } catch {
+    // Degrade to "nothing in my deck" rather than erroring or blanking the
+    // whole sentence — only the target word stays hidden.
+    _vocabIndex = new Set();
+  }
+  _vocabIndexLang = lang;
 }
 
 // Returns the HSK level of a token (tries compound first, then max of chars).
@@ -7398,8 +7481,17 @@ function _getTargetPositions(zh) {
   return positions;
 }
 
+// Words in the deck are always hidden; the slider adds easy words on top of
+// them (#862). "Not studied here" and "don't know it" are different things:
+// plenty of HSK1-4 words never entered the deck but Daniel has known them for
+// years, so leaving them visible just gives the sentence away.
+// 0 = saved words only, N = also every word at HSK <= N.
+function _hintLabelFor(level) {
+  return level === 0 ? 'Saved only' : `Saved + HSK≤${level}`;
+}
+
 function _hintSavedDefault() {
-  return parseInt(localStorage.getItem('listenHintDefault') ?? '3', 10);
+  return parseInt(localStorage.getItem('listenHideLevel') ?? '4', 10);
 }
 
 function _updateHintStar(currentVal) {
@@ -7410,18 +7502,20 @@ function _updateHintStar(currentVal) {
   btn.classList.toggle('saved', isSaved);
 }
 
-function _initListenHint() {
+async function _initListenHint() {
   const slider = document.getElementById('listen-hint-slider');
   const saved = _hintSavedDefault();
   slider.value = saved;
-  document.getElementById('listen-hint-pct').textContent = saved === 0 ? 'All' : `HSK ${saved}+`;
+  document.getElementById('listen-hint-pct').textContent = _hintLabelFor(saved);
   _updateHintStar(saved);
-  _loadHskLevels().then(() => _renderListenHint(saved));
+  const lang = currentCardLang();
+  await Promise.all([_loadVocabIndex(lang), _loadHskLevels()]);
+  _renderListenHint(saved);
 }
 
 function saveListenHintDefault() {
   const val = parseInt(document.getElementById('listen-hint-slider').value, 10);
-  localStorage.setItem('listenHintDefault', val);
+  localStorage.setItem('listenHideLevel', val);
   _updateHintStar(val);
 }
 
@@ -7460,7 +7554,7 @@ function saveWordBankDefault() {
   _updateWordBankStar(val);
 }
 
-function _renderListenHint(threshold) {
+function _renderListenHint(level) {
   // Sentence notes are excluded from stories; fall back to card.word_zh (the sentence itself).
   const isSentenceNote = card?.note_type === 'sentence';
   const zh = sentence?.sentence_zh || (isSentenceNote ? card?.word_zh : null);
@@ -7468,13 +7562,18 @@ function _renderListenHint(threshold) {
   if (!zh) { el.textContent = ''; return; }
 
   const isCjk = ch => ch >= '一' && ch <= '鿿';
-  // Sentence notes have no single "target word" to blank — reveal based on HSK only.
+  // Sentence notes have no single "target word" to blank — reveal based on vocab only.
   const targetPositions = isSentenceNote && !sentence ? new Set() : _getTargetPositions(zh);
 
-  // Reveal tokens harder than the threshold (level > threshold, or unknown to HSK).
-  // threshold=0 means "All": level > 0 is true for every known word, null words also qualify.
-  const revealPositions = new Set();
-  if (_hskLevels) {
+  // Hidden = (in my deck) ∪ (HSK <= level), the union of the two rules (#862).
+  // The deck half catches what he is actively learning; the HSK half catches the
+  // everyday words he has known for years but that never entered the deck —
+  // leaving those visible hands him the sentence for free. What stays visible is
+  // the intersection's complement: words outside the deck that are HSK 5/6 or
+  // missing from the table entirely, which is exactly what has to be heard.
+  const vocabSet = _vocabIndex || new Set();
+  const hidePositions = new Set();
+  {
     // Use story tokens when available; fall back to char-by-char for sentence notes.
     const tokens = sentence?.tokens?.length
       ? sentence.tokens
@@ -7486,9 +7585,10 @@ function _renderListenHint(threshold) {
       const tokEnd = tokStart + tok.length;
       const overlapsTarget = [...Array(tok.length).keys()].some(k => targetPositions.has(tokStart + k));
       if (!overlapsTarget) {
-        const level = _hskLevelOf(tok);
-        if (level === null || level > threshold) {
-          for (let k = tokStart; k < tokEnd; k++) revealPositions.add(k);
+        const hskLevel = _hskLevels ? _hskLevelOf(tok) : null;
+        const shouldHide = vocabSet.has(tok) || (hskLevel !== null && hskLevel <= level);
+        if (shouldHide) {
+          for (let k = tokStart; k < tokEnd; k++) hidePositions.add(k);
         }
       }
       pos = tokEnd;
@@ -7503,12 +7603,10 @@ function _renderListenHint(threshold) {
       html += ch;
     } else if (targetPositions.has(i)) {
       html += `<span class="hint-blank hint-blank-target">_</span>`;
-    } else if (threshold === 0) {
-      html += ch; // "All" mode: reveal all non-target characters
-    } else if (revealPositions.has(i)) {
-      html += ch;
-    } else {
+    } else if (hidePositions.has(i)) {
       html += `<span class="hint-blank">_</span>`;
+    } else {
+      html += ch;
     }
   }
   el.innerHTML = html;
@@ -7516,7 +7614,7 @@ function _renderListenHint(threshold) {
 
 function onListenHintSlider(val) {
   const lvl = parseInt(val, 10);
-  document.getElementById('listen-hint-pct').textContent = lvl === 0 ? 'All' : `HSK ${lvl}+`;
+  document.getElementById('listen-hint-pct').textContent = _hintLabelFor(lvl);
   _updateHintStar(lvl);
   _renderListenHint(lvl);
 }
@@ -8014,7 +8112,22 @@ function _syncCardToggleBar() {
     _syncStarBtn();
   }
 
-  bar.style.display = (pinAvail || transAvail || starAvail) ? '' : 'none';
+  // Flag: same availability rule as star — no stored sentence, nothing to flag.
+  const flagBtn = document.getElementById('toggle-flag-btn');
+  const flagAvail = !!sentence?.id;
+  if (flagBtn) {
+    flagBtn.style.display = flagAvail ? '' : 'none';
+    _syncFlagBtn();
+  }
+
+  // Ask-AI button (#853): same "does this card even have a sentence" gate as
+  // the star button, plus it needs AI to actually be reachable — no point
+  // showing a button that will just 400 in offline/hard-offline mode.
+  const questionBtn = document.getElementById('toggle-question-btn');
+  const questionAvail = starAvail && !_offlineMode;
+  if (questionBtn) questionBtn.style.display = questionAvail ? '' : 'none';
+
+  bar.style.display = (pinAvail || transAvail || starAvail || flagAvail || questionAvail) ? '' : 'none';
 }
 
 // ── Starred sentences (#692) ─────────────────────────────────────────────────
@@ -8048,6 +8161,108 @@ async function toggleSentenceStar() {
     showError('Star failed: ' + e.message);
   }
   _syncStarBtn();
+}
+
+// ── Ask AI about this sentence (#853) ────────────────────────────────────────
+// Single-turn, in-place grammar/naturalness check — sentence generation
+// occasionally produces awkward or outright wrong sentences, and this is the
+// only moment (right when reading it) that catching that is easy.
+
+function openSentenceQuestionModal() {
+  if (!sentence?.sentence_zh) return;
+  document.getElementById('sentence-question-overlay').style.display = 'block';
+  document.getElementById('sentence-question-modal').style.display = 'flex';
+  document.getElementById('sentence-question-sentence').textContent = sentence.sentence_zh;
+  const input = document.getElementById('sentence-question-input');
+  input.value = '';
+  input.disabled = false;
+  document.getElementById('sentence-question-submit').disabled = false;
+  const answerEl = document.getElementById('sentence-question-answer');
+  answerEl.textContent = '';
+  answerEl.className = '';
+  input.focus();
+}
+
+function closeSentenceQuestionModal() {
+  document.getElementById('sentence-question-overlay').style.display = 'none';
+  document.getElementById('sentence-question-modal').style.display = 'none';
+}
+
+async function submitSentenceQuestion() {
+  if (!sentence?.sentence_zh) return;
+  const input = document.getElementById('sentence-question-input');
+  const submitBtn = document.getElementById('sentence-question-submit');
+  const answerEl = document.getElementById('sentence-question-answer');
+
+  input.disabled = true;
+  submitBtn.disabled = true;
+  answerEl.textContent = 'Asking…';
+  answerEl.className = 'sq-loading';
+
+  try {
+    // Raw fetch (not the shared api() helper) so a 400/500 shows the actual
+    // server-side reason (HTTPException detail), not just an HTTP status code
+    // — "静默失败" is explicitly ruled out for this feature.
+    const res = await fetch('/api/sentence-question', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sentence_zh: sentence.sentence_zh,
+        question: input.value.trim(),
+        word_zh: card?.word_zh,
+        lang: currentCardLang(),
+      }),
+    });
+    if (res.status === 401) { location.href = '/login'; return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    // AI text rendered with textContent only — never innerHTML (#853, same
+    // rule as /dict).
+    answerEl.textContent = data.answer;
+    answerEl.className = '';
+  } catch (e) {
+    // Show the server's error text as-is — a silent failure here is worse
+    // than an ugly one, since the whole point is trustworthy feedback.
+    answerEl.textContent = 'Failed: ' + e.message;
+    answerEl.className = 'sq-error';
+  } finally {
+    input.disabled = false;
+    submitBtn.disabled = false;
+  }
+}
+
+// ── Flagged sentences (#854) ─────────────────────────────────────────────────
+// Mirror of starring, for the other judgment: a sentence that reads badly
+// (grammar mistake, awkward phrasing) — a negative example worth reading back
+// when tuning the generation prompts (Browse → ⚑). Independent of the star —
+// not a three-way toggle.
+
+function _syncFlagBtn() {
+  const btn = document.getElementById('toggle-flag-btn');
+  if (!btn) return;
+  const on = !!sentence?.flagged;
+  btn.textContent = on ? '⚑' : '⚐';
+  btn.classList.toggle('active', on);
+  btn.title = on ? 'Flagged — click to unflag (Shift+G)'
+                 : 'Flag this sentence as a bad example (Shift+G)';
+}
+
+async function toggleSentenceFlag() {
+  if (!sentence?.id) return;
+  const next = !sentence.flagged;
+  // Optimistic, same reasoning as toggleSentenceStar(): a stuck button mid-review
+  // is worse than an occasional flag that turns out not to have saved.
+  sentence.flagged = next ? 1 : 0;
+  _syncFlagBtn();
+  try {
+    const r = await api('POST', `/api/story-sentence/${sentence.id}/flag`, { flagged: next });
+    sentence.flagged = r.flagged;
+    sentence.flagged_at = r.flagged_at;
+  } catch (e) {
+    sentence.flagged = next ? 0 : 1;
+    showError('Flag failed: ' + e.message);
+  }
+  _syncFlagBtn();
 }
 
 // ── Translation toggle (German/French sentence translation) ───────────────────
@@ -8268,6 +8483,10 @@ let _setupIsMixed = false;
 let _setupIsUnfinished = false;
 let _setupIsDeckListRegen = false;
 let _deckListRegenId = null;
+// Category the deck-list ↺ targets (#857): 'unified' for the parent-row button
+// (whole-deck mixed story, unchanged pre-#857 behavior), or 'listening' /
+// 'reading' / 'creating' when a mode pill's own ↺ was clicked.
+let _deckListRegenCategory = 'unified';
 
 function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, learningCount = 0, estimatedTokens = 0 } = {}) {
   _setupIsRegen = !isMixed && !isUnfinished && !!card; // card exists (fresh single-cat) → regenerating
@@ -9107,10 +9326,19 @@ function confirmStorySetup() {
     quickMode = true;
     story = null;
     if (_setupIsDeckListRegen) {
-      // Deck-list ↺ targets a whole deck → words-only mixed (all-category) review.
-      rootDeckId = _deckListRegenId;
-      deckId = _deckListRegenId;
-      _doStartReviewMixed(null, 2, null, null, 50, 'story', true);
+      if (_deckListRegenCategory === 'unified') {
+        // Parent-row ↺ targets a whole deck → words-only mixed (all-category) review.
+        rootDeckId = _deckListRegenId;
+        deckId = _deckListRegenId;
+        _doStartReviewMixed(null, 2, null, null, 50, 'story', true);
+      } else {
+        // Mode-pill ↺ (#857) targets one category → words-only single-category
+        // review, same path startReview() itself uses for its ⚡ quick mode.
+        rootDeckId = null;
+        deckId = _deckListRegenId;
+        category = _deckListRegenCategory;
+        _doStartReview(null, 2);
+      }
     } else if (_setupIsMixed || rootDeckId) {
       _doStartReviewMixed(null, 2, null, null, 50, 'story', true);
     } else {
@@ -9698,15 +9926,16 @@ async function _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct
   }
 }
 
-async function regenerateStoryFromList(deckId) {
+async function regenerateStoryFromList(deckId, category = 'unified') {
   _deckListRegenId = deckId;
+  _deckListRegenCategory = category;
   _setupIsDeckListRegen = true;
   _setupIsRegen = false;
   _setupIsMixed = false;
   _setupIsUnfinished = false;
   let sentenceCount = 0;
   try {
-    const data = await api('GET', `/api/story/${deckId}/unified/count${_langQP('?')}`);
+    const data = await api('GET', `/api/story/${deckId}/${category}/count${_langQP('?')}`);
     sentenceCount = data?.count ?? 0;
   } catch (_) {}
   const _countLabel = document.getElementById('setup-count-label');
@@ -9739,31 +9968,40 @@ async function regenerateStoryFromList(deckId) {
 // loader, show a small persistent banner and let the user keep reviewing. When
 // the new story is ready the banner turns into a clickable "open for review".
 async function _doRegenStoryForDeckList(deckId, topic, maxHsk, model, grammarFocus, grammarPct, mode = 'story', chapterIds = null, articles = null, episodeIds = null) {
+  // Read (not a parameter): confirmStorySetup calls this positionally the same
+  // way it's called for every other setup-modal path, and regenerateStoryFromList
+  // already stashed the category here when the modal was opened (#857).
+  const category = _deckListRegenCategory || 'unified';
   const deck = flatten(_cachedDecks || []).find(d => d.id === deckId);
   const deckName = deck ? deck.name : 'deck';
   const noStory = !!(deck && deck.no_story);
+  const label = category === 'unified' ? deckName : `${deckName} (${category})`;
 
   const banner = document.getElementById('bg-story-banner');
   if (banner) {
     banner.classList.add('bg-banner-progress');
-    banner.textContent = `⏳ Regenerating story for ${deckName} in the background — keep reviewing…`;
+    banner.textContent = `⏳ Regenerating story for ${label} in the background — keep reviewing…`;
     banner.onclick = null;
     banner.style.display = 'block';
   }
 
   try {
-    await api('POST', `/api/story/${deckId}/unified/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds), { articles });
+    await api('POST', `/api/story/${deckId}/${category}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds), { articles });
     // Warm the audio cache in the background so review starts fast; don't block
     // the "ready" banner on it.
-    _preloadWithProgress(deckId, 'unified', () => {}).catch(() => {});
+    _preloadWithProgress(deckId, category, () => {}).catch(() => {});
     if (banner) {
       banner.classList.remove('bg-banner-progress');
-      banner.textContent = `📖 Story ready — ${deckName} · click to review`;
+      banner.textContent = `📖 Story ready — ${label} · click to review`;
       banner.style.display = 'block';
       banner.onclick = () => {
         banner.style.display = 'none';
         banner.onclick = null;
-        startReviewMixed(deckId, deckName, noStory);
+        if (category === 'unified') {
+          startReviewMixed(deckId, deckName, noStory);
+        } else {
+          startReview(deckId, category, deckName, noStory);
+        }
       };
     }
   } catch (e) {
@@ -11007,6 +11245,14 @@ document.addEventListener('keydown', async e => {
       closeLogsViewer();
       return;
     }
+    // Same for the sentence-question modal (#853) — its input holds focus too,
+    // so it has to be handled before the blur branch below.
+    const sqModal = document.getElementById('sentence-question-modal');
+    if (sqModal && sqModal.style.display !== 'none') {
+      e.preventDefault();
+      closeSentenceQuestionModal();
+      return;
+    }
     // Esc closes the add-word modal (its input has focus, so this must come
     // before the blur branch below). Running jobs keep going server-side.
     const addWordModal = document.getElementById('add-word-modal');
@@ -11052,6 +11298,12 @@ document.addEventListener('keydown', async e => {
   // Stars/unstars the sentence on the current card (#692)
   if (e.key === _key('star-sentence') && !e.ctrlKey && !e.metaKey) {
     if (!inInput) { e.preventDefault(); toggleSentenceStar(); }
+    return;
+  }
+
+  // Flags/unflags the sentence on the current card (#854, mirror of star-sentence)
+  if (e.key === _key('flag-sentence') && !e.ctrlKey && !e.metaKey) {
+    if (!inInput) { e.preventDefault(); toggleSentenceFlag(); }
     return;
   }
 

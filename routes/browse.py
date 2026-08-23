@@ -319,6 +319,16 @@ def browse_words(lang: str | None = None):
     return database.get_words_for_browse(lang)
 
 
+@router.get("/api/vocab-index")
+def vocab_index(lang: str = "zh"):
+    """Lightweight word list for `lang` — just the forms, no definitions or card
+    state (#850). Used by the listening-hint slider to test "is this word in my
+    deck", which needs nothing else. Deliberately not a wrapper around
+    /api/browse-words: that payload is several MB and would defeat the point.
+    """
+    return {"words": database.get_vocab_index(lang)}
+
+
 @router.get("/api/words/random")
 def random_word(exclude: str = ""):
     word = database.get_random_word(exclude)

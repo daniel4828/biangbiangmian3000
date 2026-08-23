@@ -958,6 +958,23 @@ def list_starred_sentences(lang: str | None = None, limit: int = 500):
     return {"sentences": database.get_starred_sentences(lang=lang, limit=limit)}
 
 
+# ── 标记差句子（issue #854，加星的反面）───────────────────────────────────────
+# 复习时读到写得别扭/有语法问题的句子就地标记，之后集中回看，作为改进提示词的反例样本。
+
+@router.post("/api/story-sentence/{sentence_id}/flag")
+def flag_sentence(sentence_id: int, body: dict | None = None):
+    flagged = bool((body or {}).get("flagged", True))
+    result = database.set_sentence_flagged(sentence_id, flagged)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No sentence with id {sentence_id}")
+    return result
+
+
+@router.get("/api/flagged-sentences")
+def list_flagged_sentences(lang: str | None = None, limit: int = 500):
+    return {"sentences": database.get_flagged_sentences(lang=lang, limit=limit)}
+
+
 # NOT /api/story/{story_id}/prompt: GET /api/story/{deck_id}/{category} is
 # registered earlier and would swallow it with category="prompt".
 @router.get("/api/story-prompt/{story_id}")

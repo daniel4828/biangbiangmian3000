@@ -91,6 +91,23 @@ def search_words(q: str, lang: str | None = None) -> dict:
     return {"primary": list(primary_ids), "secondary": list(secondary_ids)}
 
 
+def get_vocab_index(lang: str = "zh") -> list[str]:
+    """Return the deduplicated list of word forms in the user's vocabulary for `lang`.
+
+    Lightweight companion to get_words_for_browse() (#850): the listening-hint
+    slider needs only the word forms themselves — not definitions or card state —
+    to decide which words in a sentence are "in the user's deck". Returning the
+    full browse payload for this would be several MB for no reason.
+    """
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT DISTINCT word_zh FROM entries WHERE lang = ? AND word_zh IS NOT NULL AND word_zh != ''",
+        (lang,),
+    ).fetchall()
+    conn.close()
+    return [r["word_zh"] for r in rows]
+
+
 def get_cards_for_word(word_id: int) -> list[dict]:
     """Return all cards for a word with full deck path (parent › child)."""
     conn = get_db()

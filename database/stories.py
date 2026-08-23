@@ -151,32 +151,37 @@ def _hydrate_sentence(conn, sent_row) -> dict:
 # as positive examples to learn from when tuning the generation prompts.
 # ---------------------------------------------------------------------------
 
-def set_sentence_starred(sentence_id: int, starred: bool) -> dict | None:
-    """Star or unstar one story sentence. Returns the new state, or None if no such sentence.
+def _set_sentence_flag(sentence_id: int, column: str, ts_column: str, value: bool) -> dict | None:
+    """Shared implementation for starring/unstarring and flagging/unflagging one
+    sentence — both are the same shape of operation on a different boolean column.
+    Returns the new state, or None if no such sentence.
 
     Works for regenerated "Again" sentences too — those are ordinary
     story_sentences rows under the AGAIN_CATEGORY sentinel (see store_again_sentence).
     """
     conn = get_db()
-    starred_at = datetime.now().isoformat(timespec="seconds") if starred else None
+    ts = datetime.now().isoformat(timespec="seconds") if value else None
     cur = conn.execute(
-        "UPDATE story_sentences SET starred = ?, starred_at = ? WHERE id = ?",
-        (1 if starred else 0, starred_at, sentence_id),
+        f"UPDATE story_sentences SET {column} = ?, {ts_column} = ? WHERE id = ?",
+        (1 if value else 0, ts, sentence_id),
     )
     conn.commit()
     if cur.rowcount == 0:
         conn.close()
         return None
     conn.close()
-    return {"id": sentence_id, "starred": 1 if starred else 0, "starred_at": starred_at}
+    return {"id": sentence_id, column: 1 if value else 0, ts_column: ts}
 
 
-def get_starred_sentences(lang: str | None = None, limit: int = 500) -> list[dict]:
-    """All starred sentences, newest star first, with the context needed to judge them.
+def _get_sentences_by_flag(column: str, ts_column: str, lang: str | None, limit: int) -> list[dict]:
+    """Shared implementation behind get_starred_sentences()/get_flagged_sentences():
+    all sentences with `column` set, newest-flagged first, with the context needed
+    to judge them.
 
     Each row carries its story's generation settings (mode / model / episode_id via
     gen_params) and deck name on top of the usual sentence shape — that context is the
-    whole point: a good sentence is only informative if you know which prompt made it.
+    whole point: a starred/flagged sentence is only informative if you know which
+    prompt made it.
     """
     conn = get_db()
     lang_clause = ""
@@ -196,8 +201,8 @@ def get_starred_sentences(lang: str | None = None, limit: int = 500) -> list[dic
             FROM story_sentences ss
             JOIN stories s ON s.id = ss.story_id
             LEFT JOIN decks d ON d.id = s.deck_id
-            WHERE ss.starred = 1{lang_clause}
-            ORDER BY ss.starred_at DESC, ss.id DESC
+            WHERE ss.{column} = 1{lang_clause}
+            ORDER BY ss.{ts_column} DESC, ss.id DESC
             LIMIT ?""",
         (*params, limit),
     ).fetchall()
@@ -216,6 +221,32 @@ def get_starred_sentences(lang: str | None = None, limit: int = 500) -> list[dic
         result.append(d)
     conn.close()
     return result
+
+
+def set_sentence_starred(sentence_id: int, starred: bool) -> dict | None:
+    """Star or unstar one story sentence. Returns the new state, or None if no such sentence."""
+    return _set_sentence_flag(sentence_id, "starred", "starred_at", starred)
+
+
+def get_starred_sentences(lang: str | None = None, limit: int = 500) -> list[dict]:
+    """All starred sentences, newest star first — positive examples for prompt tuning (#692)."""
+    return _get_sentences_by_flag("starred", "starred_at", lang, limit)
+
+
+def set_sentence_flagged(sentence_id: int, flagged: bool) -> dict | None:
+    """Flag or unflag one story sentence. Returns the new state, or None if no such sentence.
+
+    Mirror of set_sentence_starred() (#854): a flagged sentence is a bad example
+    (grammar mistake, awkward phrasing) worth reading back when tuning prompts.
+    Independent of starred — a sentence can be neither, either, or (in principle,
+    though pointless) both.
+    """
+    return _set_sentence_flag(sentence_id, "flagged", "flagged_at", flagged)
+
+
+def get_flagged_sentences(lang: str | None = None, limit: int = 500) -> list[dict]:
+    """All flagged sentences, newest flag first — negative examples for prompt tuning (#854)."""
+    return _get_sentences_by_flag("flagged", "flagged_at", lang, limit)
 
 
 def get_story_prompt(story_id: int) -> dict | None:
