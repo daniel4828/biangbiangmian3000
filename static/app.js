@@ -227,7 +227,7 @@ const KEYMAP_ACTIONS = [
 
   { id: 'examples',       label: 'Toggle examples',            scope: 'shared' },
   { id: 'notes',           label: 'Toggle notes',               scope: 'shared' },
-  { id: 'word-analysis',   label: 'Toggle word analysis',       scope: 'shared' },
+  { id: 'word-analysis',   label: 'Toggle word analysis / etymology', scope: 'shared' },
   { id: 'regen-all',       label: 'Regenerate all fields',      scope: 'shared' },
 
   { id: 'suspend-reading',   label: 'Suspend/resume reading',     scope: 'review' },
@@ -3089,6 +3089,7 @@ function renderWordDetail(word) {
   renderInflectionSection(document.getElementById('wd-inflection-section'), word);
   renderNotesSection(document.getElementById('wd-notes-section'), word.notes, word.id);
   renderWordAnalysis(document.getElementById('wd-word-analysis-section'), word, word.id);
+  renderEtymologySection(document.getElementById('wd-etymology-section'), word, word.id);
   renderVocabDetail(document.getElementById('wd-examples-section'), word.examples, word.id);
 
   // Cards section
@@ -6769,18 +6770,26 @@ function _getActiveWordId() {
 // ── Regen preview modal ──────────────────────────────────────────────────────
 let _regenState = null; // { wordId, fields, containerId }
 
+// Fields "↺ All" regenerates. The last three are character-level and only
+// exist for Chinese; a Romance entry gets its entry-level etymology instead
+// (#906) — asking the Chinese prompt to analyse the characters of "parler"
+// would spend money on nonsense.
+function _allRegenFields(wordData) {
+  const base = ['definition', 'definition_zh', 'definition_de', 'definition_fr', 'pos',
+                'notes', 'examples'];
+  return _entryLang(wordData) === 'zh'
+    ? [...base, 'etymology', 'compounds', 'other_meanings']
+    : [...base, 'entry_etymology'];
+}
+
 function regenAllFields(wordId) {
-  const allFields = ['definition', 'definition_zh', 'definition_de', 'definition_fr', 'pos',
-                     'notes', 'examples', 'etymology', 'compounds', 'other_meanings'];
-  regenFields(wordId, allFields, 'wd-all');
+  regenFields(wordId, _allRegenFields(wordDetails), 'wd-all');
 }
 
 function regenAllFieldsFromReview() {
   const wordId = _getActiveWordId();
   if (!wordId) return showError('No active word');
-  const allFields = ['definition', 'definition_zh', 'definition_de', 'definition_fr', 'pos',
-                     'notes', 'examples', 'etymology', 'compounds', 'other_meanings'];
-  regenFields(wordId, allFields, 'review-regen-all');
+  regenFields(wordId, _allRegenFields(wordDetails), 'review-regen-all');
 }
 
 async function regenFields(wordId, fields, containerId) {
@@ -6833,6 +6842,13 @@ function _showRegenPreviewModal(previewData) {
     bodyHtml += `<div>
       <div class="regen-section-label">Notes</div>
       <textarea id="regen-notes-text" class="regen-notes-textarea">${result.notes || ''}</textarea>
+    </div>`;
+  }
+
+  if (fields.includes('entry_etymology')) {
+    bodyHtml += `<div>
+      <div class="regen-section-label">Etymology</div>
+      <textarea id="regen-entry-etym-text" class="regen-notes-textarea">${result.entry_etymology || ''}</textarea>
     </div>`;
   }
 
@@ -6945,6 +6961,10 @@ function _getRegenResultFromModal() {
     result.notes = document.getElementById('regen-notes-text')?.value?.trim() || '';
   }
 
+  if (fields.includes('entry_etymology')) {
+    result.entry_etymology = document.getElementById('regen-entry-etym-text')?.value?.trim() || '';
+  }
+
   if (fields.includes('examples')) {
     const rows = document.querySelectorAll('#regen-examples-list .regen-example-row');
     result.examples = Array.from(rows).map(row => ({
@@ -7004,6 +7024,7 @@ async function _applyRegenResult() {
       // Re-render all review side-panel sections
       renderNotesSection(null, updated.notes, wordId);
       renderWordAnalysis(null, updated, wordId);
+      renderEtymologySection(null, updated, wordId);
       renderVocabDetail(null, updated.examples, wordId);
     } else if (containerId === 'wd-all' && _currentWordId === wordId) {
       updated.cards = wordDetails?.cards || [];
@@ -7028,9 +7049,10 @@ async function _applyRegenResult() {
           if (defDeEl) { defDeEl.textContent = updated.definition_de ? `🇩🇪 ${updated.definition_de}` : ''; defDeEl.style.display = updated.definition_de ? 'block' : 'none'; }
           const defFrEl = document.getElementById('wd-def-fr');
           if (defFrEl) { defFrEl.textContent = updated.definition_fr ? `🇫🇷 ${updated.definition_fr}` : ''; defFrEl.style.display = updated.definition_fr ? 'block' : 'none'; }
-        } else if (fields.includes('notes'))    renderNotesSection(target, updated.notes, wordId);
-        else if (fields.includes('examples'))   renderVocabDetail(target, updated.examples, wordId);
-        else                                    renderWordAnalysis(target, updated, wordId);
+        } else if (fields.includes('notes'))            renderNotesSection(target, updated.notes, wordId);
+        else if (fields.includes('examples'))           renderVocabDetail(target, updated.examples, wordId);
+        else if (fields.includes('entry_etymology'))    renderEtymologySection(target, updated, wordId);
+        else                                            renderWordAnalysis(target, updated, wordId);
         const body  = document.getElementById(containerId + '-body');
         const arrow = document.getElementById(containerId + '-body-arrow');
         console.log('[apply] body=', body, 'arrow=', arrow);
@@ -7101,6 +7123,42 @@ function renderNotesSection(container, notes, wordId) {
       `<span><span id="${bodyId}-arrow">▷</span> Notes</span>${regenBtn}</div>` +
     `<div id="${bodyId}" class="section-peek" data-peek="1" data-state="peek">${bodyContent}</div>`;
   el.style.display = '';
+}
+
+// Word-origin section (issue #906) — Romance languages only.
+//
+// A French word has no characters to break down, so the Chinese "Word
+// Analysis" block degenerates to a single row repeating the headword. This
+// takes its place in the panel: entries.etymology, German prose written by the
+// entry prompt (or the ↺ button here). Chinese entries render nothing —
+// their etymology is per character and already lives inside Word Analysis.
+function renderEtymologySection(container, wordData, wordId) {
+  const el = container ?? document.getElementById('etymology-section');
+  if (!el) return;
+  const wd = wordData ?? wordDetails;
+  if (_entryLang(wd) === 'zh') { el.innerHTML = ''; return; }
+
+  const wid = wordId ?? _getActiveWordId();
+  const regenBtn = wid
+    ? `<button class="field-regen-btn" onclick="event.stopPropagation();regenFields(${wid},['entry_etymology'],'${el.id}')" title="Regenerate etymology">↺</button>`
+    : '';
+  const text = (wd?.etymology || '').trim();
+  const bodyId = el.id + '-body';
+  const bodyContent = text
+    ? `<div class="notes-body">${renderMarkdown(text)}</div>`
+    : `<div class="section-empty">—</div>`;
+  el.innerHTML =
+    `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
+      `<span><span id="${bodyId}-arrow">▼</span> Etymology</span>${regenBtn}</div>` +
+    `<div id="${bodyId}" class="section-open" data-peek="1" data-state="open">${bodyContent}</div>`;
+  el.style.display = '';
+}
+
+// Which language an entry belongs to. Word detail passes the entry row (which
+// carries `lang`); during review the fetch for /api/word/{id} may not have
+// landed yet, so fall back to the current card's deck language.
+function _entryLang(wordData) {
+  return wordData?.lang || currentCardLang() || 'zh';
 }
 
 // Verb conjugation section (issue #596) — French & future conjugating
@@ -7179,6 +7237,11 @@ function renderInflectionSection(container, wordData) {
 function renderWordAnalysis(container, wordData, wordId) {
   const el = container ?? document.getElementById('word-analysis-section');
   const wd = wordData ?? wordDetails;
+  // Chinese-only block (issue #906): character breakdown, measure words and
+  // component words are all 汉字 machinery. For a French/Spanish entry it
+  // rendered one row repeating the headword — renderEtymologySection() takes
+  // this slot instead.
+  if (_entryLang(wd) !== 'zh') { el.innerHTML = ''; return; }
   const nt = wd?.note_type ?? card?.note_type;
   const isMultiWord = nt === 'sentence' || nt === 'chengyu' || nt === 'expression';
   const prefix = el.id;
@@ -7312,7 +7375,11 @@ function renderWordAnalysis(container, wordData, wordId) {
 }
 
 function _callRenderWordAnalysis() {
+  // Two mutually exclusive renderers share this slot in the review panel:
+  // Word Analysis for Chinese, Etymology for everything else (#906). Both are
+  // called; each one clears itself for the language it doesn't serve.
   renderWordAnalysis();
+  renderEtymologySection();
 }
 
 // ── Quick-add compound word to tomorrow's Daily deck ────────────────────────
@@ -10010,6 +10077,7 @@ function closeStoryModal() {
 // ── Edit card modal ───────────────────────────────────────────────────────────
 let _editWordId   = null;   // word ID being edited
 let _editFromWord = false;  // true when opened from word-detail view
+let _editHasEtymology = false;  // #906: only then does saving touch entries.etymology
 
 function _openEditModal(wordObj) {
   _editWordId = wordObj.word_id || wordObj.id;
@@ -10022,6 +10090,18 @@ function _openEditModal(wordObj) {
   document.getElementById('edit-definition-de').value = wordObj.definition_de || '';
   document.getElementById('edit-definition-fr').value = wordObj.definition_fr || '';
   document.getElementById('edit-notes').value         = wordObj.notes         || '';
+  // Etymology is a Romance-only column (#906) — the field stays hidden for
+  // Chinese entries so nobody types prose into a column nothing renders.
+  //
+  // The review card row (database/cards.py) does not select entries.etymology,
+  // so during review the text comes from the wordDetails fetch. If neither
+  // source carries the column, the field stays hidden and saveEditCard() omits
+  // it entirely — saving an empty textarea would silently wipe the entry.
+  const _etymSource = ('etymology' in wordObj) ? wordObj
+    : (wordDetails?.id === (wordObj.word_id || wordObj.id) ? wordDetails : null);
+  _editHasEtymology = !!_etymSource && _entryLang(wordObj) !== 'zh';
+  document.getElementById('edit-etymology').value = _etymSource?.etymology || '';
+  document.getElementById('edit-etymology-label').style.display = _editHasEtymology ? '' : 'none';
   // Show card action menu only when opened during active review
   const menuWrap = document.getElementById('edit-card-menu-wrap');
   menuWrap.style.display = _editFromWord ? 'none' : 'inline-block';
@@ -10146,6 +10226,9 @@ async function saveEditCard() {
     definition_fr: document.getElementById('edit-definition-fr').value.trim(),
     notes:         document.getElementById('edit-notes').value.trim(),
   };
+  if (_editHasEtymology) {
+    body.etymology = document.getElementById('edit-etymology').value.trim();
+  }
   try {
     const updated = await api('PUT', `/api/word/${_editWordId}`, body);
     closeEditCard();
@@ -10160,6 +10243,7 @@ async function saveEditCard() {
         definition_de: updated.definition_de,
         definition_fr: updated.definition_fr,
         notes: updated.notes,
+        etymology: updated.etymology,
       });
       document.getElementById('word-zh').textContent  = updated.word_zh || '';
       document.getElementById('word-pin').textContent = updated.pinyin  || '';
@@ -10174,6 +10258,10 @@ async function saveEditCard() {
       posEl.textContent   = updated.pos || '';
       posEl.style.display = updated.pos ? 'inline-block' : 'none';
       renderNotesSection();
+      // updated is the full entry row, so the Etymology block (#906) picks the
+      // edit up straight away instead of showing the pre-edit text.
+      if (wordDetails?.id === updated.id) wordDetails = { ...wordDetails, ...updated };
+      renderEtymologySection();
     }
   } catch (e) {
     showError('Save failed: ' + e.message);
@@ -11898,6 +11986,15 @@ document.addEventListener('keydown', async e => {
       document.getElementById(containerId)?.scrollIntoView({ behavior: 'smooth', block });
   };
 
+  // The 'word analysis' key serves whichever renderer owns that panel slot for
+  // the current entry: Word Analysis (zh) or Etymology (Romance) — #906.
+  const _toggleAnalysisSlot = (prefix) => {
+    const id = document.getElementById(prefix + 'word-analysis-section')?.innerHTML
+      ? prefix + 'word-analysis-section'
+      : prefix + 'etymology-section';
+    _toggleAndScroll(id + '-body', id, 'end');
+  };
+
   // Review shortcuts
   const reviewView = document.getElementById('view-review');
   if (reviewView && reviewView.style.display !== 'none') {
@@ -11937,7 +12034,7 @@ document.addEventListener('keydown', async e => {
     } else if (backVisible && e.key === _key('notes')) {
       e.preventDefault(); _toggleAndScroll('notes-section-body', 'notes-section');
     } else if (backVisible && e.key === _key('word-analysis')) {
-      e.preventDefault(); _toggleAndScroll('word-analysis-section-body', 'word-analysis-section', 'end');
+      e.preventDefault(); _toggleAnalysisSlot('');
     } else if (e.key === _key('hint-minus')) {
       e.preventDefault(); _adjustListenHintSlider(-1);
     } else if (e.key === _key('hint-plus')) {
@@ -11987,7 +12084,7 @@ document.addEventListener('keydown', async e => {
     } else if (e.key === _key('notes')) {
       e.preventDefault(); _toggleAndScroll('wd-notes-section-body', 'wd-notes-section');
     } else if (e.key === _key('word-analysis')) {
-      e.preventDefault(); _toggleAndScroll('wd-word-analysis-section-body', 'wd-word-analysis-section', 'end');
+      e.preventDefault(); _toggleAnalysisSlot('wd-');
     } else if (e.key === _key('regen-all')) {
       e.preventDefault(); if (_currentWordId) regenAllFields(_currentWordId);
     } else if (e.key === _key('relations')) {

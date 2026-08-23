@@ -811,7 +811,8 @@ def count_due(deck_id: int, category: str) -> dict:
 
 
 def update_word(word_id: int, fields: dict) -> None:
-    allowed = {"word_zh", "pinyin", "definition", "pos", "traditional", "definition_zh", "notes", "hsk_level", "definition_de", "definition_fr"}
+    allowed = {"word_zh", "pinyin", "definition", "pos", "traditional", "definition_zh", "notes",
+               "hsk_level", "definition_de", "definition_fr", "etymology"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return

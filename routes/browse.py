@@ -95,6 +95,11 @@ def _enrich_chars_with_id(char_results: list, db_chars: list, output: list) -> N
 
 _TOP_FIELDS = {"notes", "examples", "definition", "definition_zh", "definition_de", "definition_fr", "pos"}
 _CHAR_FIELDS = {"etymology", "compounds", "other_meanings"}
+# Entry-level etymology (#906) — Romance languages only, and deliberately named
+# apart from the character-level "etymology" above: they are different columns
+# (entries.etymology vs characters.etymology) filled by different prompts, and
+# one name for both would make every branch below ambiguous.
+_ENTRY_ETYM_FIELD = "entry_etymology"
 
 
 def _run_regen_ai(word_id: int, word: dict, fields: list) -> tuple[dict, list]:
@@ -103,6 +108,12 @@ def _run_regen_ai(word_id: int, word: dict, fields: list) -> tuple[dict, list]:
     top_result  — notes/examples/definition/pos for the top-level entry.
     all_characters — list of {char, char_id, etymology?, compounds?} across all components.
     """
+    # Entry-level etymology (#906) is its own prompt and its own column, so it
+    # is handled separately and merged back in at the end — never passed down
+    # to the Chinese-dictionary prompt below.
+    want_entry_etym = _ENTRY_ETYM_FIELD in fields
+    fields = [f for f in fields if f != _ENTRY_ETYM_FIELD]
+
     want_char_data = "etymology" in fields or "compounds" in fields
     components = database.get_note_components(word_id)
     top_result: dict = {}
@@ -163,8 +174,12 @@ def _run_regen_ai(word_id: int, word: dict, fields: list) -> tuple[dict, list]:
                         characters.append({"char_id": None, "char": ch,
                                            "pinyin": "", "hsk_level": "", "etymology": "", "compounds": []})
                     existing_in_db.add(ch)
-        top_result = ai.regenerate_entry_fields(word, characters, fields)
-        _enrich_chars_with_id(top_result.get("characters", []), characters, all_characters)
+        if fields:
+            top_result = ai.regenerate_entry_fields(word, characters, fields)
+            _enrich_chars_with_id(top_result.get("characters", []), characters, all_characters)
+
+    if want_entry_etym:
+        top_result[_ENTRY_ETYM_FIELD] = ai.generate_entry_etymology(word)
 
     print(f"[REGEN] FINAL all_characters count={len(all_characters)} chars={[c.get('char') for c in all_characters]}", flush=True)
     return top_result, all_characters
@@ -176,6 +191,9 @@ def _save_regen_result(word_id: int, fields: list, top_result: dict, all_charact
                    if f in fields and top_result.get(f)}
     if def_updates:
         database.update_word(word_id, def_updates)
+
+    if _ENTRY_ETYM_FIELD in fields and top_result.get(_ENTRY_ETYM_FIELD):
+        database.update_word(word_id, {"etymology": top_result[_ENTRY_ETYM_FIELD]})
 
     if "notes" in fields and top_result.get("notes"):
         database.update_word(word_id, {"notes": top_result["notes"]})
@@ -243,11 +261,11 @@ def regenerate_word_fields(word_id: int, body: dict):
 
     body: {"fields": [...], "preview": false}
     When preview=true, returns raw AI result without saving (for the frontend preview modal).
-    fields: subset of ["notes", "examples", "etymology", "compounds"]
+    fields: subset of ["notes", "examples", "etymology", "compounds", "entry_etymology"]
     """
     fields = body.get("fields", [])
     preview = body.get("preview", False)
-    valid = _TOP_FIELDS | _CHAR_FIELDS
+    valid = _TOP_FIELDS | _CHAR_FIELDS | {_ENTRY_ETYM_FIELD}
     fields = [f for f in fields if f in valid]
     if not fields:
         raise HTTPException(status_code=400, detail=f"fields must be a non-empty subset of {sorted(valid)}")
@@ -260,7 +278,8 @@ def regenerate_word_fields(word_id: int, body: dict):
 
     if preview:
         aggregated: dict = {}
-        for f in ("pos", "definition", "definition_zh", "definition_de", "definition_fr", "notes", "examples"):
+        for f in ("pos", "definition", "definition_zh", "definition_de", "definition_fr", "notes",
+                  "examples", _ENTRY_ETYM_FIELD):
             if top_result.get(f):
                 aggregated[f] = top_result[f]
         if all_characters:
@@ -276,7 +295,7 @@ def apply_regen_result(word_id: int, body: dict):
     """Apply a (possibly user-edited) AI regen result returned by preview mode."""
     fields = body.get("fields", [])
     result = body.get("result", {})
-    valid = _TOP_FIELDS | _CHAR_FIELDS
+    valid = _TOP_FIELDS | _CHAR_FIELDS | {_ENTRY_ETYM_FIELD}
     fields = [f for f in fields if f in valid]
     if not fields:
         raise HTTPException(status_code=400, detail="fields required")
@@ -285,7 +304,8 @@ def apply_regen_result(word_id: int, body: dict):
     if not word:
         raise HTTPException(status_code=404, detail="Word not found")
 
-    top_keys = ("pos", "definition", "definition_zh", "definition_de", "definition_fr", "notes", "examples")
+    top_keys = ("pos", "definition", "definition_zh", "definition_de", "definition_fr", "notes",
+                "examples", _ENTRY_ETYM_FIELD)
     top_result = {k: result[k] for k in top_keys if k in result}
     all_characters = result.get("characters", [])
     _save_regen_result(word_id, fields, top_result, all_characters)

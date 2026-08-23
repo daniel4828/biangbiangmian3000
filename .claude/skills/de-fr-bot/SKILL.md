@@ -85,7 +85,8 @@ First a single line with the **German translation in bold**, then the fenced YAM
 | `english` / `german` | Concise glosses; cover all selected meanings separated by `/` |
 | `level` | CEFR string, quoted: `"A1"` `"A2"` `"B1"` `"B2"` `"C1"` `"C2"` |
 | `register` | Same value set as Chinese format: `spoken_colloquial`, `spoken_neutral`, `neutral`, `formal_written`, `literary`, `slang` |
-| `note` | **German** prose (block scalar `\|`). Contains: usage explanation, common expressions/collocations, false-friend warnings, and a **short etymology** (`**Étymologie:** …` — 1–2 sentences, no character analysis needed for French) |
+| `note` | **German** prose (block scalar `\|`). Contains: usage explanation, common expressions/collocations, false-friend warnings. **No etymology here** — it has its own field (issue #906) |
+| `etymology` | **Required** for `word`/`expression` (omit for `sentence`). **German** prose block scalar (`\|`), 2–4 sentences, no bullets and no `**Étymologie:**` heading — the UI labels the block itself. Source word (Latin/Greek/Frankish/Arabic …) with its original meaning, the path into French, the meaning shift, and any German/English cognate the learner already knows. Mark source words with `*asterisks*`. Say so in one sentence if the origin is disputed — never invent one |
 | `examples` | 2–4 items, each with `fr`, `english`, `german` |
 | `synonyms` / `antonyms` | Optional; `{word, meaning}` — meaning in German. Include when they add clear value |
 | `conjugations` | **Required for every verb** — see below. Omit for non-verbs |
@@ -150,9 +151,11 @@ Same as de-zh-bot:
     - parler couramment — fließend sprechen
     - entendre parler de — von etwas hören
     - tu parles ! — von wegen! (umgangssprachlich)
-
-    **Étymologie:** Vom lateinischen *parabolare* („in Gleichnissen reden"),
-    abgeleitet von *parabola* — derselbe Ursprung wie dt. „Parabel".
+  etymology: |
+    Vom kirchenlateinischen *parabolare* („in Gleichnissen reden"), abgeleitet
+    von griech. *parabolé* („Vergleich, Gleichnis"). Dasselbe Wort steckt in
+    dt. „Parabel" und in span. *hablar*. Das nüchterne lateinische *loqui*
+    („sprechen") wurde dabei vollständig verdrängt.
   examples:
     - fr: Je parle un peu français.
       english: I speak a little French.
@@ -287,7 +290,8 @@ Before outputting, verify:
 - [ ] `level` is a quoted CEFR string A1–C2
 - [ ] Nouns have gender in `pos` (`nom (m)` / `nom (f)`)
 - [ ] Every verb has the full `conjugations` block (7 tenses + both participles, auxiliary noted in passé composé and participe passé)
-- [ ] `note` is German, block scalar, and contains a short **Étymologie** line
+- [ ] `note` is German, block scalar — and does **not** contain the etymology
+- [ ] `etymology` is its own German block scalar, 2–4 sentences, no heading (#906)
 - [ ] 2–4 examples with `fr` + `english` + `german`
 - [ ] No unquoted colons / no double-quoted inline values
 - [ ] Reminder about the `lang: fr` file header when a new file is started

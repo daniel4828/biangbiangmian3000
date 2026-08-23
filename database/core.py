@@ -163,6 +163,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE entries ADD COLUMN grammar_notes TEXT")
     if "gender" not in cols:
         conn.execute("ALTER TABLE entries ADD COLUMN gender TEXT")
+    if "etymology" not in cols:
+        # Entry-level word origin for Romance languages (issue #906) — distinct
+        # from characters.etymology, which is per Chinese character.
+        conn.execute("ALTER TABLE entries ADD COLUMN etymology TEXT")
 
     # One-time table rebuild (#803): UNIQUE(word_zh) -> UNIQUE(word_zh, lang).
     # French and Spanish share many identical surface forms (capital, animal,

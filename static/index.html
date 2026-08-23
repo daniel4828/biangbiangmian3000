@@ -349,6 +349,7 @@
           <div id="conjugation-section"></div>
           <div id="inflection-section"></div>
           <div id="word-analysis-section"></div>
+          <div id="etymology-section"></div>
           <div id="examples-section"></div>
           <div style="display:flex;gap:8px;justify-content:center">
             <button class="edit-card-btn" id="edit-card-btn" onclick="openEditCard()">Edit card</button>
@@ -500,6 +501,7 @@
       <div id="wd-inflection-section"></div>
       <div id="wd-notes-section"></div>
       <div id="wd-word-analysis-section"></div>
+      <div id="wd-etymology-section"></div>
       <div id="wd-examples-section"></div>
       <div id="wd-cards-section"></div>
       <div id="wd-card-tile-section"></div>
@@ -796,6 +798,9 @@
     <label class="edit-label">German definition<input class="edit-input" id="edit-definition-de" type="text"></label>
     <label class="edit-label">French definition<input class="edit-input" id="edit-definition-fr" type="text"></label>
     <label class="edit-label">Notes<textarea class="edit-input edit-notes" id="edit-notes" rows="3"></textarea></label>
+    <!-- Etymology (#906): entry-level word origin, Romance languages only —
+         hidden for Chinese entries, whose etymology is per character. -->
+    <label class="edit-label" id="edit-etymology-label" style="display:none">Etymology<textarea class="edit-input edit-notes" id="edit-etymology" rows="3"></textarea></label>
   </div>
   <div class="edit-card-actions">
     <button class="edit-cancel-btn" onclick="closeEditCard()">Cancel</button>
