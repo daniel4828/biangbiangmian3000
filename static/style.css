@@ -5946,3 +5946,12 @@ table.fsrs-table td.ivl { font-weight: 700; }
   line-height: 1.5;
   margin-bottom: 4px;
 }
+
+/* Read-only language chip (#896). Review is the one view whose header can't
+   offer the switcher — the right half is the due counts, and swapping language
+   mid-card is meaningless — but it still has to say which language is on
+   screen, so it gets the active tab's look without the interaction. */
+.lang-tabs-header .lang-tab-static {
+  display: block;
+  cursor: default;
+}

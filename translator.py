@@ -21,6 +21,7 @@ Requires internet access (VPN recommended in China).
 """
 import concurrent.futures
 import logging
+import time
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
@@ -127,6 +128,15 @@ def _load(source: str, target: str) -> object | None:
     return _translators[key]
 
 
+# The free Google endpoint fails intermittently: the same request that just
+# succeeded raises TranslationNotFound (or comes back empty) a moment later —
+# measured 2 failures in 5 identical de->fr calls (#895). translate_zh never
+# noticed because it swallows and returns the original, but translate_strict
+# turns one blip into a whole failed rendition, so it retries first.
+_STRICT_ATTEMPTS = 3
+_STRICT_RETRY_DELAY_SECONDS = 0.7
+
+
 def translate_strict(text: str, target: str = "en", source: str = "zh-CN") -> str:
     """Like translate_zh, but raises instead of silently returning the
     original text on failure (#804). translate_zh's swallow-everything
@@ -134,13 +144,32 @@ def translate_strict(text: str, target: str = "en", source: str = "zh-CN") -> st
     sink a whole story/episode), but knowledge-base language renditions need
     to tell "translated" apart from "translation failed" so a failure can be
     reported to the frontend instead of being stored as if it were a real
-    translation into that language."""
+    translation into that language.
+
+    Retries transient endpoint failures (#895) before giving up; an empty
+    result counts as a failure too, since the callers that need strictness
+    (knowledge/rendition.py, the book reader) reject it anyway and would
+    otherwise throw away a perfectly retryable attempt.
+    """
     t = _load(source, target)
     if t is None:
         raise RuntimeError(f"translator unavailable (source={source}, target={target})")
     if not text.strip():
         return text
-    return _translate_with_timeout(t, text)
+    last_error: Exception | None = None
+    for attempt in range(_STRICT_ATTEMPTS):
+        try:
+            translated = _translate_with_timeout(t, text)
+            if translated and translated.strip():
+                return translated
+            last_error = RuntimeError("translator returned empty text")
+        except Exception as e:
+            last_error = e
+        logger.info("translator: strict attempt %d/%d failed (source=%s, target=%s) — %s",
+                    attempt + 1, _STRICT_ATTEMPTS, source, target, last_error)
+        if attempt + 1 < _STRICT_ATTEMPTS:
+            time.sleep(_STRICT_RETRY_DELAY_SECONDS * (attempt + 1))
+    raise last_error
 
 
 def translate_zh(text: str, target: str = "en", source: str = "zh-CN") -> str:

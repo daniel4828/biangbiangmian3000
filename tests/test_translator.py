@@ -163,3 +163,69 @@ def test_missing_result_container_returns_original_for_translate_zh(monkeypatch)
     # Deliberately lossy contract (see translate_zh's docstring): a missing
     # gloss must not sink a whole story.
     assert translator.translate_zh("Hallo", target="fr", source="de") == "Hallo"
+
+
+# ── translate_strict 的瞬时失败重试（#895）──────────────────────────────────
+# 背景：#890 那次全线失效暴露出的结构性弱点——严格版一次异常就直接抛，
+# knowledge/rendition.py 于是整篇阅读版只剩一行 translation failed。
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_delay(monkeypatch):
+    """重试的退避对测试只是纯等待。"""
+    monkeypatch.setattr(translator, "_STRICT_RETRY_DELAY_SECONDS", 0)
+
+
+def _fake_urlopen_sequence(bodies: list, calls: list):
+    """按顺序返回若干个响应体；元素是异常实例时改为抛出它。"""
+    def _open(req, timeout=None):
+        calls.append(req.full_url)
+        body = bodies[min(len(calls) - 1, len(bodies) - 1)]
+        if isinstance(body, Exception):
+            raise body
+        return io.BytesIO(body.encode("utf-8"))
+    return _open
+
+
+def _fresh_sequence(monkeypatch, bodies):
+    calls: list = []
+    monkeypatch.setattr(translator, "_translators", {})
+    monkeypatch.setattr(translator.urllib.request, "urlopen",
+                        _fake_urlopen_sequence(bodies, calls))
+    return calls
+
+
+def test_strict_retries_a_transient_failure(monkeypatch):
+    calls = _fresh_sequence(monkeypatch, [OSError("connection reset"), _PAGE])
+
+    out = translator.translate_strict("Hallo Welt.\nDanke.", target="fr", source="de")
+
+    assert out == "Bonjour le monde.\nMerci."
+    assert len(calls) == 2
+
+
+def test_strict_retries_an_empty_result(monkeypatch):
+    # 空结果原来直接返回空串，由上层判成 empty segment —— 白白丢掉一次可重试的机会。
+    empty = ('<html><body><div class="result-container">   </div></body></html>')
+    calls = _fresh_sequence(monkeypatch, [empty, _PAGE])
+
+    assert translator.translate_strict("Hallo", target="fr", source="de").strip()
+    assert len(calls) == 2
+
+
+def test_strict_gives_up_after_the_last_attempt(monkeypatch):
+    calls = _fresh_sequence(monkeypatch, [OSError("connection reset")])
+
+    with pytest.raises(Exception) as exc:
+        translator.translate_strict("Hallo", target="fr", source="de")
+
+    assert "connection reset" in str(exc.value), "要保留最后一次失败的原因"
+    assert len(calls) == translator._STRICT_ATTEMPTS
+
+
+def test_translate_zh_still_fails_fast(monkeypatch):
+    # 吞异常返回原文的契约不变，也不该为它重试三次（调用点极多）。
+    calls = _fresh_sequence(monkeypatch, [OSError("connection reset")])
+
+    assert translator.translate_zh("Hallo", target="fr", source="de") == "Hallo"
+    assert len(calls) == 1
