@@ -930,12 +930,30 @@ def regenerate_story(deck_id: int, category: str,
                 deck_id, category, lang, len(cards), topic, max_hsk, chosen_model, mode, len(articles))
     if not cards:
         return None
-    result = _generate_and_store(
-        deck_id, category, today, cards,
-        topic=topic, max_hsk=max_hsk, model=chosen_model,
-        grammar_focus=grammar_focus, grammar_pct=grammar_pct,
-        mode=mode, chapter_ids=chapter_ids, articles=articles, progress_key=progress_key, lang=lang,
-        episode_ids=parsed_episode_ids, batch_size=batch_size)
+    # Register in _generating so POST .../cancel can reach this run (#868). The
+    # cancel endpoint only flags keys it finds there, so before this the Cancel
+    # button on the regenerate loading screen could not have worked at all — it
+    # would have answered {"cancelled": false} while the run kept spending money.
+    # Another generation for the same key already running means this request has
+    # nothing of its own to cancel, so leave that registration alone.
+    with _gen_lock:
+        owns_key = progress_key not in _generating
+        if owns_key:
+            _generating.add(progress_key)
+    try:
+        result = _generate_and_store(
+            deck_id, category, today, cards,
+            topic=topic, max_hsk=max_hsk, model=chosen_model,
+            grammar_focus=grammar_focus, grammar_pct=grammar_pct,
+            mode=mode, chapter_ids=chapter_ids, articles=articles, progress_key=progress_key, lang=lang,
+            episode_ids=parsed_episode_ids, batch_size=batch_size)
+    finally:
+        # finally: a leaked key makes every later cancel for this deck a silent
+        # no-op ("nothing running") and blocks background generation outright.
+        if owns_key:
+            with _gen_lock:
+                _generating.discard(progress_key)
+            ai.clear_cancel(progress_key)
     ai._story_progress.pop(progress_key, None)
     # Queue invalidation happens inside _generate_and_store (issue #783).
     return result
