@@ -1326,6 +1326,17 @@ function _renderTasks(tasks) {
       ageEl.textContent = age;
       head.appendChild(ageEl);
     }
+    // ✕ only where the server says a cancel actually does something (#877):
+    // most task kinds have no interruption point, and a button that silently
+    // does nothing is worse than none — he would stop trusting the panel.
+    if (t.cancellable) {
+      const cancel = document.createElement('button');
+      cancel.className = 'task-cancel-btn';
+      cancel.textContent = '✕';
+      cancel.title = 'Cancel this task';
+      cancel.onclick = (e) => { e.stopPropagation(); _cancelTask(t.id, cancel, row); };
+      head.appendChild(cancel);
+    }
     row.appendChild(head);
 
     if (t.detail) {
@@ -1343,6 +1354,23 @@ function _renderTasks(tasks) {
       row.appendChild(bar);
     }
     list.appendChild(row);
+  }
+}
+
+async function _cancelTask(taskId, btn, row) {
+  btn.disabled = true;
+  row.classList.add('task-row-cancelling');
+  try {
+    await api('POST', '/api/tasks/cancel', { id: taskId });
+    // The run clears itself on its next progress check; refresh so the row
+    // disappears rather than sitting there greyed out until the next poll.
+    await _refreshTasks();
+  } catch (e) {
+    // Re-enable: the task is still running, and pretending otherwise is exactly
+    // what the server-side 400/404 is there to prevent.
+    btn.disabled = false;
+    row.classList.remove('task-row-cancelling');
+    showError('Could not cancel: ' + e.message);
   }
 }
 
@@ -1544,6 +1572,26 @@ function _renderHeaderLangTabs() {
 
 function flatten(nodes, depth = 0) {
   return nodes.flatMap(n => [{ ...n, _depth: depth }, ...flatten(n.children || [], depth + 1)]);
+}
+
+// Which of the three categories are switched on anywhere (#869). A category
+// turned off in every deck's preset must leave no trace in the UI — a "创 0·0·0"
+// tile or an empty "Creating" chart tab is noise about something that cannot
+// happen. Any deck having it on counts as on; virtual decks (Unfinished) carry
+// none of these fields and are skipped.
+//
+// Before /api/decks has answered we report everything as enabled: showing one
+// tile too many for a second beats blanking the UI on missing data.
+function _enabledCategories() {
+  const all = { reading: true, listening: true, creating: true };
+  if (!_cachedDecks) return all;
+  const decks = flatten(_cachedDecks).filter(d => d.reading_enabled !== undefined);
+  if (!decks.length) return all;
+  return {
+    reading:   decks.some(d => d.reading_enabled),
+    listening: decks.some(d => d.listening_enabled),
+    creating:  decks.some(d => d.creating_enabled),
+  };
 }
 
 // Direct category-leaf children of a deck keyed by category
@@ -5438,6 +5486,10 @@ async function _cancelStoryGeneration() {
   // to _BG_LEFT and its caller returns instead of racing us to showView().
   _bgLeaveRequested = true;
   _bgActiveResume = null;
+  // A regenerate's POST is still in flight and will resolve regardless. If the
+  // server got the flag too late and hands back a finished story, this tells
+  // _doRegenerateStory to drop it rather than yank the user's screen around.
+  if (ctx.isRegen) { _regenCancelRequested = true; _regenBgRequested = false; }
   _stopFakeProgress();
   _stopStoryProgressPoll();
   try {
@@ -5449,7 +5501,10 @@ async function _cancelStoryGeneration() {
     showNotice('Could not reach the server to cancel — generation may still be running.');
   }
   _hideLoadingBgButton();
-  loadDecks();
+  // A regenerate was started from inside a review session, so that is where
+  // cancelling belongs — the old story is untouched and still reviewable.
+  // Dropping the user on the deck list would end a session they never left.
+  if (ctx.isRegen) { showView('review'); showFront(); } else { loadDecks(); }
 }
 
 // Poll the background story endpoint until it returns a story (or an error dict),
@@ -5468,6 +5523,22 @@ async function _pollBackgroundStory(bgUrl) {
 // global readiness poller, and return to the deck list. Generation keeps running.
 function _continueStoryInBackground() {
   if (!_bgActiveResume) return;
+  // Regenerate (#868) takes a different exit: its POST is already in flight and
+  // resolves with the finished story, so there is nothing for _bgStories /
+  // _ensureBgStoryPoller (which poll `background=true` GETs) to watch. Hand the
+  // user back to their review session and let _doRegenerateStory's own promise
+  // put up the "ready" banner when it lands.
+  if (_bgActiveResume.isRegen) {
+    _regenBgRequested = true;
+    _bgActiveResume = null;
+    _stopFakeProgress();
+    _stopStoryProgressPoll();
+    _hideLoadingBgButton();
+    _showRegenBgBanner();
+    showView('review');
+    showFront();
+    return;
+  }
   _bgLeaveRequested = true;
   _bgStories[_bgActiveResume.key] = _bgActiveResume;
   _bgActiveResume = null;
@@ -5476,6 +5547,31 @@ function _continueStoryInBackground() {
   _hideLoadingBgButton();
   _ensureBgStoryPoller();
   loadDecks();
+}
+
+// Set while a regenerate started from the review screen finishes in the
+// background. Read once by _doRegenerateStory when its POST resolves: the user
+// is back on their card, so the new story must arrive as a banner they can
+// accept, never as a view switch under their hands.
+let _regenBgRequested = false;
+// Set by _cancelStoryGeneration for a regenerate run; see there.
+let _regenCancelRequested = false;
+
+function _showRegenBgBanner() {
+  const banner = document.getElementById('bg-story-banner');
+  if (!banner) return;
+  banner.classList.add('bg-banner-progress');
+  banner.textContent = '⏳ Regenerating story in the background — keep reviewing…';
+  banner.onclick = null;
+  banner.style.display = 'block';
+}
+
+function _hideRegenBgBanner() {
+  const banner = document.getElementById('bg-story-banner');
+  if (!banner) return;
+  banner.classList.remove('bg-banner-progress');
+  banner.onclick = null;
+  banner.style.display = 'none';
 }
 
 // Poll every in-flight background story for readiness; banner the user when ready.
@@ -5888,9 +5984,13 @@ function loadCard(c, counts) {
       document.getElementById(`cnt-${prefix}-lrn`).textContent = lrnCount(cc);
       document.getElementById(`cnt-${prefix}-rev`).textContent = cc.review;
     }
-    // Reading disabled via preset → its key is absent from by_cat → hide the 读 item
-    const readingItem = document.getElementById('cnt-cat-reading');
-    if (readingItem) readingItem.style.display = counts.by_cat.reading ? '' : 'none';
+    // A category disabled via preset is absent from by_cat → hide its tile.
+    // One rule for all three (#869): the reading-only special case left "创 0·0·0"
+    // sitting in the top bar for a category that can never produce a card.
+    for (const cat of Object.values(catMap)) {
+      const item = document.getElementById(`cnt-cat-${cat}`);
+      if (item) item.style.display = counts.by_cat[cat] ? '' : 'none';
+    }
     // Highlight the active category item
     ['cnt-cat-reading', 'cnt-cat-listening', 'cnt-cat-creating'].forEach(id => document.getElementById(id)?.classList.remove('cnt-cat-item-active'));
     const activeCat = c?.category;
@@ -7482,23 +7582,60 @@ function _getTargetPositions(zh) {
   return positions;
 }
 
-// Words in the deck are always hidden; the slider adds easy words on top of
-// them (#862). "Not studied here" and "don't know it" are different things:
-// plenty of HSK1-4 words never entered the deck but Daniel has known them for
-// years, so leaving them visible just gives the sentence away.
-// 0 = saved words only, N = also every word at HSK <= N.
-function _hintLabelFor(level) {
+// Two blanking rules, switchable from the review screen (#874). Which one reads
+// better is only decidable while actually reviewing, so both stay available
+// instead of one replacing the other:
+//
+//   union (default, #862) — hidden = (in my deck) ∪ (HSK <= N)
+//   hsk   (the original)  — hidden = HSK <= N, N=0 blanks nothing but the target
+//
+// The target word is always blanked in both.
+const _HINT_MODES = {
+  union: { label: 'Saved+HSK', storeKey: 'listenHideLevel',      def: 4 },
+  hsk:   { label: 'HSK only',  storeKey: 'listenHintHskLevel',   def: 3 },
+};
+
+function _hintMode() {
+  const m = localStorage.getItem('listenHintMode');
+  return _HINT_MODES[m] ? m : 'union';
+}
+
+// Each mode keeps its own slider value: the same number means different things
+// per mode, so sharing one would make a switch land on a setting nobody chose
+// (the reason #855 introduced a new localStorage key rather than reusing the old).
+function _hintSavedDefault(mode = _hintMode()) {
+  const cfg = _HINT_MODES[mode];
+  return parseInt(localStorage.getItem(cfg.storeKey) ?? String(cfg.def), 10);
+}
+
+function _hintLabelFor(level, mode = _hintMode()) {
+  if (mode === 'hsk') return level === 0 ? 'Off' : `HSK≤${level}`;
   return level === 0 ? 'Saved only' : `Saved + HSK≤${level}`;
 }
 
-function _hintSavedDefault() {
-  return parseInt(localStorage.getItem('listenHideLevel') ?? '4', 10);
+function toggleListenHintMode() {
+  const next = _hintMode() === 'union' ? 'hsk' : 'union';
+  localStorage.setItem('listenHintMode', next);
+  const level = _hintSavedDefault(next);
+  const slider = document.getElementById('listen-hint-slider');
+  if (slider) slider.value = level;
+  _syncHintModeButton();
+  document.getElementById('listen-hint-pct').textContent = _hintLabelFor(level, next);
+  _updateHintStar(level);
+  // Re-blank the sentence on the spot — comparing the two modes is the whole
+  // point, and having to flip a card to see the effect defeats it.
+  _renderListenHint(level);
+}
+
+function _syncHintModeButton() {
+  const btn = document.getElementById('hint-mode-btn');
+  if (btn) btn.textContent = _HINT_MODES[_hintMode()].label;
 }
 
 function _updateHintStar(currentVal) {
   const btn = document.getElementById('hint-save-btn');
   if (!btn) return;
-  const isSaved = currentVal === _hintSavedDefault();
+  const isSaved = currentVal === _hintSavedDefault();  // per-mode, see _hintSavedDefault
   btn.textContent = isSaved ? '★' : '☆';
   btn.classList.toggle('saved', isSaved);
 }
@@ -7507,6 +7644,7 @@ async function _initListenHint() {
   const slider = document.getElementById('listen-hint-slider');
   const saved = _hintSavedDefault();
   slider.value = saved;
+  _syncHintModeButton();
   document.getElementById('listen-hint-pct').textContent = _hintLabelFor(saved);
   _updateHintStar(saved);
   const lang = currentCardLang();
@@ -7516,7 +7654,7 @@ async function _initListenHint() {
 
 function saveListenHintDefault() {
   const val = parseInt(document.getElementById('listen-hint-slider').value, 10);
-  localStorage.setItem('listenHideLevel', val);
+  localStorage.setItem(_HINT_MODES[_hintMode()].storeKey, val);
   _updateHintStar(val);
 }
 
@@ -7566,13 +7704,16 @@ function _renderListenHint(level) {
   // Sentence notes have no single "target word" to blank — reveal based on vocab only.
   const targetPositions = isSentenceNote && !sentence ? new Set() : _getTargetPositions(zh);
 
-  // Hidden = (in my deck) ∪ (HSK <= level), the union of the two rules (#862).
-  // The deck half catches what he is actively learning; the HSK half catches the
-  // everyday words he has known for years but that never entered the deck —
-  // leaving those visible hands him the sentence for free. What stays visible is
-  // the intersection's complement: words outside the deck that are HSK 5/6 or
-  // missing from the table entirely, which is exactly what has to be heard.
-  const vocabSet = _vocabIndex || new Set();
+  // union mode (#862): hidden = (in my deck) ∪ (HSK <= level). The deck half
+  // catches what he is actively learning; the HSK half catches the everyday
+  // words he has known for years but that never entered the deck — leaving
+  // those visible hands him the sentence for free. What stays visible is words
+  // outside the deck that are HSK 5/6 or missing from the table entirely.
+  //
+  // hsk mode (#874, the original rule): hidden = HSK <= level, the deck plays no
+  // part. level 0 therefore blanks nothing but the target word.
+  const mode = _hintMode();
+  const vocabSet = mode === 'hsk' ? new Set() : (_vocabIndex || new Set());
   const hidePositions = new Set();
   {
     // Use story tokens when available; fall back to char-by-char for sentence notes.
@@ -10006,15 +10147,27 @@ async function _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct
   setLoading('Regenerating story…', true);
   setLoadingStep(10, null, 'Sending request to AI…');
   _startFakeProgress(10, 55, 45000);
+  const storyDeckId = rootDeckId || deckId;
+  const storyCategory = rootDeckId ? 'unified' : category;
+  // Cancel ✕ / Continue in background on this screen too (#868): a regenerate
+  // takes as long as a first generation and used to be an unbreakable wait.
+  // isRegen routes both buttons back into the review session instead of the
+  // deck list, and tells _continueStoryInBackground not to hand this run to the
+  // `background=true` poller — this POST is the only thing that will deliver it.
+  _bgLeaveRequested = false;
+  _regenBgRequested = false;
+  _regenCancelRequested = false;
+  _bgActiveResume = { key: `${storyDeckId}/${storyCategory}`, storyDeckId, storyCategory, isRegen: true };
+  _showLoadingBgButton();
   try {
-    const storyDeckId = rootDeckId || deckId;
-    const storyCategory = rootDeckId ? 'unified' : category;
     _startStoryProgressPoll(storyDeckId, storyCategory);
     let storyData;
     try {
       storyData = await api('POST', `/api/story/${storyDeckId}/${storyCategory}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles });
     } catch (e) {
       _stopFakeProgress(); _stopStoryProgressPoll();
+      _clearRegenBgState();
+      if (_regenBgRequested) { _hideRegenBgBanner(); showError('Regenerate failed: ' + e.message); return; }
       _showLoadingError('AI request failed', e.message);
       await new Promise(r => setTimeout(r, 2500));
       showError('Regenerate failed: ' + e.message);
@@ -10022,6 +10175,25 @@ async function _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct
       return;
     }
     _stopFakeProgress(); _stopStoryProgressPoll();
+
+    // Cancelled (#828/#868): nothing was written, so the old story stands, and
+    // _cancelStoryGeneration already returned the user to their card. The local
+    // flag covers the race where the server finished just before the flag
+    // landed — the user asked to abandon this run either way.
+    if ((storyData && storyData.cancelled) || _regenCancelRequested) { _clearRegenBgState(); return; }
+
+    // Left in the background: the user is reviewing on the old story. Load the
+    // new one into memory but do not touch what is on screen — turn the banner
+    // into the offer to switch over.
+    if (_regenBgRequested) {
+      _clearRegenBgState();
+      await _finishRegenInBackground(storyData, storyDeckId, storyCategory,
+                                     topic, maxHsk, grammarFocus, grammarPct, mode);
+      return;
+    }
+
+    _hideLoadingBgButton();
+    _clearRegenBgState();
     setLoadingStep(65, null, 'Story received, processing…');
     story = await _resolveStory(storyData, storyDeckId, storyCategory, topic, maxHsk, grammarFocus, grammarPct, mode);
     sentence = story?.sentences?.find(s => s.word_ids?.includes(card.word_id)) || null;
@@ -10040,11 +10212,48 @@ async function _doRegenerateStory(topic, maxHsk, model, grammarFocus, grammarPct
     showFront();
   } catch (e) {
     _stopFakeProgress(); _stopStoryProgressPoll();
+    const wasBg = _regenBgRequested;
+    _clearRegenBgState();
+    if (wasBg) { _hideRegenBgBanner(); showError('Regenerate failed: ' + e.message); return; }
     _showLoadingError('Regenerate failed', e.message);
     await new Promise(r => setTimeout(r, 2500));
     showError('Regenerate failed: ' + e.message);
     showView('review');
   }
+}
+
+// Every exit from _doRegenerateStory runs this: a leaked _bgActiveResume makes
+// the next Cancel click cancel the wrong run, and a stuck _regenBgRequested
+// sends the following regenerate straight into the background path.
+function _clearRegenBgState() {
+  _bgActiveResume = null;
+  _bgLeaveRequested = false;
+  _regenBgRequested = false;
+  _regenCancelRequested = false;
+  _hideLoadingBgButton();
+}
+
+// The story finished while the user kept reviewing. Warm the audio cache, then
+// offer the switch — swapping the sentence under a card being answered would
+// change the question mid-answer.
+async function _finishRegenInBackground(storyData, storyDeckId, storyCategory,
+                                        topic, maxHsk, grammarFocus, grammarPct, mode) {
+  const newStory = await _resolveStory(storyData, storyDeckId, storyCategory,
+                                       topic, maxHsk, grammarFocus, grammarPct, mode);
+  _preloadWithProgress(storyDeckId, storyCategory, () => {}).catch(() => {});
+  const banner = document.getElementById('bg-story-banner');
+  if (!banner) return;
+  banner.classList.remove('bg-banner-progress');
+  banner.textContent = '📖 Story regenerated — click to use it';
+  banner.style.display = 'block';
+  banner.onclick = () => {
+    _hideRegenBgBanner();
+    story = newStory;
+    sentence = story?.sentences?.find(s => s.word_ids?.includes(card?.word_id)) || null;
+    _updateStoryInfoRow();
+    showView('review');
+    showFront();
+  };
 }
 
 async function regenerateStoryFromList(deckId, category = 'unified') {
@@ -12126,11 +12335,17 @@ let _hcalMetric = localStorage.getItem('calMetric') || 'retention';
 let _hcalMode   = localStorage.getItem('calMode')   || 'heatmap';
 let _hcalSelectedDay = null;   // 'YYYY-MM-DD' currently shown in the detail panel
 
-const _HCAL_CATS = [
+const _HCAL_ALL_CATS = [
   { key: 'listening', zh: '听', en: 'Listening' },
   { key: 'reading',   zh: '读', en: 'Reading'   },
   { key: 'creating',  zh: '创', en: 'Creating'  },
 ];
+// Rows for categories still switched on (#869) — a permanently-zero row for a
+// disabled category is noise, not information.
+function _hcalCats() {
+  const on = _enabledCategories();
+  return _HCAL_ALL_CATS.filter(c => on[c.key]);
+}
 const _HCAL_METRICS = [
   { key: 'retention', label: 'Retention' },
   { key: 'cards',     label: 'Cards'     },
@@ -12410,7 +12625,7 @@ function _hcalTipHtml(date) {
   if (_hcalMetric === 'future') {
     const f = _hcalData.future[date];
     if (!f) return `<div class="hcal-tip-date">${nice}</div><div class="hcal-tip-empty">nothing scheduled</div>`;
-    const cats = _HCAL_CATS.map(c => `${c.zh} ${f.by_cat[c.key] || 0}`).join(' · ');
+    const cats = _hcalCats().map(c => `${c.zh} ${f.by_cat[c.key] || 0}`).join(' · ');
     return `<div class="hcal-tip-date">${nice}</div>
             <div class="hcal-tip-big">${f.total} scheduled</div>
             <div class="hcal-tip-cats">${cats}</div>`;
@@ -12423,7 +12638,7 @@ function _hcalTipHtml(date) {
   const time = d.timed_count > 0
     ? `<div class="hcal-tip-sub">${_hcalFmtTime(d.duration_ms)} total · ${_hcalFmtTime(d.duration_ms / d.timed_count)}/card</div>`
     : '';
-  const rows = _HCAL_CATS.filter(c => d.by_cat[c.key]).map(c => {
+  const rows = _hcalCats().filter(c => d.by_cat[c.key]).map(c => {
     const cd = d.by_cat[c.key];
     const ph = `learning ${_hcalFmtRR(cd.learning.correct, cd.learning.total)}`;
     return `<div class="hcal-tip-row"><b>${c.zh}</b> ${cd.cards}c · ${_hcalFmtRR(cd.review.correct, cd.review.total)} <span class="hcal-tip-dim">(${ph})</span></div>`;
@@ -12447,7 +12662,7 @@ function _hcalRenderDetail() {
     const f = _hcalData.future[date];
     const body = !f ? '<div class="hcal-tip-empty">Nothing scheduled.</div>'
       : `<table class="hcal-tbl"><tr><th></th><th>Scheduled</th></tr>${
-          _HCAL_CATS.map(c => `<tr><td>${c.zh} ${c.en}</td><td>${f.by_cat[c.key] || 0}</td></tr>`).join('')
+          _hcalCats().map(c => `<tr><td>${c.zh} ${c.en}</td><td>${f.by_cat[c.key] || 0}</td></tr>`).join('')
         }<tr class="hcal-tbl-total"><td>Total</td><td>${f.total}</td></tr></table>`;
     return `<div class="hcal-detail-head">${nice}</div>${body}`;
   }
@@ -12455,7 +12670,7 @@ function _hcalRenderDetail() {
   const d = _hcalData.by_date[date];
   if (!d || d.total === 0) return `<div class="hcal-detail-head">${nice}</div><div class="hcal-tip-empty">No reviews this day.</div>`;
 
-  const catRows = _HCAL_CATS.map(c => {
+  const catRows = _hcalCats().map(c => {
     const cd = d.by_cat[c.key];
     if (!cd) return `<tr><td>${c.zh} ${c.en}</td><td>0</td><td>—</td><td>—</td><td>—</td></tr>`;
     const avg = cd.timed_count > 0 ? _hcalFmtTime(cd.duration_ms / cd.timed_count) : '—';
@@ -12502,7 +12717,17 @@ const _EVO_STATES = [
   { key: 'learning', label: 'Learning', color: _STATE_COLOR.learning },
   { key: 'new',      label: 'New',      color: _STATE_COLOR.new      },
 ];
-const _EVO_VIEWS = [['listening', 'Listening'], ['creating', 'Creating'], ['all', 'All']];
+const _EVO_ALL_VIEWS = [['listening', 'Listening'], ['reading', 'Reading'],
+                        ['creating', 'Creating'], ['all', 'All']];
+// Tabs for categories still switched on, plus All (#869). If the stored view
+// points at a category that has since been disabled, fall back to 'all' —
+// otherwise the chart stays permanently blank with no hint why.
+function _evoViews() {
+  const on = _enabledCategories();
+  const views = _EVO_ALL_VIEWS.filter(([k]) => k === 'all' || on[k]);
+  if (!views.some(([k]) => k === _evoView)) _evoView = 'all';
+  return views;
+}
 
 function initHomeEvolution() {
   const el = document.getElementById('home-evolution');
@@ -12549,6 +12774,9 @@ function _evoRender() {
   const el = document.getElementById('home-evolution');
   if (!el || !_evoData) return;
 
+  // Resolve the tab list first: it also repairs a stored _evoView pointing at a
+  // now-disabled category, and _evoSeries() below reads _evoView (#869).
+  const views = _evoViews();
   const sr = _evoSeries();
   const allDates = _evoData.dates;
   const totalsAll = allDates.map((_, i) =>
@@ -12588,7 +12816,7 @@ function _evoRender() {
     `<span class="evo-ylabel" style="top:${(y(ymax * f) / H * 100).toFixed(2)}%">${
       Math.round(ymax * f)}</span>`).join('');
 
-  const viewBtns = _EVO_VIEWS.map(([k, lbl]) =>
+  const viewBtns = views.map(([k, lbl]) =>
     `<button class="hcal-seg-btn ${k === _evoView ? 'active' : ''}"
              onclick="evoSetView('${k}')">${lbl}</button>`).join('');
   const legend = _EVO_STATES.slice().reverse().map(s =>

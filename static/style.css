@@ -608,6 +608,22 @@ main.browse-open {
   transition: color 0.15s;
 }
 .hint-save-btn:hover { color: #f5a623; }
+/* Blanking-mode switch next to the Hint slider (#874). Carries its mode name as
+   text: an unlabelled icon here would leave the slider's numbers meaningless,
+   since the same value means different things per mode. */
+.hint-mode-btn {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  color: var(--primary);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.hint-mode-btn:hover { background: color-mix(in srgb, var(--primary) 22%, transparent); }
 .hint-save-btn.saved { color: #f5a623; }
 .meta-play-group {
   display: flex;
@@ -5726,6 +5742,20 @@ table.fsrs-table td.ivl { font-weight: 700; }
   white-space: nowrap;
 }
 .task-row-age { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.task-cancel-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  margin-left: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.task-cancel-btn:hover:not(:disabled) { color: var(--again, #ef4444); }
+.task-cancel-btn:disabled { opacity: 0.4; cursor: default; }
+.task-row-cancelling { opacity: 0.5; }
 .task-row-detail { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .task-bar { height: 3px; border-radius: 2px; background: var(--border); margin-top: 5px; }
 .task-bar > div { height: 100%; border-radius: 2px; background: var(--primary); }

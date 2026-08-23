@@ -144,3 +144,46 @@ def test_a_broken_collector_does_not_take_the_whole_list_down(tmp_db, monkeypatc
 def test_deleted_deck_falls_back_to_the_id(tmp_db):
     ai._story_progress["99999/reading/zh"] = {"phase": "request", "percent": 10}
     assert get_tasks()["tasks"][0]["label"] == "99999 · reading"
+
+
+# ── 取消任务（议题 #877）────────────────────────────────────────────────────
+# 只有故事生成真的能停下来（ai.request_cancel 设的标志由 _set_progress 在每个
+# 阶段检查）。别的任务类型没有任何中断点——它们必须明确拒绝，而不是回一个
+# 「取消成功」然后活儿照跑：那样 Daniel 会以为账单停了。
+
+def _cancel(task_id):
+    return client.post("/api/tasks/cancel", json={"id": task_id})
+
+
+def test_cancel_story_sets_the_flag_the_generator_checks(tmp_db):
+    deck_id = database.get_or_create_deck("Kouyu")
+    key = f"{deck_id}/reading/zh"
+    story_routes._generating.add(key)
+    ai._story_progress[key] = {"phase": "request", "msg": "生成句子…", "percent": 40}
+    try:
+        assert get_tasks()["tasks"][0]["cancellable"] is True
+
+        r = _cancel(f"story:{key}")
+        assert r.status_code == 200 and r.json()["cancelled"] is True
+        # 断言打在生成线程真正会读的那个标志上，而不是端点的返回值——
+        # 返回 200 却没设标志，正是这条测试要挡住的谎。
+        assert ai.is_cancelled(key)
+    finally:
+        ai.clear_cancel(key)
+
+
+def test_cancel_rejects_a_task_kind_that_cannot_be_interrupted(tmp_db):
+    import_routes._import_jobs["j1"] = {
+        "status": "running", "message": "Generating entry for 生态…"}
+
+    task = get_tasks()["tasks"][0]
+    assert task["cancellable"] is False
+
+    r = _cancel(task["id"])
+    assert r.status_code == 400
+    assert "cannot be cancelled" in r.json()["detail"]
+
+
+def test_cancel_unknown_task_is_404_not_a_polite_success(tmp_db):
+    r = _cancel("story:999/reading/zh")
+    assert r.status_code == 404
