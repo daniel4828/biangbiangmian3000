@@ -13246,6 +13246,12 @@ let _bookChaptersFormat = '';
 
 async function openBookChapters(bookId) {
   _bookState.bookId = bookId;
+  // Same language the reader is showing this book in — falls back to the
+  // active main-page language tab when chapters are opened straight from
+  // the book list (reader never opened yet this session), matching openBook().
+  const langs = await _loadBookLangs();
+  const wanted = _bookState.lang || activeLang();
+  _bookState.lang = langs.includes(wanted) ? wanted : (langs[0] || 'zh');
   showView('books');
   document.getElementById('view-books-content').innerHTML =
     '<p class="keymap-hint">Loading chapters…</p>';
@@ -13258,7 +13264,7 @@ async function openBookChapters(bookId) {
 
   let data;
   try {
-    data = await api('GET', `/api/books/${bookId}/chapters`);
+    data = await api('GET', `/api/books/${bookId}/chapters?lang=${encodeURIComponent(_bookState.lang)}`);
   } catch (e) {
     document.getElementById('view-books-content').innerHTML = `
       <div class="keymap-panel">
@@ -13307,6 +13313,11 @@ function _renderBookChapters(bookId, data) {
       ? `<div class="keymap-hint book-chapter-error" id="ch-sum-err-${ch.number}">${_escHtml(ch.error)}</div>` : '';
     const conceptRow = ch.status === 'summarized' && ch.concept_zh
       ? `<div class="keymap-hint book-chapter-concept">${_escHtml(ch.concept_zh)}</div>` : '';
+    // rendition_error (#894): the translation into the current reading
+    // language failed — the row above still shows the Chinese fields, this
+    // just explains why they're not in that language.
+    const renditionErrorRow = ch.rendition_error
+      ? `<div class="keymap-hint book-chapter-error">译文生成失败：${_escHtml(ch.rendition_error)}</div>` : '';
     return `<div class="book-chapter-row" id="ch-row-${ch.number}">
       <div class="book-chapter-main">
         <span class="book-chapter-number">${ch.number}.</span>
@@ -13316,6 +13327,7 @@ function _renderBookChapters(bookId, data) {
       </div>
       ${conceptRow}
       ${errorRow}
+      ${renditionErrorRow}
     </div>`;
   }).join('');
 
@@ -13339,8 +13351,12 @@ async function doRescanBookChapters(bookId) {
 async function doSummarizeChapter(bookId, number) {
   const btn = document.getElementById(`ch-sum-btn-${number}`);
   if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
-  // A regenerate must not leave the popup showing the previous summary.
-  delete _bookChapterCache[`${bookId}:${number}`];
+  // A regenerate must not leave the popup showing the previous summary, in
+  // any cached language — the server already cleared every rendition too
+  // (database.save_chapter_summary → delete_chapter_renditions, #894).
+  Object.keys(_bookChapterCache)
+    .filter(k => k.startsWith(`${bookId}:${number}:`))
+    .forEach(k => delete _bookChapterCache[k]);
   try {
     await api('POST', `/api/books/${bookId}/chapters/${number}/summarize`);
   } catch (e) {
@@ -13368,12 +13384,13 @@ async function _pollBookChapter(bookId, number, attempt) {
   // Re-render just this row's data via a full reload — chapter lists are
   // short, and this keeps one source of truth for the row markup.
   try {
-    const data = await api('GET', `/api/books/${bookId}/chapters`);
+    const data = await api('GET', `/api/books/${bookId}/chapters?lang=${encodeURIComponent(_bookState.lang)}`);
     if (_bookState.bookId === bookId) _renderBookChapters(bookId, data);
   } catch (e) { /* the button will just stay in its loading state */ }
 }
 
-const _bookChapterCache = {}; // `${bookId}:${number}` → full chapter
+const _bookChapterCache = {}; // `${bookId}:${number}:${lang}` → full chapter (#894: keyed by
+                               // language too, or switching languages would show a stale rendition)
 
 async function openBookChapterSummary(bookId, number) {
   const overlay = document.getElementById('kahneman-examples-overlay');
@@ -13385,11 +13402,12 @@ async function openBookChapterSummary(bookId, number) {
   overlay.style.display = '';
   modal.style.display = '';
 
-  const key = `${bookId}:${number}`;
+  const lang = _bookState.lang || 'zh';
+  const key = `${bookId}:${number}:${lang}`;
   let chapter = _bookChapterCache[key];
   if (!chapter) {
     try {
-      chapter = await api('GET', `/api/books/${bookId}/chapters/${number}`);
+      chapter = await api('GET', `/api/books/${bookId}/chapters/${number}?lang=${encodeURIComponent(lang)}`);
       _bookChapterCache[key] = chapter;
     } catch (e) {
       bodyEl.innerHTML = '';
@@ -13401,6 +13419,14 @@ async function openBookChapterSummary(bookId, number) {
 
   titleEl.textContent = chapter.title_zh || `第${number}章`;
   bodyEl.innerHTML = '';
+  if (chapter.rendition_error) {
+    // Translation into the current reading language failed — everything
+    // below is still the Chinese original, this just says why (#894).
+    const warn = document.createElement('div');
+    warn.className = 'keymap-hint book-chapter-error';
+    warn.textContent = '译文生成失败，以下为中文原文：' + chapter.rendition_error;
+    bodyEl.appendChild(warn);
+  }
   if (chapter.title_en) {
     const en = document.createElement('div');
     en.className = 'kahneman-title-en';

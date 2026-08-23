@@ -869,3 +869,28 @@ CREATE TABLE IF NOT EXISTS book_chapters (
 );
 
 CREATE INDEX IF NOT EXISTS idx_book_chapters_book ON book_chapters(book_id, number);
+
+-- ---------------------------------------------------------------------------
+-- Per-language reading renditions of a book chapter's summary (#894). Same
+-- idea as knowledge_renditions (#804): the AI writes title_zh/concept_zh/
+-- summary_zh/examples_zh exactly once, and every other language's chapter
+-- view is a Google-translated derivative of those columns, generated lazily
+-- on first request and cached here. Chinese is NOT stored here — the _zh
+-- columns on book_chapters already are the Chinese reading (no annotation
+-- pass, unlike knowledge_renditions: chapter summaries are recall outlines,
+-- the actual annotated reading material is the book page itself).
+-- Structure deliberately mirrors knowledge_renditions column-for-column.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS book_chapter_renditions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chapter_id INTEGER NOT NULL REFERENCES book_chapters(id) ON DELETE CASCADE,
+    lang       TEXT NOT NULL,
+    title      TEXT,            -- translation of title_zh (or ref_label if title_zh was empty)
+    concept    TEXT,            -- translation of concept_zh
+    summary    TEXT,            -- translation of summary_zh
+    examples   TEXT,            -- JSON array, translation of examples_zh (same shape)
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(chapter_id, lang)
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_chapter_renditions ON book_chapter_renditions(chapter_id, lang);

@@ -385,6 +385,10 @@ def get_chapter_by_id(chapter_id: int) -> dict | None:
 def save_chapter_summary(book_id: int, number: int, *, title_zh: str, title_en: str,
                          concept_zh: str, summary_zh: str, examples_zh: list) -> None:
     conn = get_db()
+    row = conn.execute(
+        "SELECT id FROM book_chapters WHERE book_id = ? AND number = ?",
+        (book_id, number),
+    ).fetchone()
     conn.execute(
         """UPDATE book_chapters SET
                title_zh = ?, title_en = ?, concept_zh = ?, summary_zh = ?,
@@ -394,6 +398,75 @@ def save_chapter_summary(book_id: int, number: int, *, title_zh: str, title_en: 
         (title_zh, title_en, concept_zh, summary_zh,
          json.dumps(examples_zh or [], ensure_ascii=False), book_id, number),
     )
+    conn.commit()
+    conn.close()
+    # A fresh Chinese summary makes any cached translation of the old one
+    # stale (#894, same rule #804 set for knowledge_renditions) — leaving it
+    # would show Daniel a French/Spanish chapter that disagrees with the
+    # Chinese he just regenerated.
+    if row:
+        delete_chapter_renditions(row["id"])
+
+
+# ── Per-language chapter renditions (#894) ──────────────────────────────────
+# Same idea/shape as knowledge_renditions (#804): the AI writes the _zh
+# columns on book_chapters exactly once, every other language's chapter view
+# is a cached translation of those columns. See books/rendition.py for the
+# translate-and-cache orchestration (including the "short vs. full fields"
+# merge that this module deliberately does NOT do — see save below).
+
+def get_chapter_rendition(chapter_id: int, lang: str) -> dict | None:
+    """The cached rendition for (chapter_id, lang), or None. `examples` comes
+    back JSON-decoded (a malformed blob degrades to an empty list, same
+    contract as get_chapter()'s examples_zh)."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM book_chapter_renditions WHERE chapter_id = ? AND lang = ?",
+        (chapter_id, lang),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["examples"] = json.loads(out["examples"]) if out["examples"] else []
+    except (ValueError, TypeError):
+        out["examples"] = []
+    return out
+
+
+def save_chapter_rendition(chapter_id: int, lang: str, *, title: str | None,
+                           concept: str | None, summary: str | None,
+                           examples: list | None) -> None:
+    """Store (or overwrite) the rendition for (chapter_id, lang) with exactly
+    the fields given — a plain overwrite. The list view only ever translates
+    title/concept (cheap, one call per chapter shown); the summary popup
+    later also translates summary/examples. Merging a "short" write with an
+    already-cached "full" one (so the short write doesn't blank summary/
+    examples back to NULL) is books/rendition.py's job, not this function's —
+    it reads the existing row first and passes this function the complete,
+    already-merged record."""
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO book_chapter_renditions (chapter_id, lang, title, concept, summary, examples)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(chapter_id, lang) DO UPDATE SET
+               title = excluded.title,
+               concept = excluded.concept,
+               summary = excluded.summary,
+               examples = excluded.examples,
+               created_at = datetime('now','localtime')""",
+        (chapter_id, lang, title, concept, summary,
+         json.dumps(examples or [], ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_chapter_renditions(chapter_id: int) -> None:
+    """Clear every cached language rendition for one chapter."""
+    conn = get_db()
+    conn.execute("DELETE FROM book_chapter_renditions WHERE chapter_id = ?", (chapter_id,))
     conn.commit()
     conn.close()
 

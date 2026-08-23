@@ -835,3 +835,175 @@ def test_patch_book_rejects_bad_source_lang(tmp_db, tmp_path):
 def test_patch_missing_book_is_404(tmp_db):
     resp = client.patch("/api/books/4242", json={"title": "x"})
     assert resp.status_code == 404
+
+
+# --- per-language chapter renditions (#894) ----------------------------------
+# AI writes the chapter summary once, in Chinese; every other language's
+# chapter view is a cached Google-translated derivative (books/rendition.py),
+# structured like knowledge_renditions (#804).
+
+def _summarized_book(tmp_path):
+    """A book with one derived, summarized chapter — everything the
+    rendition tests need, without going through the background thread."""
+    book = _make_book_with_chapters(tmp_path)
+    bid = book["book_id"]
+    database.derive_chapters(bid)
+    database.save_chapter_summary(
+        bid, 1, title_zh="第一章", title_en="Chapter One",
+        concept_zh="核心观点一句话。", summary_zh="详细摘要内容。",
+        examples_zh=["原句一。", "原句二。"])
+    return bid
+
+
+def _fake_translate(monkeypatch, mapping=None):
+    """Patch translator.translate_strict (per #894's testing note: patch the
+    real function, not something books/rendition.py imports by name — it
+    calls translator.translate_strict(...) as an attribute lookup, so this
+    is visible to it) and return the list of texts it was called with."""
+    calls = []
+
+    def _fn(text, target="en", source="zh-CN"):
+        calls.append(text)
+        if mapping and text in mapping:
+            return mapping[text]
+        return f"[{target}]{text}"
+
+    import translator
+    monkeypatch.setattr(translator, "translate_strict", _fn)
+    return calls
+
+
+def test_chapter_rendition_lazily_generated_and_cached(tmp_db, tmp_path, monkeypatch):
+    bid = _summarized_book(tmp_path)
+    calls = _fake_translate(monkeypatch)
+
+    resp = client.get(f"/api/books/{bid}/chapters/1?lang=fr")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["title_zh"] == "[fr]第一章"
+    assert body["concept_zh"] == "[fr]核心观点一句话。"
+    assert body["summary_zh"] == "[fr]详细摘要内容。"
+    assert body["examples_zh"] == ["[fr]原句一。", "原句二。"]  # see mismatch test below for why
+    assert "rendition_error" not in body
+    first_call_count = len(calls)
+    assert first_call_count > 0
+
+    chapter_id = database.get_chapter(bid, 1)["id"]
+    cached = database.get_chapter_rendition(chapter_id, "fr")
+    assert cached is not None
+
+    # Second request must not re-translate anything.
+    resp2 = client.get(f"/api/books/{bid}/chapters/1?lang=fr")
+    assert resp2.status_code == 200
+    assert resp2.json()["summary_zh"] == body["summary_zh"]
+    assert len(calls) == first_call_count
+
+
+def test_chapter_list_only_translates_short_fields_and_caches(tmp_db, tmp_path, monkeypatch):
+    bid = _summarized_book(tmp_path)
+    calls = _fake_translate(monkeypatch)
+
+    resp = client.get(f"/api/books/{bid}/chapters?lang=fr")
+    assert resp.status_code == 200, resp.text
+    chapters = resp.json()["chapters"]
+    assert chapters[0]["title_zh"] == "[fr]第一章"
+    assert chapters[0]["concept_zh"] == "[fr]核心观点一句话。"
+    # summary_zh/examples_zh aren't part of the list payload at all — the
+    # list view must never pay for translating them.
+    assert "summary_zh" not in chapters[0]
+    assert calls == ["第一章", "核心观点一句话。"]
+
+    # Second list request is fully cached.
+    resp2 = client.get(f"/api/books/{bid}/chapters?lang=fr")
+    assert resp2.json()["chapters"][0]["title_zh"] == "[fr]第一章"
+    assert len(calls) == 2
+
+    # A later full request only translates the two fields it was missing
+    # (summary/examples) — title/concept came from the cached "short" row.
+    resp3 = client.get(f"/api/books/{bid}/chapters/1?lang=fr")
+    assert resp3.status_code == 200
+    assert resp3.json()["title_zh"] == "[fr]第一章"
+    assert "详细摘要内容。" in calls  # summary got translated
+    assert calls.count("第一章") == 1  # title was NOT re-translated
+
+
+def test_chapter_lang_zh_never_touches_rendition_table(tmp_db, tmp_path, monkeypatch):
+    bid = _summarized_book(tmp_path)
+    calls = _fake_translate(monkeypatch)
+    chapter_id = database.get_chapter(bid, 1)["id"]
+
+    plain = database.get_chapter(bid, 1)
+    resp_default = client.get(f"/api/books/{bid}/chapters/{1}")
+    resp_zh = client.get(f"/api/books/{bid}/chapters/1?lang=zh")
+    assert resp_default.json()["title_zh"] == plain["title_zh"] == "第一章"
+    assert resp_zh.json()["title_zh"] == "第一章"
+    assert calls == []
+    assert database.get_chapter_rendition(chapter_id, "zh") is None
+
+    list_resp = client.get(f"/api/books/{bid}/chapters")
+    assert list_resp.json()["chapters"][0]["title_zh"] == "第一章"
+    assert calls == []
+
+
+def test_chapter_rendition_failure_reports_and_writes_nothing(tmp_db, tmp_path, monkeypatch):
+    import translator
+
+    def _boom(text, target="en", source="zh-CN"):
+        raise RuntimeError("translate endpoint down")
+
+    monkeypatch.setattr(translator, "translate_strict", _boom)
+    bid = _summarized_book(tmp_path)
+    chapter_id = database.get_chapter(bid, 1)["id"]
+
+    resp = client.get(f"/api/books/{bid}/chapters/1?lang=fr")
+    assert resp.status_code == 200  # reported inline, not a 5xx
+    body = resp.json()
+    assert body["rendition_error"]
+    assert body["title_zh"] == "第一章"  # Chinese original, untouched
+    assert body["summary_zh"] == "详细摘要内容。"
+    assert database.get_chapter_rendition(chapter_id, "fr") is None
+
+    # Failure on one chapter doesn't take the list down for the others.
+    list_resp = client.get(f"/api/books/{bid}/chapters?lang=fr")
+    assert list_resp.status_code == 200
+    row = list_resp.json()["chapters"][0]
+    assert row["rendition_error"]
+    assert row["title_zh"] == "第一章"
+
+
+def test_save_chapter_summary_clears_stale_renditions(tmp_db, tmp_path):
+    bid = _summarized_book(tmp_path)
+    chapter_id = database.get_chapter(bid, 1)["id"]
+    database.save_chapter_rendition(
+        chapter_id, "fr", title="Ancien titre", concept="Ancien concept",
+        summary="Ancien résumé", examples=["Ancienne phrase"])
+    assert database.get_chapter_rendition(chapter_id, "fr") is not None
+
+    database.save_chapter_summary(
+        bid, 1, title_zh="第一章（新）", title_en="Chapter One (new)",
+        concept_zh="新观点", summary_zh="新摘要", examples_zh=["新例句"])
+
+    assert database.get_chapter_rendition(chapter_id, "fr") is None
+
+
+def test_chapter_examples_retried_line_by_line_on_count_mismatch(tmp_db, tmp_path, monkeypatch):
+    bid = _summarized_book(tmp_path)
+    joined = "原句一。\n原句二。"
+    mapping = {
+        joined: "合并成一行的错误译文",   # simulates Google collapsing two lines into one
+        "原句一。": "Première phrase.",
+        "原句二。": "Deuxième phrase.",
+        "第一章": "Premier chapitre",
+        "核心观点一句话。": "Idée centrale.",
+        "详细摘要内容。": "Résumé détaillé.",
+    }
+    calls = _fake_translate(monkeypatch, mapping)
+
+    resp = client.get(f"/api/books/{bid}/chapters/1?lang=fr")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["examples_zh"] == ["Première phrase.", "Deuxième phrase."]
+    # The mismatch forced a retry: the joined call plus one call per example.
+    assert calls.count(joined) == 1
+    assert calls.count("原句一。") == 1
+    assert calls.count("原句二。") == 1
