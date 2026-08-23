@@ -27,7 +27,7 @@ import time
 import ai
 import database
 import tts
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -100,6 +100,9 @@ def _story_tasks() -> list[dict]:
             "detail": prog.get("msg") or phase,
             "percent": prog.get("percent"),
             "lang": lang or None,
+            # The only kind that can actually be stopped (#877), via the flag
+            # ai._set_progress() checks at every phase. See cancel_task below.
+            "cancellable": True,
         })
     return out
 
@@ -212,5 +215,41 @@ def list_tasks():
             logger.warning("tasks: collector %s failed: %s", collect.__name__, e)
     for task in tasks:
         task.setdefault("started_at", None)
+        task.setdefault("cancellable", False)
         task["icon"] = _ICONS.get(task["kind"], "⚙")
     return {"tasks": tasks, "count": len(tasks)}
+
+
+@router.post("/api/tasks/cancel")
+def cancel_task(body: dict):
+    """Stop a running task from the header panel (#877).
+
+    Only story generation can be stopped: ai.request_cancel() sets a flag that
+    _set_progress() checks at every phase, so the run stops before the next AI
+    call and before anything is written. TTS preload, add-word, knowledge
+    processing and the Again regeneration have no interruption point at all —
+    they return 400 here and show no button in the panel. A cross that quietly
+    does nothing would be worse than none: Daniel would stop watching the bill.
+
+    404 when the id is not in the current task list — a cancel reported for a
+    task that does not exist tells him a run stopped when it did not.
+
+    The id travels in the body, not the path: it carries the progress key
+    verbatim ("story:12/unified/zh"), slashes and a possibly empty last segment
+    included, which in the path would need a :path converter and still break on
+    the trailing slash of a key with no lang.
+    """
+    task_id = (body or {}).get("id") or ""
+    tasks = list_tasks()["tasks"]
+    task = next((t for t in tasks if t["id"] == task_id), None)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"No running task {task_id!r}")
+    if not task.get("cancellable"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{task['kind']} tasks cannot be cancelled — no interruption point exists")
+
+    key = task_id.split(":", 1)[1]
+    ai.request_cancel(key)
+    logger.info("tasks: cancel requested for %s", task_id)
+    return {"cancelled": True, "id": task_id}
