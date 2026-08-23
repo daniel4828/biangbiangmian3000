@@ -992,18 +992,14 @@ function showView(name) {
   document.querySelector('main').classList.toggle('review-open', name === 'review');
   const countsRow = document.getElementById('counts-row');
   if (countsRow) countsRow.style.display = name === 'review' ? 'flex' : 'none';
-  // Language tabs on the deck list and in Browse — the two views that list cards
-  // across a whole language. Browse is language-scoped too (#815), and switching
-  // tabs is the only way to change language (#819), so the tabs have to be
-  // reachable from there. Everywhere else the header row is needed for something
-  // else (review counts) or the language is fixed by what's on screen.
+  // The header always answers "which language am I in" (#896) — the tinted rule
+  // alone (#824) doesn't, and Knowledge/Books/Stats read identically in every
+  // language. Switchable tabs everywhere except review: there the header's right
+  // half is the due counts, and swapping language mid-card is meaningless, so
+  // that view gets a read-only chip naming the current language instead.
   // Re-render rather than just unhiding — some paths reach these views without
   // going through renderDecks() (error fallbacks), and the tabs must still show.
-  if (name === 'decks' || name === 'browse') _renderHeaderLangTabs();
-  else {
-    const langTabs = document.getElementById('header-lang-tabs');
-    if (langTabs) langTabs.style.display = 'none';
-  }
+  _renderHeaderLangTabs(name === 'review');
   document.getElementById('back-btn').style.display = name === 'decks' ? 'none' : 'block';
   document.getElementById('header-title').textContent =
     name === 'review'       ? deckName :
@@ -1559,17 +1555,20 @@ function _applyLangTheme() {
   else body.dataset.lang = activeLang();
 }
 
-function _renderHeaderLangTabs() {
+function _renderHeaderLangTabs(readOnly = false) {
   _applyLangTheme();
   const box = document.getElementById('header-lang-tabs');
   if (!box) return;
   if (_availableLangs.length <= 1) { box.style.display = 'none'; box.innerHTML = ''; return; }
   const cur = activeLang();
-  box.innerHTML = _availableLangs.map(l => {
-    const label = _LANG_TAB_LABELS[l] || l;
-    const active = l === cur ? ' lang-tab-active' : '';
-    return `<button class="lang-tab${active}" onclick="setActiveLang('${l}')">${label}</button>`;
-  }).join('');
+  const curLabel = _LANG_TAB_LABELS[cur] || cur;
+  box.innerHTML = readOnly
+    ? `<span class="lang-tab lang-tab-active lang-tab-static">${curLabel}</span>`
+    : _availableLangs.map(l => {
+        const label = _LANG_TAB_LABELS[l] || l;
+        const active = l === cur ? ' lang-tab-active' : '';
+        return `<button class="lang-tab${active}" onclick="setActiveLang('${l}')">${label}</button>`;
+      }).join('');
   box.style.display = 'flex';
 }
 
