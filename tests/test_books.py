@@ -128,6 +128,63 @@ def _write_epub(path, chapters, title="Testbuch", author="Autorin"):
                         f"<body>{body}</body></html>")
 
 
+def _write_epub_with_toc(path, chapters, *, nav_entries=None, ncx_entries=None,
+                         title="Testbuch", author="Autorin"):
+    """Like _write_epub, but optionally adds an EPUB3 nav.xhtml and/or an
+    EPUB2 toc.ncx (#881). `nav_entries`/`ncx_entries` are [(href, title)]
+    written into whichever document is requested."""
+    manifest_items = [
+        f'<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>'
+        for i in range(len(chapters))]
+    spine_attrs = ""
+    if nav_entries is not None:
+        manifest_items.append(
+            '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>')
+    if ncx_entries is not None:
+        manifest_items.append(
+            '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>')
+        spine_attrs = ' toc="ncx"'
+    manifest = "".join(manifest_items)
+    spine = "".join(f'<itemref idref="c{i}"/>' for i in range(len(chapters)))
+    opf = f"""<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>{title}</dc:title><dc:creator>{author}</dc:creator>
+  </metadata>
+  <manifest>{manifest}</manifest>
+  <spine{spine_attrs}>{spine}</spine>
+</package>"""
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("META-INF/container.xml",
+                    '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                    '<rootfiles><rootfile full-path="content.opf"/></rootfiles></container>')
+        zf.writestr("content.opf", opf)
+        for i, body in enumerate(chapters):
+            zf.writestr(f"c{i}.xhtml",
+                        f"<html><head><title>x</title><style>p{{}}</style></head>"
+                        f"<body>{body}</body></html>")
+        if nav_entries is not None:
+            links = "".join(f'<li><a href="{href}">{txt}</a></li>' for href, txt in nav_entries)
+            nav_xhtml = f"""<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>ToC</title></head>
+<body><nav epub:type="toc" id="toc"><ol>{links}</ol></nav></body>
+</html>"""
+            zf.writestr("nav.xhtml", nav_xhtml)
+        if ncx_entries is not None:
+            points = "".join(
+                f'<navPoint id="np{i}" playOrder="{i}">'
+                f'<navLabel><text>{txt}</text></navLabel>'
+                f'<content src="{href}"/></navPoint>'
+                for i, (href, txt) in enumerate(ncx_entries, start=1))
+            ncx = f"""<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+<head></head><docTitle><text>{title}</text></docTitle>
+<navMap>{points}</navMap>
+</ncx>"""
+            zf.writestr("toc.ncx", ncx)
+
+
 def test_epub_extract_reads_metadata_and_spine_order(tmp_path):
     path = tmp_path / "b.epub"
     _write_epub(path, ["<h1>Erstes Kapitel</h1><p>Ein Satz.</p>",
@@ -166,6 +223,83 @@ def test_non_epub_file_is_rejected(tmp_path):
 def test_unsupported_extension_is_rejected():
     with pytest.raises(BookExtractionError):
         books.format_from_filename("roman.mobi")
+
+
+# --- table of contents (#881) ------------------------------------------------
+
+def test_epub3_nav_xhtml_toc_sets_chapter_titles(tmp_path):
+    """Chapter titles come from the ToC, not from any heading tag — these
+    spine documents have no h1-h3 at all, exactly the case #881 is about."""
+    path = tmp_path / "b.epub"
+    _write_epub_with_toc(
+        path, ["<p>Erster Absatz.</p>", "<p>Zweiter Absatz.</p>"],
+        nav_entries=[("c0.xhtml", "1. Einleitung"), ("c1.xhtml", "2. Hauptteil")])
+    out = books.epub.extract(str(path))
+    labels = [b["ref_label"] for b in out["blocks"]]
+    assert labels == ["1. Einleitung", "2. Hauptteil"]
+
+
+def test_epub2_ncx_toc_sets_chapter_titles(tmp_path):
+    path = tmp_path / "b.epub"
+    _write_epub_with_toc(
+        path, ["<p>Erster Absatz.</p>", "<p>Zweiter Absatz.</p>"],
+        ncx_entries=[("c0.xhtml", "1. Einleitung"), ("c1.xhtml", "2. Hauptteil")])
+    out = books.epub.extract(str(path))
+    labels = [b["ref_label"] for b in out["blocks"]]
+    assert labels == ["1. Einleitung", "2. Hauptteil"]
+
+
+def test_epub_falls_back_to_spine_document_per_chapter_without_a_toc(tmp_path):
+    """No nav.xhtml, no toc.ncx, no h1-h3 anywhere: each spine document still
+    becomes its own chapter, labelled by its filename."""
+    path = tmp_path / "b.epub"
+    _write_epub(path, ["<p>Erster Absatz.</p>", "<p>Zweiter Absatz.</p>"])
+    out = books.epub.extract(str(path))
+    labels = [b["ref_label"] for b in out["blocks"]]
+    assert labels == ["c0", "c1"]
+    assert len(set(labels)) == 2   # two distinct chapters, not one
+
+
+def test_epub_chapter_title_priority_toc_then_h1_then_filename(tmp_path):
+    """Three spine documents exercising all three levels of the fallback
+    chain at once: a ToC title (which still yields to a real in-document
+    heading appearing partway through), a bare h1 with no ToC entry, and a
+    document with neither, which falls back to its filename."""
+    path = tmp_path / "b.epub"
+    _write_epub_with_toc(
+        path,
+        ["<p>Vor der Überschrift.</p><h1>Echte Überschrift</h1><p>Danach.</p>",
+         "<h1>Nur H1</h1><p>Text.</p>",
+         "<p>Weder ToC noch H1.</p>"],
+        nav_entries=[("c0.xhtml", "ToC-Titel")])
+    out = books.epub.extract(str(path))
+    by_text = {b["text"]: b["ref_label"] for b in out["blocks"]}
+    assert by_text["Vor der Überschrift."] == "ToC-Titel"
+    assert by_text["Echte Überschrift"] == "Echte Überschrift"
+    assert by_text["Danach."] == "Echte Überschrift"
+    assert by_text["Nur H1"] == "Nur H1"
+    assert by_text["Text."] == "Nur H1"
+    assert by_text["Weder ToC noch H1."] == "c2"
+
+
+def test_toc_parsing_failure_falls_back_gracefully(tmp_path):
+    """A broken nav.xhtml must not sink the whole book — just its ToC."""
+    path = tmp_path / "b.epub"
+    _write_epub_with_toc(path, ["<h1>Kapitel</h1><p>Text.</p>"],
+                         nav_entries=[("c0.xhtml", "Titel")])
+    # Corrupt nav.xhtml in place by rewriting the whole archive with garbage
+    # in its place, leaving everything else untouched.
+    import shutil
+    tmp2 = tmp_path / "b2.epub"
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(tmp2, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "nav.xhtml":
+                data = b"<not><valid"
+            dst.writestr(item, data)
+    shutil.move(str(tmp2), str(path))
+    out = books.epub.extract(str(path))
+    assert out["blocks"][0]["ref_label"] == "Kapitel"   # falls back to the h1
 
 
 # --- ingest -----------------------------------------------------------------
@@ -552,3 +686,152 @@ def test_ai_summarize_book_chapter_raises_on_missing_summary_field(monkeypatch):
 def test_ai_summarize_book_chapter_raises_on_empty_text():
     with pytest.raises(ValueError):
         ai.summarize_book_chapter("<p></p>", book_title="T", chapter_label="Ch1")
+
+
+# --- chapter rescan (#881) ---------------------------------------------------
+
+def _make_book_with_toc(tmp_path, char_budget=20):
+    path = tmp_path / "b.epub"
+    _write_epub_with_toc(
+        path,
+        ["<p>Ein Satz.</p><p>Noch ein Satz hier.</p>",
+         "<p>Dritter Satz.</p><p>Vierter Satz hier.</p>"],
+        nav_entries=[("c0.xhtml", "Erstes Kapitel"), ("c1.xhtml", "Zweites Kapitel")])
+    return books.ingest_file(str(path), "b.epub", char_budget=char_budget)
+
+
+def test_rescan_updates_stale_ref_labels_without_touching_pages(tmp_db, tmp_path):
+    """Simulates a book uploaded before #881: its pages carry no ref_label
+    (pre-#881 code only ever looked at h1-h3, and these documents have
+    none). Rescanning re-parses the same file with today's code and picks
+    up the ToC titles, without touching source_text or page_count."""
+    book = _make_book_with_toc(tmp_path)
+    bid = book["book_id"]
+    correct = database.get_all_pages(bid)
+    correct_labels = [p["ref_label"] for p in correct]
+    assert set(correct_labels) == {"Erstes Kapitel", "Zweites Kapitel"}
+    assert correct_labels == sorted(correct_labels, key=lambda l: l != "Erstes Kapitel")
+
+    database.update_page_ref_labels(bid, [None] * book["page_count"])
+    assert all(p["ref_label"] is None for p in database.get_all_pages(bid))
+
+    resp = client.post(f"/api/books/{bid}/rescan-chapters")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["available"] is True
+    assert [c["ref_label"] for c in body["chapters"]] == ["Erstes Kapitel", "Zweites Kapitel"]
+
+    after = database.get_all_pages(bid)
+    assert [p["ref_label"] for p in after] == [p["ref_label"] for p in correct]
+    assert [p["source_text"] for p in after] == [p["source_text"] for p in correct]
+    assert database.get_book(bid)["page_count"] == book["page_count"]
+
+
+def test_rescan_preserves_summarized_chapters(tmp_db, tmp_path):
+    book = _make_book_with_toc(tmp_path)
+    bid = book["book_id"]
+    chapters = database.derive_chapters(bid)
+    assert len(chapters) == 2
+    database.save_chapter_summary(
+        bid, 1, title_zh="第一章", title_en="Chapter One", concept_zh="核心观点",
+        summary_zh="摘要内容", examples_zh=["例句一"])
+    summarized_before = database.get_chapter(bid, 1)
+    assert summarized_before["status"] == "summarized"
+
+    database.update_page_ref_labels(bid, [None] * book["page_count"])
+
+    resp = client.post(f"/api/books/{bid}/rescan-chapters")
+    assert resp.status_code == 200, resp.text
+
+    kept = database.get_chapter(bid, 1)
+    assert kept["status"] == "summarized"
+    assert kept["title_zh"] == "第一章"
+    assert kept["summary_zh"] == "摘要内容"
+    # A summarized chapter row is never rewritten by a rescan, even though
+    # the underlying pages' ref_label changed and back.
+    assert kept["ref_label"] == summarized_before["ref_label"]
+    assert kept["start_page"] == summarized_before["start_page"]
+    assert kept["end_page"] == summarized_before["end_page"]
+
+
+def test_rescan_rejects_mismatched_pagination_and_changes_nothing(tmp_db, tmp_path):
+    book = _make_book_with_toc(tmp_path)
+    bid = book["book_id"]
+    before_pages = database.get_all_pages(bid)
+    before_book = database.get_book(bid)
+
+    # The underlying file changed since upload -- a completely different book.
+    _write_epub(before_book["file_path"], ["<p>Ganz andere Datei.</p>"])
+
+    resp = client.post(f"/api/books/{bid}/rescan-chapters")
+    assert resp.status_code == 400
+    assert "重新上传" in resp.json()["detail"]
+
+    assert database.get_all_pages(bid) == before_pages
+    assert database.get_book(bid)["page_count"] == before_book["page_count"]
+
+
+def test_rescan_missing_file_is_400(tmp_db, tmp_path):
+    book = _make_book_with_toc(tmp_path)
+    bid = book["book_id"]
+    os.remove(database.get_book(bid)["file_path"])
+    resp = client.post(f"/api/books/{bid}/rescan-chapters")
+    assert resp.status_code == 400
+    assert "重新上传" in resp.json()["detail"]
+
+
+def test_rescan_rejects_pdf_books(tmp_db, tmp_path):
+    book = _make_book(tmp_path)
+    bid = book["book_id"]
+    conn = database.core.get_db()
+    conn.execute("UPDATE books SET format = 'pdf' WHERE id = ?", (bid,))
+    conn.commit()
+    conn.close()
+    resp = client.post(f"/api/books/{bid}/rescan-chapters")
+    assert resp.status_code == 400
+
+
+def test_rescan_missing_book_is_404(tmp_db):
+    assert client.post("/api/books/4242/rescan-chapters").status_code == 404
+
+
+# --- editing book metadata (#882) -------------------------------------------
+
+def test_patch_book_updates_title_author_source_lang(tmp_db, tmp_path):
+    book = _make_book(tmp_path)
+    bid = book["book_id"]
+    before = database.get_book(bid)
+    resp = client.patch(f"/api/books/{bid}",
+                        json={"title": "Neuer Titel", "author": "Neue Autorin", "source_lang": "en"})
+    assert resp.status_code == 200, resp.text
+    updated = database.get_book(bid)
+    assert updated["title"] == "Neuer Titel"
+    assert updated["author"] == "Neue Autorin"
+    assert updated["source_lang"] == "en"
+    # format/page_count/char_budget describe the actual pagination and must
+    # never be touched by this endpoint.
+    assert updated["format"] == before["format"]
+    assert updated["page_count"] == before["page_count"]
+    assert updated["char_budget"] == before["char_budget"]
+
+
+def test_patch_book_rejects_empty_title(tmp_db, tmp_path):
+    book = _make_book(tmp_path)
+    bid = book["book_id"]
+    original_title = database.get_book(bid)["title"]
+    resp = client.patch(f"/api/books/{bid}", json={"title": "   "})
+    assert resp.status_code == 400
+    assert database.get_book(bid)["title"] == original_title
+
+
+def test_patch_book_rejects_bad_source_lang(tmp_db, tmp_path):
+    book = _make_book(tmp_path)
+    bid = book["book_id"]
+    resp = client.patch(f"/api/books/{bid}", json={"source_lang": "fr"})
+    assert resp.status_code == 400
+    assert database.get_book(bid)["source_lang"] == book["source_lang"]
+
+
+def test_patch_missing_book_is_404(tmp_db):
+    resp = client.patch("/api/books/4242", json={"title": "x"})
+    assert resp.status_code == 404
