@@ -7553,23 +7553,60 @@ function _getTargetPositions(zh) {
   return positions;
 }
 
-// Words in the deck are always hidden; the slider adds easy words on top of
-// them (#862). "Not studied here" and "don't know it" are different things:
-// plenty of HSK1-4 words never entered the deck but Daniel has known them for
-// years, so leaving them visible just gives the sentence away.
-// 0 = saved words only, N = also every word at HSK <= N.
-function _hintLabelFor(level) {
+// Two blanking rules, switchable from the review screen (#874). Which one reads
+// better is only decidable while actually reviewing, so both stay available
+// instead of one replacing the other:
+//
+//   union (default, #862) — hidden = (in my deck) ∪ (HSK <= N)
+//   hsk   (the original)  — hidden = HSK <= N, N=0 blanks nothing but the target
+//
+// The target word is always blanked in both.
+const _HINT_MODES = {
+  union: { label: 'Saved+HSK', storeKey: 'listenHideLevel',      def: 4 },
+  hsk:   { label: 'HSK only',  storeKey: 'listenHintHskLevel',   def: 3 },
+};
+
+function _hintMode() {
+  const m = localStorage.getItem('listenHintMode');
+  return _HINT_MODES[m] ? m : 'union';
+}
+
+// Each mode keeps its own slider value: the same number means different things
+// per mode, so sharing one would make a switch land on a setting nobody chose
+// (the reason #855 introduced a new localStorage key rather than reusing the old).
+function _hintSavedDefault(mode = _hintMode()) {
+  const cfg = _HINT_MODES[mode];
+  return parseInt(localStorage.getItem(cfg.storeKey) ?? String(cfg.def), 10);
+}
+
+function _hintLabelFor(level, mode = _hintMode()) {
+  if (mode === 'hsk') return level === 0 ? 'Off' : `HSK≤${level}`;
   return level === 0 ? 'Saved only' : `Saved + HSK≤${level}`;
 }
 
-function _hintSavedDefault() {
-  return parseInt(localStorage.getItem('listenHideLevel') ?? '4', 10);
+function toggleListenHintMode() {
+  const next = _hintMode() === 'union' ? 'hsk' : 'union';
+  localStorage.setItem('listenHintMode', next);
+  const level = _hintSavedDefault(next);
+  const slider = document.getElementById('listen-hint-slider');
+  if (slider) slider.value = level;
+  _syncHintModeButton();
+  document.getElementById('listen-hint-pct').textContent = _hintLabelFor(level, next);
+  _updateHintStar(level);
+  // Re-blank the sentence on the spot — comparing the two modes is the whole
+  // point, and having to flip a card to see the effect defeats it.
+  _renderListenHint(level);
+}
+
+function _syncHintModeButton() {
+  const btn = document.getElementById('hint-mode-btn');
+  if (btn) btn.textContent = _HINT_MODES[_hintMode()].label;
 }
 
 function _updateHintStar(currentVal) {
   const btn = document.getElementById('hint-save-btn');
   if (!btn) return;
-  const isSaved = currentVal === _hintSavedDefault();
+  const isSaved = currentVal === _hintSavedDefault();  // per-mode, see _hintSavedDefault
   btn.textContent = isSaved ? '★' : '☆';
   btn.classList.toggle('saved', isSaved);
 }
@@ -7578,6 +7615,7 @@ async function _initListenHint() {
   const slider = document.getElementById('listen-hint-slider');
   const saved = _hintSavedDefault();
   slider.value = saved;
+  _syncHintModeButton();
   document.getElementById('listen-hint-pct').textContent = _hintLabelFor(saved);
   _updateHintStar(saved);
   const lang = currentCardLang();
@@ -7587,7 +7625,7 @@ async function _initListenHint() {
 
 function saveListenHintDefault() {
   const val = parseInt(document.getElementById('listen-hint-slider').value, 10);
-  localStorage.setItem('listenHideLevel', val);
+  localStorage.setItem(_HINT_MODES[_hintMode()].storeKey, val);
   _updateHintStar(val);
 }
 
@@ -7637,13 +7675,16 @@ function _renderListenHint(level) {
   // Sentence notes have no single "target word" to blank — reveal based on vocab only.
   const targetPositions = isSentenceNote && !sentence ? new Set() : _getTargetPositions(zh);
 
-  // Hidden = (in my deck) ∪ (HSK <= level), the union of the two rules (#862).
-  // The deck half catches what he is actively learning; the HSK half catches the
-  // everyday words he has known for years but that never entered the deck —
-  // leaving those visible hands him the sentence for free. What stays visible is
-  // the intersection's complement: words outside the deck that are HSK 5/6 or
-  // missing from the table entirely, which is exactly what has to be heard.
-  const vocabSet = _vocabIndex || new Set();
+  // union mode (#862): hidden = (in my deck) ∪ (HSK <= level). The deck half
+  // catches what he is actively learning; the HSK half catches the everyday
+  // words he has known for years but that never entered the deck — leaving
+  // those visible hands him the sentence for free. What stays visible is words
+  // outside the deck that are HSK 5/6 or missing from the table entirely.
+  //
+  // hsk mode (#874, the original rule): hidden = HSK <= level, the deck plays no
+  // part. level 0 therefore blanks nothing but the target word.
+  const mode = _hintMode();
+  const vocabSet = mode === 'hsk' ? new Set() : (_vocabIndex || new Set());
   const hidePositions = new Set();
   {
     // Use story tokens when available; fall back to char-by-char for sentence notes.
