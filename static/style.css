@@ -5742,6 +5742,20 @@ table.fsrs-table td.ivl { font-weight: 700; }
   white-space: nowrap;
 }
 .task-row-age { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.task-cancel-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  margin-left: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.task-cancel-btn:hover:not(:disabled) { color: var(--again, #ef4444); }
+.task-cancel-btn:disabled { opacity: 0.4; cursor: default; }
+.task-row-cancelling { opacity: 0.5; }
 .task-row-detail { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .task-bar { height: 3px; border-radius: 2px; background: var(--border); margin-top: 5px; }
 .task-bar > div { height: 100%; border-radius: 2px; background: var(--primary); }

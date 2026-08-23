@@ -1326,6 +1326,17 @@ function _renderTasks(tasks) {
       ageEl.textContent = age;
       head.appendChild(ageEl);
     }
+    // ✕ only where the server says a cancel actually does something (#877):
+    // most task kinds have no interruption point, and a button that silently
+    // does nothing is worse than none — he would stop trusting the panel.
+    if (t.cancellable) {
+      const cancel = document.createElement('button');
+      cancel.className = 'task-cancel-btn';
+      cancel.textContent = '✕';
+      cancel.title = 'Cancel this task';
+      cancel.onclick = (e) => { e.stopPropagation(); _cancelTask(t.id, cancel, row); };
+      head.appendChild(cancel);
+    }
     row.appendChild(head);
 
     if (t.detail) {
@@ -1343,6 +1354,23 @@ function _renderTasks(tasks) {
       row.appendChild(bar);
     }
     list.appendChild(row);
+  }
+}
+
+async function _cancelTask(taskId, btn, row) {
+  btn.disabled = true;
+  row.classList.add('task-row-cancelling');
+  try {
+    await api('POST', '/api/tasks/cancel', { id: taskId });
+    // The run clears itself on its next progress check; refresh so the row
+    // disappears rather than sitting there greyed out until the next poll.
+    await _refreshTasks();
+  } catch (e) {
+    // Re-enable: the task is still running, and pretending otherwise is exactly
+    // what the server-side 400/404 is there to prevent.
+    btn.disabled = false;
+    row.classList.remove('task-row-cancelling');
+    showError('Could not cancel: ' + e.message);
   }
 }
 
