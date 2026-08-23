@@ -278,3 +278,32 @@ def update_preset(preset_id: int, fields: dict) -> None:
     conn.execute(f"UPDATE deck_presets SET {set_clause} WHERE id = :_id", updates)
     conn.commit()
     conn.close()
+
+
+def get_lang_preset(lang: str | None, create: bool = False) -> dict | None:
+    """The preset a language tree's decks are bound to (issue #806).
+
+    Chinese decks hang off the default preset (id=2 in production); every other
+    language tree got its own clone, named after its deck root ('Français',
+    'Español'). Looked up by name, read-only by default.
+
+    Pass create=True on write paths (#898): silently falling back to the
+    default preset there would write one language's settings onto Chinese —
+    an unused extra preset row is the cheaper mistake by far.
+    """
+    from languages import DEFAULT_LANG, deck_root
+    from .core import _ensure_lang_preset
+
+    conn = get_db()
+    if not lang or lang == DEFAULT_LANG:
+        row = conn.execute("SELECT * FROM deck_presets WHERE is_default = 1 LIMIT 1").fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    name = deck_root(lang)
+    row = conn.execute("SELECT * FROM deck_presets WHERE name = ?", (name,)).fetchone()
+    if row is None and create:
+        _ensure_lang_preset(conn, lang)
+        row = conn.execute("SELECT * FROM deck_presets WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
