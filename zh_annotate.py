@@ -296,3 +296,34 @@ def annotate_de_summary(html: str) -> str:
     except Exception as e:
         logger.warning("zh_annotate: German annotation failed — %s", e)
         return html
+
+
+# ---------------------------------------------------------------------------
+# Script detection (#904)
+# ---------------------------------------------------------------------------
+
+_CJK_CHAR_RE = re.compile(r"[一-鿿]")
+
+# A German summary legitimately carries a few Chinese asides — the annotations
+# this very module inserts ("(bólínqiáng/柏林墙)") plus whatever names the model
+# spells out in hanzi. Measured over the production knowledge base those sit at
+# or below 0.023 CJK, while summaries the model mistakenly wrote *in Chinese*
+# start at 0.225. 0.10 lands in the empty middle of that gap.
+NON_CHINESE_TEXT_MAX_CJK = 0.10
+
+
+def cjk_ratio(text: str) -> float:
+    """Fraction of `text`'s non-whitespace characters that are CJK (0.0 for
+    empty text). The shared primitive behind every "which script is this
+    written in?" check in the app — podcast.py picks a translation direction
+    with it, ai.py and knowledge/rendition.py use it to catch a summary_de
+    that isn't German (#904)."""
+    stripped = re.sub(r"\s+", "", text or "")
+    if not stripped:
+        return 0.0
+    return len(_CJK_CHAR_RE.findall(stripped)) / len(stripped)
+
+
+def is_chinese_text(text: str, threshold: float = 0.2) -> bool:
+    """True when at least `threshold` of `text` is CJK. See cjk_ratio()."""
+    return cjk_ratio(text) >= threshold

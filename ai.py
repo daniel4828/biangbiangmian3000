@@ -21,6 +21,7 @@ import openai
 
 import database
 import languages
+import zh_annotate
 
 logger = logging.getLogger(__name__)
 
@@ -2455,26 +2456,12 @@ _ROMANCE_ARTICLE_PREFIXES = {
 def _card_surface_forms(card: dict, lang: str) -> list[str]:
     """Every surface form that counts as "this card's word" in `lang`.
 
-    For conjugating languages the knowledge prompt explicitly allows the model
-    to adapt a word's form ("réduire" -> "a réduit"), so matching on the
-    headword alone would discard most correct sentences and replace them with
-    fallbacks. #803 stores the full conjugation/inflection table per entry, so
-    the accepted set is simply the headword plus everything in entry_forms.
-    Chinese has no forms and skips the lookup entirely.
+    Thin wrapper around database.surface_forms() — the lookup itself moved to
+    database/entries.py (issue #903) so the review-card cloze UI can reuse it
+    (via a `word_forms` field attached in database/cards.py) instead of the
+    frontend doing bare substring matching against unconjugated headwords.
     """
-    word = card.get("word_zh") or ""
-    if lang == "zh" or not card.get("word_id"):
-        return [word]
-    forms = [word]
-    try:
-        grouped = database.get_entry_forms(card["word_id"])
-        for paradigm in grouped.values():
-            for slots in paradigm.values():
-                forms.extend(f for f in slots.values() if f)
-    except Exception as e:
-        logger.warning("could not load stored forms for word %s — %s", card.get("word_id"), e)
-    # Longest first so a multi-word form wins over a bare headword prefix.
-    return sorted({f for f in forms if f}, key=len, reverse=True)
+    return database.surface_forms(card.get("word_id"), card.get("word_zh") or "", lang)
 
 
 def _word_match(word_zh: str, sentence_zh: str, lang: str = "zh") -> bool:
@@ -3711,6 +3698,25 @@ def parse_podcast_summary_json(raw: str) -> dict:
             "title_suggestion": title_suggestion}
 
 
+def summary_de_is_german(summary_de: str) -> bool:
+    """False when a summary that is supposed to be German was in fact written
+    in Chinese (#904).
+
+    The summary prompt asks for German first and a Chinese translation second
+    (#708), and the model occasionally answers with Chinese in *both* JSON
+    fields. Nothing downstream could tell: a Chinese summary_de parses fine,
+    passes the "summary_de is non-empty" success test, gets pinyin-annotated
+    by zh_annotate.annotate_de_summary(), and — worst of all — is fed to
+    knowledge/rendition.py as the German source text every other study
+    language is translated from, which yields the unreadable pinyin soup that
+    filed this issue.
+
+    Judged purely on script, not on grammar: a real German summary carries at
+    most a handful of Chinese asides, and the gap to a summary actually
+    written in Chinese is wide and empty (see zh_annotate's threshold)."""
+    return zh_annotate.cjk_ratio(summary_de or "") < zh_annotate.NON_CHINESE_TEXT_MAX_CJK
+
+
 def summarize_podcast_transcript(transcript: str, title: str,
                                  detail_level: str = "detailed",
                                  china_critical: bool = False) -> dict:
@@ -3754,11 +3760,17 @@ def summarize_podcast_transcript(transcript: str, title: str,
         try:
             raw = _call_api(model, [{"role": "user", "content": prompt}], 8192, purpose="podcast-summary")
             result = parse_podcast_summary_json(raw)
-            if result["summary_de"]:
+            if result["summary_de"] and not summary_de_is_german(result["summary_de"]):
+                # Answered in Chinese instead of German (#904) — a fallback
+                # model is exactly the right response, and letting it through
+                # would poison every other language's rendition.
+                logger.warning("summarize_podcast_transcript: summary_de is not German (%s)", model)
+            elif result["summary_de"]:
                 if model != primary:
                     logger.info("summarize_podcast_transcript: fell back to %s after %s failed", model, primary)
                 return result
-            logger.warning("summarize_podcast_transcript: empty summary_de in AI reply (%s)", model)
+            else:
+                logger.warning("summarize_podcast_transcript: empty summary_de in AI reply (%s)", model)
         except Exception as e:
             logger.warning("summarize_podcast_transcript failed on %s (%s)", model, e)
     return {"summary_zh": "", "summary_de": "", "words": []}

@@ -581,12 +581,12 @@ def _is_chinese_text(text: str, threshold: float = 0.2) -> bool:
     it. 0.2 is deliberately low: real Chinese text (even mixed with English
     loanwords/numbers) sits well above it, while non-Chinese text with an
     occasional Chinese aside (e.g. one word said in Mandarin) stays well
-    below."""
-    stripped = re.sub(r"\s+", "", text or "")
-    if not stripped:
-        return False
-    cjk = len(_CJK_CHAR_RE.findall(stripped))
-    return (cjk / len(stripped)) >= threshold
+    below.
+
+    The measurement itself lives in zh_annotate.cjk_ratio (#904) — ai.py and
+    knowledge/rendition.py need the same primitive to reject a summary_de
+    that was written in Chinese, and three copies of one ratio would drift."""
+    return zh_annotate.is_chinese_text(text, threshold)
 
 
 def _probe_duration_seconds(path: str) -> float:
@@ -983,6 +983,12 @@ def _summarize_via_notebooklm(transcript: str, title: str, detail_level: str) ->
     result = ai.parse_podcast_summary_json(answer)
     if not result.get("summary_de"):
         logger.warning("podcast: NotebookLM summary answer was unparseable/empty for %r", title)
+        return None
+    if not ai.summary_de_is_german(result["summary_de"]):
+        # Chinese where German was asked for (#904). Returning None hands the
+        # episode to the paid API chain, which is the right trade: a summary
+        # in the wrong language breaks every non-Chinese rendition downstream.
+        logger.warning("podcast: NotebookLM summary_de is not German for %r, falling back", title)
         return None
 
     logger.info("podcast: NotebookLM summarized %r (%d word(s))", title, len(result.get("words") or []))

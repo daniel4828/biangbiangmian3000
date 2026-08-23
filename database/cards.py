@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 from .core import get_db, anki_today, get_day_cutoff_hour
 from .presets import get_preset_for_deck
 from .decks import get_deck, get_locked_deck_ids
+from .entries import surface_forms
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,7 @@ def get_card(card_id: int) -> dict | None:
            SELECT c.*,
                   w.word_zh, w.pinyin, w.definition, w.pos, w.hsk_level,
                   w.traditional, w.definition_zh, w.note_type, w.notes, w.definition_de, w.definition_fr, w.register,
+                  w.lang AS word_lang,
                   d.name AS deck_name,
                   CASE WHEN d.category IS NOT NULL THEN
                     (SELECT group_concat(name, ' › ')
@@ -235,7 +237,21 @@ def get_card(card_id: int) -> dict | None:
                 if key not in ("id", "preset_id", "category") and val is not None:
                     card[key] = val
     conn.close()
+    _attach_word_forms(card)
     return card
+
+
+def _attach_word_forms(card: dict) -> None:
+    """Attach card["word_forms"] — every conjugated/inflected surface form of
+    this card's word (issue #903), for the review UI's cloze-blank matcher.
+
+    Chinese words never change form, and the frontend's existing plain
+    indexOf() matching is already exact for them, so this deliberately skips
+    zh cards rather than adding a field every caller has to ignore.
+    """
+    if card.get("word_lang", "zh") == "zh":
+        return
+    card["word_forms"] = surface_forms(card.get("word_id"), card.get("word_zh") or "", card["word_lang"])
 
 
 def _count_new_introduced_today_multi(conn, deck_ids: list[int], category: str, today: str) -> int:

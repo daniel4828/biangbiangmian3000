@@ -13,6 +13,12 @@ import pytest
 
 APP_JS = Path(__file__).resolve().parent.parent / "static" / "app.js"
 FN = "function buildWordBankOrder("
+# resolveTargetSurfaces() (issue #903) and its private helpers sit contiguously
+# just above buildWordBankOrder — start of the block is the const it opens with,
+# end is the closing brace of resolveTargetSurfaces itself (found via brace
+# matching on that function's header, same as buildWordBankOrder below).
+HELPERS_START = "const _ROMANCE_ARTICLE_PREFIXES = {"
+HELPERS_END_FN = "function resolveTargetSurfaces("
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
@@ -31,15 +37,26 @@ def _extract_fn(source: str, header: str) -> str:
     raise AssertionError(f"unbalanced braces after {header}")
 
 
-def build_order(zh, tokens, target):
-    fn = _extract_fn(APP_JS.read_text(encoding="utf-8"), FN)
+def _extract_helpers(source: str) -> str:
+    """resolveTargetSurfaces() plus the private helpers it calls (issue #903) —
+    buildWordBankOrder and renderClozeSentence both depend on it now, so tests
+    need the whole contiguous block, not just buildWordBankOrder itself."""
+    start = source.index(HELPERS_START)
+    end_fn = _extract_fn(source, HELPERS_END_FN)
+    end = source.index(end_fn) + len(end_fn)
+    return source[start:end]
+
+
+def build_order(zh, tokens, target, forms=None, lang="zh"):
+    source = APP_JS.read_text(encoding="utf-8")
+    fn = _extract_helpers(source) + "\n" + _extract_fn(source, FN)
     script = (
         fn
-        + "\nconst [zh, tokens, target] = JSON.parse(process.argv[1]);"
-        + "\nprocess.stdout.write(JSON.stringify(buildWordBankOrder(zh, tokens, target)));"
+        + "\nconst [zh, tokens, target, forms, lang] = JSON.parse(process.argv[1]);"
+        + "\nprocess.stdout.write(JSON.stringify(buildWordBankOrder(zh, tokens, target, forms, lang)));"
     )
     out = subprocess.run(
-        ["node", "-e", script, json.dumps([zh, tokens, target])],
+        ["node", "-e", script, json.dumps([zh, tokens, target, forms or [], lang])],
         capture_output=True, text=True, check=True,
     )
     return json.loads(out.stdout)
@@ -139,3 +156,44 @@ def test_french_space_separated_tokens_preserved():
     assert rejoined(order) == zh
     # Whitespace stays its own token so it can never become an empty tile
     assert {"type": "char", "char": " "} in order
+
+
+# ── resolveTargetSurfaces() — issue #903 (non-zh target matching) ──────────
+
+def test_fr_article_dropped():
+    """Dictionary form 'la bourse' appears in the sentence as bare 'bourse'."""
+    zh = "Macron offre une bourse en or à Merz."
+    order = build_order(zh, [], "la bourse", forms=[], lang="fr")
+    assert targets(order) == ["bourse"]
+    assert rejoined(order) == zh
+
+
+def test_fr_stored_conjugated_form_wins():
+    """Longest matching stored form ('a réduit') beats the bare headword."""
+    zh = "Le gouvernement a réduit les impôts."
+    order = build_order(zh, [], "réduire", forms=["a réduit", "réduit"], lang="fr")
+    assert targets(order) == ["a réduit"]
+    assert rejoined(order) == zh
+
+
+def test_fr_word_boundary_not_substring():
+    """Target 'or' must not match inside 'Macron' — only the standalone word."""
+    zh = "Macron offre une bourse en or à Merz."
+    order = build_order(zh, [], "or", forms=[], lang="fr")
+    assert targets(order) == ["or"]
+    assert rejoined(order) == zh
+
+
+def test_fr_capitalized_sentence_start():
+    """Match is case-insensitive but returns the sentence's own capitalization."""
+    zh = "Le chat dort."
+    order = build_order(zh, [], "le chat", forms=[], lang="fr")
+    assert targets(order) == ["Le chat"]
+    assert rejoined(order) == zh
+
+
+def test_fr_no_match_appends_blank():
+    zh = "Il fait beau aujourd'hui."
+    order = build_order(zh, [], "la voiture", forms=[], lang="fr")
+    assert targets(order) == ["la voiture"]
+    assert rejoined(order) == zh + "la voiture"

@@ -625,6 +625,10 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **免费的 NotebookLM 路径不受影响，照旧第一优先**：它是 Google 的，没理由审查这个话题，而且不花钱。勾选只改变它失败之后 API 兜底那一层选谁
   - **标记必须在粘贴那一刻打上**：摘要发生在之后独立的 `POST .../process` 调用里（甚至是 cron 里），那时已经没人在旁边说明这是什么素材
   - 三个入口（应用知识页的链接框/正文框、独立收藏页 `/save`）都有该复选框，**每次提交后自动复位**——粘性复选框会在之后所有素材上静默烧 GPT 的钱。请求字段可选且默认 false，所以不发这个字段的 iOS 快捷指令和邮件收件行为完全不变
+- **`summary_de` 必须真的是德语（#904）**：提示词要求德语在先、中文翻译在后（#708），模型偶尔把两个键**都**写成中文。这种回答非空、能解析、照样通过"成功判定只看 `summary_de`"，然后被 `annotate_de_summary` 加上拼音、再被 `knowledge/rendition.py` 当德语原文翻成法语（谷歌翻译对中文输入基本原样返回）—— 法语阅读版于是变成一堆粘连拼音。现在按**字形**判定：`zh_annotate.cjk_ratio()` ≥ `NON_CHINESE_TEXT_MAX_CJK`（0.10）即视为不是德语。实测生产库分得很干净：正常德语摘要 ≤ 0.023（合法的中文注释如 `(bólínqiáng/柏林墙)` 占比极低），写错语言的 ≥ 0.225
+  - **两层防线**：① `ai.summarize_podcast_transcript()` 的候选模型循环里判定失败 → 换下一个模型（NotebookLM 路径同理，返回 None 落到 API 链）；② `knowledge/rendition.get_or_create_rendition()` 发现存量坏数据时抛 `RenditionError` 并说明原因、**不写库** —— 页面显示可读的原因，不显示乱码。已有坏条目靠详情页 Regenerate summary 修
+  - 判定原语（`cjk_ratio`）住在 `zh_annotate.py`（零项目内依赖，谁都能 import），`podcast._is_chinese_text`（#750/#772 判转录方向）改为调它 —— 同一个比值不许有第三份
+
 - **按语言渲染摘要（#804）**：知识源全语言共享，**AI 摘要只生成一次**（`summary_de` 是主版本），其它语言的阅读版本是它的谷歌翻译 + 生词标注派生物，存 `knowledge_renditions(episode_id, lang)`，第一次打开时懒生成并缓存 —— 不为每种语言再花一次 AI 的钱。中文侧**完全不走这条路**（`summary_zh` 本来就是 AI 原生的，由 `zh_annotate` 标注），零回归
   - **翻译按 HTML 文本节点分块**（`knowledge/rendition.py._translate_html_strict`）：摘要是 `<p>`/`<b>` 标记的 HTML，整块丢给谷歌翻译会两头出错——免费端点超过约 5000 字直接拒绝，而且标签会被吃掉或挪位。所以只送文本节点、标签原样保留；行数对不上就逐节点重译
   - **失败绝不写库**：`translator.translate_strict()` 是为此新加的（`translate_zh` 的契约是"失败返回原文"，那在这里等于把德语原文冒充成法语存进库）。失败时详情页显示原因，不静默退回德语
