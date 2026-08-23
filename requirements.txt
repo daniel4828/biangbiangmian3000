@@ -9,7 +9,6 @@ openai>=2.29,<3.0
 edge-tts>=7.2,<8.0
 PyYAML>=6.0,<7.0
 python-multipart>=0.0.22,<0.1
-deep-translator>=1.11,<2.0
 jieba>=0.42,<1.0
 pypinyin>=0.55,<1.0
 notebooklm-py>=0.7.3,<0.8.0

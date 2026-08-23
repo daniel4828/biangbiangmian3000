@@ -226,7 +226,7 @@
 │                          #   pdf.py（pypdf，按页抽文字层+记真实页码，不做 OCR）、paginate.py（定长切页）、
 │                          #   __init__.py 的 ingest_file() 是唯一入库入口
 ├── zh_annotate.py         # 生词标注（#638，零 AI）：HSK 表+词库+jieba+pypinyin+谷歌翻译
-├── translator.py          # 翻译（Google Translate，deep-translator，可选）
+├── translator.py          # 翻译（Google Translate 免费网页端点，纯标准库；UA 必须伪装成浏览器，#890）
 ├── tts.py                 # edge-tts 封装（离线模式下只读缓存，#612）
 ├── routes/dictionary.py   # AI 词典 API（#746）：/api/dict/lookup + 历史；结果存 dict_queries（database/dictionary.py）
 ├── review_notify.py       # 复习收尾提醒（#701）：去重 + 发信，判定在 database.due_notification_status()
@@ -819,7 +819,7 @@ GET  /api/stats ；/api/retention ；/api/card-evolution（均支持 ?lang=）
 
 - 所有数据库访问通过 `database/` 包——其他文件不写原始 SQL（`import database` 仍然有效）
 - 保持 `ai.py` 简洁——每种提示词类型对应一个函数；AI 返回的格式错误 JSON 始终用 try/except + 回退处理
-- 允许的外部依赖：`fastapi`、`uvicorn`、`anthropic`、`openai`、`edge-tts`、`pyyaml`、`python-multipart`、`deep-translator`（可选）、`jieba`、`pypinyin`、`alibabacloud_tingwu20230930`、`zhconv`（NotebookLM 转录繁转简，#500）（播客通义听悟转录主力，#498，官方 SDK）、`notebooklm-py`（播客 NotebookLM 可选转录，#486，非官方库，凭据文件一次性从本地拷到服务器，见 `scripts/README.md`）、`youtube-transcript-api`（知识库 YouTube 字幕摄取，#651）、`trafilatura`（知识库文章正文抽取，#652）、`pypdf` + `python-docx`（知识库文件上传，#835；`pypdf` 同时供书籍阅读器读 PDF，#836）。**EPUB 走标准库解析，不加 `ebooklib`/`beautifulsoup4`**（#836）。新增依赖必须同步更新 `requirements.txt`。播客转录链的 Whisper/NotebookLM 两条路径（听悟提交直链不需要）需要系统级 `ffmpeg`（`apt install ffmpeg`，不是 Python 依赖，缺失时该功能自动跳过）
+- 允许的外部依赖：`fastapi`、`uvicorn`、`anthropic`、`openai`、`edge-tts`、`pyyaml`、`python-multipart`、`jieba`、`pypinyin`、`alibabacloud_tingwu20230930`、`zhconv`（NotebookLM 转录繁转简，#500）（播客通义听悟转录主力，#498，官方 SDK）、`notebooklm-py`（播客 NotebookLM 可选转录，#486，非官方库，凭据文件一次性从本地拷到服务器，见 `scripts/README.md`）、`youtube-transcript-api`（知识库 YouTube 字幕摄取，#651）、`trafilatura`（知识库文章正文抽取，#652）、`pypdf` + `python-docx`（知识库文件上传，#835；`pypdf` 同时供书籍阅读器读 PDF，#836）。**EPUB 走标准库解析，不加 `ebooklib`/`beautifulsoup4`**（#836）。新增依赖必须同步更新 `requirements.txt`。播客转录链的 Whisper/NotebookLM 两条路径（听悟提交直链不需要）需要系统级 `ffmpeg`（`apt install ffmpeg`，不是 Python 依赖，缺失时该功能自动跳过）
 - 前端无构建步骤——直接编辑 `static/` 下的文件
 - API 密钥只从环境变量读取，绝不写入代码或仓库
 - **不要在 8000 端口跑测试服务器**——Daniel 的浏览器连着它

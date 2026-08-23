@@ -1,23 +1,102 @@
 """
-Source language → target language translation using Google Translate (via deep_translator).
+Source language → target language translation using Google Translate's free
+mobile endpoint (https://translate.google.com/m).
 
 The source language is configurable (defaults to Chinese, "zh-CN") so this module
 can also translate other learner languages (e.g. French) into German.
 
+Why this talks to the endpoint itself instead of using `deep-translator` (#890):
+that library scrapes the very same page, but sends `requests`' default
+User-Agent — and Google answers `python-requests/x.y` with a JavaScript-only
+page that contains no `div.result-container`. Every single translation
+therefore raised TranslationNotFound. Because most callers go through
+translate_zh(), whose contract is "return the original on failure", the app
+degraded silently for a long time (German text served under a Chinese label);
+the book reader was the one caller that hard-fails, which is how it surfaced.
+Sending a browser User-Agent fixes it outright, so the transport lives here
+where that one crucial header is visible.
+
+Standard library only — no `deep-translator`, no `beautifulsoup4`.
 Requires internet access (VPN recommended in China).
-Install: pip install deep-translator
 """
 import concurrent.futures
 import logging
+import urllib.parse
+import urllib.request
+from html.parser import HTMLParser
 
 logger = logging.getLogger(__name__)
 
 _translators: dict[tuple[str, str], object] = {}
 
-# deep-translator's underlying requests call sets no timeout, so one stalled
-# connection can hang the calling thread forever — a podcast check once froze
-# for 14h this way while holding its run lock (#565).
+# One stalled connection must not hang the calling thread forever — a podcast
+# check once froze for 14h this way while holding its run lock (#565). urlopen
+# gets the timeout too; the thread deadline below is the backstop for a
+# connection that trickles bytes slowly enough to never trip it.
 _REQUEST_TIMEOUT_SECONDS = 90
+
+_GOOGLE_URL = "https://translate.google.com/m"
+# 🔴 Not a politeness header — the entire feature depends on it. Google serves
+# `python-requests/…` a JS-only page with no result container, which is exactly
+# what broke every translation in the app (#890). Keep a real browser UA here.
+_BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+
+
+class _ResultParser(HTMLParser):
+    """Pull the text out of <div class="result-container">, the element the
+    mobile endpoint puts the translation in. convert_charrefs=True means the
+    text arrives already unescaped."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.result: str | None = None
+        self._depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if self._depth:
+            self._depth += 1
+            return
+        if tag == "div" and "result-container" in dict(attrs).get("class", "").split():
+            self._depth = 1
+            self.result = ""
+
+    def handle_endtag(self, tag):
+        if self._depth:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if self._depth:
+            self.result = (self.result or "") + data
+
+
+class _GoogleWebTranslator:
+    """Minimal stand-in for deep-translator's GoogleTranslator: one
+    `.translate(text)` method, so the timeout wrapper and the batching helpers
+    below did not have to change."""
+
+    def __init__(self, source: str, target: str):
+        self.source = source
+        self.target = target
+
+    def translate(self, text: str) -> str:
+        if not text.strip():
+            return text
+        params = urllib.parse.urlencode({"sl": self.source, "tl": self.target, "q": text})
+        req = urllib.request.Request(f"{_GOOGLE_URL}?{params}",
+                                     headers={"User-Agent": _BROWSER_UA})
+        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_SECONDS) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        parser = _ResultParser()
+        parser.feed(body)
+        parser.close()
+        if parser.result is None:
+            # Never return the input as if it were a translation: translate_zh
+            # deliberately falls back to the original, translate_strict must
+            # raise, and both need this to be an error to tell them apart.
+            raise RuntimeError(
+                f"no translation in Google's reply (source={self.source}, target={self.target})")
+        return parser.result
 
 
 def _translate_with_timeout(t, text: str) -> str:
@@ -33,19 +112,19 @@ def _translate_with_timeout(t, text: str) -> str:
 
 
 def _load(source: str, target: str) -> object | None:
+    """Cached translator for this language pair. Kept as a factory returning
+    None on failure because both public functions branch on that: translate_zh
+    returns the original text, translate_strict raises."""
     key = (source, target)
     if key in _translators:
         return _translators[key]
-    try:
-        from deep_translator import GoogleTranslator
-        t = GoogleTranslator(source=source, target=target)
-        _translators[key] = t
-        logger.info("translator: GoogleTranslator loaded (source=%s, target=%s)", source, target)
-        return t
-    except Exception as e:
-        logger.error("translator: failed to load (source=%s, target=%s) — %s", source, target, e)
+    if not source or not target:
+        logger.error("translator: missing language (source=%r, target=%r)", source, target)
         _translators[key] = None
         return None
+    _translators[key] = _GoogleWebTranslator(source, target)
+    logger.info("translator: Google web translator ready (source=%s, target=%s)", source, target)
+    return _translators[key]
 
 
 def translate_strict(text: str, target: str = "en", source: str = "zh-CN") -> str:
