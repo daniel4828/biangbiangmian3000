@@ -32,6 +32,7 @@ _AGAIN_ACTION_LABELS = {
     # regenerate single sentences through generate_sentence_for_word below).
     "podcast": "Podcast Again Sentences",
     "knowledge": "Knowledge Again Sentences",
+    "book": "Book Again Sentences",
     "kahneman": "Kahneman Again Sentences",
     "news": "News Again Sentences",
     "briefing": "News Again Sentences",
@@ -64,6 +65,103 @@ def _knowledge_material(episode: dict) -> str:
     if transcript:
         return transcript[:_KNOWLEDGE_MATERIAL_MAX_CHARS]
     return (episode.get("summary_de") or "").strip()[:_KNOWLEDGE_MATERIAL_MAX_CHARS]
+
+
+def _knowledge_sources(episode_ids: list[int] | None) -> tuple[list[dict], str]:
+    """Build the knowledge-mode `sources` list (+ overall `kind`) from selected
+    episode ids. Extracted from the knowledge branch of _generate_and_store_body
+    (issue #865) so book mode's single-chapter source (_book_source below) can
+    share everything downstream of "sources exists" — one AI-call pipeline for
+    both, per #643's single-pipeline principle.
+
+    #752 let episode_ids hold several source items; #776 removed the
+    interleaving machinery so each source now gets its own call(s), one at a
+    time — sources[] only includes items that actually have material, an id
+    that resolves to nothing usable is dropped with a warning rather than
+    failing the whole batch (Daniel picking 3 items where 1 has no transcript
+    yet shouldn't block the other 2). Raises ValueError (never returns an
+    empty list) when nothing usable was selected."""
+    if not episode_ids:
+        raise ValueError("Knowledge mode requires selecting at least one source item.")
+    episodes = []
+    for eid in episode_ids:
+        episode = database.get_episode(eid)
+        if not episode:
+            raise ValueError(f"Knowledge item {eid} not found.")
+        episodes.append(episode)
+    sources: list[dict] = []
+    for eid, episode in zip(episode_ids, episodes):
+        material = _knowledge_material(episode)
+        if not material:
+            logger.warning("story  knowledge item %d has no transcript/summary — skipped", eid)
+            continue
+        ep_kind = episode.get("kind") or "podcast"
+        sources.append({
+            "title": episode.get("title") or "",
+            "kind": ep_kind,
+            # #790: always the in-app knowledge detail page, never the
+            # external video/article URL — the detail page carries the
+            # summary, bilingual transcript and new-word table, and has
+            # its own "Open ↗" button to the original. Hash shape must
+            # match the frontend router (app.js): podcasts keep the
+            # legacy #podcast-<id>, everything else is #knowledge-<id>
+            # (the old f"/#{ep_kind}-…" produced dead #video-<id> links).
+            "url": f"/#{'podcast' if ep_kind == 'podcast' else 'knowledge'}-{eid}",
+            "material": material,
+        })
+    if not sources:
+        raise ValueError("Selected item has no transcript or summary yet.")
+    # kind recorded in gen_params (issue #654): single source keeps its own
+    # kind, multiple sources collapse to "mixed" — there is no single kind to
+    # show in the frontend once items are combined.
+    kind = sources[0]["kind"] if len(sources) == 1 else "mixed"
+    return sources, kind
+
+
+def _book_source(chapter_id: int | None) -> dict:
+    """Build a knowledge-pipeline `source` dict from one book chapter (#865).
+
+    Only single-chapter selection is supported (unlike knowledge mode's
+    multi-select) — Daniel's ask was "pick a book, pick a chapter", not a
+    reading list. material = the chapter's Chinese summary (so the model
+    grasps the point first) followed by the chapter's original text (for
+    detail), same truncation budget as knowledge mode
+    (_KNOWLEDGE_MATERIAL_MAX_CHARS) since it goes through the same prompt.
+    Missing original text (e.g. pages were pruned) is not an error — the
+    summary alone is still usable material.
+
+    Never silently falls back to a plain story: missing chapter id, unknown
+    chapter, or a chapter that hasn't been summarized yet all raise
+    ValueError with a message the setup modal can show as-is."""
+    if not chapter_id:
+        raise ValueError("Book mode requires selecting a chapter.")
+    chapter = database.get_chapter_by_id(chapter_id)
+    if not chapter:
+        raise ValueError(f"Book chapter {chapter_id} not found.")
+    if chapter.get("status") != "summarized" or not chapter.get("summary_zh"):
+        raise ValueError("这一章还没有生成摘要，请先在书籍页点「✨ 生成摘要」。")
+    book = database.get_book(chapter["book_id"])
+    book_title = book["title"] if book else ""
+    chapter_label = chapter.get("title_zh") or chapter.get("ref_label") or ""
+    title = f"《{book_title}》第{chapter['number']}章 · {chapter_label}" if book_title else f"第{chapter['number']}章 · {chapter_label}"
+
+    raw_text = database.chapter_source_text(chapter["book_id"], chapter["number"]) or ""
+    plain_text = ai._HTML_TAG_RE.sub(" ", raw_text).strip()
+    material = f"【本章中文摘要】\n{chapter['summary_zh']}"
+    if plain_text:
+        material += f"\n\n【本章原文】\n{plain_text[:_KNOWLEDGE_MATERIAL_MAX_CHARS]}"
+
+    return {
+        "title": title,
+        "kind": "book",
+        "url": f"/#book-{chapter['book_id']}-chapter-{chapter['number']}",
+        "material": material,
+        # Not part of the ai.generate_podcast_sentences contract (it only
+        # reads title/kind/url/material) — kept here so the concept_zh
+        # step and Again single-sentence regen can build the chapter label
+        # without a second database round trip.
+        "chapter": chapter,
+    }
 
 
 def _parse_episode_ids(episode_ids: str | None, episode_id: int | None) -> list[int]:
@@ -269,7 +367,8 @@ def _generate_and_store(deck_id: int, category: str, today: str, cards: list, *,
                         topic, max_hsk, model, grammar_focus, grammar_pct, mode,
                         chapter_ids, articles=None, progress_key, lang: str | None = None,
                         origin: str | None = None, episode_ids: list[int] | None = None,
-                        batch_size: int | None = None) -> dict | None:
+                        batch_size: int | None = None,
+                        book_chapter_id: int | None = None) -> dict | None:
     """Generate a story for `cards`, persist it, and return the stored story
     (with sentences) — or an error dict on failure, or None if there is nothing
     to generate. Shared by the synchronous GET, the background thread, and regenerate.
@@ -298,6 +397,7 @@ def _generate_and_store(deck_id: int, category: str, today: str, cards: list, *,
             grammar_pct=grammar_pct, mode=mode, chapter_ids=chapter_ids,
             articles=articles, progress_key=progress_key, lang=lang,
             origin=origin, episode_ids=episode_ids, batch_size=batch_size,
+            book_chapter_id=book_chapter_id,
         )
     # A new story means the word→position mapping changed — invalidate every
     # in-memory session queue so the review order picks up the narrative order on
@@ -326,6 +426,8 @@ def _action_label_for_story(mode: str, deck_id: int) -> str:
         return "Generate Paste Story"
     if mode == "knowledge":
         return "Generate Knowledge Review"
+    if mode == "book":
+        return "Generate Book Review"
     deck = database.get_deck(deck_id)
     deck_name = deck["name"] if deck else str(deck_id)
     return f"Generate Story: {deck_name}"
@@ -335,7 +437,8 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
                              topic, max_hsk, model, grammar_focus, grammar_pct, mode,
                              chapter_ids, articles, progress_key, lang: str,
                              origin: str | None, episode_ids: list[int] | None,
-                             batch_size: int | None = None) -> dict | None:
+                             batch_size: int | None = None,
+                             book_chapter_id: int | None = None) -> dict | None:
     kind = None  # knowledge mode's source kind (podcast/video/article, issue #654)
     try:
         if mode == "news":
@@ -361,8 +464,8 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
             # bundled with the still-Chinese-only kahneman/paste/briefing
             # modes, which stay gated by extended_story_modes.
             feats = languages.get_lang_config(lang)["features"]
-            gate = "knowledge_story_mode" if mode == "knowledge" else "extended_story_modes"
-            if mode in ("kahneman", "paste", "briefing", "knowledge") and not feats.get(gate):
+            gate = "knowledge_story_mode" if mode in ("knowledge", "book") else "extended_story_modes"
+            if mode in ("kahneman", "paste", "briefing", "knowledge", "book") and not feats.get(gate):
                 raise ValueError(f"mode '{mode}' is only available for Chinese decks")
         if mode == "kahneman":
             parsed_chapter_ids = [int(x) for x in chapter_ids.split(",") if x.strip()] if chapter_ids else []
@@ -400,7 +503,26 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
                 cards, articles, model=model, progress_key=progress_key,
                 max_hsk=max_hsk, generic=(mode == "paste"),
                 include_context=True, batch_size=batch_size)
-        elif mode == "knowledge":
+        elif mode in ("knowledge", "book"):
+            # Book mode (issue #865): shares this entire branch with knowledge
+            # mode — the only difference is where `sources` comes from. Book
+            # mode builds its single source from a chosen chapter's summary +
+            # original text (_book_source) instead of an episode's transcript;
+            # everything after that (word splitting, per-source AI calls,
+            # prompt concatenation) is byte-for-byte the same pipeline so a
+            # fix to one mode's generation quality applies to both (#643's
+            # single-pipeline principle).
+            if mode == "book":
+                sources: list[dict] = [_book_source(book_chapter_id)]
+                kind = "book"
+                model = _validated_model(model, default=ai.DEFAULT_MODEL)
+                logger.info("story  book model in use: %s chapter_id=%s batch_size=%s",
+                            model, book_chapter_id, batch_size)
+            else:
+                sources, kind = _knowledge_sources(episode_ids)
+                model = _validated_model(model, default=ai.DEFAULT_MODEL)
+                logger.info("story  knowledge model in use: %s kind=%s sources=%d batch_size=%s",
+                            model, kind, len(sources), batch_size)
             # Knowledge mode (issue #654, renamed from "podcast" #482/#561):
             # after the knowledge-base generalization (#650) podcast_episodes
             # covers podcast/video/article sources uniformly, so this path
@@ -429,48 +551,10 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
             # model could interleave sources. Daniel didn't want interleaving
             # — he wants source 1 finished before source 2 starts (#776). So
             # each source now gets its own call(s), one at a time, and the
-            # results are concatenated in source order. sources[] built below
-            # only includes items that actually have material; an id that
-            # resolves to nothing usable is dropped with a warning rather than
-            # failing the whole batch, since Daniel picking 3 items where 1
-            # has no transcript yet shouldn't block the other 2.
-            if not episode_ids:
-                raise ValueError("Knowledge mode requires selecting at least one source item.")
-            episodes = []
-            for eid in episode_ids:
-                episode = database.get_episode(eid)
-                if not episode:
-                    raise ValueError(f"Knowledge item {eid} not found.")
-                episodes.append(episode)
-            sources: list[dict] = []
-            for eid, episode in zip(episode_ids, episodes):
-                material = _knowledge_material(episode)
-                if not material:
-                    logger.warning("story  knowledge item %d has no transcript/summary — skipped", eid)
-                    continue
-                ep_kind = episode.get("kind") or "podcast"
-                sources.append({
-                    "title": episode.get("title") or "",
-                    "kind": ep_kind,
-                    # #790: always the in-app knowledge detail page, never the
-                    # external video/article URL — the detail page carries the
-                    # summary, bilingual transcript and new-word table, and has
-                    # its own "Open ↗" button to the original. Hash shape must
-                    # match the frontend router (app.js): podcasts keep the
-                    # legacy #podcast-<id>, everything else is #knowledge-<id>
-                    # (the old f"/#{ep_kind}-…" produced dead #video-<id> links).
-                    "url": f"/#{'podcast' if ep_kind == 'podcast' else 'knowledge'}-{eid}",
-                    "material": material,
-                })
-            if not sources:
-                raise ValueError("Selected item has no transcript or summary yet.")
-            # kind recorded in gen_params (issue #654): single source keeps its
-            # own kind, multiple sources collapse to "mixed" — there is no
-            # single kind to show in the frontend once items are combined.
-            kind = sources[0]["kind"] if len(sources) == 1 else "mixed"
-            model = _validated_model(model, default=ai.DEFAULT_MODEL)
-            logger.info("story  knowledge model in use: %s kind=%s sources=%d batch_size=%s",
-                        model, kind, len(sources), batch_size)
+            # results are concatenated in source order. `sources` (built by
+            # _knowledge_sources() above for knowledge mode, or as a single
+            # book-chapter source for book mode) is never empty at this point —
+            # both builders raise ValueError instead of returning one.
 
             # Split the due-word list evenly across sources (issue #776):
             # remainder words go to the earlier sources (16 words / 3 sources
@@ -532,6 +616,16 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
             # the mode being actively tuned — were the one mode whose prompt you
             # couldn't go back and read.
             prompt_text = "\n\n".join(chunk_prompts)
+            if mode == "book":
+                # Concept box (#865, Daniel's explicit ask): every sentence gets
+                # the chapter label so the review card can show "Chapter N: …"
+                # the same way kahneman shows its concept — only set when the
+                # model didn't already produce one, never overwritten.
+                chapter = sources[0]["chapter"]
+                chapter_label = f"第{chapter['number']}章：{chapter.get('title_zh') or chapter.get('ref_label') or ''}"
+                for s in sentences:
+                    if not s.get("concept_zh"):
+                        s["concept_zh"] = chapter_label
         else:
             sentences, prompt_text = _generate_story_sentences(
                 cards, topic=topic, max_hsk=max_hsk, model=model,
@@ -544,7 +638,8 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
             topic=topic, max_hsk=max_hsk, model=model,
             grammar_focus=grammar_focus, grammar_pct=grammar_pct,
             mode=mode, chapter_ids=chapter_ids, articles=articles, lang=lang,
-            origin=origin, episode_ids=episode_ids, batch_size=batch_size, kind=kind)
+            origin=origin, episode_ids=episode_ids, batch_size=batch_size, kind=kind,
+            book_chapter_id=book_chapter_id)
         # Last checkpoint before the write (#828): everything above is throwaway
         # work, a stored story is not — cancelling and then finding a story you
         # did not want waiting for you is worse than no cancel button at all.
@@ -574,7 +669,8 @@ def _start_background_generation(deck_id: int, category: str, today: str, cards:
                                  topic, max_hsk, model, grammar_focus, grammar_pct,
                                  mode, chapter_ids, articles=None, progress_key,
                                  lang: str | None = None, episode_ids: list[int] | None = None,
-                                 batch_size: int | None = None) -> None:
+                                 batch_size: int | None = None,
+                                 book_chapter_id: int | None = None) -> None:
     """Spawn a daemon thread that generates+stores a story, recording a terminal
     progress state (done/error) the frontend can poll. De-duped by progress_key."""
     def _run() -> None:
@@ -585,7 +681,8 @@ def _start_background_generation(deck_id: int, category: str, today: str, cards:
                 topic=topic, max_hsk=max_hsk, model=model,
                 grammar_focus=grammar_focus, grammar_pct=grammar_pct,
                 mode=mode, chapter_ids=chapter_ids, articles=articles, progress_key=progress_key,
-                lang=lang, episode_ids=episode_ids, batch_size=batch_size)
+                lang=lang, episode_ids=episode_ids, batch_size=batch_size,
+                book_chapter_id=book_chapter_id)
             if isinstance(result, dict) and result.get("cancelled"):
                 # Leave no terminal state behind: the user is already gone, and
                 # a sticky done/error entry would keep the #821 task indicator
@@ -618,7 +715,7 @@ def _start_background_generation(deck_id: int, category: str, today: str, cards:
 def _gen_params_dict(*, topic, max_hsk, model, grammar_focus, grammar_pct,
                      mode, chapter_ids, articles=None, lang="zh",
                      origin=None, episode_ids=None, batch_size=None,
-                     kind=None) -> dict:
+                     kind=None, book_chapter_id=None) -> dict:
     """Bundle the story generation settings persisted on each story row, so the
     Again regeneration can reproduce the same style (see generate_sentence_for_word).
 
@@ -644,6 +741,10 @@ def _gen_params_dict(*, topic, max_hsk, model, grammar_focus, grammar_pct,
     family: CHUNK_SIZE; kahneman: per-chapter split capped at MAX_KAHNEMAN_BATCH;
     briefing/paste: MAX_NEWS_BATCH). Stored for handoff/reproducibility only —
     Again-regen is single-card.
+    book_chapter_id: book mode's selected chapter (issue #865, book_chapters.id)
+    — Again-regen re-fetches the chapter (and re-derives its summary+text
+    material) by this id, same pattern as episode_ids for knowledge mode.
+    Always written (even None) so the key's shape is stable across modes.
     """
     return {
         "mode": mode,
@@ -660,6 +761,7 @@ def _gen_params_dict(*, topic, max_hsk, model, grammar_focus, grammar_pct,
         "episode_ids": episode_ids,
         "batch_size": batch_size,
         "kind": kind,
+        "book_chapter_id": book_chapter_id,
     }
 
 
@@ -712,6 +814,29 @@ def generate_sentence_for_word(card: dict, gen_params: dict | None) -> dict | No
                 if chapter is not None:
                     sentences = ai.generate_kahneman_sentences([card], chapter, model=model)
                 else:  # book data missing → fall back to a plain sentence
+                    sentences, _ = ai.generate_story([card], model=model, lang=lang)
+            elif mode == "book":
+                # Book Again-regen (issue #865): same _book_source() the main
+                # generation uses, so a single regenerated sentence stays
+                # anchored to the same chapter's material. A chapter that's
+                # since been deleted or un-summarized falls back to a plain
+                # sentence rather than failing the whole Again click — the
+                # user just wanted one word regenerated, not a chapter status
+                # report.
+                try:
+                    source = _book_source(gp.get("book_chapter_id"))
+                except ValueError:
+                    source = None
+                if source:
+                    sentences, _ = ai.generate_podcast_sentences(
+                        [card], source,
+                        model=_validated_model(gp.get("model"), default=ai.DEFAULT_MODEL),
+                        max_hsk=gp.get("max_hsk", 3), lang=lang)
+                    if sentences and not sentences[0].get("concept_zh"):
+                        chapter = source["chapter"]
+                        sentences[0]["concept_zh"] = (
+                            f"第{chapter['number']}章：{chapter.get('title_zh') or chapter.get('ref_label') or ''}")
+                else:
                     sentences, _ = ai.generate_story([card], model=model, lang=lang)
             elif mode in ("knowledge", "podcast"):
                 # Knowledge Again-regen (issue #561, renamed from "podcast" in
@@ -795,6 +920,7 @@ def get_story(deck_id: int, category: str,
               episode_id: int | None = None,
               episode_ids: str | None = None,
               batch_size: int | None = None,
+              book_chapter_id: int | None = None,
               no_generate: bool = False,
               background: bool = False,
               lang: str | None = None):
@@ -875,7 +1001,8 @@ def get_story(deck_id: int, category: str,
             topic=topic, max_hsk=max_hsk, model=chosen_model,
             grammar_focus=grammar_focus, grammar_pct=grammar_pct,
             mode=mode, chapter_ids=chapter_ids, progress_key=progress_key, lang=lang,
-            episode_ids=parsed_episode_ids, batch_size=batch_size)
+            episode_ids=parsed_episode_ids, batch_size=batch_size,
+            book_chapter_id=book_chapter_id)
         return {"generating": True}
 
     # ── Synchronous mode (default): generate now and return the story ─────────
@@ -889,7 +1016,8 @@ def get_story(deck_id: int, category: str,
         topic=topic, max_hsk=max_hsk, model=chosen_model,
         grammar_focus=grammar_focus, grammar_pct=grammar_pct,
         mode=mode, chapter_ids=chapter_ids, progress_key=progress_key, lang=lang,
-        episode_ids=parsed_episode_ids, batch_size=batch_size)
+        episode_ids=parsed_episode_ids, batch_size=batch_size,
+        book_chapter_id=book_chapter_id)
     ai._story_progress.pop(progress_key, None)
     return result
 
@@ -904,6 +1032,7 @@ def regenerate_story(deck_id: int, category: str,
                      episode_id: int | None = None,
                      episode_ids: str | None = None,
                      batch_size: int | None = None,
+                     book_chapter_id: int | None = None,
                      body: dict | None = None,
                      lang: str | None = None):
     """Regenerate today's story. body (optional JSON): {"articles": [{"url", "title", "text"}]}
@@ -935,7 +1064,8 @@ def regenerate_story(deck_id: int, category: str,
         topic=topic, max_hsk=max_hsk, model=chosen_model,
         grammar_focus=grammar_focus, grammar_pct=grammar_pct,
         mode=mode, chapter_ids=chapter_ids, articles=articles, progress_key=progress_key, lang=lang,
-        episode_ids=parsed_episode_ids, batch_size=batch_size)
+        episode_ids=parsed_episode_ids, batch_size=batch_size,
+        book_chapter_id=book_chapter_id)
     ai._story_progress.pop(progress_key, None)
     # Queue invalidation happens inside _generate_and_store (issue #783).
     return result
