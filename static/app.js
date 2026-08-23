@@ -129,9 +129,46 @@ function levelLabel(lang, lvl) {
   return lang === 'zh' ? `HSK ${lvl}` : (CEFR_LABELS[lvl] || `${lvl}`);
 }
 
-// — Customizable review shortcuts —
-// Each action maps to one key. Defaults below are the active bindings.
-// User overrides persist in localStorage('reviewKeymap'). Rating keys 1-4 stay fixed.
+// — Customizable review shortcuts (#856 expands this to cover almost every
+// hardcoded shortcut in the app, not just the original review-view 10) —
+// Each action maps to one key. Defaults below are the active bindings, and
+// match byte-for-byte what used to be hardcoded — this is a pure
+// configurability upgrade, not a behavior change.
+// User overrides persist in localStorage('reviewKeymap'). Rating keys 1-4,
+// Escape, Enter and Tab stay fixed (see KEYMAP_RESERVED).
+//
+// `scope` says which views/contexts an action's shortcut applies in, and is
+// used only for conflict detection in the settings UI when the user tries to
+// rebind a key — it does NOT gate where the keydown handler's own code runs
+// (that's still whatever view checks the handler already has).
+const KEYMAP_SCOPES = {
+  // NOTE: `global` deliberately excludes `story`. The story-modal keydown
+  // branch runs first and returns early whenever the modal is open, before
+  // the global-nav branch is ever reached — so a `global` binding never
+  // actually competes with a `story` binding for the same keypress, even
+  // though nav-back/story-next share the default key 'd'. See the keydown
+  // handler around line ~10880 (search for "storyOverlay").
+  global:        ['review', 'word-detail', 'home'],
+  review:        ['review'],
+  shared:        ['review', 'word-detail'],
+  'word-detail': ['word-detail'],
+  home:          ['home'],
+  story:         ['story'],
+};
+function _scopeSet(scope) { return new Set(KEYMAP_SCOPES[scope] || [scope]); }
+// Display order + labels for the grouped settings-page rendering (#856).
+const KEYMAP_SCOPE_GROUPS = [
+  { scope: 'review',       name: 'Review' },
+  { scope: 'shared',       name: 'Review + word detail' },
+  { scope: 'word-detail',  name: 'Word detail' },
+  { scope: 'story',        name: 'Story player' },
+  { scope: 'global',       name: 'Navigation' },
+  { scope: 'home',         name: 'Home' },
+];
+function _scopeDisplayName(scope) {
+  return (KEYMAP_SCOPE_GROUPS.find(g => g.scope === scope) || {}).name || scope;
+}
+
 const KEYMAP_DEFAULTS = {
   reveal:         ' ',
   replay:         'q',
@@ -143,21 +180,86 @@ const KEYMAP_DEFAULTS = {
   'hint-minus':   'a',
   'hint-plus':    's',
   'story-modal':  'x',
+  // shared (review card-back + word-detail page)
+  examples:       'e',
+  notes:          'n',
+  'word-analysis':'w',
+  'regen-all':    'C',
+  // review-only
+  'suspend-reading':   'f',
+  'suspend-listening': 'v',
+  'suspend-creating':  'c',
+  'delete-card':       'D',
+  'delete-card-alt':   '7',
+  leech:               'L',
+  'deck-options':      'o',
+  reasoning:           'g',
+  'restart-server':    'R',
+  'star-sentence':     'F',
+  'flag-sentence':     'G',
+  'fsrs-inspector':    'S',
+  // word-detail only
+  relations:      'r',
+  // story modal
+  'story-play':   ' ',
+  'story-prev':   'a',
+  'story-repeat': 's',
+  'story-next':   'd',
+  // global navigation
+  'nav-back':      'd',
+  'nav-browse':    'b',
+  'nav-add-card':  'a',
+  // home (decks view)
+  'home-listening': 'l',
+  'home-creating':  'c',
 };
 const KEYMAP_ACTIONS = [
-  { id: 'reveal',       label: 'Reveal answer' },
-  { id: 'replay',       label: 'Replay audio' },
-  { id: 'pinyin',       label: 'Toggle pinyin' },
-  { id: 'translation',  label: 'Toggle translation' },
-  { id: 'worddef',      label: 'Toggle word definition' },
-  { id: 'new-sentence', label: 'New sentence (regenerate)' },
-  { id: 'undo',         label: 'Undo last review' },
-  { id: 'hint-minus',   label: 'Listening hint −' },
-  { id: 'hint-plus',    label: 'Listening hint +' },
-  { id: 'story-modal',  label: 'Open summary (full story)' },
+  { id: 'reveal',       label: 'Reveal answer',                scope: 'review' },
+  { id: 'replay',       label: 'Replay audio',                 scope: 'review' },
+  { id: 'pinyin',       label: 'Toggle pinyin',                scope: 'review' },
+  { id: 'translation',  label: 'Toggle translation',           scope: 'review' },
+  { id: 'worddef',      label: 'Toggle word definition',       scope: 'review' },
+  { id: 'new-sentence', label: 'New sentence (regenerate)',    scope: 'review' },
+  { id: 'undo',         label: 'Undo last review',             scope: 'review' },
+  { id: 'hint-minus',   label: 'Listening hint −',             scope: 'review' },
+  { id: 'hint-plus',    label: 'Listening hint +',             scope: 'review' },
+  { id: 'story-modal',  label: 'Open summary (full story)',    scope: 'review' },
+
+  { id: 'examples',       label: 'Toggle examples',            scope: 'shared' },
+  { id: 'notes',           label: 'Toggle notes',               scope: 'shared' },
+  { id: 'word-analysis',   label: 'Toggle word analysis',       scope: 'shared' },
+  { id: 'regen-all',       label: 'Regenerate all fields',      scope: 'shared' },
+
+  { id: 'suspend-reading',   label: 'Suspend/resume reading',     scope: 'review' },
+  { id: 'suspend-listening', label: 'Suspend/resume listening',   scope: 'review' },
+  { id: 'suspend-creating',  label: 'Suspend/resume creating',    scope: 'review' },
+  { id: 'delete-card',       label: 'Delete card',                scope: 'review' },
+  { id: 'delete-card-alt',   label: 'Delete card (alt key)',      scope: 'review' },
+  { id: 'leech',             label: 'Mark as leech',              scope: 'review' },
+  { id: 'deck-options',      label: 'Deck options',               scope: 'review' },
+  { id: 'reasoning',         label: 'Background popup / news language', scope: 'review' },
+  { id: 'restart-server',    label: 'Restart server',             scope: 'review' },
+  { id: 'star-sentence',     label: 'Star this sentence',         scope: 'review' },
+  { id: 'flag-sentence',     label: 'Flag this sentence',         scope: 'review' },
+  { id: 'fsrs-inspector',    label: 'FSRS scheduler inspector',   scope: 'review' },
+
+  { id: 'relations',    label: 'Toggle relations',             scope: 'word-detail' },
+
+  { id: 'story-play',   label: 'Play / pause full story',      scope: 'story' },
+  { id: 'story-prev',   label: 'Previous sentence',            scope: 'story' },
+  { id: 'story-repeat', label: 'Repeat sentence',               scope: 'story' },
+  { id: 'story-next',   label: 'Next sentence',                scope: 'story' },
+
+  { id: 'nav-back',      label: 'Back',                        scope: 'global' },
+  { id: 'nav-browse',    label: 'Open Browse',                 scope: 'global' },
+  { id: 'nav-add-card',  label: 'New card',                    scope: 'global' },
+
+  { id: 'home-listening', label: 'All deck · Listening',       scope: 'home' },
+  { id: 'home-creating',  label: 'All deck · Creating',        scope: 'home' },
 ];
-// Keys hardcoded elsewhere in the review view — cannot be reassigned to.
-const KEYMAP_RESERVED = ['R','1','2','3','4','e','n','w','f','v','c','C','D','7','L','o','g','Enter','Tab'];
+// Keys that can never be reassigned to: rating keys, and the fixed
+// navigation/editing keys used throughout the app.
+const KEYMAP_RESERVED = ['1','2','3','4','Enter','Tab','Escape'];
 function _loadKeymap() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('reviewKeymap') || '{}'); } catch (e) {}
@@ -165,8 +267,36 @@ function _loadKeymap() {
 }
 let _keymap = _loadKeymap();
 function _key(id) { return _keymap[id]; }
-function _saveKeymap() { localStorage.setItem('reviewKeymap', JSON.stringify(_keymap)); }
-function _keyLabel(k) { return k == null ? 'None' : (k === ' ' ? 'Space' : (k.length === 1 ? k.toUpperCase() : k)); }
+function _saveKeymap() {
+  localStorage.setItem('reviewKeymap', JSON.stringify(_keymap));
+  if (typeof _syncShortcutTitles === 'function') _syncShortcutTitles();
+}
+// A single uppercase letter as e.key means Shift was held (#856) — spell that
+// out, otherwise the settings page shows a bare "F" for what you press as
+// Shift+F. Digits and symbols are shown as-is.
+function _keyLabel(k) {
+  if (k == null) return 'None';
+  if (k === ' ') return 'Space';
+  if (k.length !== 1) return k;
+  if (k >= 'A' && k <= 'Z') return `Shift+${k}`;
+  return k.toUpperCase();
+}
+
+// Keeps the static `title="… (X)"` shortcut hints in index.html in sync with
+// the current keymap (#856) — elements opt in via data-shortcut-action (the
+// KEYMAP_ACTIONS id) + data-shortcut-title (the hint text without the key).
+// An optional data-shortcut-suffix is appended after the key, inside the
+// parens (used by the FSRS inspector's "Close (S / Esc)").
+// Unbound actions drop the parenthetical entirely rather than show "(None)".
+function _syncShortcutTitles() {
+  document.querySelectorAll('[data-shortcut-action]').forEach(el => {
+    const base = el.dataset.shortcutTitle || '';
+    const k = _key(el.dataset.shortcutAction);
+    if (k == null) { el.title = base; return; }
+    const suffix = el.dataset.shortcutSuffix || '';
+    el.title = `${base} (${_keyLabel(k)}${suffix})`;
+  });
+}
 
 let _timerInterval = null;
 let _timerStart = null;
@@ -3304,17 +3434,25 @@ async function saveDayCutoffHour() {
     if (msg) msg.textContent = 'Failed: ' + e.message;
   }
 }
-function renderSettings() {
-  const rows = KEYMAP_ACTIONS.map(a => {
-    const capturing = _capturingAction === a.id;
-    const keyTxt = capturing ? 'Press a key…' : _keyLabel(_keymap[a.id]);
-    const isDefault = _keymap[a.id] === KEYMAP_DEFAULTS[a.id];
-    const isUnbound = _keymap[a.id] == null;
-    return `<div class="keymap-row">
+function _keymapRowHtml(a) {
+  const capturing = _capturingAction === a.id;
+  const keyTxt = capturing ? 'Press a key…' : _keyLabel(_keymap[a.id]);
+  const isDefault = _keymap[a.id] === KEYMAP_DEFAULTS[a.id];
+  const isUnbound = _keymap[a.id] == null;
+  return `<div class="keymap-row">
       <span class="keymap-label">${a.label}</span>
       <button class="keymap-key${capturing ? ' capturing' : ''}${isUnbound ? ' unbound' : ''}" onclick="startKeyCapture('${a.id}')">${keyTxt}</button>
       <button class="keymap-clear" onclick="clearKeymapAction('${a.id}')" ${isUnbound ? 'disabled' : ''} title="Remove shortcut">✕</button>
       <button class="keymap-reset" onclick="resetKeymapAction('${a.id}')" ${isDefault ? 'disabled' : ''} title="Reset to default">↺</button>
+    </div>`;
+}
+function renderSettings() {
+  const groups = KEYMAP_SCOPE_GROUPS.map(g => {
+    const actions = KEYMAP_ACTIONS.filter(a => a.scope === g.scope);
+    if (!actions.length) return '';
+    return `<div class="keymap-group">
+      <h3 class="keymap-subheading">${g.name}</h3>
+      ${actions.map(_keymapRowHtml).join('')}
     </div>`;
   }).join('');
   const msg = _settingsMsg ? `<div class="keymap-msg">${_settingsMsg}</div>` : '';
@@ -3322,9 +3460,9 @@ function renderSettings() {
   document.getElementById('view-settings-content').innerHTML = `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Review shortcuts</h2>
-      <p class="keymap-hint">Click a key, then press the new key. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 are fixed.</p>
+      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed.</p>
       ${msg}
-      ${rows}
+      ${groups}
       <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
     </div>
     <div class="keymap-panel">
@@ -4381,16 +4519,26 @@ function _settingsKeydown(e) {
     _keymap[id] = null; _saveKeymap();
     _capturingAction = null; _settingsMsg = ''; renderSettings(); return;
   }
-  if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) {
-    _settingsMsg = 'Press a single key without modifiers.'; renderSettings(); return;
+  // Shift is allowed (it's how you type 'D', 'C', 'F', etc.) — only Ctrl/Cmd/Alt
+  // combos are rejected, since those are reserved for fixed app-wide shortcuts.
+  if (e.ctrlKey || e.metaKey || e.altKey) {
+    _settingsMsg = 'Press a key without Ctrl, Cmd or Alt.'; renderSettings(); return;
   }
   const key = e.key;
   if (KEYMAP_RESERVED.includes(key)) {
     _settingsMsg = `"${_keyLabel(key)}" is reserved and can't be reassigned.`; renderSettings(); return;
   }
-  const clash = KEYMAP_ACTIONS.find(a => a.id !== id && _keymap[a.id] === key);
+  const action = KEYMAP_ACTIONS.find(a => a.id === id);
+  const mySet = _scopeSet(action ? action.scope : id);
+  const clash = KEYMAP_ACTIONS.find(a => {
+    if (a.id === id || _keymap[a.id] !== key) return false;
+    const otherSet = _scopeSet(a.scope);
+    for (const v of mySet) if (otherSet.has(v)) return true;
+    return false;
+  });
   if (clash) {
-    _settingsMsg = `"${_keyLabel(key)}" is already used by "${clash.label}".`; renderSettings(); return;
+    _settingsMsg = `"${_keyLabel(key)}" is already used by "${clash.label}" (${_scopeDisplayName(clash.scope)}).`;
+    renderSettings(); return;
   }
   _keymap[id] = key; _saveKeymap();
   _capturingAction = null; _settingsMsg = ''; renderSettings();
@@ -11125,11 +11273,11 @@ document.addEventListener('keydown', async e => {
 
   if (!inInput) {
     const storyOverlay = document.getElementById('story-modal-overlay');
-    if (storyOverlay && storyOverlay.style.display !== 'none') {
-      if (e.code === 'Space') { e.preventDefault(); toggleFullStory(); return; }
-      if (e.code === 'KeyA' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); storySkipPrev(); return; }
-      if (e.code === 'KeyS' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); storyRepeat(); return; }
-      if (e.code === 'KeyD' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); storySkipNext(); return; }
+    if (storyOverlay && storyOverlay.style.display !== 'none' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (e.key === _key('story-play')) { e.preventDefault(); toggleFullStory(); return; }
+      if (e.key === _key('story-prev')) { e.preventDefault(); storySkipPrev(); return; }
+      if (e.key === _key('story-repeat')) { e.preventDefault(); storyRepeat(); return; }
+      if (e.key === _key('story-next')) { e.preventDefault(); storySkipNext(); return; }
     }
   }
 
@@ -11142,19 +11290,19 @@ document.addEventListener('keydown', async e => {
     }
   }
 
-  if (e.key === 'R' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+  if (e.key === _key('restart-server') && !e.ctrlKey && !e.metaKey) {
     if (!inInput) { e.preventDefault(); _restartServer(); }
     return;
   }
 
-  // Shift+F stars/unstars the sentence on the current card (#692)
-  if (e.key === 'F' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+  // Stars/unstars the sentence on the current card (#692)
+  if (e.key === _key('star-sentence') && !e.ctrlKey && !e.metaKey) {
     if (!inInput) { e.preventDefault(); toggleSentenceStar(); }
     return;
   }
 
-  // Shift+G flags/unflags the sentence on the current card (#854, mirror of Shift+F)
-  if (e.key === 'G' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+  // Flags/unflags the sentence on the current card (#854, mirror of star-sentence)
+  if (e.key === _key('flag-sentence') && !e.ctrlKey && !e.metaKey) {
     if (!inInput) { e.preventDefault(); toggleSentenceFlag(); }
     return;
   }
@@ -11172,8 +11320,8 @@ document.addEventListener('keydown', async e => {
     return;
   }
 
-  // Shift+S toggles the FSRS scheduler inspector
-  if (e.key === 'S' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+  // Toggles the FSRS scheduler inspector
+  if (e.key === _key('fsrs-inspector') && !e.ctrlKey && !e.metaKey) {
     if (!inInput) { e.preventDefault(); toggleFsrsInspector(); }
     return;
   }
@@ -11210,33 +11358,43 @@ document.addEventListener('keydown', async e => {
 
     // In the review view, let configured shortcut keys fall through to the
     // review handler below instead of firing global nav (Back/Browse/Add Card).
+    // Only actions whose scope actually includes 'review' count here — home/
+    // word-detail/story bindings must not block review's own shortcuts, and
+    // the global-nav actions themselves are excluded (checking a key against
+    // its own action would trivially always match).
     const _reviewActive = document.getElementById('view-review')?.style.display !== 'none';
-    const _mappedInReview = _reviewActive && Object.values(_keymap).includes(e.key);
+    const _reviewBoundKeys = new Set(
+      KEYMAP_ACTIONS
+        .filter(a => a.scope !== 'global' && _scopeSet(a.scope).has('review'))
+        .map(a => _keymap[a.id])
+        .filter(k => k != null)
+    );
+    const _mappedInReview = _reviewActive && _reviewBoundKeys.has(e.key);
     if (!e.metaKey && !e.ctrlKey && !e.altKey && !_mappedInReview) {
-      if (code === 'KeyD') {
+      if (e.key === _key('nav-back')) {
         e.preventDefault();
         goBack();
         return;
       }
-      if (code === 'KeyB') {
+      if (e.key === _key('nav-browse')) {
         e.preventDefault();
         openBrowse();
         return;
       }
-      if (code === 'KeyA') {
+      if (e.key === _key('nav-add-card')) {
         e.preventDefault();
         openQuickAddCard();
         return;
       }
-      // On the home (decks) view: L → All deck Listening, C → All deck Creating.
+      // On the home (decks) view: home-listening → All deck Listening, home-creating → All deck Creating.
       const _decksActive = document.getElementById('view-decks')?.style.display !== 'none';
       if (_decksActive) {
-        if (code === 'KeyL') {
+        if (e.key === _key('home-listening')) {
           e.preventDefault();
           _startAllDeckCategory('listening');
           return;
         }
-        if (code === 'KeyC') {
+        if (e.key === _key('home-creating')) {
           e.preventDefault();
           _startAllDeckCategory('creating');
           return;
@@ -11266,9 +11424,10 @@ document.addEventListener('keydown', async e => {
   const reviewView = document.getElementById('view-review');
   if (reviewView && reviewView.style.display !== 'none') {
     const backVisible = document.getElementById('side-back')?.style.display === 'flex';
-    if (e.key === 'R') {
-      e.preventDefault(); location.reload();
-    } else if (e.key === _key('replay')) {
+    // Note: 'restart-server' (default 'R') is handled by the top-level branch
+    // above, which always intercepts and returns before this block runs —
+    // branch order is unchanged from before #856, just now keymap-driven.
+    if (e.key === _key('replay')) {
       e.preventDefault(); playSentence();
     } else if (e.key === _key('pinyin')) {
       e.preventDefault(); togglePinyin();
@@ -11295,11 +11454,11 @@ document.addEventListener('keydown', async e => {
     } else if (e.key === _key('undo')) {
       const undoBtn = document.getElementById('undo-btn');
       if (undoBtn && !undoBtn.disabled) { e.preventDefault(); undoReview(); }
-    } else if (backVisible && e.key === 'e') {
+    } else if (backVisible && e.key === _key('examples')) {
       e.preventDefault(); _toggleAndScroll('examples-section-body', 'examples-section');
-    } else if (backVisible && e.key === 'n') {
+    } else if (backVisible && e.key === _key('notes')) {
       e.preventDefault(); _toggleAndScroll('notes-section-body', 'notes-section');
-    } else if (backVisible && e.key === 'w') {
+    } else if (backVisible && e.key === _key('word-analysis')) {
       e.preventDefault(); _toggleAndScroll('word-analysis-section-body', 'word-analysis-section', 'end');
     } else if (e.key === _key('hint-minus')) {
       e.preventDefault(); _adjustListenHintSlider(-1);
@@ -11309,24 +11468,24 @@ document.addEventListener('keydown', async e => {
       e.preventDefault();
       const _storyOpen = document.getElementById('story-modal-overlay')?.style.display !== 'none';
       if (_storyOpen) closeStoryModal(); else openStoryModal();
-    } else if (e.key === 'f') {
+    } else if (e.key === _key('suspend-reading')) {
       e.preventDefault(); _toggleSuspendCat('reading');
-    } else if (e.key === 'v') {
+    } else if (e.key === _key('suspend-listening')) {
       e.preventDefault(); _toggleSuspendCat('listening');
-    } else if (e.key === 'c') {
+    } else if (e.key === _key('suspend-creating')) {
       e.preventDefault(); _toggleSuspendCat('creating');
-    } else if (e.key === 'C') {
+    } else if (e.key === _key('regen-all')) {
       e.preventDefault(); regenAllFieldsFromReview();
-    } else if (e.key === 'D' || e.key === '7') {
+    } else if (e.key === _key('delete-card') || e.key === _key('delete-card-alt')) {
       e.preventDefault();
       reviewCardAction('delete');
-    } else if (e.key === 'L') {
+    } else if (e.key === _key('leech')) {
       e.preventDefault();
       reviewCardAction('leech');
-    } else if (e.key === 'o') {
+    } else if (e.key === _key('deck-options')) {
       e.preventDefault();
       if (deckId) openOptions(deckId);
-    } else if (e.key === 'g') {
+    } else if (e.key === _key('reasoning')) {
       e.preventDefault();
       // Kahneman cards keep g for the reasoning popup; everything else uses g to
       // flip the news-flow display language (original DE ↔ Chinese, issue #452).
@@ -11345,15 +11504,15 @@ document.addEventListener('keydown', async e => {
   // Word-detail shortcuts
   const wdView = document.getElementById('view-word-detail');
   if (wdView && wdView.style.display !== 'none') {
-    if (e.key === 'e') {
+    if (e.key === _key('examples')) {
       e.preventDefault(); _toggleAndScroll('wd-examples-section-body', 'wd-examples-section');
-    } else if (e.key === 'n') {
+    } else if (e.key === _key('notes')) {
       e.preventDefault(); _toggleAndScroll('wd-notes-section-body', 'wd-notes-section');
-    } else if (e.key === 'w') {
+    } else if (e.key === _key('word-analysis')) {
       e.preventDefault(); _toggleAndScroll('wd-word-analysis-section-body', 'wd-word-analysis-section', 'end');
-    } else if (e.key === 'C') {
+    } else if (e.key === _key('regen-all')) {
       e.preventDefault(); if (_currentWordId) regenAllFields(_currentWordId);
-    } else if (e.key === 'r') {
+    } else if (e.key === _key('relations')) {
       e.preventDefault(); _toggleAndScroll('wd-relations-body', 'wd-relations-section');
     }
   }
@@ -11829,6 +11988,7 @@ if (/^#(?:podcast|knowledge)-feed-\d+$/.test(location.hash)
 }
 _loadVersionBadge();
 _startTasksPolling();
+_syncShortcutTitles();
 
 
 // ===== Home calendar heatmap (issue #307) — inlined here to dodge index.html caching =====

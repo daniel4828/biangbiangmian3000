@@ -3146,6 +3146,9 @@ a.nav-btn { text-decoration: none; }
 .keymap-panel { display: flex; flex-direction: column; gap: 8px; }
 .keymap-heading { font-size: 18px; margin: 0; }
 .keymap-hint { color: var(--text-dim, #888); font-size: 13px; margin: 0 0 8px; }
+.keymap-group { display: flex; flex-direction: column; }
+.keymap-subheading { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim, #888); margin: 12px 0 2px; }
+.keymap-group:first-child .keymap-subheading { margin-top: 0; }
 .keymap-msg { color: var(--danger, #e06c5a); font-size: 13px; padding: 6px 0; }
 .keymap-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,0.15); }
 .keymap-label { flex: 1; }
