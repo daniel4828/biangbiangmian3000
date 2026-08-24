@@ -356,6 +356,47 @@ ALLOWED_MODELS = {
 DEFAULT_MODEL = ai.DEFAULT_MODEL
 
 
+# Frontend placeholder meaning "let the server pick" — the value the model
+# dropdown carries for briefing (always) and paste (as its default, #910). It
+# is deliberately NOT in ALLOWED_MODELS: it is not a model.
+SERVER_MODEL_SENTINEL = "briefing-server"
+
+
+def _paste_model(model: str | None) -> str:
+    """Model for paste mode (#910): the dropdown is no longer locked.
+
+    Paste mode shares the briefing pipeline but not its reason for being
+    OpenAI-only — DeepSeek censors *news*, and pasted material is whatever
+    Daniel put in the box. Same call knowledge mode already made (#561/#640).
+
+    BRIEFING_MODEL stays the default, and is also where an unknown model falls
+    back to: it is the configuration this pipeline is actually verified on.
+    Never resolve it when the user did pick a model — resolve_briefing_model()
+    probes the API on first use.
+    """
+    if model and model != SERVER_MODEL_SENTINEL:
+        if model in ALLOWED_MODELS:
+            return model
+        # 同 _validated_model：静默用错模型是 #721 三个月没被发现的原因。
+        logger.warning("paste model %r not in ALLOWED_MODELS — using BRIEFING_MODEL", model)
+    return ai.resolve_briefing_model()
+
+
+def _requested_model(model: str | None, mode: str) -> str:
+    """Validate the dropdown's pick, but keep SERVER_MODEL_SENTINEL intact for
+    the two modes that understand it (briefing/paste, #910).
+
+    The routes validate before _generate_and_store, and _validated_model would
+    turn the sentinel into DEFAULT_MODEL right here — paste's branch, which
+    reads the sentinel as "resolve BRIEFING_MODEL", would then silently run on
+    DeepSeek instead. Every other mode falls through to normal validation, so
+    the sentinel can never reach an API call as if it were a model name.
+    """
+    if model == SERVER_MODEL_SENTINEL and mode in ("paste", "briefing"):
+        return model
+    return _validated_model(model)
+
+
 def _validated_model(model: str | None, default: str | None = None) -> str:
     if model and model in ALLOWED_MODELS:
         return model
@@ -478,12 +519,16 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
                 batch_size=batch_size)
         elif mode in ("paste", "briefing"):
             # Briefing (issue #444) and paste (issue #481) share the briefing
-            # pipeline and ignore the frontend's model selection — they always
-            # use BRIEFING_MODEL (env, default gpt-5.6-luna, verified/cached via
-            # ai.resolve_briefing_model()), OpenAI only. Resolved before the
-            # article-selection call so summarize_news_items uses the same
+            # pipeline. Briefing ignores the frontend's model selection — it
+            # always uses BRIEFING_MODEL (env, default gpt-5.6-luna,
+            # verified/cached via ai.resolve_briefing_model()), OpenAI only,
+            # because DeepSeek censors news content. Paste honours the
+            # dropdown since #910: that reason is about *news*, and pasted
+            # material is whatever the user put in the box (same call knowledge
+            # mode made in #561/#640). Either way the model is resolved before
+            # the article-selection call so summarize_news_items uses the same
             # model as the sentence generation (issue #448).
-            model = ai.resolve_briefing_model()
+            model = _paste_model(model) if mode == "paste" else ai.resolve_briefing_model()
             logger.info("story  %s model in use: %s", mode, model)
             if mode == "briefing" and not articles:
                 # Briefing always auto-fetches today's news and lets the AI
@@ -890,10 +935,17 @@ def generate_sentence_for_word(card: dict, gen_params: dict | None) -> dict | No
             elif mode in ("news", "paste", "briefing"):
                 # Briefing/paste Again-regen reuses the single-sentence news path:
                 # one word gets one fresh sentence from the same articles (no
-                # context chain). Both always use BRIEFING_MODEL (issue #444/#481),
-                # ignoring the story's stored model — same resolution as the main
-                # generation.
-                news_model = ai.resolve_briefing_model() if mode in ("briefing", "paste") else model
+                # context chain). Same model resolution as the main generation:
+                # briefing always BRIEFING_MODEL (issue #444/#481), paste the
+                # model stored in gen_params (#910) — the main generation wrote
+                # its resolved pick there, so the regenerated sentence comes
+                # from the same model as the rest of the story.
+                if mode == "briefing":
+                    news_model = ai.resolve_briefing_model()
+                elif mode == "paste":
+                    news_model = _paste_model(gp.get("model"))
+                else:
+                    news_model = model
                 articles = gp.get("articles") or []
                 if articles:
                     sentences = ai.generate_news_sentences(
@@ -973,7 +1025,7 @@ def get_story(deck_id: int, category: str,
         logger.info("story  DISABLED (DISABLE_AI=1) deck=%d cat=%s", deck_id, category)
         return None
 
-    chosen_model = _validated_model(model)
+    chosen_model = _requested_model(model, mode)
 
     # News mode without pasted articles auto-fetches today's news inside
     # _generate_and_store (issue #387), so it flows through the normal
@@ -1052,7 +1104,7 @@ def regenerate_story(deck_id: int, category: str,
     identifier still display and still support per-word Again regeneration."""
     if ai_disabled():
         return None
-    chosen_model = _validated_model(model)
+    chosen_model = _requested_model(model, mode)
     today = database.anki_today().isoformat()
     lang = lang or database.get_deck_lang(deck_id)
     parsed_episode_ids = _parse_episode_ids(episode_ids, episode_id)

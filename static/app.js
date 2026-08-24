@@ -9061,47 +9061,59 @@ function updateSetupMode() {
   }
 }
 
-// ── News-family modes (briefing/paste) lock the model select ────────────────
-// briefing/paste share the server-side briefing pipeline and always use
-// BRIEFING_MODEL (DeepSeek censors news content, so it's OpenAI-only).
-// Switching to one of them locks the dropdown to a "Server: BRIEFING_MODEL"
-// placeholder and remembers the previous model; switching back restores it.
-// knowledge mode (issue #561 rework, renamed from podcast in #654) is no
-// longer part of this lock — it picks its own model, remembered per-mode via
-// localStorage (see MODE_MODEL_DEFAULTS below) instead of sharing BRIEFING_MODEL.
+// Dropdown value meaning "let the server pick the model" — mirrors
+// routes/story.SERVER_MODEL_SENTINEL. Not a model: the backend maps it to
+// BRIEFING_MODEL and it is deliberately absent from ALLOWED_MODELS.
+const SERVER_MODEL_VALUE = 'briefing-server';
+
+// ── Briefing mode locks the model select; paste only defaults to it ─────────
+// Both share the server-side briefing pipeline, but only briefing is about
+// *news*: DeepSeek censors news content, so briefing always runs on
+// BRIEFING_MODEL and the dropdown is disabled to say so honestly instead of
+// showing a stale selection (issue #448). Paste (#910) sends whatever the user
+// picks — its material is whatever went into the box, so the censorship reason
+// doesn't apply — and merely *defaults* to the same server placeholder, which
+// is the only configuration this pipeline is verified on. knowledge mode made
+// the same move earlier (#561/#640) and picks its own model per-mode.
 let _modelBeforeNewsMode = null;
 
 // Per-mode remembered model (issue #561): knowledge mode has its own
 // first-time default, then remembers whatever the user picked last. Since
 // #640 that default is DeepSeek (like kahneman) rather than gpt-5-mini — must
 // stay in sync with ai.DEFAULT_MODEL, which is the backend-side default.
-const MODE_MODEL_DEFAULTS = { knowledge: 'deepseek-v4-flash', book: 'deepseek-v4-flash' };
+// paste's default is the server placeholder itself (#910).
+const MODE_MODEL_DEFAULTS = {
+  knowledge: 'deepseek-v4-flash',
+  book: 'deepseek-v4-flash',
+  paste: SERVER_MODEL_VALUE,
+};
 let _modelSelMode = 'story';   // mode the model dropdown's current value belongs to
 
 function _autoSwitchModelForMode(mode) {
   const modelSel = document.getElementById('setup-model');
   if (!modelSel) return;
 
-  // Briefing and paste (issues #481/#444) share the briefing pipeline and
-  // ignore this dropdown server-side — the server always resolves
-  // BRIEFING_MODEL (env, default gpt-5.6-luna). Lock the control and show that
-  // honestly instead of a stale gpt-5-mini selection (issue #448).
-  const serverOpt = document.getElementById('setup-model-server-opt');
-  if (mode === 'briefing' || mode === 'paste') {
+  // The "let the server decide" option exists for the two modes the server may
+  // resolve on its own: briefing (always) and paste (its default). routes/story.py
+  // maps this value back to BRIEFING_MODEL (SERVER_MODEL_SENTINEL there).
+  const wantsServerOpt = mode === 'briefing' || mode === 'paste';
+  let serverOpt = document.getElementById('setup-model-server-opt');
+  if (wantsServerOpt && !serverOpt) {
+    serverOpt = document.createElement('option');
+    serverOpt.id = 'setup-model-server-opt';
+    serverOpt.value = SERVER_MODEL_VALUE;
+    serverOpt.textContent = 'Server: BRIEFING_MODEL (gpt-5.6-luna)';
+    modelSel.appendChild(serverOpt);
+  }
+
+  if (mode === 'briefing') {
     // Remember the outgoing mode's selection before overwriting it — but
-    // never persist the server placeholder itself as a "model".
-    if (_modelSelMode && modelSel.value !== 'briefing-server')
+    // never persist the server placeholder itself as that mode's "model".
+    if (_modelSelMode && modelSel.value !== SERVER_MODEL_VALUE)
       localStorage.setItem('setupModel:' + _modelSelMode, modelSel.value);
-    if (!serverOpt) {
-      const opt = document.createElement('option');
-      opt.id = 'setup-model-server-opt';
-      opt.value = 'briefing-server';   // ignored by the server for briefing/paste
-      opt.textContent = 'Server: BRIEFING_MODEL (gpt-5.6-luna)';
-      modelSel.appendChild(opt);
-    }
-    if (modelSel.value !== 'briefing-server') {
+    if (modelSel.value !== SERVER_MODEL_VALUE) {
       if (_modelBeforeNewsMode === null) _modelBeforeNewsMode = modelSel.value;
-      modelSel.value = 'briefing-server';
+      modelSel.value = SERVER_MODEL_VALUE;
     }
     modelSel.disabled = true;
     modelSel.title = 'News flow always uses BRIEFING_MODEL on the server (default gpt-5.6-luna)';
@@ -9109,9 +9121,11 @@ function _autoSwitchModelForMode(mode) {
     return;
   }
   modelSel.disabled = false;
-  modelSel.title = '';
-  if (serverOpt) {
-    if (modelSel.value === 'briefing-server') {
+  modelSel.title = mode === 'paste'
+    ? 'Server: BRIEFING_MODEL is the default — pick another model to override it'
+    : '';
+  if (serverOpt && !wantsServerOpt) {
+    if (modelSel.value === SERVER_MODEL_VALUE) {
       modelSel.value = _modelBeforeNewsMode || 'gpt-5-mini';
     }
     serverOpt.remove();
@@ -9119,7 +9133,9 @@ function _autoSwitchModelForMode(mode) {
   // Every other mode remembers its own model selection (issue #561) — save
   // the outgoing mode's value, then restore the incoming mode's last pick
   // (or its hardcoded default, or just leave the current value untouched).
-  if (_modelSelMode && modelSel.value !== 'briefing-server')
+  // paste may persist the server placeholder: for that mode it is a real
+  // choice ("let the server decide"), not a locked-in stand-in (#910).
+  if (_modelSelMode && (modelSel.value !== SERVER_MODEL_VALUE || _modelSelMode === 'paste'))
     localStorage.setItem('setupModel:' + _modelSelMode, modelSel.value);
   const remembered = localStorage.getItem('setupModel:' + mode);
   modelSel.value = remembered || MODE_MODEL_DEFAULTS[mode] || modelSel.value;
@@ -9778,9 +9794,12 @@ function confirmStorySetup() {
   const grammarFocus = document.getElementById('setup-grammar').value.trim() || null;
   const grammarPct  = parseInt(document.getElementById('setup-grammar-pct').value, 10) || 75;
   const mode        = document.getElementById('setup-mode').value;
-  // Remember this mode's model choice (issue #561) — never the briefing/paste
-  // server placeholder, which isn't a real model selection.
-  if (model && model !== 'briefing-server') localStorage.setItem('setupModel:' + mode, model);
+  // Remember this mode's model choice (issue #561). The server placeholder is
+  // not a real model selection for briefing (which is locked to it), but it is
+  // one for paste — "let the server decide" is what that mode defaults to and
+  // the user may deliberately keep it (#910).
+  if (model && (model !== SERVER_MODEL_VALUE || mode === 'paste'))
+    localStorage.setItem('setupModel:' + mode, model);
   const chapterIds  = mode === 'kahneman' ? _getSelectedChapterIds() : null;
   const articles    = mode === 'paste' ? _collectPastedContents() : null;
   const episodeIds  = mode === 'knowledge' ? _getSelectedEpisodeIds() : null;
