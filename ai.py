@@ -20,6 +20,7 @@ import anthropic
 import openai
 
 import database
+import lang_detect
 import languages
 import zh_annotate
 
@@ -3282,50 +3283,61 @@ Material:
 Target words:
 {words}
 
-1. Each sentence must contain exactly ONE target word. You may adapt the
+1. OUTPUT LANGUAGE — the single most important rule: every sentence must be
+   written in {lang_name}, and nothing but {lang_name}. The material below is
+   very probably in some other language (German, English, Chinese …); that is
+   normal and it is NOT the language you write in. Never copy the material's
+   sentence structure or its language. A sentence in the material's language
+   with a {lang_name} word dropped into it is the single worst thing you can
+   return here — it is worthless to the learner. Only names, numbers and the
+   terminology of rule 14 are carried over verbatim.
+2. Each sentence must contain exactly ONE target word. You may adapt the
    word's form (conjugation, agreement, article) so the sentence is
    grammatical — that is expected in {lang_name}, not a violation.
-2. Each sentence must retell one concrete fact from the material: who, what,
+3. Each sentence must retell one concrete fact from the material: who, what,
    how much, when, why, with what result.
-3. Use each fact exactly once. Rephrasing the same information counts as the
+4. Use each fact exactly once. Rephrasing the same information counts as the
    same fact.
-4. The number of sentences equals the number of target words.
-5. Before writing, list the material's facts internally — at least as many as
+5. The number of sentences equals the number of target words.
+6. Before writing, list the material's facts internally — at least as many as
    there are target words — spread across its beginning, middle and end, and
    covering every topic it raises. Never pile every sentence onto the opening
    topic.
-6. Prefer facts carrying hard data: years, dates, amounts, sums, percentages,
+7. Prefer facts carrying hard data: years, dates, amounts, sums, percentages,
    rankings, durations, ages; then facts naming people, companies,
    institutions, places. Facts with both come first.
-7. Output the sentences in the order the facts appear in the material, so the
+8. Output the sentences in the order the facts appear in the material, so the
    set reads like an outline. Reorder only when strict order would force an
    unnatural pairing.
-8. No connectives or plot between sentences — each stands on its own.
-9. No empty sentences ("it was interesting", "he said a lot").
-10. Use ONLY information stated in the material. Never invent, never add
+9. No connectives or plot between sentences — each stands on its own.
+10. No empty sentences ("it was interesting", "he said a lot").
+11. Use ONLY information stated in the material. Never invent, never add
     background knowledge, never comment.
-11. Keep each sentence to about {sentence_limit}.
-12. Apart from the target word and the key terms in rule 13, use only simple
+12. Keep each sentence to about {sentence_limit}.
+13. Apart from the target word and the key terms in rule 14, use only simple
     {background} vocabulary.
-13. KEY-TERM EXCEPTION: names of people, places and institutions, numbers,
+14. KEY-TERM EXCEPTION: names of people, places and institutions, numbers,
     years, amounts and core terminology from the material must be kept
     verbatim even when they are above that level — they are exactly what is
     worth remembering. Never blur them into "someone", "somewhere", "a lot",
     "several years". There is no cap on how many appear in one sentence.
-14. Never mark the target word in any way — no quotes, brackets, bold or
+15. Never mark the target word in any way — no quotes, brackets, bold or
     parentheses. Write it plainly inside the sentence.
-15. Never use markdown anywhere in the output.
+16. Never use markdown anywhere in the output.
 
-For every sentence also write reasoning_zh: start with "Fact: " and the fact
-that sentence retells, copying its names and numbers verbatim from the
-material, then one short sentence in German saying what the sentence is
-about. Writing the fact out is the self-check — no two sentences may carry
-the same one.
+For every sentence also write reasoning_zh — this is a note ABOUT the
+sentence, not the sentence itself, and it is the only field that is not in
+{lang_name}: start with "Fact: " and the fact that sentence retells, copying
+its names and numbers verbatim from the material, then one short sentence in
+German saying what it is about. Writing the fact out is the self-check — no
+two sentences may carry the same one. The sentence itself (sentence_zh) stays
+{lang_name}, always.
 
-Self-check before answering (internally, do not output): as many sentences as
-target words? each target word used exactly once? every sentence carrying a
-concrete fact? no fact used twice? facts spread over the whole material? no
-number or name blurred away?
+Self-check before answering (internally, do not output): is every single
+sentence written in {lang_name} and not in the material's language? as many
+sentences as target words? each target word used exactly once? every sentence
+carrying a concrete fact? no fact used twice? facts spread over the whole
+material? no number or name blurred away?
 
 {extra_hint}
 
@@ -3470,6 +3482,7 @@ def generate_podcast_sentences(
         # Scan in order: not trusting the AI's target_word tag, only the actual
         # sentence content counts (same approach as briefing).
         got = 0
+        drifted: list[str] = []
         for item in items:
             s_zh = (item.get("sentence_zh") or "").strip()
             if not s_zh:
@@ -3480,6 +3493,16 @@ def generate_podcast_sentences(
                 None)
             if matched is None:
                 continue          # no target word → drop (this mode allows no context sentences)
+            if not lang_detect.looks_like_language(s_zh, lang):
+                # #912: the material is nearly always in another language than
+                # the deck's (a German book, an English podcast) and the model
+                # follows it — writing a German sentence with the French target
+                # word dropped in. _word_match happily accepts that (it only
+                # looks for the word), so without this check the sentence went
+                # straight into the story. The word stays in `remaining`, so the
+                # missing-word rounds below simply ask for it again.
+                drifted.append(matched["word_zh"])
+                continue
             remaining.remove(matched)
             got += 1
             sentences.append({
@@ -3496,6 +3519,10 @@ def generate_podcast_sentences(
                 "source_title": source.get("title"),
                 "tokens": [],
             })
+        if drifted:
+            log_progress(progress_key,
+                         f"{label}：{len(drifted)} 句不是目标语言（写成了素材的语言），已丢弃："
+                         + "、".join(drifted))
         log_progress(progress_key, f"{label}：拿到 {got} 句，还差 {len(remaining)} 个词")
 
     log_progress(progress_key, f"开始生成播客句子：{len(cards)} 个词，模型 {model}")
@@ -3522,6 +3549,10 @@ def generate_podcast_sentences(
                     f"一个来自素材的专有名词。") if lang == "zh" else (
                     f"\n\nRETRY ROUND: you skipped these words last time: {missing}. "
                     f"Write one sentence for each of them — none may be missing. "
+                    f"Every sentence must be written in "
+                    f"{languages.get_lang_config(lang)['name_en']}, never in the "
+                    f"language of the material (some of your last sentences were "
+                    f"rejected for exactly that). "
                     f"With only a few words left you no longer have to cover every "
                     f"topic in the material, but each sentence must still name a "
                     f"proper noun or a hard datum taken from it.")
