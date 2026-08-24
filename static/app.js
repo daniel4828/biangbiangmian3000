@@ -122,6 +122,21 @@ function currentCardLang() {
   return _deckLangById[id] || 'zh';
 }
 
+// Language of the story about to be generated (#908). Mirrors the server's
+// rule — the `lang` parameter wins, the deck's own lang is only the fallback
+// (see _langQ(), which sends that parameter under exactly this condition).
+// Reading the deck's own lang was wrong for the aggregating root deck 'All':
+// it is lang='zh' in the database yet reviews every language under the tab
+// bar, so a French session rendered as Chinese — the editable Chinese prompt
+// template button appeared (and edits there do nothing: non-zh generation
+// goes through ai._KNOWLEDGE_PROMPT_NON_ZH, #806), the difficulty slider read
+// "HSK", and the zh-only modes stayed selectable until the backend rejected
+// them. currentCardLang() above deliberately keeps using the card's own deck
+// (#726): the word being added comes from that card, not from the tab.
+function setupLang() {
+  return _availableLangs.length > 1 ? activeLang() : (_deckLangById[deckId] || 'zh');
+}
+
 // Shared 1-6 difficulty value → per-language label (issue #596):
 // zh uses HSK levels, every other language the CEFR scale (A1=1 … C2=6).
 const CEFR_LABELS = { 1: 'A1', 2: 'A2', 3: 'B1', 4: 'B2', 5: 'C1', 6: 'C2' };
@@ -8892,7 +8907,7 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
     } catch { _prefillGp = null; }
   }
   // Default background level: HSK 3 for zh, A2 (=2) for CEFR languages (#596)
-  const _setupLang = _deckLangById[deckId] || 'zh';
+  const _setupLang = setupLang();
   document.getElementById('setup-hsk-slider').value =
     _prefillGp?.max_hsk ?? (_setupLang === 'zh' ? 3 : 2);
   const _modeSel = document.getElementById('setup-mode');
@@ -8914,7 +8929,7 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
 // language-agnostic (the source material's language doesn't matter, the AI
 // writes in the deck's target language), so it stays visible for every deck.
 function _applySetupLangRestrictions() {
-  const lang = _deckLangById[deckId] || 'zh';
+  const lang = setupLang();
   const modeSelect = document.getElementById('setup-mode');
   const zhOnlyOptions = modeSelect.querySelectorAll('option.setup-mode-zh-only');
   // hidden alone is ignored by iOS Safari for <option> — disabled greys it out there
@@ -8940,7 +8955,7 @@ function togglePriceTable(e) {
 
 function updateHskLabel() {
   const v = parseInt(document.getElementById('setup-hsk-slider').value, 10);
-  const lang = _deckLangById[deckId] || 'zh';
+  const lang = setupLang();
   document.getElementById('setup-hsk-badge').textContent = levelLabel(lang, v);
 }
 
@@ -8981,11 +8996,11 @@ function updateSetupMode() {
   const editPromptBtn = document.getElementById('setup-edit-prompt-btn');
   if (editPromptBtn) {
     const editable = ['story', 'qa', 'expository', 'knowledge'].includes(mode)
-      && (_deckLangById[deckId] || 'zh') === 'zh';
+      && setupLang() === 'zh';
     editPromptBtn.style.display = editable ? '' : 'none';
   }
   if (grammarLabel) grammarLabel.style.display =
-    isVocab ? 'none' : ((_deckLangById[deckId] || 'zh') === 'zh' ? '' : 'none');
+    isVocab ? 'none' : (setupLang() === 'zh' ? '' : 'none');
   const countLabel = document.getElementById('setup-count-label');
   // Restore the story-count text when switching back from Words-only mode.
   if (!isVocab && countLabel && countLabel.dataset.storyText != null)
