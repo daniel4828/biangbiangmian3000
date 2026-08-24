@@ -3202,8 +3202,26 @@ a.nav-btn { text-decoration: none; }
 }
 .podcast-row-clickable { cursor: pointer; }
 .podcast-row-clickable:hover { border-color: var(--primary); }
-.podcast-row-title { flex: 1; color: var(--text); }
+/* min-width:0 lets the title actually shrink instead of pushing the nowrap
+   meta items out; without it a long CJK title stays at its intrinsic width. */
+.podcast-row-title { flex: 1; min-width: 0; color: var(--text); }
+.podcast-row-meta { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .podcast-row-date { font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* Phones (#913): the meta items are all nowrap, so on a narrow screen they
+   squeezed the title down to about one character wide and every Chinese
+   character wrapped onto its own line. Give the title the full width and drop
+   source/date/badge onto a second line. */
+@media (max-width: 600px) {
+  .podcast-row { flex-wrap: wrap; gap: 6px; }
+  .podcast-row-title {
+    flex: 1 1 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .podcast-row-meta { flex: 1 1 100%; flex-wrap: wrap; gap: 8px; }
+}
 .podcast-badge {
   font-size: 10px;
   font-weight: 700;
