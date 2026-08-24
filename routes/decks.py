@@ -253,19 +253,34 @@ def purge_deck(deck_id: int):
     return {"ok": True}
 
 
+# `lang` scopes these three to the active language tab (#918). Without it the
+# recursive descent from the shared root 'All' reaches every language tree, so
+# pausing Creating under 中文 also suspended the French cards. Omitting the
+# parameter keeps the old, unfiltered behaviour — see database._suspension_scope.
+
+def _checked_lang(lang: str | None) -> str | None:
+    """An unknown language would match no deck and quietly suspend nothing —
+    a button that reports success and does nothing is worse than an error."""
+    if lang is not None and not languages.is_valid_lang(lang):
+        raise HTTPException(400, f"unknown lang: {lang!r}")
+    return lang
+
+
 @router.post("/api/decks/{deck_id}/creating/toggle-suspension")
-def toggle_creating_suspension(deck_id: int):
-    return database.toggle_category_suspension(deck_id, "creating")
+def toggle_creating_suspension(deck_id: int, lang: str | None = None):
+    return database.toggle_category_suspension(deck_id, "creating",
+                                               lang=_checked_lang(lang))
 
 
 @router.post("/api/decks/{deck_id}/categories/{category}/toggle-suspension")
-def toggle_category_suspension(deck_id: int, category: str):
-    return database.toggle_category_suspension(deck_id, category)
+def toggle_category_suspension(deck_id: int, category: str, lang: str | None = None):
+    return database.toggle_category_suspension(deck_id, category,
+                                               lang=_checked_lang(lang))
 
 
 @router.post("/api/decks/{deck_id}/toggle-all-suspension")
-def toggle_deck_all_suspension(deck_id: int):
-    return database.toggle_deck_all_suspension(deck_id)
+def toggle_deck_all_suspension(deck_id: int, lang: str | None = None):
+    return database.toggle_deck_all_suspension(deck_id, lang=_checked_lang(lang))
 
 
 @router.post("/api/trash/cards/{card_id}/restore")
