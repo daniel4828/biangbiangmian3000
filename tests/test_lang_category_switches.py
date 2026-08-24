@@ -100,3 +100,61 @@ def test_zh_tab_writes_the_default_preset_as_before(tmp_db):
     client.put(f"/api/decks/{root}/preset", params={"lang": "zh"},
                json={"creating_enabled": 0})
     assert database.get_preset(own_id)["creating_enabled"] == 0
+
+
+# --- #915: decks *inside* the French tree, not just the shared root ----------
+#
+# _ensure_lang_preset (#806) only runs when a deck is created, so every French
+# deck predating it is still bound to the default (Chinese) preset — that is
+# the state of production: `Français` itself and its 2026-08-13 subtree sit on
+# preset 2. #898 routed by "deck's language differs from the tab", which those
+# rows fail, so they read and wrote Chinese's switches under the fr tab.
+
+@pytest.fixture
+def legacy_fr_deck(tmp_db):
+    """A French deck bound to the default preset, like the pre-#806 rows."""
+    deck_id = database.get_or_create_deck_path("Français", lang="fr")
+    database.assign_preset_to_deck(deck_id, database.get_lang_preset("zh")["id"])
+    return deck_id
+
+
+def test_legacy_fr_deck_does_not_write_the_chinese_preset(legacy_fr_deck):
+    default_id = database.get_lang_preset("zh")["id"]
+    fr_id = database.get_lang_preset("fr")["id"]
+    assert database.get_deck(legacy_fr_deck)["preset_id"] == default_id
+
+    r = client.put(f"/api/decks/{legacy_fr_deck}/preset", params={"lang": "fr"},
+                   json={"creating_enabled": 0})
+    assert r.status_code == 200
+
+    assert database.get_preset(fr_id)["creating_enabled"] == 0
+    assert database.get_preset(default_id)["creating_enabled"] == 1
+
+
+def test_legacy_fr_deck_reads_the_french_switches(legacy_fr_deck):
+    client.put(f"/api/decks/{legacy_fr_deck}/preset", params={"lang": "fr"},
+               json={"creating_enabled": 0})
+    assert _switches(legacy_fr_deck, "fr")["creating_enabled"] == 0
+
+    def node(lang):
+        tree = client.get("/api/decks", params={"lang": lang}).json()
+        return next(d for d in _flatten(tree) if d["id"] == legacy_fr_deck)
+
+    assert node("fr")["creating_enabled"] == 0
+
+
+def test_chinese_tab_unaffected_by_the_french_switches(legacy_fr_deck, tmp_db):
+    """The reported symptom: flipping Creating under 中文 must stay in 中文."""
+    client.put(f"/api/decks/{legacy_fr_deck}/preset", params={"lang": "fr"},
+               json={"creating_enabled": 1})
+    client.put(f"/api/decks/{tmp_db}/preset", params={"lang": "zh"},
+               json={"creating_enabled": 0})
+
+    assert _switches(legacy_fr_deck, "fr")["creating_enabled"] == 1
+    assert _switches(tmp_db, "zh")["creating_enabled"] == 0
+
+
+def _flatten(tree):
+    for node in tree:
+        yield node
+        yield from _flatten(node.get("children") or [])
