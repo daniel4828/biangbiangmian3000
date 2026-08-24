@@ -2022,7 +2022,9 @@ function renderDeckRows(decks, depth, sortMode) {
 async function toggleCategorySuspension(deckId, category) {
   try {
     await api('POST', `/api/decks/${deckId}/categories/${category}/toggle-suspension`);
-    const decks = await api('GET', '/api/decks');
+    // Scope the refresh to the active tab like loadDecks() does — an unfiltered
+    // reload repaints the tree with every language's decks in it (#915).
+    const decks = await api('GET', `/api/decks${_optLangQ()}`);
     _cachedDecks = decks;
     renderDecks(decks);
   } catch (e) {
@@ -2033,7 +2035,7 @@ async function toggleCategorySuspension(deckId, category) {
 async function toggleDeckAllSuspension(deckId) {
   try {
     await api('POST', `/api/decks/${deckId}/toggle-all-suspension`);
-    const decks = await api('GET', '/api/decks');
+    const decks = await api('GET', `/api/decks${_optLangQ()}`);
     _cachedDecks = decks;
     renderDecks(decks);
   } catch (e) {

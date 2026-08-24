@@ -69,12 +69,21 @@ _CATEGORY_SWITCHES = ("reading_enabled", "listening_enabled", "creating_enabled"
 def _lang_switch_preset(deck_id: int, lang: str | None, create: bool = False) -> dict | None:
     """Preset owning this deck's category switches while viewed under `lang`.
 
-    None means "the deck's own preset" — either no language tab is in play, or
-    the deck already belongs to that language.
+    None means "the deck's own preset", and that is Chinese only: every zh deck
+    hangs off preset id=2, which is also what the untabbed (lang=None) view
+    edits, so its behavior stays byte-identical.
+
+    Every other language reads and writes these three switches on its *own*
+    preset regardless of what the deck happens to be bound to (#915). #898
+    routed by `get_deck_lang(deck_id) != lang`, which only covered the shared
+    aggregating root 'All' — the decks inside the Français tree matched their
+    tab and therefore fell through to their own preset, and in production that
+    preset is still id=2 (`_ensure_lang_preset` from #806 only fires when a
+    deck is *created*, so everything predating it was never migrated). Result:
+    flipping Creating under 中文 flipped it under Français too, the exact bug
+    #898 was meant to kill. Routing by language alone cannot regress that way.
     """
-    if not lang:
-        return None
-    if database.get_deck_lang(deck_id) == lang:
+    if not lang or lang == languages.DEFAULT_LANG:
         return None
     return database.get_lang_preset(lang, create=create)
 
@@ -166,10 +175,13 @@ def get_decks(unfinished_scope: str = "unfinished", lang: str | None = None):
     for deck in flat:
         pid = deck.get("preset_id")
         p = presets.get(pid, {})
-        # #898: decks from another language tree than the tab being viewed —
-        # in practice the aggregating root 'All' — take their category
-        # switches from this language's preset (see _CATEGORY_SWITCHES).
-        sp = lang_preset if (lang_preset and (deck.get("lang") or "zh") != lang) else p
+        # #898/#915: under a non-Chinese tab *every* row — the shared
+        # aggregating root 'All' and the language's own decks alike — takes its
+        # category switches from that language's preset, whatever preset the
+        # deck itself is bound to (see _lang_switch_preset, which the read and
+        # write endpoints route through the same way). Chinese keeps reading
+        # the deck's own preset.
+        sp = lang_preset if (lang_preset and lang != languages.DEFAULT_LANG) else p
         deck["bury_mode"] = deck.get("bury_quick_mode", "all")
         deck["new_review_order_override"] = deck.get("new_review_order_override")
         deck["category_order"] = p.get("category_order", "listening,reading,creating")
