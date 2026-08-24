@@ -3975,10 +3975,12 @@ function _renderPodcastEpisodeList() {
     return `<div class="podcast-row${clickable ? ' podcast-row-clickable' : ''}"
                  ${clickable ? `onclick="openKnowledgeItem(${ep.id})"` : ''}>
       <span class="podcast-row-title">${_escHtml(ep.title || '(untitled)')}</span>
-      <span class="podcast-row-date">${date}</span>
-      ${duration ? `<span class="podcast-row-date">${duration}</span>` : ''}
-      <span class="podcast-badge ${cls}">${label}</span>
-      ${transcribeBtn}
+      <span class="podcast-row-meta">
+        <span class="podcast-row-date">${date}</span>
+        ${duration ? `<span class="podcast-row-date">${duration}</span>` : ''}
+        <span class="podcast-badge ${cls}">${label}</span>
+        ${transcribeBtn}
+      </span>
     </div>`;
   }).join('') || '<div class="keymap-hint">No episodes yet.</div>';
 
@@ -4119,9 +4121,11 @@ function _knowledgeMaterialRowHtml(ep) {
       <span>${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
       ${ep.title_en ? `<span style="font-size:12px;color:var(--muted)">${_escHtml(ep.title_en)}</span>` : ''}
     </span>
-    ${source ? `<span class="podcast-row-date">${_escHtml(source)}</span>` : ''}
-    <span class="podcast-row-date">${date}</span>
-    <span class="podcast-badge ${cls}">${label}</span>
+    <span class="podcast-row-meta">
+      ${source ? `<span class="podcast-row-date">${_escHtml(source)}</span>` : ''}
+      <span class="podcast-row-date">${date}</span>
+      <span class="podcast-badge ${cls}">${label}</span>
+    </span>
   </div>`;
 }
 
