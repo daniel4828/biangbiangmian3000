@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 from datetime import date, datetime, time, timedelta
+from languages import DEFAULT_LANG
 from .core import get_db, anki_today, get_day_cutoff_hour
 from .presets import get_preset_for_deck
 from .decks import get_deck, get_locked_deck_ids
@@ -1765,19 +1766,44 @@ def get_category_all_suspended(deck_id: int, category: str) -> bool:
     return total == suspended
 
 
-def toggle_category_suspension(deck_id: int, category: str) -> dict:
-    """Toggle all non-sentence cards of given category in a deck and all descendants."""
-    conn = get_db()
-    deck_rows = conn.execute(
+def _suspension_scope(conn, deck_id: int, lang: str | None) -> list:
+    """Deck ids a suspension toggle acts on: `deck_id` plus all descendants.
+
+    `lang` narrows that to one language tree (issue #918). The home page's
+    aggregating root 'All' is a single row shown under every language tab, so
+    an unfiltered descent from it reaches the Français subtree too: pausing
+    Creating under 中文 suspended Daniel's French cards along with it.
+
+    Filtering on `decks.lang` alone is enough — cards only ever live on leaf
+    decks, and a leaf always carries its own language. Aggregating ancestors
+    are dropped here (unlike routes.decks._filter_tree_by_lang, which keeps
+    them so the tree still renders) and that costs nothing: they hold no cards.
+
+    lang=None means "no language tab in play" and keeps the old, unfiltered
+    behaviour byte-for-byte.
+    """
+    rows = conn.execute(
         """WITH RECURSIVE descendants AS (
              SELECT id FROM decks WHERE id = ?
              UNION ALL
              SELECT d.id FROM decks d JOIN descendants p ON d.parent_id = p.id
            )
-           SELECT id FROM descendants""",
-        (deck_id,),
+           SELECT d.id FROM descendants
+           JOIN decks d ON d.id = descendants.id
+           WHERE ? IS NULL OR COALESCE(d.lang, ?) = ?""",
+        (deck_id, lang, DEFAULT_LANG, lang),
     ).fetchall()
-    deck_ids = [r["id"] for r in deck_rows]
+    return [r["id"] for r in rows]
+
+
+def toggle_category_suspension(deck_id: int, category: str,
+                               lang: str | None = None) -> dict:
+    """Toggle all non-sentence cards of given category in a deck and all descendants."""
+    conn = get_db()
+    deck_ids = _suspension_scope(conn, deck_id, lang)
+    if not deck_ids:
+        conn.close()
+        return {"all_suspended": False}
     placeholders = ",".join("?" * len(deck_ids))
     active_row = conn.execute(
         f"""SELECT COUNT(*) as cnt FROM cards c
@@ -2064,19 +2090,13 @@ def get_deck_all_suspended(deck_id: int) -> bool:
     return total > 0 and total == suspended
 
 
-def toggle_deck_all_suspension(deck_id: int) -> dict:
+def toggle_deck_all_suspension(deck_id: int, lang: str | None = None) -> dict:
     """Toggle ALL non-sentence cards in deck and all descendant decks."""
     conn = get_db()
-    deck_rows = conn.execute(
-        """WITH RECURSIVE descendants AS (
-             SELECT id FROM decks WHERE id = ?
-             UNION ALL
-             SELECT d.id FROM decks d JOIN descendants p ON d.parent_id = p.id
-           )
-           SELECT id FROM descendants""",
-        (deck_id,),
-    ).fetchall()
-    deck_ids = [r["id"] for r in deck_rows]
+    deck_ids = _suspension_scope(conn, deck_id, lang)
+    if not deck_ids:
+        conn.close()
+        return {"all_suspended": False}
     placeholders = ",".join("?" * len(deck_ids))
     active_row = conn.execute(
         f"""SELECT COUNT(*) as cnt FROM cards c
