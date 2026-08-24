@@ -47,10 +47,14 @@ _TAG_RE = re.compile(r"<[^>]*>")
 _stopword_cache: dict[str, set[str]] = {}
 
 
-def _stopwords(lang: str) -> set[str]:
+def stopwords(lang: str) -> set[str]:
     """Function-word list for `lang`, loaded once per process. An unreadable
     file degrades to an empty set — same "worse annotation, not a crash"
-    posture as zh_annotate's HSK table."""
+    posture as zh_annotate's HSK table.
+
+    Public since #912: lang_detect.py reuses these lists as the "this text
+    really is French/Spanish" evidence, so the two features can never drift
+    apart over what counts as a function word."""
     if lang in _stopword_cache:
         return _stopword_cache[lang]
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"stopwords_{lang}.txt")
@@ -101,7 +105,7 @@ def annotate_summary(text: str, lang: str) -> tuple[str, list[dict]]:
 
 
 def _annotate(text: str, lang: str) -> tuple[str, list[dict]]:
-    stopwords = _stopwords(lang)
+    stop = stopwords(lang)
     tag_spans = [(m.start(), m.end()) for m in _TAG_RE.finditer(text)]
 
     def _in_tag(pos: int) -> bool:
@@ -123,7 +127,7 @@ def _annotate(text: str, lang: str) -> tuple[str, list[dict]]:
         core = _strip_elision(raw)
         low = core.lower()
         is_proper = core[:1].isupper() and not _is_sentence_start(text, m.start())
-        annotatable = len(low) >= 2 and low not in stopwords and not is_proper
+        annotatable = len(low) >= 2 and low not in stop and not is_proper
         tagged.append((m, low if annotatable else None))
         if annotatable and low not in seen:
             seen.add(low)
