@@ -1717,6 +1717,26 @@ def _summary_zh_html(summary_zh: str) -> str:
     )
 
 
+def _rendition_fr_html(episode: dict) -> str | None:
+    """通讯（#925）的通知里额外带一份法语阅读版。只对 kind='newsletter'
+    生效——播客/视频/文章的邮件与 Signal 消息一个字节都不变。
+    生成失败只记日志、返回 None：为一份锦上添花的译文丢掉整封通知是荒唐的。
+
+    延迟到函数内部 import knowledge.rendition，避免模块级循环导入——
+    knowledge.ingest.py 里 `import ai` 也是同样的写法（见其 docstring）：
+    podcast.py 目前不会被 knowledge 包在模块加载时 import，但没必要为了
+    这一个可选功能冒险在顶部建立一条新的模块间依赖。"""
+    if episode.get("kind") != "newsletter":
+        return None
+    try:
+        import knowledge.rendition
+        rendition = knowledge.rendition.get_or_create_rendition(episode["id"], "fr")
+        return rendition.get("summary")
+    except Exception as e:
+        logger.warning("podcast: 法语 rendition 生成失败 (episode %s): %s", episode.get("id"), e)
+        return None
+
+
 def send_mail(subject: str, body_html: str, *, context: str = "mail") -> bool:
     """Send one HTML mail to the configured recipient. Returns True if sent,
     False if skipped because SMTP isn't configured — skipping is not an error,
@@ -1761,6 +1781,11 @@ def send_email(episode: dict) -> bool:
     words_html = _words_table_html(episode.get("hsk_words") or [])
     transcript_html = _bilingual_transcript_html(episode.get("transcript_de") or [])
 
+    # 通讯（#925）额外附一份法语阅读版，放在德语总结之后；对其它 kind
+    # 恒为 None，下面这一段 HTML 就不出现——播客/视频/文章的邮件字节不变。
+    fr_html = _rendition_fr_html(episode)
+    fr_block = f"<h3>Français</h3><div>{fr_html}</div>" if fr_html else ""
+
     body_html = f"""
     <html><body style="font-family:sans-serif;max-width:640px">
       <h2>{episode['title']}</h2>
@@ -1769,6 +1794,7 @@ def send_email(episode: dict) -> bool:
       </p>
       {_summary_zh_html(episode.get('summary_zh') or '')}
       <div>{episode.get('summary_de') or ''}</div>
+      {fr_block}
       <h3>Neue HSK5+ Vokabeln</h3>
       {words_html}
       <p>
@@ -1907,6 +1933,11 @@ def send_signal(episode: dict) -> bool:
     if summary_de:
         lines.append("")
         lines.append(summary_de)
+    # 通讯（#925）额外附一份法语版；对其它 kind 恒为 None，不改变行为。
+    fr_html = _rendition_fr_html(episode)
+    if fr_html:
+        lines.append("")
+        lines.append(_summary_to_plain_text(fr_html))
     if word_lines:
         lines.append("")
         lines.append("Neue HSK5+ Vokabeln:")

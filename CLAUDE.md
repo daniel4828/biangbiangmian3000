@@ -246,7 +246,7 @@
 ├── news_fetcher.py        # 新闻抓取（Tagesschau API + RSS；按天缓存 data/news_cache/）
 ├── podcast.py             # 播客爬虫（#479）：播客 RSS 直链发现新单集（#497，退役 YouTube/yt-dlp）、每源 auto_process 开关+非自动源只入库元数据（#502，podcast_feeds 表）、转录链 NotebookLM 免费主力+听悟+Whisper 保底、单步异常不中止整链（#510 重排，链式降级，原 #498/#485/#486）、摘要 NotebookLM chat.ask 免费优先+DeepSeek/gpt API 链回退（api 路径内部 DeepSeek 优先省钱，#532；勾了 china-kritisch 的素材跳过 DeepSeek 直接用 OpenAI，#731）、邮件通知+Signal 通知（signal-cli 关联设备，发 Note to Self，#521，二者独立可选、互不影响；消息抬头播客名·星期·日期、链接在末尾，单集日期按 Europe/Berlin 显示，#532）、摘要 table.media 风格（`<p>` 段落+每段首句 `<b>` 加粗总结，#567）+详情页 Regenerate summary 按钮、邮件主题=`播客名 - 单集标题`（查不到播客名只用标题，不要退回死前缀）+ `summary_zh` 开头中文总结（#708 起是 `summary_de` 的**完整翻译**：同段落数、同顺序、同事实，同样 `<p>`+段首 `<b>`，HSK4-5 用词；提示词里德语先写、中文后译，JSON 里 `summary_de` 排在前面；渲染三处——邮件 `podcast._summary_zh_html`、详情页 `app.js._summaryZhHtml` 均"先全转义再放行 `<p>/<b>/<strong>/<em>/<i>/<br>`"，Signal 用 `_summary_to_plain_text` 剥标签；#708 之前的旧条目是纯文本，两处渲染都按空行补 `<p>`；**是增量不是必需**——成功判定只看 `summary_de`，模型漏掉中文总结不能让整集失败）+ 摘要里任何 HSK5+ 中文概念都标 `pinyin/汉字`（不限于提取的词表，宁多勿少，#631）；已泛化为知识库存储层，见 `knowledge/` 包
 ├── annotate/              # 知识库生词标注分派（#804）：__init__.py 按 languages 的 annotator 字段分派，zh 走 zh_annotate（原样不动），romance.py 是法语/西语实现（entry_forms 精确匹配，零词干还原）+ stopwords_fr/es.txt 功能词表
-├── knowledge/             # 知识库摄取（#650–#655，播客功能泛化，见「知识库」节）：rendition.py（按语言渲染摘要，#804）、youtube.py（字幕摄取）、article.py（正文抽取）、instagram.py（Reel/Post 摄取，yt-dlp 元数据+音频下载，#750）、files.py（上传的 txt/md/pdf/docx 抽文本，#835）、ingest.py（唯一入库管线）、mailbox.py（IMAP 邮件收件）、signal_inbox.py（Signal Note to Self 分享收件，含 text 前缀粘贴正文，#749/#834）
+├── knowledge/             # 知识库摄取（#650–#655，播客功能泛化，见「知识库」节）：rendition.py（按语言渲染摘要，#804）、youtube.py（字幕摄取）、article.py（正文抽取）、instagram.py（Reel/Post 摄取，yt-dlp 元数据+音频下载，#750）、files.py（上传的 txt/md/pdf/docx 抽文本，#835）、ingest.py（唯一入库管线）、mailbox.py（IMAP 邮件收件）、newsletter.py（已知邮件通讯的发件人注册表+样板清洗，#925）、signal_inbox.py（Signal Note to Self 分享收件，含 text 前缀粘贴正文，#749/#834）
 ├── books/                 # 书籍阅读器（#836）：epub.py（纯标准库 zipfile+ElementTree）、
 │                          #   pdf.py（pypdf，按页抽文字层+记真实页码，不做 OCR）、paginate.py（定长切页）、
 │                          #   __init__.py 的 ingest_file() 是唯一入库入口
@@ -388,7 +388,7 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 | `TINGWU_APP_KEY` | 可选 | 播客爬虫（#498）通义听悟控制台创建的应用 AppKey；与上面两个 AccessKey 变量任一缺失都会跳过听悟。一次性开通步骤见 `scripts/README.md` |
 | `KNOWLEDGE_IMAP_HOST` / `KNOWLEDGE_IMAP_PORT` | 可选 | 知识库邮件收件（#655）的 IMAP 服务器；端口默认 `993`（SSL） |
 | `KNOWLEDGE_IMAP_USER` / `KNOWLEDGE_IMAP_PASSWORD` | 可选 | 知识库邮件收件（#655）专用邮箱的登录凭据；三者（含上面两个变量）任一未配置时 `scripts/knowledge_mail_check.py` 直接跳过，不连接 |
-| `KNOWLEDGE_MAIL_ALLOWED_SENDERS` | 可选 | 知识库邮件收件（#655）发件人白名单，逗号分隔的邮箱地址（不区分大小写，兼容 `Name <addr@x.de>` 格式）；**留空则整个邮箱检查被跳过，不处理任何邮件**——这是防止任何知道邮箱地址的人往服务器塞 URL 触发 AI 调用的唯一防线 |
+| `KNOWLEDGE_MAIL_ALLOWED_SENDERS` | 可选 | 知识库邮件收件（#655）发件人白名单，逗号分隔的邮箱地址（不区分大小写，兼容 `Name <addr@x.de>` 格式）；**留空则整个邮箱检查被跳过，不处理任何邮件**——这是防止任何知道邮箱地址的人往服务器塞 URL 触发 AI 调用的唯一防线。已知邮件通讯的发件人（`newsletter@nl.faz.net`，#925）也必须列在这里 |
 | `GROQ_API_KEY` | 可选 | Instagram Reel 转录（#750）的主力，Groq `whisper-large-v3-turbo`（约比 OpenAI 便宜 9 倍、快 10 倍）；未配置时自动回退已有的 OpenAI `whisper-1`（`OPENAI_API_KEY`），只是单价贵约 9 倍——不是本功能能否使用的前提。获取方式见 `scripts/README.md` |
 | `INSTAGRAM_COOKIES_FILE` | `data/instagram_cookies.txt` | Instagram Reel 摄取（#750）用的登录态 cookies（Netscape 格式，`yt-dlp --cookies`）；文件不存在时公开 Reel 仍会尝试下载，不一定成功。会过期，过期时的错误信息会明说，一次性导出步骤见 `scripts/README.md` |
 | `YT_DLP_PATH` | `yt-dlp` | Instagram Reel 摄取（#750）用的 yt-dlp 可执行文件路径；系统级命令行工具（同 `ffmpeg` 的处理方式），装在非默认位置时指过去 |
@@ -604,9 +604,16 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 播客爬虫（#479）泛化成一个统一的知识库：播客单集、YouTube 视频、报刊文章三类素材走**同一条流水线**（获取 → 转录/正文 → 中文+德语摘要 → 生词标注 → 通知 → 造卡）。总体设计见 `docs/knowledge-base.md`（各阶段 Issue 都引用它）。
 
-- **不新建表，泛化 `podcast_episodes`**：加两列 `kind`（`podcast`|`video`|`article`）、`title_en`。**表名和历史列名故意不改**——改名要重建表+迁移生产库，风险远大于收益，本仓库已有同类先例（`youtube_url` 现在也存文章/播客链接，`word_zh` 对法语存法语词形）。`video_id` 对文章存 `normalize_url()` 去掉跟踪参数后的规范化 URL（`podcast_episodes` 的去重键），`transcript_source` 存 `youtube_captions`/`article`/`tingwu`/`whisper`/`notebooklm`
+- **不新建表，泛化 `podcast_episodes`**：加两列 `kind`（`podcast`|`video`|`article`|`newsletter`，最后一个 #925 加的）、`title_en`。**表名和历史列名故意不改**——改名要重建表+迁移生产库，风险远大于收益，本仓库已有同类先例（`youtube_url` 现在也存文章/播客链接，`word_zh` 对法语存法语词形）。`video_id` 对文章存 `normalize_url()` 去掉跟踪参数后的规范化 URL（`podcast_episodes` 的去重键），`transcript_source` 存 `youtube_captions`/`article`/`tingwu`/`whisper`/`notebooklm`
 - **`knowledge/` 包，`ingest.py` 是唯一入库管线**：`ingest_url()` 判断 YouTube 链接走 `youtube.py`（oEmbed 拿标题 + `youtube-transcript-api` 拿字幕，语言优先级 zh-Hans→zh-CN→zh→zh-TW→de→en，找不到任何字幕轨直接 `no_transcript`，**不跑 Whisper**；**YouTube 封锁云服务商 IP，所以服务器上字幕 API 恒返回 `RequestBlocked`，实际走的是 NotebookLM 兜底**，见下条），否则当文章走 `article.py`（`trafilatura` 抽正文，不足 200 字视为失败并抛 `ArticleExtractionError`——付费墙/登录墙/JS 页面绝不能存进库冒充正文，见其 docstring）。界面「粘贴 URL」框（`POST /api/knowledge/add`）和邮件收件（`mailbox.py`）**共用这一个函数**——理由同 #643 加词单一入口：两条平行管线迟早会让修好的坑在另一条上复活
 - **邮件收件（`knowledge/mailbox.py`，#655）**：IMAP 轮询 UNSEEN 邮件，标题+正文都扫 URL（手机分享到邮件，链接位置因 App 而异）。`KNOWLEDGE_MAIL_ALLOWED_SENDERS` 未配置时**整个邮箱检查被跳过，不读取也不标已读**——这是防止任何知道邮箱地址的人远程触发付费 AI 调用的唯一防线；处理失败的邮件同样不标已读，留给下一轮重试（`ingest_url()` 对已入库 URL 幂等返回 `already_exists`，重试安全）
+- **邮件通讯（`knowledge/newsletter.py`，#925）**：Daniel 每天早上收到 F.A.Z. Frühdenker，Gmail 规则转发到上面那个收件邮箱（`newsletter@nl.faz.net` 必须在 `KNOWLEDGE_MAIL_ALLOWED_SENDERS` 里，否则整封被白名单挡掉）。新 `kind='newsletter'`（该列**没有 CHECK 约束**，加值不需要迁移生产库），知识页有独立的 📰 标签且**没有粘贴框**——通讯只从邮箱进来
+  - **必须排在 `mailbox.py` 的 URL 分支之前**：通讯正文里有几十个 faz.net 付费墙链接，走 URL 分支等于每轮对每个链接做一次注定失败的网络往返，而真正的内容就在邮件正文里。入库仍走**同一个** `ingest_text()`，只是多传一个 `kind`
+  - **入库后立即同步处理**（转录+摘要+通知），同 `signal_inbox.py`——"早上就要读"的语义
+  - **`_HTMLTextExtractor` 必须在块级标签处插入换行**（#925 改的）：原来 `"".join(chunks)` 一个换行都不产生，压缩成一行的营销邮件因此整封是**一行**，而 `clean_body()` 是按行删样板的——那一行里只要有 "Abbestellen"，整封正文就被删光。#668 的粘贴正文路径同样受益（原来段落会被粘成一坨喂给 AI）
+  - **`clean_body()` 删掉超过 60%（`_MIN_KEEP_RATIO`）时放弃清洗、原样返回**：留几行页脚只让摘要略脏，删光正文是静默失效。宁脏勿空
+  - **`IngestError`（正文太短）是永久失败 → 标已读放弃**，其它异常才留着不读重试。cron 每 5 分钟一轮，留着一封永远不可能成功的邮件等于每轮白跑一次（同 `signal_inbox.py` 对粘贴正文失败不进重试队列的判断）
+  - **通知里额外带法语**（`podcast._rendition_fr_html`）：中文是 AI 原生的 `summary_zh`，法语复用 `knowledge/rendition.py`。**只对 `kind='newsletter'` 生效**，播客/视频/文章的邮件与 Signal 消息一个字节不变；法语失败只记日志，照常发德/中两份
 - **Signal 分享入口（`knowledge/signal_inbox.py`，#749）**：手机把链接分享到 Signal 自己的「Note to Self」，服务器用 #521 早就关联好的**同一个** signal-cli 设备（`SIGNAL_ACCOUNT`）把消息收下来，正文里的 URL 同样走 `ingest_url()`。与邮件收件方向相反、账号相同——`send_signal()` 是服务器→Daniel，这个是 Daniel→服务器
   - **安全防线**：只收下**源账号和目的账号都等于 `SIGNAL_ACCOUNT` 自己**的消息（真正的 Note to Self）——关联设备会同步收到 Daniel 手机发出的所有消息，包括发给别人的，那些一律忽略。作用等同于 `KNOWLEDGE_MAIL_ALLOWED_SENDERS` 之于邮件入口
   - **粘贴正文入口（#834）**：消息第一行只写 `text`（小写，大小写不敏感；也接受 `text:` / `文本`）→ 剩下的整条消息当文章正文，走 `ingest_text()`。**关键字必须独占第一行**，否则 "Text von gestern, siehe Link" 这种普通句子会被误认；正文里的**第一个链接自动存为 `source_url`**；标题/作者交给 #833 的服务端 AI 抽取。**粘贴正文的失败不进重试队列**——那个队列在 `app_settings` 里存 JSON（是给 URL 用的），而且正文失败的方式是"太短"，重试一百次结果一样；回执说明原因，重发一次即可。🔴 正文绝不进日志/错误信息/回执（下面 Privacy 那条同样适用）

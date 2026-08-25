@@ -3744,7 +3744,7 @@ let _podcastEpisodes = [];
 let _podcastConfig = null;
 let _podcastCurrentFeedId = null;   // layer 2/3 (podcast tab): which feed's episode list we're in
 let _podcastPollTimer = null;       // re-poll while any listed item is "processing"
-let _knowledgeTab = localStorage.getItem('knowledgeTab') || 'podcast';  // 'podcast' | 'video' | 'reel' | 'article'
+let _knowledgeTab = localStorage.getItem('knowledgeTab') || 'podcast';  // 'podcast' | 'video' | 'reel' | 'article' | 'newsletter'
 let _knowledgeListKind = null;      // set while a flat video/article list is showing (layer 1 for those tabs)
 let _knowledgeAddMode = 'link';     // 'link' | 'text' — article tab only (#668); paywalled articles can't be fetched, so pasting the body is the escape hatch
 
@@ -3758,6 +3758,12 @@ function _clearPodcastPoll() {
 // filter in the backend, all so a Reel can be labelled as the video it
 // already is). So both the Videos and Reels tabs fetch kind=video and get
 // split here, in the frontend, by where the URL points.
+//
+// 📰 Newsletter (#925) is NOT virtual — it's a real backend kind
+// ('newsletter', podcast_episodes.kind), unlike Reels. It arrives from a
+// dedicated sender (knowledge/newsletter.py), never shares a kind with
+// anything else, so it needs no frontend-side split: it just passes
+// straight through the default branch below like 'podcast'/'video'/'article'.
 function _knowledgeApiKind(tab) {
   return tab === 'reel' ? 'video' : tab;
 }
@@ -3802,7 +3808,8 @@ async function switchKnowledgeTab(tab) {
 
 function _knowledgeTabBarHtml() {
   const tabs = [['podcast', '🎙️ Podcasts'], ['video', '📺 Videos'],
-                ['reel', '📱 Reels'], ['article', '📄 Articles']];
+                ['reel', '📱 Reels'], ['article', '📄 Articles'],
+                ['newsletter', '📰 Newsletter']];
   const btns = tabs.map(([id, label]) =>
     `<button class="hcal-seg-btn ${_knowledgeTab === id ? 'active' : ''}" onclick="switchKnowledgeTab('${id}')">${label}</button>`
   ).join('');
@@ -4012,6 +4019,9 @@ function _renderKnowledgeMaterialList() {
     video: ['Paste a YouTube link…', 'No videos yet — paste a YouTube link above.'],
     reel: ['Paste an Instagram Reel link…', 'No Reels yet — paste an Instagram link above.'],
     article: ['Paste an article link…', 'No articles yet — paste a link above.'],
+    // No link hint here — newsletter has no paste box (see addBoxHtml below),
+    // it only ever arrives by mail (knowledge/newsletter.py, #925).
+    newsletter: [null, 'No newsletters yet — they arrive by mail.'],
   };
   const [linkHint, emptyHint] = HINTS[_knowledgeTab] || HINTS.article;
   const rows = _podcastEpisodes.map(ep => _knowledgeMaterialRowHtml(ep)).join('') ||
@@ -4019,7 +4029,11 @@ function _renderKnowledgeMaterialList() {
   // Paste-text is an article-only escape hatch for paywalled pieces the server
   // can't fetch (#668) — video/podcast tabs only ever get a link box.
   const isArticleTab = _knowledgeTab === 'article';
-  const addBoxHtml = (isArticleTab && _knowledgeAddMode === 'file')
+  // Newsletter has no add box at all (#925): it only ever arrives by mail
+  // (a Gmail forwarding rule -> knowledge/newsletter.py), there's nothing
+  // for Daniel to paste in here.
+  const addBoxHtml = (_knowledgeTab === 'newsletter') ? '' :
+    (isArticleTab && _knowledgeAddMode === 'file')
     ? `<div class="keymap-panel">
         <div class="keymap-row" style="align-items:flex-start">
           <div style="flex:1;display:flex;flex-direction:column;gap:6px">
@@ -4331,7 +4345,8 @@ function _renderKnowledgeDetail(ep) {
   if (!el) return;
   const kind = ep.kind || 'podcast';
   const isPodcast = kind === 'podcast';
-  const contentLabel = kind === 'video' ? 'Subtitles' : kind === 'article' ? 'Article text' : 'Transcript';
+  const contentLabel = kind === 'video' ? 'Subtitles' : kind === 'article' ? 'Article text' :
+    kind === 'newsletter' ? 'Newsletter text' : 'Transcript';
   const date = _localDate(ep.published_at || ep.created_at || '');
   // lang (#804): zh reads hsk_words/summary_zh/summary_de exactly as before
   // #804 — not one byte of that path changes. Every other language reads
