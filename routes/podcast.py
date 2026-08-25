@@ -136,6 +136,58 @@ def patch_episode(episode_id: int, body: EpisodeMetadataPatch):
     return _overlay_processing_status(episode)
 
 
+@router.post("/api/podcast/episodes/{episode_id}/retag")
+def retag_episode(episode_id: int):
+    """Re-run the AI tagger on one item (#938), replacing its previous machine
+    guesses. Synchronous — it is one cheap call over the summary, not a
+    transcription.
+
+    Only the AI's own tags are replaced; anything Daniel typed (#937) survives
+    untouched, which is the whole reason knowledge_item_tags carries a source.
+    """
+    episode = database.get_episode(episode_id)
+    if not episode:
+        raise HTTPException(404, "Episode not found")
+    if not (episode.get("summary_de") or "").strip():
+        raise HTTPException(400, "Nothing to tag yet — this item has no summary")
+    podcast.autotag_episode(episode_id, episode["title"], episode["summary_de"], force=True)
+    return database.get_episode(episode_id)
+
+
+# ── Tag management (#938) ──────────────────────────────────────────────────
+# Without these the AI's near-duplicates ('KI' next to 'AI') can never be
+# cleaned up, and a tag vocabulary nobody can tidy stops being a filter.
+
+class TagPatch(BaseModel):
+    name: str
+
+
+@router.get("/api/knowledge/tags")
+def list_knowledge_tags():
+    return database.list_tags()
+
+
+@router.put("/api/knowledge/tags/{tag_id}")
+def rename_knowledge_tag(tag_id: int, body: TagPatch):
+    """Rename a tag — or MERGE it, if the new name already exists. Merging is
+    the point, not a side effect: renaming 'AI' to 'KI' is how two tags for the
+    same thing become one."""
+    try:
+        ok = database.rename_tag(tag_id, body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(404, "Tag not found")
+    return database.list_tags()
+
+
+@router.delete("/api/knowledge/tags/{tag_id}")
+def delete_knowledge_tag(tag_id: int):
+    if not database.delete_tag(tag_id):
+        raise HTTPException(404, "Tag not found")
+    return {"deleted": True}
+
+
 @router.get("/api/knowledge/facets")
 def knowledge_facets():
     """Everything the filter bar's dropdowns need, in one request (#936):
