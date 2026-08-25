@@ -2085,7 +2085,10 @@ def _process_episode(episode_id: int, video: dict, detail_level: str, summary: d
                 processed_at=datetime.now().isoformat(),
             )
             title_suggestion = (result.get("title_suggestion") or "").strip()
-            if title_suggestion and _is_placeholder_title(video["title"]):
+            # #937: a title Daniel typed himself is never replaced, even if it
+            # happens to look like a placeholder. He was looking at the source.
+            if (title_suggestion and _is_placeholder_title(video["title"])
+                    and not database.is_manual(episode_id, "title")):
                 update_fields["title"] = title_suggestion
                 try:
                     title_en = ai.translate_title(title_suggestion)
@@ -2183,7 +2186,9 @@ def regenerate_summary(episode_id: int) -> dict:
     # stuck with "Video by <uploader>" titles, since it's the one Daniel can
     # trigger by hand from the detail page's "Regenerate summary" button.
     title_suggestion = (result.get("title_suggestion") or "").strip()
-    if title_suggestion and _is_placeholder_title(episode["title"]):
+    # Same #937 guard as _process_episode: hand-edited titles are off limits.
+    if (title_suggestion and _is_placeholder_title(episode["title"])
+            and not database.is_manual(episode_id, "title")):
         update_fields["title"] = title_suggestion
         try:
             title_en = ai.translate_title(title_suggestion)

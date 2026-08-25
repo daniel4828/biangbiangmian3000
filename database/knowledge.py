@@ -16,6 +16,8 @@ Two rules the rest of the app depends on:
     survive every re-tag. set_item_tags() enforces this — do not write to
     knowledge_item_tags from anywhere else.
 """
+import json
+
 from .core import get_db
 
 
@@ -407,3 +409,85 @@ def knowledge_facets() -> dict:
     facets["tags"] = list_tags()
     facets["lists"] = list_lists()
     return facets
+
+
+# ---------------------------------------------------------------------------
+# Hand-edited metadata (#937)
+# ---------------------------------------------------------------------------
+
+# Columns Daniel may edit by hand. A whitelist because these names go into an
+# UPDATE statement, and because "editable" is a deliberate, small set: the
+# transcript, the summary and the status are results, not metadata.
+EDITABLE_EPISODE_FIELDS = ("title", "title_en", "author", "platform",
+                           "published_at", "youtube_url")
+
+
+def manual_fields(episode_id: int) -> set[str]:
+    """Which columns of this episode Daniel edited by hand (#937).
+
+    Every AI path — the title suggestion in podcast.summarize(), the metadata
+    extraction in knowledge/ingest.py, the auto tagger (#938) — must consult
+    this before writing: he was looking at the source, the model is guessing.
+    """
+    conn = get_db()
+    row = conn.execute(
+        "SELECT manual_fields FROM podcast_episodes WHERE id = ?", (episode_id,)).fetchone()
+    conn.close()
+    if not row or not row["manual_fields"]:
+        return set()
+    try:
+        return set(json.loads(row["manual_fields"]) or [])
+    except (ValueError, TypeError):
+        # A corrupt marker must not make the episode uneditable; the worst
+        # case of treating it as empty is that an AI path overwrites one field.
+        return set()
+
+
+def is_manual(episode_id: int, field: str) -> bool:
+    return field in manual_fields(episode_id)
+
+
+def update_episode_metadata(episode_id: int, fields: dict, *, source: str = "user") -> dict | None:
+    """Update an episode's editable metadata. Returns the updated row, or None
+    if the episode doesn't exist (callers turn that into a 404).
+
+    `fields` may contain any of EDITABLE_EPISODE_FIELDS; anything else is
+    ignored rather than raising — an unknown key is a frontend bug, not a
+    reason to lose the edit that came with it. An empty string clears the
+    column; a key that isn't present is left untouched.
+
+    With source='user' (the default) every column written is recorded in
+    manual_fields, which is what keeps later AI passes off it. source='ai'
+    writes the same columns without claiming them — and skips any column
+    Daniel has already claimed.
+    """
+    if source not in ("user", "ai"):
+        raise ValueError(f"invalid source: {source!r}")
+
+    claimed = manual_fields(episode_id)
+    updates = {}
+    for key in EDITABLE_EPISODE_FIELDS:
+        if key not in fields:
+            continue
+        if source == "ai" and key in claimed:
+            continue
+        value = fields[key]
+        value = value.strip() if isinstance(value, str) else value
+        updates[key] = value or None
+
+    conn = get_db()
+    try:
+        if not conn.execute("SELECT 1 FROM podcast_episodes WHERE id = ?", (episode_id,)).fetchone():
+            return None
+        if updates:
+            if source == "user":
+                claimed = claimed | set(updates)
+                updates["manual_fields"] = json.dumps(sorted(claimed))
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(f"UPDATE podcast_episodes SET {set_clause} WHERE id = ?",
+                         (*updates.values(), episode_id))
+            conn.commit()
+    finally:
+        conn.close()
+    from .podcast import get_episode
+    return get_episode(episode_id)

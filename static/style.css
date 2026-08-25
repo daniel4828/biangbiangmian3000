@@ -3333,6 +3333,30 @@ a.nav-btn { text-decoration: none; }
 /* AI 打的标签浅一档：Daniel 一眼看得出哪些是机器猜的（#938） */
 .knowledge-tag-ai { background: transparent; border: 1px dashed var(--border); color: var(--muted); }
 .knowledge-row-archived { opacity: 0.55; }
+
+/* 元数据编辑表单（#937） */
+.knowledge-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.knowledge-edit-row { display: flex; align-items: center; gap: 8px; }
+.knowledge-edit-row > span:first-child {
+  flex: 0 0 84px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.knowledge-edit-row .edit-input,
+.knowledge-edit-row .opt-input { flex: 1; min-width: 0; }
+@media (max-width: 600px) {
+  .knowledge-edit-row { flex-wrap: wrap; }
+  .knowledge-edit-row > span:first-child { flex: 1 1 100%; }
+}
 #podcast-summary-de { line-height: 1.6; color: var(--text); }
 
 /* Chinese summary (#631; since #708 a full translation of the German one,
