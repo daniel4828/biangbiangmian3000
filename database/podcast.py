@@ -9,6 +9,7 @@ and routes/podcast.py only call into this module.
 """
 import json
 from .core import get_db
+from .knowledge import tags_for_items, list_membership
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +166,9 @@ def create_pending_episode(video_id: str, channel_id: str | None, title: str,
                            audio_url: str | None = None,
                            duration_seconds: int | None = None,
                            kind: str = 'podcast',
-                           china_critical: bool = False) -> int:
+                           china_critical: bool = False,
+                           author: str | None = None,
+                           platform: str | None = None) -> int:
     """Insert a new episode row with status=pending. Returns the new id.
 
     `channel_id` stores the source RSS feed URL (#497, was a YouTube channel
@@ -176,14 +179,21 @@ def create_pending_episode(video_id: str, channel_id: str | None, title: str,
     docs/knowledge-base.md for what the generic columns mean per kind.
     `china_critical` (#731) makes the API summary fallback skip DeepSeek and
     use OpenAI directly — see podcast.summarize().
+    `author`/`platform` (#935) are what the unified material list filters on.
+    They are deliberately separate from `channel_id`, which already means four
+    different things depending on kind and so can't be filtered on. Callers
+    pass an author only when they genuinely know one (channel name, uploader,
+    what Daniel typed) — a site domain is not an author, and a wrong one is
+    worse than none.
     """
     conn = get_db()
     cur = conn.execute(
         """INSERT INTO podcast_episodes
-           (video_id, channel_id, title, published_at, youtube_url, audio_url, duration_seconds, status, kind, china_critical)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+           (video_id, channel_id, title, published_at, youtube_url, audio_url, duration_seconds,
+            status, kind, china_critical, author, platform)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
         (video_id, channel_id, title, published_at, youtube_url, audio_url, duration_seconds,
-         kind, 1 if china_critical else 0),
+         kind, 1 if china_critical else 0, author, platform),
     )
     conn.commit()
     episode_id = cur.lastrowid
@@ -255,7 +265,12 @@ def get_episode(episode_id: int) -> dict | None:
     conn = get_db()
     row = conn.execute("SELECT * FROM podcast_episodes WHERE id = ?", (episode_id,)).fetchone()
     conn.close()
-    return _hydrate(row) if row else None
+    if row is None:
+        return None
+    d = _hydrate(row)
+    d["tags"] = tags_for_items([episode_id]).get(episode_id, [])
+    d["list_ids"] = list_membership([episode_id]).get(episode_id, [])
+    return d
 
 
 def list_episodes(limit: int = 100, feed_url: str | None = None, kind: str | None = None) -> list[dict]:
@@ -270,6 +285,7 @@ def list_episodes(limit: int = 100, feed_url: str | None = None, kind: str | Non
                       audio_url, duration_seconds,
                       summary_de, hsk_words, detail_level, status, error, email_sent_at, created_at,
                       transcript_source, china_critical,
+                      processed_at, author, platform, archived_at,
                       (transcript_zh IS NOT NULL AND transcript_zh != '') AS has_transcript
                FROM podcast_episodes"""
     clauses: list = []
@@ -286,7 +302,16 @@ def list_episodes(limit: int = 100, feed_url: str | None = None, kind: str | Non
     params.append(limit)
     rows = conn.execute(query, params).fetchall()
     conn.close()
-    return [_hydrate(r) for r in rows]
+    episodes = [_hydrate(r) for r in rows]
+    # Tags and list membership for the whole page in two queries, not two per
+    # row — this list is pulled 1000 rows at a time by the material view.
+    ids = [e["id"] for e in episodes]
+    tags = tags_for_items(ids)
+    lists = list_membership(ids)
+    for e in episodes:
+        e["tags"] = tags.get(e["id"], [])
+        e["list_ids"] = lists.get(e["id"], [])
+    return episodes
 
 
 def list_recent_error_episodes(max_age_days: int = 7) -> list[dict]:

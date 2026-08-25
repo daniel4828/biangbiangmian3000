@@ -251,10 +251,12 @@ def fetch_new_videos() -> list[dict]:
             logger.warning("podcast: failed to fetch/parse feed %s: %s", feed_url, e)
             continue
 
-        if not feed.get("title"):
+        feed_title = feed.get("title")
+        if not feed_title:
             channel_title_el = root.find("channel/title")
             if channel_title_el is not None and channel_title_el.text:
-                database.update_feed(feed["id"], title=channel_title_el.text.strip())
+                feed_title = channel_title_el.text.strip()
+                database.update_feed(feed["id"], title=feed_title)
 
         auto_process = bool(feed.get("auto_process"))
         is_first_run = not database.has_any_episode_for_feed(feed_url)
@@ -270,6 +272,10 @@ def fetch_new_videos() -> list[dict]:
 
             video["auto_process"] = auto_process
             video["is_backfill"] = is_first_run
+            # #935: the show's own name is the author of every one of its
+            # episodes. channel_id already holds the feed URL, which is not
+            # something anyone wants to see in an author filter.
+            video["feed_title"] = feed_title
             feed_videos.append(video)
             if is_first_run and len(feed_videos) >= FIRST_RUN_BACKFILL:
                 break
@@ -310,6 +316,7 @@ def ingest_feed_episodes(feed_id: int, limit: int, root=None) -> int:
             video["video_id"], video["channel_id"], video["title"],
             video["published_at"], video["youtube_url"],
             video.get("audio_url"), video.get("duration_seconds"),
+            author=feed.get("title"), platform="podcast",
         )
         added += 1
         if added >= limit:
@@ -2073,6 +2080,9 @@ def _process_episode(episode_id: int, video: dict, detail_level: str, summary: d
                 detail_level=detail_level,
                 spotify_url=spotify_url,
                 status="summarized",
+                # #935: "Bearbeitungsdatum" — when this material actually
+                # became readable. The unified list sorts on it by default.
+                processed_at=datetime.now().isoformat(),
             )
             title_suggestion = (result.get("title_suggestion") or "").strip()
             if title_suggestion and _is_placeholder_title(video["title"]):
@@ -2164,6 +2174,9 @@ def regenerate_summary(episode_id: int) -> dict:
         summary_de=result["summary_de"],
         hsk_words=words,
         detail_level=detail_level,
+        # #935: regenerating really is processing the item again, so the
+        # material list should float it back to the top.
+        processed_at=datetime.now().isoformat(),
     )
     # Same placeholder-title gate as _process_episode (#781) — this is the
     # only path that can retroactively fix the existing backlog of Reels
@@ -2307,6 +2320,7 @@ def _run_check_locked(cfg: dict) -> dict:
             video["video_id"], video["channel_id"], video["title"],
             video["published_at"], video["youtube_url"],
             video.get("audio_url"), video.get("duration_seconds"),
+            author=video.get("feed_title"), platform="podcast",
         )
         summary["new"] += 1
         # Auto-processing (#502): only immediately transcribe+summarize when

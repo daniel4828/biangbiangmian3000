@@ -102,6 +102,7 @@ async def add_knowledge_file(
             source_url=source_url, author=author,
             china_critical=china_critical,
             fallback_title=title_guess,
+            platform="upload",
         )
     except knowledge.ingest.IngestError as e:
         raise HTTPException(400, str(e))

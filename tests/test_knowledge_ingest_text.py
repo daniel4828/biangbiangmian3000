@@ -309,3 +309,29 @@ def test_knowledge_ingest_is_not_duplicated_in_app_js():
     for source in (app_js, save_html):
         assert "/api/knowledge/add" not in source
         assert "ingestKnowledge(" in source
+
+
+# ---------------------------------------------------------------------------
+# platform / author (#935)
+# ---------------------------------------------------------------------------
+
+def test_ingest_text_defaults_to_the_paste_platform():
+    ep = database.get_episode(ingest.ingest_text("标题", LONG_ARTICLE)["episode_id"])
+    assert ep["platform"] == "paste"
+
+
+def test_ingest_text_platform_is_per_caller():
+    """platform is NOT derivable from kind: an uploaded file, a newsletter and
+    a Signal share all land as kind='article'/'newsletter' pasted bodies but
+    arrive from three different places, and Daniel filters on that."""
+    ep = database.get_episode(
+        ingest.ingest_text("标题", LONG_ARTICLE, platform="upload")["episode_id"])
+    assert ep["platform"] == "upload"
+
+
+def test_ingest_text_stores_the_author_in_its_own_column():
+    ep = database.get_episode(
+        ingest.ingest_text("标题", LONG_ARTICLE, author="Jan Böhmermann")["episode_id"])
+    assert ep["author"] == "Jan Böhmermann"
+    # channel_id keeps its historical value too — nothing that reads it breaks.
+    assert ep["channel_id"] == "Jan Böhmermann"

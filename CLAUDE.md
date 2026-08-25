@@ -643,6 +643,16 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **两张表不是一个 JSON 列**（`knowledge_chats` + `knowledge_chat_messages`）：追加一轮若要读-改-写整个 JSON，两个标签页同时聊会互相覆盖。`episode_id` 上的外键 `ON DELETE CASCADE` 负责素材删除时清干净（`get_db()` 开了 `PRAGMA foreign_keys`）
   - 模型走 `routes.story._validated_model()`，不认识的回落默认模型并 `logger.warning`（#721 的教训）；成本记账自动走 `_call_api` 的 `log_api_call`，`purpose="knowledge_chat"`
   - **每条消息都会把整份转录（最多 15000 字）重发一遍**，长对话不便宜。先按 Daniel 定的做，嫌贵再加「只发摘要」开关
+- **素材元数据层（#935，大方向 #934）**：知识库正在从"按 kind 分四个标签页"改造成"一个可排序/筛选/搜索/分类的素材库"。这一阶段只加数据层：
+  - `podcast_episodes` 新增 `processed_at`（摘要**成功完成**的时刻，统一列表的默认排序键）、`author`、`platform`、`manual_fields`、`archived_at`
+  - **`author` 不复用 `channel_id`**：后者已经同时表示 RSS 源 URL / YouTube 频道 id / 网站域名 / 粘贴时填的作者，四种含义并存，按它做作者筛选是不可能的。所以只在**真的知道作者**时才写（频道名、uploader、Daniel 手填、播客节目名），网站域名不是作者——宁可留空，等 #937/#938 填
+  - `platform` = 素材**从哪来**（`youtube`/`instagram`/`podcast`/`web`/`upload`/`paste`/`email`/`signal`，白名单在 `database.KNOWLEDGE_PLATFORMS`），和 `kind`（它**是什么**）是两个正交的轴，两个都要能筛。**不能由 kind 推出来**：上传的文件、newsletter、Signal 分享全都是 `kind='article'/'newsletter'` 的粘贴正文，所以 `ingest_text(platform=...)` 由每个调用方自己传
+  - 四张新表 `knowledge_tags` / `knowledge_item_tags` / `knowledge_lists` / `knowledge_list_items`，访问函数在**新模块 `database/knowledge.py`**（`database/podcast.py` 已经 440 行，而且标签/列表是"怎么组织素材"，不是"怎么抓素材"）
+  - **标签名大小写不敏感唯一**（`idx_knowledge_tags_name ... COLLATE NOCASE`）：筛选栏里 `Politik` 和 `politik` 各管一半，比没有标签更糟。`rename_tag()` 改成已存在的名字 = **合并**，这是收拾 AI 造出的近义标签的唯一出口
+  - **`knowledge_item_tags.source`（`user`/`ai`）是硬边界**：`set_item_tags(source=...)` 只替换**同 source** 的行，所以 AI 重新打标签永远删不掉 Daniel 手打的，反之亦然。手动打一个 AI 已经猜到的标签会把它**升级成 `user`**（他认领了它）。别处不许直接写 `knowledge_item_tags`
+  - **回填是幂等的，不是靠一次性标记**：每条 UPDATE 都限定在目标列仍为 NULL 的行上——生产每 2 分钟重启一次，`init_db()` 就跑一次（#688 的教训）。`processed_at` 回填 `COALESCE(email_sent_at, created_at)` 且只填 `summarized` 行；`author` **不回填**（错的作者比空的更糟）
+  - 内置的 `Read Later` 列表按 **`is_builtin` 而不是名字**判断存在：否则 Daniel 一改名，下次重启就又冒出一个 `Read Later`
+  - `idx_episodes_processed_at` 建在 `core.py` 的迁移里而不是 `schema.sql`：schema 在**第 2 阶段**执行，那时旧库上 `ALTER TABLE`（第 3 阶段）还没跑，列还不存在，`CREATE INDEX` 会直接报错
 - **china-kritisch 复选框（#731）**：摘要默认走便宜的 DeepSeek —— Daniel 的博客素材绝大多数不批评中国，没必要为它们付 OpenAI 的钱。少数确实批评中国的素材勾选后存 `podcast_episodes.china_critical=1`，摘要时把 DeepSeek 从候选模型里**彻底删掉**（不是排后面）：它对这类内容会悄悄弱化或拒答，而弱化后的摘要照样能解析出 `summary_de`，任何"解析失败就回退"的机制都永远不会触发
   - **免费的 NotebookLM 路径不受影响，照旧第一优先**：它是 Google 的，没理由审查这个话题，而且不花钱。勾选只改变它失败之后 API 兜底那一层选谁
   - **标记必须在粘贴那一刻打上**：摘要发生在之后独立的 `POST .../process` 调用里（甚至是 cron 里），那时已经没人在旁边说明这是什么素材

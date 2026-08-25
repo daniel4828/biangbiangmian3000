@@ -727,6 +727,30 @@ CREATE TABLE IF NOT EXISTS podcast_episodes (
     -- 1 means "skip DeepSeek, go straight to OpenAI". The free NotebookLM
     -- path stays first either way — Google doesn't censor the topic.
     china_critical   INTEGER NOT NULL DEFAULT 0,
+    -- #935 (knowledge base overhaul, umbrella #934):
+    --   processed_at: when the summary last completed successfully. This is
+    --     the unified material list's default sort key ("Bearbeitungsdatum") —
+    --     created_at is when it was pasted, published_at is when the source
+    --     went out, neither answers "when did this become readable for me".
+    --     Regenerating a summary refreshes it: the item really was processed
+    --     again.
+    --   author:  person/channel/show behind the material. Deliberately NOT
+    --     channel_id — that column is already overloaded four ways (RSS feed
+    --     URL | YouTube channel id | site domain | pasted-text author), so
+    --     filtering by author off it is impossible.
+    --   platform: 'youtube' | 'instagram' | 'podcast' | 'web' | 'upload' |
+    --     'paste'. Inferred once at ingest time, editable by hand afterwards
+    --     (#937).
+    --   manual_fields: JSON array of column names Daniel edited by hand
+    --     (#937). AI paths (title suggestion, metadata extraction, auto
+    --     tagging) must never overwrite what's listed here.
+    --   archived_at: NULL = not archived. The default list view hides
+    --     archived material (#940); a filter toggle brings it back.
+    processed_at     TEXT,
+    author           TEXT,
+    platform         TEXT,
+    manual_fields    TEXT,
+    archived_at      TEXT,
     created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -747,6 +771,49 @@ CREATE TABLE IF NOT EXISTS knowledge_renditions (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(episode_id, lang)
 );
+
+-- Tags and user-defined lists over knowledge material (#935, umbrella #934).
+-- Tags come from two sources: the AI tagger (#938) and Daniel's own edits
+-- (#937). `source` keeps them apart so re-tagging can never clobber a manual
+-- tag, and so the UI can show which ones were machine-made.
+CREATE TABLE IF NOT EXISTS knowledge_tags (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Display form as typed. Uniqueness is case-insensitive (see the index
+    -- below) so 'Politik' and 'politik' can never become two tags — with a
+    -- shared filter bar, near-duplicate tags are worse than no tags.
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_tags_name ON knowledge_tags(name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS knowledge_item_tags (
+    episode_id INTEGER NOT NULL REFERENCES podcast_episodes(id) ON DELETE CASCADE,
+    tag_id     INTEGER NOT NULL REFERENCES knowledge_tags(id) ON DELETE CASCADE,
+    source     TEXT NOT NULL DEFAULT 'user' CHECK(source IN ('user', 'ai')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (episode_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_item_tags_tag ON knowledge_item_tags(tag_id);
+
+-- User-defined lists, e.g. "Read Later" (#940). The Read Later row is created
+-- by init_db() and protected from deletion (is_builtin=1) — the swipe gesture
+-- targets it by name, so it has to exist.
+CREATE TABLE IF NOT EXISTS knowledge_lists (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    icon       TEXT,
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_list_items (
+    list_id    INTEGER NOT NULL REFERENCES knowledge_lists(id) ON DELETE CASCADE,
+    episode_id INTEGER NOT NULL REFERENCES podcast_episodes(id) ON DELETE CASCADE,
+    added_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (list_id, episode_id)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_list_items_episode ON knowledge_list_items(episode_id);
 
 CREATE TABLE IF NOT EXISTS podcast_config (
     key   TEXT PRIMARY KEY,
