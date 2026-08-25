@@ -362,7 +362,17 @@ def add_word_ai(body: dict):
     # irreversibly, so the response says exactly what was thrown away rather
     # than reporting a bland success.
     existing = database.get_word_by_zh(word_zh)
+    if existing is None and lang != "zh":
+        # Typed an inflected form of a word already in the database (#924):
+        # "mangeons" has to reach the existing `manger` entry. Without this the
+        # word gets generated a second time under a second headword —
+        # UNIQUE(word_zh, lang) does not catch it, the two spellings differ.
+        # Exact match against entry_forms only, no stemming: a wrong guess here
+        # would move some other word's cards.
+        existing = database.get_word_by_form(word_zh, lang)
     if existing:
+        # Act on and report the entry's own headword, not what was typed.
+        word_zh = existing["word_zh"]
         # An existing word moves inside its OWN language's tree, whatever the
         # request said (#726): word_zh is globally unique, so a mistyped lang
         # would otherwise scatter one word's cards across two language trees
@@ -446,9 +456,15 @@ def add_word_ai(body: dict):
             if result.get("yaml_error"):
                 raise ValueError(
                     f"AI returned invalid YAML: {result['yaml_error'].get('problem', 'parse error')}")
+            # The headword actually written can differ from what Daniel typed:
+            # the fr/es prompts normalise an inflected input to the lemma
+            # (#924). Looking the entry up by the typed string would find
+            # nothing and leave the cards behind in the daily deck.
+            imported_words = result.get("imported_words") or []
+            stored_word = imported_words[0] if imported_words else word_zh
             if to_list and result.get("imported"):
                 # Only now do the freshly created cards exist to move (#677).
-                entry = database.get_word_by_zh(word_zh)
+                entry = database.get_word_by_zh(stored_word)
                 if entry:
                     database.stage_word_in_saved(
                         entry["id"], database.get_or_create_saved_deck(lang))
@@ -460,7 +476,7 @@ def add_word_ai(body: dict):
                 _import_jobs[job_id] = {
                     "status": "done",
                     "message": "Entry added",
-                    "summary": {"word_zh": word_zh, "deck_id": deck_id,
+                    "summary": {"word_zh": stored_word, "deck_id": deck_id,
                                 "deck_path": deck_path, **result},
                     "started_at": started_at,
                 }
@@ -522,6 +538,10 @@ def save_word(body: dict):
     saved_deck_id = database.get_or_create_saved_deck(lang)
 
     existing = database.get_word_by_zh(word_zh)
+    if existing is None and lang != "zh":
+        # Same lemma resolution as /api/add-word-ai (#924): a conjugated form
+        # of a known word must not become a second, contentless entry.
+        existing = database.get_word_by_form(word_zh, lang)
     if existing:
         entry_id = existing["id"]
         conn = database.get_db()

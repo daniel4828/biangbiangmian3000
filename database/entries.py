@@ -390,6 +390,36 @@ def forms_lookup(surface_forms: list[str], lang: str) -> set[str]:
     return {r["form"] for r in form_rows} | {r["word_zh"] for r in zh_rows}
 
 
+def get_word_by_form(surface_form: str, lang: str) -> dict | None:
+    """Find the entry a single inflected surface form belongs to (#924).
+
+    `manger` is stored once; typing `mangeons` has to reach that same entry
+    instead of paying for a second generation and creating a near-duplicate
+    headword. Looks at the headword itself first (the common case), then at
+    the stored conjugated/inflected forms — the same table the knowledge-base
+    annotator matches against, which is why #803 insists every added word
+    carries its full form list.
+
+    Returns None for Chinese and for any form that is not stored: no stemming,
+    no guessing. A wrong match would silently move another word's cards.
+    """
+    if not surface_form:
+        return None
+    conn = get_db()
+    row = conn.execute("SELECT * FROM entries WHERE word_zh = ? AND lang = ?",
+                       (surface_form, lang)).fetchone()
+    if row is None:
+        row = conn.execute(
+            """SELECT e.* FROM entries e
+               JOIN entry_forms ef ON ef.word_id = e.id
+               WHERE e.lang = ? AND ef.form = ?
+               ORDER BY e.id LIMIT 1""",
+            (lang, surface_form),
+        ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def delete_word_examples(word_id: int) -> None:
     conn = get_db()
     conn.execute("DELETE FROM entry_examples WHERE word_id = ?", (word_id,))

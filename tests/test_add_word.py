@@ -967,3 +967,91 @@ def test_promote_uses_the_anki_day_not_the_calendar_day(tmp_db):
     ).fetchall()
     conn.close()
     assert all(row["due"] == stub_day.isoformat() for row in rows)
+
+
+# ---------------------------------------------------------------------------
+# Dictionary form / lemma (#924)
+#
+# Daniel picks words out of texts, so the typed word is often inflected. Two
+# separate guarantees: the prompt tells the model to normalise it, and the
+# route resolves an inflected input to the entry that already owns that form
+# instead of paying for a near-duplicate entry.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("lang", ["fr", "es"])
+def test_romance_prompt_demands_the_dictionary_form(lang):
+    with patch.object(ai, "_call_api", return_value=ENTRY_YAML_FR_VERB) as call:
+        ai.generate_word_entry_yaml("mangeons", lang=lang)
+    prompt = call.call_args[0][1][0]["content"]
+    assert "DICTIONARY FORM" in prompt
+    assert "infinitive" in prompt
+    assert "masculine singular" in prompt
+
+
+def test_chinese_prompt_is_untouched_by_the_lemma_rule():
+    """Chinese has no inflection — the rule must not leak into that prompt."""
+    with patch.object(ai, "_call_api", return_value=ENTRY_YAML) as call:
+        ai.generate_word_entry_yaml("生态")
+    assert "DICTIONARY FORM" not in call.call_args[0][1][0]["content"]
+
+
+def test_romance_dictionary_prompt_demands_the_dictionary_form():
+    """/dict options are one click away from becoming SRS entries."""
+    reply = '{"kind": "word", "headline": "manger", "groups": [{"label": "x", ' \
+            '"options": [{"key": "a", "zh": "manger", "de": "essen"}]}]}'
+    with patch.object(ai, "_call_api", return_value=reply) as call:
+        ai.dictionary_lookup("mangeons", lang="fr")
+    prompt = call.call_args[0][1][0]["content"]
+    assert "DICTIONARY FORM" in prompt
+    assert "LEMMA" in prompt
+
+
+def test_inflected_form_finds_the_existing_entry_instead_of_generating_again(tmp_db):
+    """`manger` is already stored with its conjugations; typing `mangeons`
+    must reach that entry — no AI call, no second headword (#924)."""
+    _run_add_word("parler", yaml_text=ENTRY_YAML_FR_VERB, lang="fr", day="list")
+    entry = database.get_word_by_zh("parler")
+
+    # Any conjugated form stored by the importer resolves back to the lemma.
+    assert database.get_word_by_form("parles", "fr")["id"] == entry["id"]
+    assert database.get_word_by_form("parler", "fr")["id"] == entry["id"]
+    # No stemming: an unstored form is not guessed at.
+    assert database.get_word_by_form("parlassions", "fr") is None
+    # Languages don't bleed into each other.
+    assert database.get_word_by_form("parles", "es") is None
+
+    # The route takes the same path — and never calls the AI.
+    with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
+        r = client.post("/api/add-word-ai",
+                        json={"word_zh": "parles", "lang": "fr", "day": "list"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "job_id" not in body
+    # Reported under the entry's own headword, not what was typed.
+    assert body["word_zh"] == "parler"
+    assert body["entry_id"] == entry["id"]
+
+    conn = database.get_db()
+    n = conn.execute("SELECT COUNT(*) c FROM entries WHERE lang='fr'").fetchone()["c"]
+    conn.close()
+    assert n == 1, "an inflected input created a second entry"
+
+
+def test_lemmatised_headword_still_reaches_the_saved_deck(tmp_db):
+    """The model normalises `mangeons` to `manger`, so the freshly imported
+    entry cannot be looked up by what Daniel typed — day='list' would silently
+    leave the cards in the daily deck (#924)."""
+    result = _run_add_word("parles", yaml_text=ENTRY_YAML_FR_VERB, lang="fr", day="list")
+    assert result["job"]["status"] == "done", result["job"]
+    assert result["job"]["summary"]["word_zh"] == "parler"
+
+    entry = database.get_word_by_zh("parler")
+    saved_deck_id = database.get_or_create_saved_deck("fr")
+    conn = database.get_db()
+    rows = conn.execute(
+        "SELECT deck_id, state FROM cards WHERE word_id=? AND deleted_at IS NULL",
+        (entry["id"],),
+    ).fetchall()
+    conn.close()
+    assert {r["deck_id"] for r in rows} == {saved_deck_id}
+    assert all(r["state"] == "suspended" for r in rows)

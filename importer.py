@@ -718,6 +718,10 @@ def _import_entries(entries: list, deck_ids: dict, source: str, label: str,
     skipped_duplicate = 0
     skipped_invalid = 0
     skipped_entries: list[dict] = []
+    # Headwords actually written, in import order (#924). The caller cannot
+    # derive them from its own input any more: for fr/es the AI normalises an
+    # inflected input to the lemma, so "mangeons" comes back as "manger".
+    imported_words: list[str] = []
     _deck_path_cache: dict[str, dict] = {}  # deck_path → leaf deck_ids
 
     for entry in entries:
@@ -798,6 +802,7 @@ def _import_entries(entries: list, deck_ids: dict, source: str, label: str,
                 n = database.reset_card_progress(word_id)
                 logger.info("RESET %s: %r — reset %d card(s)", label, word_zh, n)
                 imported += 1
+                imported_words.append(word_zh)
             elif dup_action == "move":
                 move_target = card_cfg.get("move_target")
                 move_cats = card_cfg.get("move_categories") or None
@@ -817,6 +822,7 @@ def _import_entries(entries: list, deck_ids: dict, source: str, label: str,
                     logger.info("MOVE %s: %r → %r (cats=%r) — moved %d card(s)",
                                 label, word_zh, move_target, move_cats, n)
                     imported += 1
+                    imported_words.append(word_zh)
                 else:
                     logger.warning("MOVE %s: %r — no move_target specified, skipping", label, word_zh)
                     skipped_duplicate += 1
@@ -904,6 +910,7 @@ def _import_entries(entries: list, deck_ids: dict, source: str, label: str,
         _create_cards(word_id, target_deck_ids, suspended_states, word_zh=word_zh,
                       due_offset_days=due_offset_days)
         imported += 1
+        imported_words.append(word_zh)
 
       except Exception as _entry_exc:
         _entry_word = entry.get("simplified") or entry.get("word_zh") or repr(entry)[:60]
@@ -912,7 +919,8 @@ def _import_entries(entries: list, deck_ids: dict, source: str, label: str,
         skipped_entries.append({"word": str(_entry_word), "reason": str(_entry_exc)})
 
     return {"imported": imported, "skipped_duplicate": skipped_duplicate,
-            "skipped_invalid": skipped_invalid, "skipped_entries": skipped_entries}
+            "skipped_invalid": skipped_invalid, "skipped_entries": skipped_entries,
+            "imported_words": imported_words}
 
 
 def _validate_entry(word_zh: str, note_type: str) -> str | None:

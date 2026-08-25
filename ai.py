@@ -1289,6 +1289,20 @@ TYPE — pick exactly one:
 The headword key is named after the type: `word:`, `expression:` or `sentence:`.
 There is no `simplified` field and no Chinese in the output.
 
+DICTIONARY FORM — the headword is ALWAYS the lemma, never the form that was
+typed in. Daniel picks words out of texts, so the input is often inflected
+(mangeons, réduites, chats, plus belle). Normalise it:
+  - verb   -> the infinitive (mangeons -> manger, a réduit -> réduire)
+  - noun   -> the singular, with its article in `pos` (chats -> chat)
+  - adjective -> the masculine singular (réduites -> réduit, belle -> beau)
+  - everything else (adverb, preposition …) -> its invariable citation form
+The inflected form the learner typed is not lost: name it in one short German
+sentence inside `note` ("Eingegeben war die 1. Person Plural Präsens
+*mangeons*.") — and it must also appear in `conjugations`/`forms`, which are
+required anyway. Two exceptions, where the typed form IS the entry: a
+lexicalised form with a meaning of its own (a participle used as a noun or
+adjective), and anything of type `expression` or `sentence`.
+
 REQUIRED FIELDS: type, the headword key, english, german, level, date: "{today}".
   - pos: French part of speech — verbe, nom (m), nom (f), adjectif, adverbe,
     locution … NOUNS ALWAYS CARRY THEIR GENDER. Omit pos for `sentence`.
@@ -1509,6 +1523,20 @@ TYPE — pick exactly one:
 
 The headword key is named after the type: `word:`, `expression:` or `sentence:`.
 There is no `simplified` field and no Chinese in the output.
+
+DICTIONARY FORM — the headword is ALWAYS the lemma, never the form that was
+typed in. Daniel picks words out of texts, so the input is often inflected
+(hablamos, reducidas, gatos, más bella). Normalise it:
+  - verb   -> the infinitive (hablamos -> hablar, ha reducido -> reducir)
+  - noun   -> the singular, with its article in `pos` (gatos -> el gato)
+  - adjective -> the masculine singular (reducidas -> reducido)
+  - everything else (adverb, preposition …) -> its invariable citation form
+The inflected form the learner typed is not lost: name it in one short German
+sentence inside `note` ("Eingegeben war die 1. Person Plural Präsens
+*hablamos*.") — and it must also appear in `conjugations`/`forms`, which are
+required anyway. Two exceptions, where the typed form IS the entry: a
+lexicalised form with a meaning of its own (a participle used as a noun or
+adjective), and anything of type `expression` or `sentence`.
 
 REQUIRED FIELDS: type, the headword key, english, german, level, date: "{today}".
   - pos: Spanish part of speech — verbo, sustantivo (m), sustantivo (f),
@@ -1766,6 +1794,17 @@ Quality rules (these decide whether the entry is useful at all):
   formal_written, literary, slang.
 - For {lang_name} input, "headline" is the input word itself and each group's
   "label" names one sense in German (e.g. "1. Ökologie (Biologie)").
+- DICTIONARY FORM: every "zh" value that names a word (option "zh", and
+  "headline" for {lang_name} input) must be the LEMMA — verbs as the
+  infinitive, nouns in the singular, adjectives in the masculine singular —
+  even when the input was inflected (mangeons -> manger, réduites -> réduit).
+  Daniel adds words to his SRS straight from these options with one click, and
+  an inflected headword there builds the whole entry around the wrong form.
+  When you normalise an inflected input, say so in one German sentence in
+  "notes" ("Eingegeben war *mangeons*, 1. Person Plural von *manger*.") and
+  keep the inflected form out of the headline. This does NOT apply to the
+  "sentence" field or to the example sentences — those stay natural
+  {lang_name}, inflected as the grammar requires.
 - "kind" is exactly one of: "chinese" (reused here to mean "target-language
   input", i.e. any {lang_name} input), "word", "phrase", "sentence"
   (German/English input, by length). Only "sentence" makes the "sentence"
