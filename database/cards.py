@@ -370,6 +370,24 @@ def _still_learning(card: dict, learned_interval: int) -> bool:
     return card["state"] == "review" and (card.get("interval") or 0) < learned_interval
 
 
+def learning_rank(card: dict) -> int:
+    """0 for cards actually sitting in the learning/relearn steps, 1 otherwise.
+
+    The outermost sort key of every review queue (issue #920).  It has to be
+    separate from _still_learning() because that one deliberately lumps short-
+    interval review cards in with the learning group — and inside that merged
+    group the sort was by `due`, where the two states carry different shapes:
+    a review card's due is a bare date ('2026-08-24'), a learning card's is a
+    timestamp ('2026-08-24T09:00:00').  String-compared, the bare date always
+    wins, so review cards were served ahead of same-day learning cards.
+
+    It also overrides story order: a story only reads top-to-bottom if you take
+    its sentences in sequence, but Daniel wants the cards he is still learning
+    first, story or no story (decided 2026-08-25, overriding issue #462).
+    """
+    return 0 if card["state"] in ("learning", "relearn") else 1
+
+
 def story_sort_key(card: dict, story_pos: dict) -> tuple[int, int]:
     """Where a due card sits relative to today's story (issue #732).
 
@@ -535,8 +553,8 @@ def get_due_cards(deck_id: int, category: str, *, sibling_suppression: bool = Fa
                 return 0.0
         review_cards.sort(key=_overdueness, reverse=True)
 
-    # ── 3. Learning cards always sorted by due time ───────────────────────────
-    learning_cards.sort(key=lambda c: c["due"])
+    # ── 3. Learning cards first, then short-interval reviews; each by due ─────
+    learning_cards.sort(key=lambda c: (learning_rank(c), c["due"]))
 
     # ── 4. Assemble queue ─────────────────────────────────────────────────────
     il_o = preset.get("interday_learning_review_order", "mixed")
@@ -581,7 +599,7 @@ def get_next_card(deck_id: int, category: str) -> dict | None:
         sentences = get_story_sentences(story["id"])
         # word_id → story position
         story_pos = {s["word_id"]: s["position"] for s in sentences}
-        cards.sort(key=lambda c: story_sort_key(c, story_pos))
+        cards.sort(key=lambda c: (learning_rank(c), story_sort_key(c, story_pos)))
 
     return cards[0]
 
@@ -1119,26 +1137,30 @@ def get_due_cards_any_cat(root_deck_id: int, lang: str | None = None) -> list[di
                     story_pos[wid] = s["position"]
 
     if story_pos:
-        # Story exists: follow narrative order so the session reads top-to-bottom.
+        # Story exists: learning/relearn cards first (#920), then narrative order.
         # Cards the story doesn't cover are grouped by story_sort_key (#732) —
         # learning/review leftovers ahead of it, new cards behind it — instead of
         # all landing behind every new card.
         # Use category_order as tiebreaker so same-word cards respect deck settings.
         all_cards.sort(key=lambda c: (
+            learning_rank(c),
             story_sort_key(c, story_pos),
             cat_order.get(c["category"], 99),
         ))
     else:
-        # No story: learning-first. A review card below its deck's
-        # learned_interval is still "learning" (rank 0), before learned cards.
+        # No story: learning-first. Cards actually in the learning steps rank 0;
+        # a review card below its deck's learned_interval is still "learning"
+        # (rank 1) and comes before learned cards, but after rank 0 (#920).
         thresholds = {
             did: (get_preset_for_deck(did) or {}).get("learned_interval", 4)
             for did, _ in leaf_pairs
         }
         def _rank(c: dict) -> int:
-            if _still_learning(c, thresholds.get(c["deck_id"], 4)):
+            if learning_rank(c) == 0:
                 return 0
-            return 1 if c["state"] == "review" else 2
+            if _still_learning(c, thresholds.get(c["deck_id"], 4)):
+                return 1
+            return 2 if c["state"] == "review" else 3
         all_cards.sort(key=lambda c: (
             _rank(c),
             cat_order.get(c["category"], 99),
@@ -1267,7 +1289,7 @@ def get_due_cards_multi(deck_ids: list[int], category: str, *, root_deck_id: int
             root_new_remaining = max(0, root_new_limit - root_new_done)
             new_cards = new_cards[:root_new_remaining]
 
-    learning_cards.sort(key=lambda c: c["due"])
+    learning_cards.sort(key=lambda c: (learning_rank(c), c["due"]))
     review_cards.sort(key=lambda c: c["due"])
     # new_cards keep the per-deck gather/sort order from get_due_cards
 
