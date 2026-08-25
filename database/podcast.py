@@ -273,13 +273,63 @@ def get_episode(episode_id: int) -> dict | None:
     return d
 
 
-def list_episodes(limit: int = 100, feed_url: str | None = None, kind: str | None = None) -> list[dict]:
+# Columns the unified material list (#936) may sort on, mapped to the SQL
+# ordering they mean. A whitelist, not string interpolation of whatever the
+# query string says: `sort` goes straight into an ORDER BY clause.
+#
+# processed_at is the default and gets special treatment: rows that have NOT
+# been processed yet sort FIRST, because those are the ones waiting for Daniel
+# to do something. NULLs would otherwise sink to the bottom of a DESC sort and
+# the "you have unprocessed material" signal would be invisible. That leading
+# term is hard-coded ASC and does NOT follow `order`: "not processed yet" is
+# not a date, so flipping the direction must not bury it at the far end.
+EPISODE_SORTS = {
+    "processed_at": "processed_at IS NOT NULL ASC, processed_at {dir}",
+    "published_at": "COALESCE(published_at, created_at) {dir}",
+    "created_at":   "created_at {dir}",
+    "title":        "title COLLATE NOCASE {dir}",
+    "duration":     "COALESCE(duration_seconds, 0) {dir}",
+    "author":       "author COLLATE NOCASE {dir}",
+}
+
+
+def _order_by(sort: str | None, order: str | None) -> str:
+    """ORDER BY body for list_episodes(). Unknown values fall back to the
+    default instead of raising: a stale bookmark or a typo in a query string
+    should still show the list, just in the default order."""
+    spec = EPISODE_SORTS.get(sort or "", EPISODE_SORTS["processed_at"])
+    direction = "ASC" if (order or "").lower() == "asc" else "DESC"
+    return spec.format(dir=direction) + ", id DESC"
+
+
+def list_episodes(limit: int = 100, feed_url: str | None = None, kind=None,
+                  *, sort: str | None = None, order: str | None = None,
+                  platform=None, author=None, status=None, tag=None,
+                  since: str | None = None, list_id: int | None = None,
+                  include_archived: bool = True) -> list[dict]:
     """Episode list without the transcript full text (kept out for payload
-    size). `feed_url` (#502, the podcast_feeds.url / episode's channel_id)
-    optionally restricts the list to one source, for the per-feed episode
-    list view. `kind` (#650) optionally restricts to 'podcast' | 'video' |
-    'article'; None leaves behavior unchanged (all kinds, i.e. all existing
-    rows since they default to 'podcast')."""
+    size).
+
+    `feed_url` (#502, the podcast_feeds.url / episode's channel_id) restricts
+    the list to one source. `kind` (#650) restricts to 'podcast' | 'video' |
+    'article' | 'newsletter'; it accepts a list too (#936, the unified list
+    filters on several at once). None means "all kinds".
+
+    The rest are the #936 filter axes, each accepting a string or a list of
+    strings (OR within one axis, AND across axes — the way filter bars are
+    expected to behave):
+
+      platform  where the material came from (podcast_episodes.platform)
+      author    exact author match
+      status    pending | summarized | no_transcript | error
+      tag       tag NAME (case-insensitive); an item matches if it carries ANY
+                of the given tags
+      since     ISO date/datetime lower bound on the active sort's date
+      list_id   only members of one knowledge_list (#940)
+      include_archived  False hides rows with archived_at set
+
+    `sort`/`order` are validated against EPISODE_SORTS — never interpolated
+    raw."""
     conn = get_db()
     query = """SELECT id, video_id, channel_id, title, title_en, kind, published_at, youtube_url, spotify_url,
                       audio_url, duration_seconds,
@@ -293,12 +343,51 @@ def list_episodes(limit: int = 100, feed_url: str | None = None, kind: str | Non
     if feed_url:
         clauses.append("channel_id = ?")
         params.append(feed_url)
-    if kind:
-        clauses.append("kind = ?")
-        params.append(kind)
+
+    def _in(column: str, value) -> None:
+        """OR-within-an-axis: one value or many, always as an IN clause."""
+        values = [v for v in ([value] if isinstance(value, str) else (value or [])) if v]
+        if not values:
+            return
+        clauses.append(f"{column} IN ({','.join('?' * len(values))})")
+        params.extend(values)
+
+    _in("kind", kind)
+    _in("platform", platform)
+    _in("author", author)
+    _in("status", status)
+
+    tags = [t for t in ([tag] if isinstance(tag, str) else (tag or [])) if t]
+    if tags:
+        # Matching on the tag NAME, not its id: the filter bar round-trips
+        # names, and a name survives a merge (rename_tag) while an id doesn't.
+        clauses.append(
+            "id IN (SELECT it.episode_id FROM knowledge_item_tags it "
+            "JOIN knowledge_tags t ON t.id = it.tag_id "
+            f"WHERE t.name COLLATE NOCASE IN ({','.join('?' * len(tags))}))")
+        params.extend(tags)
+
+    if list_id is not None:
+        clauses.append("id IN (SELECT episode_id FROM knowledge_list_items WHERE list_id = ?)")
+        params.append(list_id)
+
+    if since:
+        # Bounded on the same date the current sort uses, so "last 7 days"
+        # means the same thing the list is ordered by rather than silently
+        # switching to a different clock.
+        date_col = {
+            "published_at": "COALESCE(published_at, created_at)",
+            "created_at":   "created_at",
+        }.get(sort or "", "COALESCE(processed_at, created_at)")
+        clauses.append(f"{date_col} >= ?")
+        params.append(since)
+
+    if not include_archived:
+        clauses.append("archived_at IS NULL")
+
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT ?"
+    query += " ORDER BY " + _order_by(sort, order) + " LIMIT ?"
     params.append(limit)
     rows = conn.execute(query, params).fetchall()
     conn.close()

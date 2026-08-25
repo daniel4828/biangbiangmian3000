@@ -474,6 +474,7 @@ try:
         # exactly the link Daniel wants on his home screen.
         "reel": "reel", "reels": "reel", "instagram": "reel",
         "article": "article", "articles": "article",
+        "newsletter": "newsletter", "newsletters": "newsletter",
     }
 
     @app.get("/knowledge/{kind}")

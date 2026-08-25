@@ -359,3 +359,51 @@ def list_episode_ids(list_id: int) -> list[int]:
         (list_id,)).fetchall()
     conn.close()
     return [r["episode_id"] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Filter facets (#936)
+# ---------------------------------------------------------------------------
+
+def knowledge_facets() -> dict:
+    """Everything the material list's filter bar needs to render its dropdowns,
+    in one request: which kinds/platforms/authors/statuses actually occur, plus
+    the tag and list catalogs.
+
+    Derived from the data rather than hard-coded, so a platform or author that
+    exists only in Daniel's library still shows up — and one that doesn't
+    exist never offers an option that can only return an empty list.
+
+    One call, not one per dropdown: the filter bar renders as a unit.
+    """
+    conn = get_db()
+
+    def _distinct(column: str) -> list[dict]:
+        rows = conn.execute(
+            f"SELECT {column} AS value, COUNT(*) AS count FROM podcast_episodes "
+            f"WHERE {column} IS NOT NULL AND {column} != '' "
+            f"GROUP BY {column} ORDER BY count DESC, value COLLATE NOCASE"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    facets = {
+        "kinds": _distinct("kind"),
+        "platforms": _distinct("platform"),
+        "authors": _distinct("author"),
+        "statuses": _distinct("status"),
+    }
+    feeds = conn.execute(
+        """SELECT f.id, f.url, f.title, COUNT(e.id) AS count
+           FROM podcast_feeds f
+           LEFT JOIN podcast_episodes e ON e.channel_id = f.url
+           GROUP BY f.id ORDER BY f.title COLLATE NOCASE, f.id"""
+    ).fetchall()
+    facets["feeds"] = [dict(r) for r in feeds]
+    archived = conn.execute(
+        "SELECT COUNT(*) AS c FROM podcast_episodes WHERE archived_at IS NOT NULL").fetchone()
+    facets["archived_count"] = archived["c"]
+    conn.close()
+
+    facets["tags"] = list_tags()
+    facets["lists"] = list_lists()
+    return facets

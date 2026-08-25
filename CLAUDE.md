@@ -623,7 +623,16 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **`receive` 必须带 `-t`，且超时要给足（#755）**：不带 `-t` 的 `signal-cli receive` **不会**"取空就退"，它会一直监听等新消息直到被杀——cron 一次性调用因此永远等到 subprocess 超时，一条都收不到。另外**首轮特别慢**：这个账号自 #521 起只发不收，Signal 服务端攒了大量待投递消息，实测消化超过 2 分钟（原来 120 秒的上限就是这么被撑爆的），所以 `_RECEIVE_TIMEOUT=300`。之后每 5 分钟一轮只有零星消息，秒级返回
   - **`receive` 会把 Daniel 与所有人的对话都同步下来**（#755 实测）：别人的消息正文、附件元数据、已读回执、正在输入指示，全都在返回的 envelope 流里。上面那道安全门挡住了它们入库，但它们**经过了本进程的内存**。所以：**永远不要把 envelope 原文写进日志**，也不要放进错误信息或 Signal 回执——只记 URL 和处理结果
   - `scripts/signal_check.py`：cron 入口，结构照抄 `knowledge_mail_check.py`（同款 PID 锁 + `database.init_db()` 直连）
-- **前端：播客页 → 知识页**（#653，`static/app.js`）：🎙️/📺/📄 三个子标签，播客管理页原有的 RSS 源/详情/生词表格逻辑全部保留，只是按 `?kind=` 过滤。**旧的 `#podcast-<id>` hash 链接永久保留**——已发出去的邮件/Signal 消息里全是这种链接；播客条目仍生成旧格式 hash，只有视频/文章条目用新的 `#knowledge-<id>`
+- **前端：统一素材列表（#936，取代 #653 的四个 kind 子标签）**：一个列表 + 排序栏 + 筛选栏 + **一个 Add 按钮**。kind 从"你放在哪个桶里"降级成众多筛选之一——因为找东西的方式是"上周处理的、那个作者的那篇"，不是"它属于四类中的哪一类"；而且两套并行的列表实现意味着以后每个排序和筛选都要写两遍
+  - 三个屏幕（`_knowledgeScreen`）：`list` 统一列表 / `feed` 某个 RSS 源的单集（**保留独立屏幕**，因为"Load more"是按源翻页的动作，在混合列表里没有意义）/ `feeds` RSS 源管理（从旧播客标签页搬到顶栏 📡 按钮后面）
+  - **Reels 不再是"虚拟标签"**（#764 那套按 URL 判 Instagram 的前端拆分）：`platform='instagram'` 现在是库里的真列，`#knowledge-reel` 链接翻译成 `platform=instagram` 筛选。`_isInstagramEpisode()` 优先读 `platform`，URL 判断只作为老行的兜底
+  - **筛选状态存 `localStorage.knowledgeFilters`**，读出来时**合并到默认值上**而不是直接信任存的对象——以后新增的筛选轴对老用户不能是 `undefined`
+  - 从素材详情返回时 `openKnowledge()` **不传参数**：传了就会重置筛选栏，而"看完一篇回到列表发现筛选没了"是最糟的时机
+  - **旧的 `#podcast-<id>` hash 链接永久保留**——已发出去的邮件/Signal 消息里全是这种链接；`#knowledge-<kind>` / `/knowledge/<kind>`（#704）同样保留，落到"该 kind 已预选"的统一列表
+- **列表接口的排序与筛选（#936）**：`GET /api/podcast/episodes` 的 `sort`/`order` 走 `database.EPISODE_SORTS` **白名单**（它要拼进 ORDER BY），**未知值回落默认顺序而不是 400**——过期的书签也该看得到列表。筛选轴 `kind`/`platform`/`author`/`tag`/`status` 都**可重复**（轴内 OR、轴间 AND），`kind` 仍接受单值字符串（#936 之前的调用方和书签都是这么写的）
+  - **未处理的素材在默认排序下永远排最前**（`processed_at IS NOT NULL ASC` 这一项**写死 ASC、不跟随 `order`**）："还没处理"不是一个日期，翻转方向时不该把它埋到另一头
+  - `GET /api/knowledge/facets` 一次返回筛选栏所有下拉的选项（实际出现过的 kind/platform/author/status + 源/标签/列表目录）：筛选栏是一个整体，五个并行请求就是五倍的"画到一半"概率。选项**从数据里推**，不写死——只存在于 Daniel 库里的平台也能出现，不存在的永远不会给出必然为空的选项
+  - 归档素材（#940）在 **HTTP 层**默认隐藏（`include_archived=false`）；`database.list_episodes()` 本身保持包含，免得动到既有调用方
 - **独立收藏页 `/save`（#681，#835 起三个标签）**：`/add` 的素材版 —— 可收藏的网址，🔗 Link / 📋 Text / 📎 File，同样**不加载 `app.js`**（手机上从别的 App 分享文章时秒开）。入库逻辑抽到 `shared.js` 的 `ingestKnowledge()` / `ingestKnowledgeFile()`，应用的知识页和本页共用一份。**两处都不许直接调 `/api/knowledge/add*`**，有测试守着
 - **粘贴正文的元数据由 AI 补全（#833）**：Text 表单是「正文（必填）+ 链接 / 标题 / 作者（都可选）」，留空的由 `ai.extract_article_metadata()` 一次便宜的 DeepSeek 调用从正文**前 3000 字**读出来（元数据都在开头，喂全文是白花钱）。author 落 `channel_id`（文章行本来就用这一列存来源）
   - **三个都填好了就完全不调 AI**；**AI 绝不覆盖用户手填的值**（他看着原文，模型是猜的）
@@ -808,7 +817,11 @@ POST /api/knowledge/add-text                          → body {text, title?, au
 POST /api/knowledge/add-file                          → multipart：file（.txt/.md/.pdf/.docx，≤10 MB）+ title?/author?/source_url?/china_critical?（#835）→ 同上契约；未知类型 / 抽不出文字 / 正文太短均 400
 GET/POST /api/known-words ；DELETE /api/known-words/{word} → 已认识词库（#710）：标记后 zh_annotate 不再当生词；不建卡不排程；DELETE 词不在表里返回 404（不假装成功）
 POST /api/podcast/check                              → 跑一轮抓取，返回汇总 {new, summarized, emailed, failed}
-GET  /api/podcast/episodes                            → 列表（不含转录全文；?feed_id= 按源过滤；?kind= 按 podcast/video/article 过滤，#650；手动处理中的单集 status 显示为 processing）
+GET  /api/podcast/episodes                            → 统一素材列表（不含转录全文；手动处理中的单集 status 显示为 processing）
+                                                       #936 起：?sort=processed_at|published_at|created_at|title|author|duration & ?order=asc|desc（白名单，未知值回落默认而不是 400）
+                                                       筛选轴 ?kind= ?platform= ?author= ?tag= ?status= 均**可重复**（轴内 OR、轴间 AND）；?since=YYYY-MM-DD、?feed_id=、?list_id=
+                                                       ?include_archived=（默认 false，归档素材默认不出现）
+GET  /api/knowledge/facets                            → 筛选栏所有下拉的选项，一次拿全（#936）：{kinds,platforms,authors,statuses,feeds,tags,lists,archived_count}
 GET  /api/podcast/episodes/{id}                       → 详情（摘要 + 转录 + HSK 生词）
 POST /api/podcast/episodes/{id}/retry                 → 同步重跑单集（error/no_transcript/pending；#491/#500）
 POST /api/podcast/episodes/{id}/process               → 手动触发单集转录+摘要（后台线程，立即返回；重复提交 409；#502）

@@ -9,7 +9,7 @@ from xml.etree import ElementTree
 import database
 import knowledge.rendition
 import podcast
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -45,15 +45,53 @@ def _overlay_processing_status(episode: dict) -> dict:
 
 
 @router.get("/api/podcast/episodes")
-def list_episodes(limit: int = 100, feed_id: int | None = None, kind: str | None = None):
+def list_episodes(
+    limit: int = 100,
+    feed_id: int | None = None,
+    kind: list[str] | None = Query(None),
+    sort: str | None = None,
+    order: str | None = None,
+    platform: list[str] | None = Query(None),
+    author: list[str] | None = Query(None),
+    status: list[str] | None = Query(None),
+    tag: list[str] | None = Query(None),
+    since: str | None = None,
+    list_id: int | None = None,
+    include_archived: bool = False,
+):
+    """The material list (#936). Every filter axis repeats (?tag=a&tag=b = OR
+    within the axis, AND across axes); `kind` keeps working as a single value
+    because that is how every pre-#936 caller and bookmark spells it.
+
+    `sort`/`order` are validated against database.EPISODE_SORTS — an unknown
+    value falls back to the default order instead of 400ing, because a stale
+    bookmark should still show the list.
+
+    `include_archived` defaults to False: archived material (#940) is out of
+    the way by default, and a filter toggle brings it back.
+    """
     feed_url = None
     if feed_id is not None:
         feed = database.get_feed(feed_id)
         if not feed:
             raise HTTPException(404, "Feed not found")
         feed_url = feed["url"]
-    episodes = database.list_episodes(limit=limit, feed_url=feed_url, kind=kind)
+    episodes = database.list_episodes(
+        limit=limit, feed_url=feed_url, kind=kind, sort=sort, order=order,
+        platform=platform, author=author, status=status, tag=tag,
+        since=since, list_id=list_id, include_archived=include_archived,
+    )
     return [_overlay_processing_status(e) for e in episodes]
+
+
+@router.get("/api/knowledge/facets")
+def knowledge_facets():
+    """Everything the filter bar's dropdowns need, in one request (#936):
+    the kinds/platforms/authors/statuses that actually occur in the library,
+    plus the feed, tag and list catalogs. One call rather than one per
+    dropdown — the bar renders as a unit, and five parallel requests on every
+    list load is five times the chance of a half-drawn filter bar."""
+    return database.knowledge_facets()
 
 
 @router.get("/api/podcast/episodes/{episode_id}")
