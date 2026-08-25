@@ -224,6 +224,11 @@ const KEYMAP_DEFAULTS = {
   'nav-back':      'd',
   'nav-browse':    'b',
   'nav-add-card':  'a',
+  // #927: ⌘A has always opened the add-word modal (#788), but a Cmd combo can't
+  // be shown in the keymap list (single keys only), so the action was invisible
+  // there. Listed with no default binding — ⌘A keeps working either way, so
+  // this is a pure discoverability fix, not a behavior change.
+  'add-word':      null,
   // home (decks view)
   'home-listening': 'l',
   'home-creating':  'c',
@@ -268,6 +273,7 @@ const KEYMAP_ACTIONS = [
   { id: 'nav-back',      label: 'Back',                        scope: 'global' },
   { id: 'nav-browse',    label: 'Open Browse',                 scope: 'global' },
   { id: 'nav-add-card',  label: 'New card',                    scope: 'global' },
+  { id: 'add-word',      label: 'Add a new word (also ⌘A)',    scope: 'global' },
 
   { id: 'home-listening', label: 'All deck · Listening',       scope: 'home' },
   { id: 'home-creating',  label: 'All deck · Creating',        scope: 'home' },
@@ -7699,6 +7705,17 @@ function closeAddWordModal() {
   _addWordQueue = _addWordQueue.filter(item => item.state === 'running');
 }
 
+// Shared by the two keyboard ways in (#788's ⌘A and #927's optional single
+// key) — one toggle so both can never drift apart.
+function toggleAddWordModal() {
+  const modal = document.getElementById('add-word-modal');
+  if (modal && modal.style.display !== 'none') { closeAddWordModal(); return; }
+  // In review the word was picked out of the card, so that card's language
+  // wins (same rule as the header ＋, #829). Anywhere else the argument must
+  // stay omitted so the home page's language tab decides.
+  openAddWordModal(_currentView === 'review' ? currentCardLang() : undefined);
+}
+
 function _renderAddWordQueue() {
   const el = document.getElementById('add-word-queue');
   if (!el) return;
@@ -12031,12 +12048,15 @@ document.addEventListener('keydown', async e => {
   // Use e.code, not e.key: with Cmd held macOS may report a different e.key.
   // Inside inputs we let the browser's select-all through untouched.
   if (e.code === 'KeyA' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
-    if (!inInput) {
-      e.preventDefault();
-      const modal = document.getElementById('add-word-modal');
-      if (modal && modal.style.display !== 'none') closeAddWordModal();
-      else openAddWordModal();
-    }
+    if (!inInput) { e.preventDefault(); toggleAddWordModal(); }
+    return;
+  }
+
+  // Optional single-key binding for the same action (#927). Unbound by default,
+  // so this branch is inert until the user assigns a key in Settings — ⌘A above
+  // stays the always-available way in.
+  if (_key('add-word') != null && e.key === _key('add-word') && !e.ctrlKey && !e.metaKey) {
+    if (!inInput) { e.preventDefault(); toggleAddWordModal(); }
     return;
   }
 
