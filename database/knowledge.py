@@ -495,3 +495,18 @@ def update_episode_metadata(episode_id: int, fields: dict, *, source: str = "use
     reindex_episode(episode_id)
     from .podcast import get_episode
     return get_episode(episode_id)
+
+
+def set_archived(episode_id: int, archived: bool = True) -> None:
+    """Archive / un-archive one item (#940). A column on podcast_episodes
+    rather than a fifth table: "am I done with this one" is a property of the
+    item, and a join would sit in the way of every single list query."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE podcast_episodes SET archived_at = %s WHERE id = ?"
+            % ("datetime('now')" if archived else "NULL"),
+            (episode_id,))
+        conn.commit()
+    finally:
+        conn.close()

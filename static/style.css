@@ -3334,6 +3334,68 @@ a.nav-btn { text-decoration: none; }
 .knowledge-tag-ai { background: transparent; border: 1px dashed var(--border); color: var(--muted); }
 .knowledge-row-archived { opacity: 0.55; }
 
+/* ── 列表 + 左右滑动（#940）─────────────────────────────────────────────── */
+.knowledge-lists-bar { margin-bottom: 10px; flex-wrap: wrap; }
+/* 行本身被拖动，两个动作面板露在它后面 */
+.knowledge-swipe { position: relative; overflow: hidden; border-radius: 8px; }
+.knowledge-swipe + .knowledge-swipe { margin-top: 0; }
+.knowledge-swipe-row {
+  position: relative;
+  z-index: 1;
+  background: var(--card, var(--bg));
+  touch-action: pan-y;          /* 纵向滚动照常，横向留给手势 */
+}
+.knowledge-swipe-active .knowledge-swipe-row { transition: none; }
+.knowledge-swipe-row { transition: transform 0.18s ease; }
+.knowledge-swipe-action {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+}
+.knowledge-swipe-left  { left: 0;  background: var(--primary); }
+.knowledge-swipe-right { right: 0; background: #64748b; }
+
+/* 桌面端没有触摸：悬停时给出同样两个动作，功能不缺失 */
+.knowledge-hover-actions { display: none; gap: 4px; }
+.podcast-row:hover .knowledge-hover-actions { display: inline-flex; }
+@media (hover: none) {
+  .knowledge-hover-actions { display: none !important; }
+}
+
+/* 误滑在手机上太容易发生，动作一律可撤销 */
+#knowledge-toast {
+  display: none;
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 900;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--text);
+  color: #fff;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+}
+#knowledge-toast button {
+  background: transparent;
+  border: none;
+  color: #93c5fd;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
 /* 全文搜索（#939） */
 .knowledge-search-row { display: flex; gap: 6px; margin-bottom: 10px; }
 .knowledge-search-row .opt-input { flex: 1; min-width: 0; }

@@ -4,6 +4,7 @@
 import json
 import logging
 import re
+import sqlite3
 import threading
 from xml.etree import ElementTree
 
@@ -186,6 +187,94 @@ def delete_knowledge_tag(tag_id: int):
     if not database.delete_tag(tag_id):
         raise HTTPException(404, "Tag not found")
     return {"deleted": True}
+
+
+# ── Lists & archiving (#940) ───────────────────────────────────────────────
+# Ingesting and reading are two different moments. Until now nothing recorded
+# "I still want to read this" or "I'm done with it", so the list was a pile
+# that only ever grew.
+
+class ListBody(BaseModel):
+    name: str
+    icon: str | None = None
+
+
+class ListItemBody(BaseModel):
+    episode_id: int
+
+
+@router.get("/api/knowledge/lists")
+def list_knowledge_lists():
+    return database.list_lists()
+
+
+@router.post("/api/knowledge/lists")
+def create_knowledge_list(body: ListBody):
+    try:
+        list_id = database.create_list(body.name, body.icon)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "A list with that name already exists")
+    return database.get_list(list_id)
+
+
+@router.put("/api/knowledge/lists/{list_id}")
+def update_knowledge_list(list_id: int, body: ListBody):
+    """Rename / re-icon a list. The built-in Read Later list may be renamed —
+    it is only a label; the swipe gesture finds it by is_builtin, not by name.
+    Only deleting it is refused."""
+    try:
+        ok = database.update_list(list_id, name=body.name, icon=body.icon)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "A list with that name already exists")
+    if not ok:
+        raise HTTPException(404, "List not found")
+    return database.get_list(list_id)
+
+
+@router.delete("/api/knowledge/lists/{list_id}")
+def delete_knowledge_list(list_id: int):
+    try:
+        deleted = database.delete_list(list_id)
+    except ValueError as e:
+        # The built-in list: the swipe gesture has nowhere to put things
+        # without it.
+        raise HTTPException(400, str(e))
+    if not deleted:
+        raise HTTPException(404, "List not found")
+    return {"deleted": True}
+
+
+@router.post("/api/knowledge/lists/{list_id}/items")
+def add_to_knowledge_list(list_id: int, body: ListItemBody):
+    if database.get_list(list_id) is None:
+        raise HTTPException(404, "List not found")
+    if database.get_episode(body.episode_id) is None:
+        raise HTTPException(404, "Episode not found")
+    database.add_to_list(list_id, body.episode_id)
+    return {"added": True}
+
+
+@router.delete("/api/knowledge/lists/{list_id}/items/{episode_id}")
+def remove_from_knowledge_list(list_id: int, episode_id: int):
+    if not database.remove_from_list(list_id, episode_id):
+        raise HTTPException(404, "Not in that list")
+    return {"removed": True}
+
+
+@router.post("/api/podcast/episodes/{episode_id}/archive")
+def archive_episode(episode_id: int, archived: bool = True):
+    """Archive / un-archive one item (#940). Archived material drops out of the
+    default list view; the filter bar's toggle brings it back. A column rather
+    than a fifth table: "am I done with this" is a property of the item, and a
+    join would only be in the way of every list query."""
+    if database.get_episode(episode_id) is None:
+        raise HTTPException(404, "Episode not found")
+    database.set_archived(episode_id, archived)
+    return database.get_episode(episode_id)
 
 
 @router.get("/api/knowledge/search")

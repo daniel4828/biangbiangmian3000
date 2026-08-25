@@ -686,6 +686,13 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **索引不用触发器**：写在 `schema.sql` 里的触发器，之后改这些列的人根本看不见它；而且两个数据源要解析 JSON，SQL 做不到。挂钩点是 `database.update_episode()` 里的 `_SEARCHABLE_COLUMNS` 判断（转录和摘要本来就都从这一个瓶颈过）、`save_knowledge_rendition()` / `delete_knowledge_renditions()`、以及 `update_episode_metadata()`（#937 的手改走的不是 `update_episode`）
   - 首次全量建索引在 `init_db()` 里，**用 `app_settings.knowledge_fts_built` 标记只跑一次**：它要读遍库里所有转录，而生产每 2 分钟重启一次（#688 的教训）
   - `knowledge_fts` 是虚拟表**没有外键**，所以删素材时必须显式删它的索引行，否则会一直返回已经不存在的素材
+- **列表 / Read Later / 归档 / 左右滑动（#940）**：摄取和阅读是两个时刻——素材抓下来、摘要跑完，往往几天后才真去读。在此之前没有任何地方记录"这个我还想读"和"这个我读完了"
+  - 内置 `Read Later` **可以改名但不能删**（`is_builtin`）：滑动手势没有它就无处可放，而且它是按 `is_builtin` 找的、不是按名字，所以改名不影响手势
+  - 加入列表**幂等**；移除一个本来就不在里面的东西返回 **404 而不是假装成功**——否则界面会为一次没发生的改动弹出撤销条
+  - **归档用 `podcast_episodes.archived_at` 一列，不建第五张表**："我读完了吗"是素材自身的属性，一个 JOIN 会挡在每一条列表查询前面
+  - **滑动是纯原生 touch 事件**（本项目无构建步骤）：**必须先锁轴**（`_SWIPE_DECIDE`，横向位移明显大于纵向才算滑动），否则带一点横向抖动的纵向拖动会被当成滑动吃掉，列表区域就再也滚不动了。监听器**委托绑定且只绑一次**（`dataset.swipeBound`）——列表的 `innerHTML` 每次筛选都重建，逐行绑定要永远重绑
+  - **桌面端悬停给出同样两个动作**（`.knowledge-hover-actions`）：没有触摸屏不等于没有这个功能
+  - 动作是**乐观更新**（同 #692 的加星）+ **可撤销的提示条**：手机上误滑太容易发生，单向动作不可接受
 - **china-kritisch 复选框（#731）**：摘要默认走便宜的 DeepSeek —— Daniel 的博客素材绝大多数不批评中国，没必要为它们付 OpenAI 的钱。少数确实批评中国的素材勾选后存 `podcast_episodes.china_critical=1`，摘要时把 DeepSeek 从候选模型里**彻底删掉**（不是排后面）：它对这类内容会悄悄弱化或拒答，而弱化后的摘要照样能解析出 `summary_de`，任何"解析失败就回退"的机制都永远不会触发
   - **免费的 NotebookLM 路径不受影响，照旧第一优先**：它是 Google 的，没理由审查这个话题，而且不花钱。勾选只改变它失败之后 API 兜底那一层选谁
   - **标记必须在粘贴那一刻打上**：摘要发生在之后独立的 `POST .../process` 调用里（甚至是 cron 里），那时已经没人在旁边说明这是什么素材
@@ -856,6 +863,9 @@ GET  /api/podcast/episodes                            → 统一素材列表（�
                                                        #936 起：?sort=processed_at|published_at|created_at|title|author|duration & ?order=asc|desc（白名单，未知值回落默认而不是 400）
                                                        筛选轴 ?kind= ?platform= ?author= ?tag= ?status= 均**可重复**（轴内 OR、轴间 AND）；?since=YYYY-MM-DD、?feed_id=、?list_id=
                                                        ?include_archived=（默认 false，归档素材默认不出现）
+GET/POST /api/knowledge/lists ；PUT/DELETE /api/knowledge/lists/{id}      → 列表管理（#940）；内置 Read Later 可改名不可删（删返回 400）；重名 409；不存在 404
+POST /api/knowledge/lists/{id}/items ；DELETE .../items/{episode_id}      → 加入/移出列表；加入幂等；移出不在其中的返回 404（不假装成功）
+POST /api/podcast/episodes/{id}/archive[?archived=false]                  → 归档/取消归档（#940）；归档素材默认列表视图不显示
 GET  /api/knowledge/search?q=&limit=                   → 全文搜索（#939）：转录 + 两份摘要 + 各语言 rendition + 标题/作者
                                                        一条素材一行结果，带 fields[] 与 snippet（命中用 \x02/\x03 哨兵包住）；q 为空 → 400
 POST /api/knowledge/reindex                           → 全量重建索引（正常不需要，写路径自己维护；索引与源漂移时的唯一修法）
