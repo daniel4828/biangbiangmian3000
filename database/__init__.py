@@ -11,3 +11,4 @@ from .knowledge import *
 from .prompts import *
 from .dictionary import *
 from .books import *
+from .knowledge_chat import *

@@ -15,9 +15,12 @@ import logging
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+import ai
 import database
 import knowledge.files
 import knowledge.ingest
+import routes.story
+from routes.utils import ai_disabled
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -142,3 +145,82 @@ def delete_known_word(word: str, lang: str = "zh"):
     if not database.remove_known_word(word.strip(), lang):
         raise HTTPException(404, "word not on the known list")
     return {"status": "ok", "word": word, "lang": lang}
+
+
+# ── Chat about a knowledge item (#945) ──────────────────────────────────────
+# Follow-up questions about the material Daniel just read, saved so they are
+# still there next time he opens the item. The context is rebuilt from
+# podcast_episodes on every turn (never copied into the chat tables), so a
+# regenerated summary is immediately what the AI sees.
+
+
+class KnowledgeChatRequest(BaseModel):
+    message: str
+    # Same whitelist the story model dropdown uses (routes/story.ALLOWED_MODELS);
+    # an unknown value falls back to the default with a warning rather than
+    # being sent to an API as if it were a model name (#721).
+    model: str | None = None
+
+
+@router.get("/api/knowledge/{episode_id}/chat")
+def get_knowledge_chat(episode_id: int):
+    """The saved conversation for one item. An item nobody has asked about
+    yet is an empty list, not a 404 — the panel renders either way."""
+    if database.get_episode(episode_id) is None:
+        raise HTTPException(404, "knowledge item not found")
+    chat = database.get_chat(episode_id)
+    return {
+        "episode_id": episode_id,
+        "model": (chat or {}).get("model"),
+        "messages": (chat or {}).get("messages", []),
+    }
+
+
+@router.post("/api/knowledge/{episode_id}/chat")
+def post_knowledge_chat(episode_id: int, body: KnowledgeChatRequest):
+    """Ask one question about the item and store the turn.
+
+    Nothing is written until the answer is in hand: an AI failure must leave
+    the history exactly as it was, so Daniel can just press send again (the
+    frontend keeps his text in the box). A stored question with no answer
+    would be a permanent hole in the conversation.
+    """
+    question = (body.message or "").strip()
+    if not question:
+        raise HTTPException(400, "message required")
+    if ai_disabled():
+        raise HTTPException(400, "AI is disabled")
+
+    episode = database.get_episode(episode_id)
+    if episode is None:
+        raise HTTPException(404, "knowledge item not found")
+
+    # Same rule the knowledge story mode uses (#661): full transcript when
+    # there is one, summary otherwise. Imported from routes.story rather than
+    # copied so the two can't drift apart.
+    material = routes.story._knowledge_material(episode)
+    if not material:
+        raise HTTPException(400, "this item has no transcript or summary yet — process it first")
+
+    chat = database.get_chat(episode_id)
+    history = (chat or {}).get("messages", [])
+    model = routes.story._validated_model(body.model)
+
+    try:
+        answer, used_model = ai.chat_about_material(
+            material, episode.get("title") or "", history, question, model=model)
+    except Exception as e:
+        logger.exception("knowledge chat failed for episode %s", episode_id)
+        raise HTTPException(500, f"AI call failed: {e}")
+
+    stored = database.add_turn(episode_id, question, answer, used_model)
+    return {"episode_id": episode_id, "model": used_model, "messages": stored["messages"]}
+
+
+@router.delete("/api/knowledge/{episode_id}/chat")
+def delete_knowledge_chat(episode_id: int):
+    """Clear the conversation. 404 when there was none — reporting a miss
+    beats pretending success on an item the frontend thinks has a chat."""
+    if not database.delete_chat(episode_id):
+        raise HTTPException(404, "no chat for this item")
+    return {"status": "ok", "episode_id": episode_id}

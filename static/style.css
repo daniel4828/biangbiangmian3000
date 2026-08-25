@@ -5963,3 +5963,39 @@ table.fsrs-table td.ivl { font-weight: 700; }
   display: block;
   cursor: default;
 }
+
+
+/* ── Chat about a knowledge item (#945) ────────────────────────────────── */
+.knowledge-chat-log {
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.knowledge-chat-msg {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #ddd);
+  background: var(--bg);
+}
+.knowledge-chat-me { border-left: 3px solid var(--primary); }
+.knowledge-chat-who {
+  font-size: 0.78em;
+  color: var(--muted, #888);
+  margin-bottom: 4px;
+}
+.knowledge-chat-body {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.knowledge-chat-input { margin-top: 10px; }
+.knowledge-chat-input textarea { width: 100%; resize: vertical; }
+.knowledge-chat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.knowledge-chat-controls select { flex: 1 1 220px; min-width: 0; }
