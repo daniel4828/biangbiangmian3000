@@ -409,7 +409,7 @@ def test_mail_without_url_but_long_body_ingested_as_text(monkeypatch):
     ))
     monkeypatch.setattr(
         knowledge.ingest, "ingest_text",
-        lambda title, text, source_url=None: calls.append((title, text)) or {"episode_id": 1},
+        lambda title, text, source_url=None, **kwargs: calls.append((title, text)) or {"episode_id": 1},
     )
 
     summary = mailbox.check_mailbox(imap_factory=lambda: fake)
@@ -435,7 +435,7 @@ def test_url_present_takes_priority_over_text_fallback(monkeypatch):
     monkeypatch.setattr(knowledge.ingest, "ingest_url", lambda url: url_calls.append(url) or {"episode_id": 1})
     monkeypatch.setattr(
         knowledge.ingest, "ingest_text",
-        lambda title, text, source_url=None: text_calls.append(title) or {"episode_id": 2},
+        lambda title, text, source_url=None, **kwargs: text_calls.append(title) or {"episode_id": 2},
     )
 
     summary = mailbox.check_mailbox(imap_factory=lambda: fake)
@@ -455,7 +455,7 @@ def test_text_fallback_ingest_failure_does_not_mark_seen(monkeypatch):
         AssertionError("should not be reached")
     ))
 
-    def failing_ingest_text(title, text, source_url=None):
+    def failing_ingest_text(title, text, source_url=None, **kwargs):
         raise knowledge.ingest.IngestError("boom")
 
     monkeypatch.setattr(knowledge.ingest, "ingest_text", failing_ingest_text)
@@ -483,7 +483,7 @@ def test_html_only_body_used_for_text_fallback_after_stripping(monkeypatch):
     ))
     monkeypatch.setattr(
         knowledge.ingest, "ingest_text",
-        lambda title, text, source_url=None: calls.append(text) or {"episode_id": 1},
+        lambda title, text, source_url=None, **kwargs: calls.append(text) or {"episode_id": 1},
     )
 
     summary = mailbox.check_mailbox(imap_factory=lambda: fake)

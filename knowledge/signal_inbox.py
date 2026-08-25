@@ -260,7 +260,7 @@ def _ingest_pasted_body(body: str, summary: dict, receipt_lines: list) -> None:
     urls = extract_urls(body)
     try:
         result = knowledge.ingest.ingest_text(
-            None, body, source_url=urls[0] if urls else None)
+            None, body, source_url=urls[0] if urls else None, platform="signal")
     except Exception as e:
         logger.warning("knowledge.signal_inbox: 粘贴正文入库失败（%d 字）: %s", len(body), e)
         summary["failed"] += 1

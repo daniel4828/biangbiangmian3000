@@ -119,7 +119,8 @@ def test_ingest_newsletter_calls_ingest_text_with_kind_newsletter(monkeypatch):
     calls = []
 
     def fake_ingest_text(title, text, source_url=None, author=None,
-                          china_critical=False, fallback_title=None, kind="article"):
+                          china_critical=False, fallback_title=None, kind="article",
+                          **kwargs):
         calls.append({"title": title, "text": text, "author": author, "kind": kind})
         return {"episode_id": 1}
 
@@ -241,7 +242,7 @@ def test_newsletter_sender_takes_priority_over_url_branch(monkeypatch):
     monkeypatch.setattr(
         knowledge.ingest, "ingest_text",
         lambda title, text, source_url=None, author=None, china_critical=False,
-               fallback_title=None, kind="article":
+               fallback_title=None, kind="article", **kwargs:
             text_calls.append({"title": title, "kind": kind, "author": author}) or {"episode_id": 42},
     )
     monkeypatch.setattr(podcast, "retry_episode", lambda episode_id: retry_calls.append(episode_id) or {"status": "summarized"})
@@ -275,7 +276,7 @@ def test_newsletter_already_exists_skips_retry_but_still_marks_seen(monkeypatch)
     monkeypatch.setattr(
         knowledge.ingest, "ingest_text",
         lambda title, text, source_url=None, author=None, china_critical=False,
-               fallback_title=None, kind="article": {"status": "already_exists", "episode_id": 7},
+               fallback_title=None, kind="article", **kwargs: {"status": "already_exists", "episode_id": 7},
     )
     monkeypatch.setattr(podcast, "retry_episode", lambda episode_id: retry_calls.append(episode_id))
 
@@ -303,7 +304,8 @@ def test_newsletter_permanent_ingest_error_marks_seen(monkeypatch):
         AssertionError("should not be reached")))
 
     def failing_ingest_text(title, text, source_url=None, author=None,
-                             china_critical=False, fallback_title=None, kind="article"):
+                             china_critical=False, fallback_title=None, kind="article",
+                             **kwargs):
         raise knowledge.ingest.IngestError("too short")
 
     monkeypatch.setattr(knowledge.ingest, "ingest_text", failing_ingest_text)
@@ -329,7 +331,8 @@ def test_newsletter_transient_error_not_marked_seen(monkeypatch):
         AssertionError("should not be reached")))
 
     def flaky_ingest_text(title, text, source_url=None, author=None,
-                           china_critical=False, fallback_title=None, kind="article"):
+                           china_critical=False, fallback_title=None, kind="article",
+                           **kwargs):
         raise RuntimeError("database is locked")
 
     monkeypatch.setattr(knowledge.ingest, "ingest_text", flaky_ingest_text)
@@ -448,7 +451,8 @@ def test_minified_html_newsletter_keeps_real_content_end_to_end(monkeypatch):
     captured_text = {}
 
     def fake_ingest_text(title, text, source_url=None, author=None,
-                          china_critical=False, fallback_title=None, kind="article"):
+                          china_critical=False, fallback_title=None, kind="article",
+                          **kwargs):
         captured_text["text"] = text
         captured_text["kind"] = kind
         return {"episode_id": 55}

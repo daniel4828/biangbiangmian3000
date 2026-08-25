@@ -91,6 +91,8 @@ def _ingest_video(url: str, video_id: str, china_critical: bool = False) -> dict
         duration_seconds=None,
         kind="video",
         china_critical=china_critical,
+        author=meta.get("author_name"),
+        platform="youtube",
     )
     if title_en:
         database.update_episode(episode_id, title_en=title_en)
@@ -135,6 +137,8 @@ def _ingest_instagram(url: str, shortcode: str, china_critical: bool = False) ->
         duration_seconds=meta.get("duration"),
         kind="video",
         china_critical=china_critical,
+        author=meta.get("uploader"),
+        platform="instagram",
     )
     if title_en:
         database.update_episode(episode_id, title_en=title_en)
@@ -154,7 +158,8 @@ def _existing_episode(video_id: str) -> dict | None:
 
 def _store_article(*, video_id: str, title: str, site: str | None, published_at,
                     source_url: str | None, text: str, transcript_source: str,
-                    china_critical: bool = False, kind: str = "article") -> dict:
+                    china_critical: bool = False, kind: str = "article",
+                    author: str | None = None, platform: str | None = None) -> dict:
     """Create the kind='article' (or kind='newsletter', #925) podcast_episodes
     row and store `text` as transcript_zh immediately — this is the ONE
     row-building code path for _ingest_article (URL), ingest_text (pasted
@@ -164,6 +169,12 @@ def _store_article(*, video_id: str, title: str, site: str | None, published_at,
     puts both paths straight into _process_episode's "reuse existing
     transcript" fast path when the frontend later calls
     POST /api/podcast/episodes/{id}/process — see article.py's docstring.
+
+    `author`/`platform` (#935) feed the unified material list's filters. Note
+    that `site` and `author` are NOT the same thing even though both paths
+    historically shared the channel_id column: a fetched article's `site` is a
+    domain, which is not an author — so _ingest_article passes no author and
+    lets #937/#938 fill it in, while the paste path passes what Daniel typed.
 
     Caller must already have deduped via `_existing_episode()`."""
     title = title or video_id
@@ -185,6 +196,8 @@ def _store_article(*, video_id: str, title: str, site: str | None, published_at,
         duration_seconds=None,
         kind=kind,
         china_critical=china_critical,
+        author=author,
+        platform=platform,
     )
     updates = {"transcript_zh": text, "transcript_source": transcript_source}
     if title_en:
@@ -219,6 +232,7 @@ def _ingest_article(url: str, china_critical: bool = False) -> dict:
         video_id=normalized,
         title=article["title"],
         site=article["site"],
+        platform="web",
         published_at=article.get("published_at"),
         source_url=url,
         text=article["text"],
@@ -269,7 +283,8 @@ def _fill_missing_metadata(text: str, title: str, author: str | None,
 
 def ingest_text(title: str | None, text: str, source_url: str | None = None,
                 author: str | None = None, china_critical: bool = False,
-                fallback_title: str | None = None, kind: str = "article") -> dict:
+                fallback_title: str | None = None, kind: str = "article",
+                platform: str = "paste") -> dict:
     """Ingest a pasted article body (#668) — for paywalled articles
     (Spiegel+, FAZ, ...) the server can't fetch, but the user can read in
     their browser and paste the text in directly. Same row-building path
@@ -286,7 +301,12 @@ def ingest_text(title: str | None, text: str, source_url: str | None = None,
     Daniel left blank is filled in by one cheap AI call over the head of the
     body (_fill_missing_metadata), falling back to the body's first line for
     the title. `author` lands in the same column a fetched article's site
-    name does (channel_id) — it's the "who is this from" slot.
+    name does (channel_id) — it's the "who is this from" slot — and, since
+    #935, in the dedicated `author` column the material list filters on.
+
+    `platform` (#935) says where the body arrived from: 'paste' (the default,
+    i.e. the paste box), 'upload' (a file), 'email' (mailbox/newsletter) or
+    'signal'. It is NOT derivable from `kind`, so every caller passes its own.
 
     Raises IngestError if `text` is under 200 chars (same threshold as
     knowledge.article._MIN_ARTICLE_CHARS — too short to be a real article,
@@ -348,4 +368,6 @@ def ingest_text(title: str | None, text: str, source_url: str | None = None,
         transcript_source="pasted",
         china_critical=china_critical,
         kind=kind,
+        author=author,
+        platform=platform,
     )
