@@ -8,6 +8,7 @@ deterministically is already in the repo, so no AI call is involved here:
 
   * `static/hsk_levels.json` — 4991 words with their HSK 1-6 level
   * `entries.word_zh`        — the words Daniel already studies (his collection)
+  * `annotate/baseline_zh.txt` — HSK 3.0 1-4, the floor he arrived with (#922)
   * `jieba` / `pypinyin`     — segmentation and toned pinyin
   * `translator.py`          — Google Translate for the German gloss
 
@@ -88,10 +89,12 @@ def _char_levels() -> dict[str, int]:
 
 
 def _known_words(words: list[str]) -> set[str]:
-    """Which of these words Daniel already knows: either studied here
-    (entries.word_zh) or marked as known without ever studying it (#710,
-    known_words). Queried per call (both lists grow daily, and it is two
-    indexed IN queries).
+    """Which of these words Daniel already knows: studied here
+    (entries.word_zh), marked as known without ever studying it (#710,
+    known_words), or part of the HSK 3.0 1-4 baseline he brought with him
+    (#922, annotate/baseline_zh.txt). The two database lists are queried per
+    call (both grow daily, and it is two indexed IN queries); the baseline is a
+    static file cached for the process.
 
     This union is the ONE place that answers "does Daniel know this word".
     Inline annotations in both summaries and the HSK word table under an
@@ -99,12 +102,14 @@ def _known_words(words: list[str]) -> set[str]:
     disappear from all of them at once."""
     if not words:
         return set()
+    from annotate.baseline import baseline_words
+    known = set(words) & baseline_words("zh")
     try:
         import database
-        return database.word_zh_exists(words) | database.known_words_exists(words)
+        known |= database.word_zh_exists(words) | database.known_words_exists(words)
     except Exception as e:
         logger.warning("zh_annotate: collection lookup failed — %s", e)
-        return set()
+    return known
 
 
 def _is_new_word(word: str, hsk: dict[str, int], known: set[str],

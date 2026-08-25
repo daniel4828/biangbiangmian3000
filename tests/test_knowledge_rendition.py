@@ -114,17 +114,19 @@ def test_known_words_not_annotated_unknown_words_are(tmp_db):
     # "bonjour" was never studied but Daniel marked it known (#710/#803).
     database.add_known_word("bonjour", "fr")
 
-    text = "Nous parlons de bonjour et de mystère."
+    # "amoindrir" is neither studied nor in the CEFR A1-A2 baseline (#922) —
+    # a word past A2 is what "unknown" has to mean now that a floor exists.
+    text = "Nous parlons de bonjour et d'amoindrir."
     annotated, new_words = annotate.annotate_summary(text, "fr")
 
     new_word_surfaces = {w["word"] for w in new_words}
     assert "parlons" not in new_word_surfaces
     assert "bonjour" not in new_word_surfaces
-    assert "mystère" in new_word_surfaces
+    assert "amoindrir" in new_word_surfaces
 
     assert "parlons (" not in annotated
     assert "bonjour (" not in annotated
-    assert "mystère" in annotated
+    assert "amoindrir" in annotated
 
 
 def test_zh_annotation_dispatch_untouched(tmp_db):

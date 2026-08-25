@@ -6,7 +6,9 @@ No stemming happens here — that is the entire point of #803's entry_forms
 table. Every conjugated/inflected surface form Daniel has already studied is
 stored verbatim (database.forms_lookup), so a plain exact-string lookup
 already knows "parlons" belongs to a word he knows without any linguistic
-reduction here.
+reduction here. The same table-driven logic extends to the CEFR A1-A2 baseline
+(#922, annotate/baseline_fr.txt): it too is stored fully inflected, because a
+lemma-only list would leave "mangeons" flagged as new.
 
 Best-effort throughout, like zh_annotate: any failure returns the original
 text unannotated and an empty word list. A missing gloss costs Daniel a
@@ -18,6 +20,8 @@ import re
 
 import database
 import languages
+
+from . import baseline
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +140,9 @@ def _annotate(text: str, lang: str) -> tuple[str, list[dict]]:
     if not order:
         return text, []
 
-    known = database.forms_lookup(order, lang) | database.known_words_exists(order, lang)
+    known = (database.forms_lookup(order, lang)
+             | database.known_words_exists(order, lang)
+             | (set(order) & baseline.baseline_words(lang)))
     new_cores = [w for w in order if w not in known]
     if not new_cores:
         return text, []
