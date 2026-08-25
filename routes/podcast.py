@@ -3,6 +3,7 @@
 """
 import json
 import logging
+import re
 import threading
 from xml.etree import ElementTree
 
@@ -82,6 +83,57 @@ def list_episodes(
         since=since, list_id=list_id, include_archived=include_archived,
     )
     return [_overlay_processing_status(e) for e in episodes]
+
+
+class EpisodeMetadataPatch(BaseModel):
+    """Hand-edited metadata (#937). Every field is optional: the request body
+    carries only what changed, and an empty string clears that column."""
+    title: str | None = None
+    title_en: str | None = None
+    author: str | None = None
+    platform: str | None = None
+    published_at: str | None = None
+    youtube_url: str | None = None
+    tags: list[str] | None = None
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@router.patch("/api/podcast/episodes/{episode_id}")
+def patch_episode(episode_id: int, body: EpisodeMetadataPatch):
+    """Edit an episode's metadata by hand (#937).
+
+    Title/author/platform/date come from RSS, yt-dlp or an AI extraction, and
+    all three get it wrong regularly — an article's "title" is often the site's
+    nav text, a Reel's is the first line of its description. This is the way to
+    fix that.
+
+    Two rules the AI paths depend on:
+      * Everything written here is recorded in podcast_episodes.manual_fields,
+        so no later AI pass may overwrite it. Daniel was looking at the source;
+        the model is guessing.
+      * `tags` is stored with source='user', which means re-tagging (#938) can
+        never remove them — and can never be removed BY them either.
+    """
+    patch = body.model_dump(exclude_unset=True)
+    tags = patch.pop("tags", None)
+
+    published_at = patch.get("published_at")
+    if published_at:
+        # Only a plain date. The list sorts and filters on this column, so a
+        # free-form "last Wednesday" would quietly land the item in the wrong
+        # place forever (same rule as ai.extract_article_metadata's, #833).
+        if not _DATE_RE.match(published_at.strip()):
+            raise HTTPException(400, "published_at must be YYYY-MM-DD")
+
+    episode = database.update_episode_metadata(episode_id, patch, source="user")
+    if episode is None:
+        raise HTTPException(404, "Episode not found")
+    if tags is not None:
+        database.set_item_tags(episode_id, tags, source="user")
+        episode = database.get_episode(episode_id)
+    return _overlay_processing_status(episode)
 
 
 @router.get("/api/knowledge/facets")

@@ -662,6 +662,13 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **回填是幂等的，不是靠一次性标记**：每条 UPDATE 都限定在目标列仍为 NULL 的行上——生产每 2 分钟重启一次，`init_db()` 就跑一次（#688 的教训）。`processed_at` 回填 `COALESCE(email_sent_at, created_at)` 且只填 `summarized` 行；`author` **不回填**（错的作者比空的更糟）
   - 内置的 `Read Later` 列表按 **`is_builtin` 而不是名字**判断存在：否则 Daniel 一改名，下次重启就又冒出一个 `Read Later`
   - `idx_episodes_processed_at` 建在 `core.py` 的迁移里而不是 `schema.sql`：schema 在**第 2 阶段**执行，那时旧库上 `ALTER TABLE`（第 3 阶段）还没跑，列还不存在，`CREATE INDEX` 会直接报错
+- **元数据可手改（#937）**：详情页 ✎ Edit → 标题 / 作者 / 平台 / 发布日期 / 链接 / 标签，走 `PATCH /api/podcast/episodes/{id}`（body 只带改动的字段，空字符串 = 清空，缺席 = 不动）
+  - 🔴 **AI 绝不覆盖手改过的值**：写进去的每一列都记进 `podcast_episodes.manual_fields`（JSON 数组），`database.is_manual(id, field)` 是所有 AI 路径写之前必须问的那一句。他看着原文，模型是猜的。已接的两处：`podcast._process_episode` 和 `regenerate_summary` 的占位标题替换（#781）——**哪怕手改后的标题看起来仍像占位符**也不许换
+  - `update_episode_metadata(..., source='ai')` 写同样的列但**不认领**，且跳过已被认领的列；`source='user'` 才记 `manual_fields`
+  - `published_at` 只收 `YYYY-MM-DD`，别的格式 400（同 #833 对 AI 返回值的规矩）：列表按这一列排序和筛选，"上周三"会让它永远排在错的位置
+  - 未知字段**忽略而不是报错**：多一个键是前端的 bug，不该让它顺带毁掉同一次请求里的正常编辑。可编辑列的白名单在 `database.EDITABLE_EPISODE_FIELDS`——转录、摘要、状态是结果不是元数据
+  - 标签存 `source='user'`，所以 #938 的重新打标签既删不掉它们、也不会被它们删掉；`tags` 键缺席 = 完全不动标签，`[]` = 清空手动标签
+  - `shared.js` 的 `api()` 现在把服务端的 `detail` 带回错误信息里：`PATCH … → 400` 什么也没说，`published_at must be YYYY-MM-DD` 才说清了要改什么
 - **china-kritisch 复选框（#731）**：摘要默认走便宜的 DeepSeek —— Daniel 的博客素材绝大多数不批评中国，没必要为它们付 OpenAI 的钱。少数确实批评中国的素材勾选后存 `podcast_episodes.china_critical=1`，摘要时把 DeepSeek 从候选模型里**彻底删掉**（不是排后面）：它对这类内容会悄悄弱化或拒答，而弱化后的摘要照样能解析出 `summary_de`，任何"解析失败就回退"的机制都永远不会触发
   - **免费的 NotebookLM 路径不受影响，照旧第一优先**：它是 Google 的，没理由审查这个话题，而且不花钱。勾选只改变它失败之后 API 兜底那一层选谁
   - **标记必须在粘贴那一刻打上**：摘要发生在之后独立的 `POST .../process` 调用里（甚至是 cron 里），那时已经没人在旁边说明这是什么素材
@@ -834,6 +841,9 @@ GET  /api/podcast/episodes                            → 统一素材列表（�
                                                        ?include_archived=（默认 false，归档素材默认不出现）
 GET  /api/knowledge/facets                            → 筛选栏所有下拉的选项，一次拿全（#936）：{kinds,platforms,authors,statuses,feeds,tags,lists,archived_count}
 GET  /api/podcast/episodes/{id}                       → 详情（摘要 + 转录 + HSK 生词）
+PATCH /api/podcast/episodes/{id}                      → 手改元数据（#937）：body 可含 title/title_en/author/platform/published_at/youtube_url/tags
+                                                       只带改动的字段；空串=清空，缺席=不动；未知字段忽略；published_at 非 YYYY-MM-DD → 400；不存在 → 404
+                                                       写进去的列记入 manual_fields，此后所有 AI 路径不得覆盖；tags 存 source='user'
 POST /api/podcast/episodes/{id}/retry                 → 同步重跑单集（error/no_transcript/pending；#491/#500）
 POST /api/podcast/episodes/{id}/process               → 手动触发单集转录+摘要（后台线程，立即返回；重复提交 409；#502）
 POST /api/podcast/episodes/{id}/notify                → 按需重发通知，body {channel: signal|email}（同步；仅 summarized；重发不更新 email_sent_at；返回 {sent}，失败时 sent:false 带 detail；#530）

@@ -4625,6 +4625,7 @@ let _knowledgeDetailId = null;
 
 async function openKnowledgeItem(id) {
   setLoading('Loading…');
+  _knowledgeEditOpen = false;   // #937: a fresh item opens read-only
   try {
     // lang (#804): the detail endpoint returns a translated+annotated
     // rendition of the summary for non-Chinese tabs; zh's response is
@@ -4724,8 +4725,14 @@ function _renderKnowledgeDetail(ep) {
   el.innerHTML = `
     <button class="keymap-reset-all" onclick="closeKnowledgeDetail()">← Back</button>
     <div class="keymap-panel">
-      <h2 class="keymap-heading">${_escHtml(ep.title || '(untitled)')}</h2>
-      <p class="keymap-hint">${date}</p>
+      <div class="knowledge-header">
+        <h2 class="keymap-heading" style="margin:0">${_escHtml(ep.title || '(untitled)')}</h2>
+        <span style="flex:1"></span>
+        <button class="btn-secondary" onclick="toggleKnowledgeEdit()">${_knowledgeEditOpen ? '✕ Close' : '✎ Edit'}</button>
+      </div>
+      <p class="keymap-hint">${[_escHtml(ep.author || ''), _escHtml(_knowledgePlatformLabel(ep)), date].filter(Boolean).join(' · ')}</p>
+      ${_knowledgeTagRowHtml(ep)}
+      ${_knowledgeEditOpen ? _knowledgeEditFormHtml(ep) : ''}
       <div style="margin:4px 0 10px">${links}</div>
       ${summaryBlock}
     </div>
@@ -4741,6 +4748,97 @@ function _renderKnowledgeDetail(ep) {
   // The saved conversation (#945) is fetched after the markup exists, so the
   // detail view still renders instantly when the chat request is slow.
   _loadKnowledgeChat(ep.id);
+}
+
+// ── Hand-editing an item's metadata (#937) ─────────────────────────────────
+// Title/author/platform/date come from RSS, yt-dlp or an AI extraction, and
+// all three get it wrong regularly. Everything saved here is recorded server
+// side in manual_fields, so no later AI pass overwrites it.
+let _knowledgeEditOpen = false;
+
+function toggleKnowledgeEdit() {
+  _knowledgeEditOpen = !_knowledgeEditOpen;
+  if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+function _knowledgePlatformLabel(ep) {
+  return ep.platform ? (KNOWLEDGE_PLATFORM_LABEL[ep.platform] || ep.platform) : '';
+}
+
+function _knowledgeTagRowHtml(ep) {
+  const tags = ep.tags || [];
+  if (!tags.length) return '';
+  return `<div class="knowledge-tag-row" style="margin:6px 0">${tags.map(t =>
+    `<span class="knowledge-tag ${t.source === 'ai' ? 'knowledge-tag-ai' : ''}">${_escHtml(t.name)}</span>`
+  ).join('')}</div>`;
+}
+
+function _knowledgeEditFormHtml(ep) {
+  // Every platform the app knows about, plus whatever this row already has —
+  // a value typed in by hand or invented by a future ingest path must not
+  // silently disappear from its own dropdown.
+  const platforms = [...Object.keys(KNOWLEDGE_PLATFORM_LABEL)];
+  if (ep.platform && !platforms.includes(ep.platform)) platforms.push(ep.platform);
+  const platformOpts = ['<option value="">—</option>'].concat(platforms.map(pl =>
+    `<option value="${_escHtml(pl)}" ${ep.platform === pl ? 'selected' : ''}>${_escHtml(KNOWLEDGE_PLATFORM_LABEL[pl] || pl)}</option>`
+  )).join('');
+  const tagValue = (ep.tags || []).map(t => t.name).join(', ');
+  return `<div class="knowledge-edit-form">
+    <label class="knowledge-edit-row"><span>Title</span>
+      <input type="text" class="edit-input" id="kedit-title" value="${_escHtml(ep.title || '')}"></label>
+    <label class="knowledge-edit-row"><span>Author</span>
+      <input type="text" class="edit-input" id="kedit-author" value="${_escHtml(ep.author || '')}"></label>
+    <label class="knowledge-edit-row"><span>Platform</span>
+      <select class="opt-input" id="kedit-platform">${platformOpts}</select></label>
+    <label class="knowledge-edit-row"><span>Published</span>
+      <input type="text" class="edit-input" id="kedit-published" placeholder="YYYY-MM-DD"
+             value="${_escHtml(ep.published_at ? String(ep.published_at).slice(0, 10) : '')}"></label>
+    <label class="knowledge-edit-row"><span>Link</span>
+      <input type="text" class="edit-input" id="kedit-url" value="${_escHtml(ep.youtube_url || '')}"></label>
+    <label class="knowledge-edit-row"><span>Tags</span>
+      <input type="text" class="edit-input" id="kedit-tags" list="kedit-tag-options"
+             placeholder="comma separated" value="${_escHtml(tagValue)}"></label>
+    <datalist id="kedit-tag-options">${
+      (_knowledgeFacets?.tags || []).map(t => `<option value="${_escHtml(t.name)}"></option>`).join('')
+    }</datalist>
+    <div class="knowledge-edit-row">
+      <span></span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <button class="btn-secondary" onclick="saveKnowledgeEdit()">Save</button>
+        <span id="kedit-msg" style="font-size:12px;color:var(--muted)"></span>
+      </span>
+    </div>
+    <p class="keymap-hint" style="margin:2px 0 0">Anything you change here is yours — later AI passes leave it alone. Tags saved here are never removed by re-tagging.</p>
+  </div>`;
+}
+
+async function saveKnowledgeEdit() {
+  const ep = _knowledgeDetailEpisode;
+  if (!ep) return;
+  const msg = document.getElementById('kedit-msg');
+  const val = (id) => (document.getElementById(id)?.value || '').trim();
+  const payload = {
+    title: val('kedit-title'),
+    author: val('kedit-author'),
+    platform: val('kedit-platform'),
+    published_at: val('kedit-published'),
+    youtube_url: val('kedit-url'),
+    tags: val('kedit-tags').split(',').map(t => t.trim()).filter(Boolean),
+  };
+  if (msg) msg.textContent = 'Saving…';
+  try {
+    const updated = await api('PATCH', `/api/podcast/episodes/${ep.id}`, payload);
+    // Re-fetch rather than trusting the PATCH response: the detail view also
+    // needs the per-language rendition, which the PATCH endpoint knows nothing
+    // about (it would come back missing and the summary would blank out).
+    _knowledgeEditOpen = false;
+    // The facet lists just changed (a new author, a new tag), so drop the
+    // cached copy — the filter bar rebuilds from the server on next open.
+    _knowledgeFacets = null;
+    await openKnowledgeItem(updated?.id || ep.id);
+  } catch (e) {
+    if (msg) msg.textContent = 'Error: ' + e.message;
+  }
 }
 
 function _togglePodcastTranscript() {

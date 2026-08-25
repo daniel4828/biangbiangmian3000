@@ -325,6 +325,9 @@ def test_regenerate_summary_replaces_placeholder_title(monkeypatch):
     monkeypatch.setattr(podcast, "summarize", lambda *a, **kw: _summary_result())
     monkeypatch.setattr(podcast, "filter_new_words", lambda words: words)
     monkeypatch.setattr(ai, "translate_title", lambda t: "Why Interest Rates Are Rising")
+    # #937: the title suggestion now also asks whether Daniel edited the title
+    # by hand. This test has no database at all, so answer for it.
+    monkeypatch.setattr(database, "is_manual", lambda eid, field: False)
 
     captured = {}
     def fake_update_episode(eid, **fields):

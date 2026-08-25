@@ -15,7 +15,14 @@ async function api(method, path, body) {
     location.href = '/login';
     throw new Error(`${method} ${path} → 401 (redirecting to login)`);
   }
-  if (!r.ok) throw new Error(`${method} ${path} → ${r.status}`);
+  if (!r.ok) {
+    // Carry the server's own explanation through (#937): "PATCH … → 400" tells
+    // Daniel nothing, "published_at must be YYYY-MM-DD" tells him exactly what
+    // to fix. Best-effort — an error body that isn't JSON just doesn't add one.
+    let detail = '';
+    try { detail = (await r.json())?.detail || ''; } catch (e) { /* not JSON */ }
+    throw new Error(detail || `${method} ${path} → ${r.status}`);
+  }
   return r.json();
 }
 
