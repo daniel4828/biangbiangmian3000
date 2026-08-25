@@ -84,3 +84,60 @@ YouTube 视频和文章的**唯一区别是「怎么拿到中文正文」**，�
 | F | #655 | 邮件收件（IMAP 轮询） | B、C |
 
 每阶段一个分支、一个 PR、CI 绿了才合并。
+
+---
+
+# 第二轮：素材库化（大方向 #934，2026-08-25）
+
+第一轮（#650–#655）解决的是"各种素材都能进来，走同一条流水线"。素材攒到一定
+数量之后，问题变成了**怎么找回来**：按 kind 分的四个标签页要求你先猜它属于哪
+一类，没有搜索、没有标签、没有"待读"，标题作者错了也改不了。
+
+Daniel 2026-08-25 提出的目标：一个按处理日期排序、排序可换、能按作者/平台/标
+签筛、能全文搜索、能建 Read Later 这类列表、并且元数据可以手改的素材库。
+
+## 六个阶段
+
+| 阶段 | Issue | 内容 |
+|---|---|---|
+| 1 | #935 | 数据层：`processed_at`/`author`/`platform`/`manual_fields`/`archived_at` 列 + 标签表 + 列表表 |
+| 2 | #936 | 统一素材列表：排序 + 筛选栏 + 一个 Add 按钮（四个 kind 子标签取消） |
+| 3 | #937 | 元数据可手改 + `manual_fields` 保护 |
+| 4 | #938 | AI 自动打标签 + 标签管理（合并/删除） |
+| 5 | #939 | 全文搜索（FTS5，覆盖转录 + 摘要 + 各语言 rendition） |
+| 6 | #940 | 自定义列表 + Read Later + 左右滑动手势 + 归档 |
+
+## 几条贯穿全局的决定
+
+**`kind` 和 `platform` 是正交的两个轴。** `kind` 是"它是什么"（podcast /
+video / article / newsletter），`platform` 是"它从哪来"（youtube /
+instagram / podcast / web / upload / paste / email / signal）。两个都要能
+筛，而且 `platform` **不能由 `kind` 推出来**——上传的文件、newsletter、
+Signal 分享全都是 `kind='article'/'newsletter'` 的粘贴正文，来源却完全不同。
+所以 `ingest_text(platform=...)` 由每个调用方自己传。
+
+**`author` 没有复用 `channel_id`。** 后者已经同时表示 RSS 源 URL / YouTube
+频道 id / 网站域名 / 粘贴时填的作者，四种含义并存——按它做作者筛选是不可能
+的。新列只在**真的知道作者**时才写；网站域名不是作者，宁可留空。
+
+**人写的东西优先于机器写的东西。** `manual_fields`（列）和
+`knowledge_item_tags.source`（行）是同一条规则的两种形态：Daniel 改过的字段
+和打过的标签，任何 AI 路径都不许覆盖。反过来，他编辑标签时也不会误删 AI 的
+建议——`set_item_tags()` 只替换同 source 的行。
+
+**索引和缓存跟着数据走，但绝不用触发器。** 搜索索引挂在
+`database.update_episode()` 的 `_SEARCHABLE_COLUMNS` 判断、
+`save/delete_knowledge_rendition()` 和 `update_episode_metadata()` 上。写在
+`schema.sql` 里的触发器，之后改这些列的人根本看不见它；而且两个数据源要解析
+JSON，SQL 做不到。
+
+**回填要么幂等、要么带一次性标记。** 生产每 2 分钟重启一次就跑一次
+`init_db()`（#688 的教训）。`processed_at`/`platform` 的回填限定在目标列仍为
+NULL 的行上；全量建搜索索引要读遍所有转录，所以用
+`app_settings.knowledge_fts_built` 标记。
+
+## 还没做
+
+**"问 AI 关于我的知识库"**（Daniel 提到但当时没想好怎么做）。#939 的 FTS5
+索引是它的地基：先有能搜的索引，之后加一层"检索 + 喂给 AI"即可，不用推倒重
+来。留待单独设计。
