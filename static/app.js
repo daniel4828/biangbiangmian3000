@@ -3790,26 +3790,34 @@ async function savePregenConfig() {
   }
 }
 
-// ── Knowledge base: podcasts / videos / articles ────────────────────────────
-// Generalizes the old podcast-only view (#480, per-feed manager #502) into
-// three kind-filtered sub-tabs (#653; design doc: docs/knowledge-base.md).
-// All three kinds share the same podcast_episodes table and episode detail —
-// only "how do I get a list of items" differs:
-//   podcast tab  -> feed list (layer 1) -> per-feed episode list (layer 2, unchanged from #502)
-//   video/article tabs -> flat list filtered by ?kind=, plus a paste-a-link box
-// Both funnel into the same layer-3 detail view.
+// ── Knowledge base: one unified material library ────────────────────────────
+// #936 (umbrella #934) replaced the four kind sub-tabs (podcast/video/reel/
+// article, #653/#764) with a SINGLE list. Kind is now just one filter among
+// several, because "which of the four buckets did I put this in" is not how
+// Daniel looks for something — "the thing I processed last week by that
+// author" is. Two parallel list implementations were also two places to fix
+// every future sort and filter, so the tabs are gone rather than kept
+// alongside.
 //
-// Hash routes (the bare "podcast" prefix is kept working forever — episode
-// links already went out in podcast notification emails/Signal messages):
-//   #knowledge-podcast|video|article    -> top level, one sub-tab (#704; the
-//                                          target of the /knowledge/<kind>
-//                                          redirect, and bookmarkable)
-//   #podcast-feed-<id> / #knowledge-feed-<id> -> layer 2: one feed's episodes
-//   #podcast-<id>      / #knowledge-<id>       -> layer 3: item detail
-// The tab form is letters-only and the other two are digits-only, so they can
+// Screens (_knowledgeScreen):
+//   'list'  the unified material list — sort bar, filter bar, one Add button
+//   'feed'  one RSS feed's episodes (unchanged from #502; reachable from the
+//           feed filter chip and from the feeds screen)
+//   'feeds' RSS feed management (add/delete/auto-process/detail level) — it
+//           moved off the old podcast tab into its own screen behind the
+//           header's 📡 button
+// Layer 3 (item detail) is shared by all of them, unchanged.
+//
+// Hash routes (the bare "podcast" prefix is kept working FOREVER — episode
+// links already went out in notification emails and Signal messages):
+//   #podcast-<id>      / #knowledge-<id>       -> item detail
+//   #podcast-feed-<id> / #knowledge-feed-<id>  -> one feed's episodes
+//   #knowledge-podcast|video|reel|article      -> the unified list with that
+//                                                 kind preselected as a filter
+//                                                 (the /knowledge/<kind>
+//                                                 redirect's target, #704)
+// The tab form is letters-only and the other two digits-only, so they can
 // never collide.
-// Settings: GET/PUT /api/podcast/config (detail_level only — feeds/auto now
-// live in the podcast_feeds table via /api/podcast/feeds).
 const PODCAST_STATUS_LABEL = {
   summarized:    'Summarized',
   no_transcript: 'No transcript',
@@ -3825,110 +3833,559 @@ const PODCAST_STATUS_CLASS = {
   processing:    'podcast-badge-pending',
 };
 
+const KNOWLEDGE_KIND_LABEL = {
+  podcast: '🎙️ Podcast', video: '📺 Video',
+  article: '📄 Article', newsletter: '📰 Newsletter',
+};
+const KNOWLEDGE_PLATFORM_LABEL = {
+  youtube: 'YouTube', instagram: 'Instagram', podcast: 'Podcast RSS',
+  web: 'Web', upload: 'Upload', paste: 'Paste', email: 'E-Mail', signal: 'Signal',
+};
+// Label + backend sort key. Must stay in sync with database.EPISODE_SORTS —
+// an unknown key doesn't 400, it silently falls back to the default order,
+// which would look like "the sort button does nothing".
+const KNOWLEDGE_SORTS = [
+  ['processed_at', 'Processed'],
+  ['published_at', 'Published'],
+  ['created_at',   'Added'],
+  ['title',        'Title'],
+  ['author',       'Author'],
+  ['duration',     'Length'],
+];
+const KNOWLEDGE_SINCE = [['', 'Any time'], ['7', 'Last 7 days'],
+                         ['30', 'Last 30 days'], ['365', 'This year']];
+
 let _podcastFeeds = [];
 let _podcastEpisodes = [];
 let _podcastConfig = null;
-let _podcastCurrentFeedId = null;   // layer 2/3 (podcast tab): which feed's episode list we're in
+let _podcastCurrentFeedId = null;   // 'feed' screen: whose episodes are shown
 let _podcastPollTimer = null;       // re-poll while any listed item is "processing"
-let _knowledgeTab = localStorage.getItem('knowledgeTab') || 'podcast';  // 'podcast' | 'video' | 'reel' | 'article' | 'newsletter'
-let _knowledgeListKind = null;      // set while a flat video/article list is showing (layer 1 for those tabs)
-let _knowledgeAddMode = 'link';     // 'link' | 'text' — article tab only (#668); paywalled articles can't be fetched, so pasting the body is the escape hatch
+let _knowledgeFacets = null;        // GET /api/knowledge/facets — the filter bar's option lists
+let _knowledgeScreen = 'list';      // 'list' | 'feed' | 'feeds'
+let _knowledgeAddOpen = false;
+let _knowledgeAddMode = 'link';     // 'link' | 'text' | 'file' | 'feed'
+
+// Filters live in localStorage: Daniel comes back to this page many times a
+// day and re-picking the same three filters every time is the kind of friction
+// that makes a filter bar go unused.
+const KNOWLEDGE_FILTER_DEFAULTS = {
+  sort: 'processed_at', order: 'desc',
+  kind: [], platform: [], author: [], tag: [], status: [],
+  since: '', archived: false,
+};
+function _loadKnowledgeFilters() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('knowledgeFilters') || '{}');
+    // Merge onto the defaults rather than trusting the stored object: a
+    // filter added in a later version must not be `undefined` for anyone who
+    // already has a saved blob.
+    return { ...KNOWLEDGE_FILTER_DEFAULTS, ...saved };
+  } catch (e) { return { ...KNOWLEDGE_FILTER_DEFAULTS }; }
+}
+let _kFilters = _loadKnowledgeFilters();
+
+function _saveKnowledgeFilters() {
+  try { localStorage.setItem('knowledgeFilters', JSON.stringify(_kFilters)); }
+  catch (e) { /* private mode / quota — filtering still works this session */ }
+}
 
 function _clearPodcastPoll() {
   if (_podcastPollTimer) { clearTimeout(_podcastPollTimer); _podcastPollTimer = null; }
 }
 
-// 📱 Reels is a *virtual* tab (#764): Instagram Reels are stored as
-// kind='video' rows (#750 deliberately did not add a fourth kind — that
-// means a schema change, a production migration, and touching every kind
-// filter in the backend, all so a Reel can be labelled as the video it
-// already is). So both the Videos and Reels tabs fetch kind=video and get
-// split here, in the frontend, by where the URL points.
-//
-// 📰 Newsletter (#925) is NOT virtual — it's a real backend kind
-// ('newsletter', podcast_episodes.kind), unlike Reels. It arrives from a
-// dedicated sender (knowledge/newsletter.py), never shares a kind with
-// anything else, so it needs no frontend-side split: it just passes
-// straight through the default branch below like 'podcast'/'video'/'article'.
-function _knowledgeApiKind(tab) {
-  return tab === 'reel' ? 'video' : tab;
-}
-
 function _isInstagramEpisode(ep) {
+  // platform (#935) is now authoritative; the URL check stays as the fallback
+  // for any row that predates the backfill or was hand-edited to blank.
+  if (ep.platform) return ep.platform === 'instagram';
   let host = '';
   try { host = new URL(ep.youtube_url || '').hostname; } catch (e) { return false; }
   return /(^|\.)instagram\.com$/.test(host);
 }
 
-// The one place the video/reel split is decided. Both tabs ask the backend
-// for the same rows, so whichever filter is applied here must be the exact
-// complement of the other — otherwise a row belongs to both tabs or neither.
-function _knowledgeListFilter(tab) {
-  if (tab === 'reel') return _isInstagramEpisode;
-  if (tab === 'video') return (ep) => !_isInstagramEpisode(ep);
-  return () => true;
+// A row stays self-describing wherever it's rendered (#761): the icon says
+// what kind of material this is, since the list no longer sits inside a tab
+// that already answered that.
+function _knowledgeSourceIcon(ep) {
+  if (_isInstagramEpisode(ep)) return '📱 ';
+  return ({ podcast: '🎙️ ', video: '📺 ', article: '📄 ', newsletter: '📰 ' })[ep.kind] || '';
 }
 
-async function _fetchKnowledgeList(tab) {
-  const episodes = await api('GET', `/api/podcast/episodes?kind=${_knowledgeApiKind(tab)}&limit=1000`);
-  return (episodes || []).filter(_knowledgeListFilter(tab));
-}
-
-// Top level: sub-tab bar + per-tab list -----------------------------------------
-
-async function openKnowledge(tab) {
-  if (tab) { _knowledgeTab = tab; localStorage.setItem('knowledgeTab', tab); }
-  _clearPodcastPoll();
-  _podcastCurrentFeedId = null;
-  setLoading('Loading…');
-  await _loadKnowledgeTab();
-}
-
-// Switching tabs without a full-screen loading flash — the tab bar and page
-// stay put, only the content below it swaps.
-async function switchKnowledgeTab(tab) {
-  _knowledgeTab = tab;
-  localStorage.setItem('knowledgeTab', tab);
-  await _loadKnowledgeTab();
-}
-
-function _knowledgeTabBarHtml() {
-  const tabs = [['podcast', '🎙️ Podcasts'], ['video', '📺 Videos'],
-                ['reel', '📱 Reels'], ['article', '📄 Articles'],
-                ['newsletter', '📰 Newsletter']];
-  const btns = tabs.map(([id, label]) =>
-    `<button class="hcal-seg-btn ${_knowledgeTab === id ? 'active' : ''}" onclick="switchKnowledgeTab('${id}')">${label}</button>`
-  ).join('');
-  return `<div class="hcal-seg" style="margin-bottom:12px">${btns}</div>`;
-}
-
-async function _loadKnowledgeTab() {
-  _clearPodcastPoll();
-  _podcastCurrentFeedId = null;
-  try {
-    if (_knowledgeTab === 'podcast') {
-      _knowledgeListKind = null;
-      const [feeds, config] = await Promise.all([
-        api('GET', '/api/podcast/feeds'),
-        api('GET', '/api/podcast/config'),
-      ]);
-      _podcastFeeds = feeds || [];
-      _podcastConfig = config || {};
-      _renderPodcastFeedList();
-    } else {
-      _knowledgeListKind = _knowledgeTab;
-      _podcastEpisodes = await _fetchKnowledgeList(_knowledgeTab);
-      _renderKnowledgeMaterialList();
-      _schedulePodcastPollIfNeeded();
+// Query string for the material list. Every axis repeats (?tag=a&tag=b), which
+// the backend reads as OR-within-axis / AND-across-axes.
+function _knowledgeQuery() {
+  const p = new URLSearchParams();
+  p.set('limit', '1000');
+  p.set('sort', _kFilters.sort);
+  p.set('order', _kFilters.order);
+  for (const axis of ['kind', 'platform', 'author', 'tag', 'status']) {
+    for (const v of _kFilters[axis] || []) p.append(axis, v);
+  }
+  if (_kFilters.since) {
+    const days = parseInt(_kFilters.since, 10);
+    if (days > 0) {
+      const d = new Date(Date.now() - days * 86400000);
+      p.set('since', d.toISOString().slice(0, 10));
     }
+  }
+  if (_kFilters.archived) p.set('include_archived', 'true');
+  return p.toString();
+}
+
+// ── Screen: the unified material list ───────────────────────────────────────
+
+// `tab` (optional) comes from the #knowledge-<kind> hash route and the
+// /knowledge/<kind> redirect (#704). Those links predate #936 and must keep
+// working, so a tab name is translated into the equivalent filter: 'reel' is
+// platform=instagram (it was always a frontend-only split of kind=video,
+// #764), everything else is a kind.
+async function openKnowledge(tab) {
+  if (tab) {
+    _kFilters.kind = [];
+    _kFilters.platform = [];
+    if (tab === 'reel') _kFilters.platform = ['instagram'];
+    else if (tab) _kFilters.kind = [tab];
+    _saveKnowledgeFilters();
+  }
+  _clearPodcastPoll();
+  _podcastCurrentFeedId = null;
+  _knowledgeScreen = 'list';
+  setLoading('Loading…');
+  await _loadKnowledgeList();
+}
+
+async function _loadKnowledgeList() {
+  _clearPodcastPoll();
+  _podcastCurrentFeedId = null;
+  _knowledgeScreen = 'list';
+  try {
+    const [episodes, facets] = await Promise.all([
+      api('GET', `/api/podcast/episodes?${_knowledgeQuery()}`),
+      api('GET', '/api/knowledge/facets'),
+    ]);
+    _podcastEpisodes = episodes || [];
+    _knowledgeFacets = facets || null;
+    _renderKnowledgeList();
     showView('knowledge');
+    _schedulePodcastPollIfNeeded();
   } catch (e) {
     showError('Knowledge failed: ' + e.message);
     showView('decks');
   }
 }
 
-// Layer 1a: podcast feed list ---------------------------------------------------
+// Re-fetch after a filter change without the full-screen loading flash — the
+// bar stays put, only the rows below it swap.
+async function _refreshKnowledgeList() {
+  try {
+    _podcastEpisodes = await api('GET', `/api/podcast/episodes?${_knowledgeQuery()}`) || [];
+    _renderKnowledgeList();
+    _schedulePodcastPollIfNeeded();
+  } catch (e) {
+    showError('Knowledge failed: ' + e.message);
+  }
+}
+
+function _knowledgeOptionsHtml(axis, facetKey, labels) {
+  const opts = (_knowledgeFacets?.[facetKey] || [])
+    .filter(o => !(_kFilters[axis] || []).includes(o.value))
+    .map(o => `<option value="${_escHtml(o.value)}">${_escHtml((labels && labels[o.value]) || o.value)} (${o.count})</option>`)
+    .join('');
+  return opts;
+}
+
+// One <select> per axis that ADDS a chip and resets itself. Plain selects
+// rather than a custom multi-select widget: no build step here, and the
+// native picker is the one control that is genuinely good on iOS.
+function _knowledgeFilterBarHtml() {
+  const axes = [
+    ['kind', 'kinds', 'Kind', KNOWLEDGE_KIND_LABEL],
+    ['platform', 'platforms', 'Platform', KNOWLEDGE_PLATFORM_LABEL],
+    ['author', 'authors', 'Author', null],
+    ['tag', null, 'Tag', null],
+    ['status', 'statuses', 'Status', null],
+  ];
+  const selects = axes.map(([axis, facetKey, label, labels]) => {
+    const opts = axis === 'tag'
+      ? (_knowledgeFacets?.tags || [])
+          .filter(t => !(_kFilters.tag || []).includes(t.name))
+          .map(t => `<option value="${_escHtml(t.name)}">${_escHtml(t.name)} (${t.count})</option>`).join('')
+      : _knowledgeOptionsHtml(axis, facetKey, labels);
+    if (!opts) return '';
+    return `<select class="opt-input knowledge-filter-select"
+                    onchange="knowledgeAddFilter('${axis}', this.value); this.selectedIndex=0">
+              <option value="">${label}</option>${opts}
+            </select>`;
+  }).join('');
+
+  const sinceOpts = KNOWLEDGE_SINCE.map(([v, l]) =>
+    `<option value="${v}" ${_kFilters.since === v ? 'selected' : ''}>${l}</option>`).join('');
+  const archivedCount = _knowledgeFacets?.archived_count || 0;
+
+  return `<div class="knowledge-filter-bar">
+    ${selects}
+    <select class="opt-input knowledge-filter-select" onchange="knowledgeSetSince(this.value)">${sinceOpts}</select>
+    ${archivedCount ? `<label class="knowledge-filter-toggle">
+      <input type="checkbox" ${_kFilters.archived ? 'checked' : ''} onchange="knowledgeToggleArchived(this.checked)">
+      Archived (${archivedCount})
+    </label>` : ''}
+  </div>`;
+}
+
+function _knowledgeChipsHtml() {
+  const chips = [];
+  const labelFor = {
+    kind: (v) => KNOWLEDGE_KIND_LABEL[v] || v,
+    platform: (v) => KNOWLEDGE_PLATFORM_LABEL[v] || v,
+    author: (v) => v, tag: (v) => '#' + v, status: (v) => v,
+  };
+  for (const axis of ['kind', 'platform', 'author', 'tag', 'status']) {
+    for (const v of _kFilters[axis] || []) {
+      chips.push(`<button class="knowledge-chip" onclick="knowledgeRemoveFilter('${axis}', ${JSON.stringify(v).replace(/"/g, '&quot;')})">
+        ${_escHtml(labelFor[axis](v))} ✕</button>`);
+    }
+  }
+  if (!chips.length) return '';
+  return `<div class="knowledge-chips">${chips.join('')}
+    <button class="knowledge-chip knowledge-chip-clear" onclick="knowledgeClearFilters()">Clear all</button></div>`;
+}
+
+function _knowledgeSortBarHtml() {
+  const opts = KNOWLEDGE_SORTS.map(([v, l]) =>
+    `<option value="${v}" ${_kFilters.sort === v ? 'selected' : ''}>${l}</option>`).join('');
+  const arrow = _kFilters.order === 'asc' ? '↑' : '↓';
+  return `<div class="knowledge-sort-row">
+    <span class="keymap-label">Sort</span>
+    <select class="opt-input knowledge-filter-select" onchange="knowledgeSetSort(this.value)">${opts}</select>
+    <button class="btn-secondary knowledge-order-btn" onclick="knowledgeToggleOrder()"
+            title="${_kFilters.order === 'asc' ? 'Ascending' : 'Descending'}">${arrow}</button>
+    <span class="knowledge-count">${_podcastEpisodes.length} item${_podcastEpisodes.length === 1 ? '' : 's'}</span>
+  </div>`;
+}
+
+function _renderKnowledgeList() {
+  const el = document.getElementById('view-knowledge-content');
+  if (!el) return;
+  const anyFilter = ['kind', 'platform', 'author', 'tag', 'status']
+    .some(a => (_kFilters[a] || []).length) || _kFilters.since;
+  const rows = _podcastEpisodes.map(ep => _knowledgeMaterialRowHtml(ep)).join('') ||
+    `<div class="keymap-hint">${anyFilter
+      ? 'Nothing matches these filters.'
+      : 'Nothing here yet — use ＋ Add to paste a link, some text or a file.'}</div>`;
+  el.innerHTML = `
+    <div class="knowledge-header">
+      <h2 class="keymap-heading" style="margin:0">Knowledge</h2>
+      <span style="flex:1"></span>
+      <button class="btn-secondary" onclick="openKnowledgeFeeds()" title="RSS feeds">📡 Feeds</button>
+      <button class="btn-secondary" onclick="toggleKnowledgeAdd()">${_knowledgeAddOpen ? '✕ Close' : '＋ Add'}</button>
+    </div>
+    ${_knowledgeAddOpen ? _knowledgeAddPanelHtml() : ''}
+    ${_knowledgeSortBarHtml()}
+    ${_knowledgeFilterBarHtml()}
+    ${_knowledgeChipsHtml()}
+    <div class="podcast-list">${rows}</div>`;
+}
+
+function knowledgeAddFilter(axis, value) {
+  if (!value) return;
+  if (!(_kFilters[axis] || []).includes(value)) _kFilters[axis] = [...(_kFilters[axis] || []), value];
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+function knowledgeRemoveFilter(axis, value) {
+  _kFilters[axis] = (_kFilters[axis] || []).filter(v => v !== value);
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+function knowledgeClearFilters() {
+  _kFilters = { ..._kFilters, kind: [], platform: [], author: [], tag: [], status: [], since: '' };
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+function knowledgeSetSort(sort) {
+  _kFilters.sort = sort;
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+function knowledgeToggleOrder() {
+  _kFilters.order = _kFilters.order === 'asc' ? 'desc' : 'asc';
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+function knowledgeSetSince(v) {
+  _kFilters.since = v;
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+function knowledgeToggleArchived(checked) {
+  _kFilters.archived = !!checked;
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+
+// A row shows what the filters filter on — kind icon, title, author, platform,
+// tags, the processed date. Without those the filter bar would be operating on
+// data the list never displays.
+function _knowledgeMaterialRowHtml(ep) {
+  const status = ep.status || 'pending';
+  const label = PODCAST_STATUS_LABEL[status] || status;
+  const cls = PODCAST_STATUS_CLASS[status] || 'podcast-badge-muted';
+  const clickable = status === 'summarized';
+  const date = _localDate(ep.processed_at || ep.published_at || ep.created_at || '');
+  let source = ep.author || '';
+  if (!source && ep.youtube_url) {
+    try { source = new URL(ep.youtube_url).hostname.replace(/^www\./, ''); } catch (e) { /* leave blank */ }
+  }
+  const platform = ep.platform ? (KNOWLEDGE_PLATFORM_LABEL[ep.platform] || ep.platform) : '';
+  const tags = (ep.tags || []).map(t =>
+    `<span class="knowledge-tag ${t.source === 'ai' ? 'knowledge-tag-ai' : ''}">${_escHtml(t.name)}</span>`).join('');
+  const transcribable = ['pending', 'no_transcript', 'error'].includes(status);
+  const transcribeBtn = transcribable
+    ? `<button class="btn-secondary podcast-transcribe-btn" onclick="event.stopPropagation(); _transcribePodcastEpisode(${ep.id})">Transcribe</button>`
+    : '';
+  return `<div class="podcast-row${clickable ? ' podcast-row-clickable' : ''}${ep.archived_at ? ' knowledge-row-archived' : ''}"
+               ${clickable ? `onclick="openKnowledgeItem(${ep.id})"` : ''}>
+    <span class="podcast-row-title" style="display:flex;flex-direction:column;gap:2px;overflow:hidden">
+      <span>${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
+      ${ep.title_en ? `<span style="font-size:12px;color:var(--muted)">${_escHtml(ep.title_en)}</span>` : ''}
+      ${tags ? `<span class="knowledge-tag-row">${tags}</span>` : ''}
+    </span>
+    <span class="podcast-row-meta">
+      ${source ? `<span class="podcast-row-date">${_escHtml(source)}</span>` : ''}
+      ${platform ? `<span class="podcast-row-date">${_escHtml(platform)}</span>` : ''}
+      <span class="podcast-row-date">${date}</span>
+      <span class="podcast-badge ${cls}">${label}</span>
+      ${transcribeBtn}
+    </span>
+  </div>`;
+}
+
+// ── The one Add button ──────────────────────────────────────────────────────
+// #936: every way material gets in is behind this single button. Before, a
+// link box lived on three tabs, the paste/file boxes only on Articles, and
+// "add an RSS feed" was a fourth box on a different screen — which of them you
+// got depended on which tab you happened to be standing on.
+
+function toggleKnowledgeAdd() {
+  _knowledgeAddOpen = !_knowledgeAddOpen;
+  _renderKnowledgeList();
+  if (_knowledgeAddOpen) {
+    const first = document.getElementById('knowledge-add-url')
+               || document.getElementById('knowledge-add-text');
+    if (first) first.focus();
+  }
+}
+
+function switchKnowledgeAddMode(mode) {
+  _knowledgeAddMode = mode;
+  _renderKnowledgeList();
+}
+
+function _knowledgeAddModeBarHtml() {
+  const modes = [['link', '🔗 Link'], ['text', '📋 Text'], ['file', '📎 File'], ['feed', '📡 Feed']];
+  const btns = modes.map(([id, label]) =>
+    `<button class="hcal-seg-btn ${_knowledgeAddMode === id ? 'active' : ''}" onclick="switchKnowledgeAddMode('${id}')">${label}</button>`
+  ).join('');
+  return `<div class="hcal-seg" style="margin-bottom:12px">${btns}</div>`;
+}
+
+// china-kritisch (#731): DeepSeek summarizes these dishonestly, so the box
+// sends a flag that makes the server's API fallback use GPT. Deliberately
+// resets to unchecked on every re-render — the overwhelming majority of
+// material is fine on the cheap model, and a sticky checkbox would silently
+// spend GPT money on all of it.
+function _knowledgeChinaCriticalChecked() {
+  return !!document.getElementById('knowledge-add-china')?.checked;
+}
+
+const _KNOWLEDGE_CHINA_ROW = `
+  <label class="keymap-row" style="gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+    <input type="checkbox" id="knowledge-add-china" style="margin:0">
+    china-kritisch — summarize with GPT instead of DeepSeek
+  </label>
+  <span id="knowledge-add-msg" style="font-size:12px;color:var(--muted)"></span>`;
+
+// The three optional metadata fields the text/file forms share (#833/#835):
+// whatever is left blank is read out of the material itself by one cheap AI
+// call, so none of them is required.
+const _KNOWLEDGE_META_FIELDS = `
+  <input type="text" class="edit-input" id="knowledge-add-source-url"
+         placeholder="Original link (optional)">
+  <input type="text" class="edit-input" id="knowledge-add-title"
+         placeholder="Title (optional — read from the text)">
+  <input type="text" class="edit-input" id="knowledge-add-author"
+         placeholder="Author (optional — read from the text)">`;
+
+function _knowledgeAddPanelHtml() {
+  let body;
+  if (_knowledgeAddMode === 'file') {
+    body = `<div class="keymap-row" style="align-items:flex-start">
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <input type="file" id="knowledge-add-file"
+                 accept=".txt,.md,.markdown,.pdf,.docx" style="font-size:13px">
+          ${_KNOWLEDGE_META_FIELDS}
+        </div>
+        <button class="btn-secondary" onclick="submitKnowledgeFile()" style="flex-shrink:0">Add</button>
+      </div>${_KNOWLEDGE_CHINA_ROW}`;
+  } else if (_knowledgeAddMode === 'text') {
+    body = `<div class="keymap-row" style="align-items:flex-start">
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <textarea class="edit-input" id="knowledge-add-text" rows="10"
+                    placeholder="Paste the full article text here…"
+                    style="width:100%;box-sizing:border-box;resize:vertical"></textarea>
+          ${_KNOWLEDGE_META_FIELDS}
+        </div>
+        <button class="btn-secondary" onclick="submitKnowledgeText()" style="flex-shrink:0">Add</button>
+      </div>${_KNOWLEDGE_CHINA_ROW}`;
+  } else if (_knowledgeAddMode === 'feed') {
+    // Subscribing to a podcast is "adding material" too, so it belongs behind
+    // the same button; managing the existing feeds is a different job and
+    // lives on its own screen (📡 Feeds).
+    body = `<div class="keymap-row">
+        <input type="text" class="opt-input" id="knowledge-add-feed-url"
+               placeholder="Podcast RSS feed URL…" style="flex:1"
+               onkeydown="if(event.key==='Enter') submitKnowledgeFeed()">
+        <button class="btn-secondary" onclick="submitKnowledgeFeed()">Add</button>
+      </div>
+      <span id="knowledge-add-msg" style="font-size:12px;color:var(--muted)"></span>
+      <p class="keymap-hint" style="margin:6px 0 0">New episodes are crawled hourly. Manage feeds under 📡 Feeds.</p>`;
+  } else {
+    body = `<div class="keymap-row">
+        <input type="text" class="opt-input" id="knowledge-add-url"
+               placeholder="Paste a link — article, YouTube, Instagram Reel…" style="flex:1"
+               onkeydown="if(event.key==='Enter') submitKnowledgeUrl()">
+        <button class="btn-secondary" onclick="submitKnowledgeUrl()">Add</button>
+      </div>${_KNOWLEDGE_CHINA_ROW}`;
+  }
+  return `<div class="keymap-panel">${_knowledgeAddModeBarHtml()}${body}</div>`;
+}
+
+// Submits, clears immediately so the next link can be pasted right away (same
+// pattern as the #636 add-word box), then kicks off processing and starts
+// polling for the status update.
+async function submitKnowledgeUrl() {
+  const input = document.getElementById('knowledge-add-url');
+  const msg = document.getElementById('knowledge-add-msg');
+  const url = (input?.value || '').trim();
+  if (!url) return;
+  // Read the checkbox BEFORE clearing/re-rendering — _submitKnowledgeAdd
+  // rebuilds this panel's DOM when it refreshes the list.
+  const china_critical = _knowledgeChinaCriticalChecked();
+  if (input) { input.value = ''; input.focus(); }
+  await _submitKnowledgeAdd({ url, china_critical }, msg);
+}
+
+// Paste-a-body (#668) — for paywalled pieces the server can't fetch. Only the
+// body is required (#833): a blank title/author/link is filled in server-side
+// from the text itself, so there is nothing to validate here beyond "is there
+// a body".
+async function submitKnowledgeText() {
+  const titleInput = document.getElementById('knowledge-add-title');
+  const authorInput = document.getElementById('knowledge-add-author');
+  const urlInput = document.getElementById('knowledge-add-source-url');
+  const textInput = document.getElementById('knowledge-add-text');
+  const msg = document.getElementById('knowledge-add-msg');
+  const text = (textInput?.value || '').trim();
+  if (!text) return;
+  const payload = {
+    text,
+    title: (titleInput?.value || '').trim(),
+    author: (authorInput?.value || '').trim(),
+    source_url: (urlInput?.value || '').trim(),
+    china_critical: _knowledgeChinaCriticalChecked(),
+  };
+  for (const input of [titleInput, authorInput, urlInput]) if (input) input.value = '';
+  if (textInput) { textInput.value = ''; textInput.focus(); }
+  await _submitKnowledgeAdd(payload, msg);
+}
+
+// File upload (#835) — .txt/.md/.pdf/.docx. Goes through ingestKnowledgeFile()
+// in shared.js, which posts the file and then starts processing exactly like a
+// paste does.
+async function submitKnowledgeFile() {
+  const fileInput = document.getElementById('knowledge-add-file');
+  const msg = document.getElementById('knowledge-add-msg');
+  const file = fileInput?.files?.[0];
+  if (!file) {
+    if (msg) msg.textContent = 'Pick a file first.';
+    return;
+  }
+  const fields = {
+    title: (document.getElementById('knowledge-add-title')?.value || '').trim(),
+    author: (document.getElementById('knowledge-add-author')?.value || '').trim(),
+    source_url: (document.getElementById('knowledge-add-source-url')?.value || '').trim(),
+    china_critical: _knowledgeChinaCriticalChecked(),
+  };
+  if (msg) msg.textContent = `Uploading ${file.name}…`;
+  try {
+    const res = await ingestKnowledgeFile(file, fields);
+    const done = res?.status === 'already_exists'
+      ? 'Already in your library.' : 'Added — processing on the server.';
+    await _refreshKnowledgeList();
+    // Re-query: the refresh above rebuilds this panel, so the element
+    // captured before it is no longer on the page.
+    const after = document.getElementById('knowledge-add-msg');
+    if (after) after.textContent = done;
+  } catch (e) {
+    if (msg) msg.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function submitKnowledgeFeed() {
+  const input = document.getElementById('knowledge-add-feed-url');
+  const msg = document.getElementById('knowledge-add-msg');
+  const url = (input?.value || '').trim();
+  if (!url) return;
+  if (msg) msg.textContent = 'Adding…';
+  try {
+    await api('POST', '/api/podcast/feeds', { url });
+    if (input) input.value = '';
+    await _refreshKnowledgeList();
+    const after = document.getElementById('knowledge-add-msg');
+    if (after) after.textContent = 'Feed added — its latest episodes are being fetched.';
+  } catch (e) {
+    if (msg) msg.textContent = 'Error: ' + e.message;
+  }
+}
+
+// Shared tail end of the add boxes: ingest (shared.js kicks off processing),
+// then refresh the list.
+async function _submitKnowledgeAdd(payload, msg) {
+  if (msg) msg.textContent = 'Adding…';
+  try {
+    const res = await ingestKnowledge(payload);
+    await _refreshKnowledgeList();
+    const after = document.getElementById('knowledge-add-msg');
+    if (after) {
+      after.textContent = res?.status === 'already_exists'
+        ? 'Already in your library.' : 'Added — processing on the server.';
+    }
+  } catch (e) {
+    const after = document.getElementById('knowledge-add-msg') || msg;
+    if (after) after.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Screen: RSS feed management ─────────────────────────────────────────────
+
+async function openKnowledgeFeeds() {
+  _clearPodcastPoll();
+  _podcastCurrentFeedId = null;
+  _knowledgeScreen = 'feeds';
+  setLoading('Loading…');
+  try {
+    const [feeds, config] = await Promise.all([
+      api('GET', '/api/podcast/feeds'),
+      api('GET', '/api/podcast/config'),
+    ]);
+    _podcastFeeds = feeds || [];
+    _podcastConfig = config || {};
+    _renderPodcastFeedList();
+    showView('knowledge');
+  } catch (e) {
+    showError('Feeds failed: ' + e.message);
+    openKnowledge();
+  }
+}
 
 function _renderPodcastFeedList() {
   const el = document.getElementById('view-knowledge-content');
@@ -3950,10 +4407,10 @@ function _renderPodcastFeedList() {
     </div>`).join('') || '<div class="keymap-hint">No feeds yet — add one below.</div>';
 
   el.innerHTML = `
-    ${_knowledgeTabBarHtml()}
+    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
     <div class="keymap-panel">
-      <h2 class="keymap-heading">Podcasts</h2>
-      <p class="keymap-hint">RSS feeds crawled hourly for new episodes — German summary, HSK vocabulary and Chinese transcript for each. Auto-process feeds are transcribed+summarized automatically; other feeds only store new episodes' metadata until you pick one to transcribe.</p>
+      <h2 class="keymap-heading">Podcast feeds</h2>
+      <p class="keymap-hint">RSS feeds crawled hourly for new episodes. Auto-process feeds are transcribed+summarized automatically; other feeds only store new episodes' metadata until you pick one to transcribe.</p>
       <div class="keymap-row">
         <span class="keymap-label">Summary detail level</span>
         <select class="opt-input" id="podcast-detail-level" style="flex:1" onchange="_savePodcastDetailLevel(this.value)">
@@ -4023,22 +4480,32 @@ async function _savePodcastDetailLevel(value) {
   }
 }
 
-// Layer 2 (podcast tab only): one feed's episode list ---------------------------
+// ── Screen: one feed's episodes ─────────────────────────────────────────────
+// Kept as its own screen (rather than folded into a feed filter on the unified
+// list) because it owns "Load more": paging a feed's back catalog is a
+// per-feed action with no meaning in a mixed list.
 
 async function openPodcastFeed(feedId) {
   _clearPodcastPoll();
   _podcastCurrentFeedId = feedId;
-  _knowledgeListKind = null;
+  _knowledgeScreen = 'feed';
   setLoading('Loading episodes…');
   try {
-    const episodes = await api('GET', `/api/podcast/episodes?feed_id=${feedId}&limit=1000`);
+    // Published order here, not the unified list's processed order: inside one
+    // podcast, "which episode is this" is a question about the show's own
+    // timeline.
+    const [episodes, feeds] = await Promise.all([
+      api('GET', `/api/podcast/episodes?feed_id=${feedId}&limit=1000&sort=published_at&order=desc`),
+      _podcastFeeds.length ? Promise.resolve(_podcastFeeds) : api('GET', '/api/podcast/feeds'),
+    ]);
     _podcastEpisodes = episodes || [];
+    _podcastFeeds = feeds || [];
     showView('knowledge');
     _renderPodcastEpisodeList();
     _schedulePodcastPollIfNeeded();
   } catch (e) {
     showError('Episodes failed: ' + e.message);
-    openKnowledge('podcast');
+    openKnowledge();
   }
 }
 
@@ -4082,7 +4549,7 @@ function _renderPodcastEpisodeList() {
   }).join('') || '<div class="keymap-hint">No episodes yet.</div>';
 
   el.innerHTML = `
-    <button class="keymap-reset-all" onclick="openKnowledge('podcast')">← Podcasts</button>
+    <button class="keymap-reset-all" onclick="openKnowledgeFeeds()">← Feeds</button>
     <div class="keymap-panel">
       <h2 class="keymap-heading">${_escHtml(feed?.title || feed?.url || 'Feed')}</h2>
     </div>
@@ -4093,249 +4560,6 @@ function _renderPodcastEpisodeList() {
     </div>`;
 }
 
-// Layer 1b (video/article tabs): flat list filtered by kind, plus paste box -----
-
-function _renderKnowledgeMaterialList() {
-  const el = document.getElementById('view-knowledge-content');
-  if (!el) return;
-  // Each tab says what it actually takes — the paste box is the same
-  // ingest_url() dispatch for all of them, so the only thing that tells
-  // Daniel a Reel link is welcome here is this text (#761/#764).
-  const HINTS = {
-    video: ['Paste a YouTube link…', 'No videos yet — paste a YouTube link above.'],
-    reel: ['Paste an Instagram Reel link…', 'No Reels yet — paste an Instagram link above.'],
-    article: ['Paste an article link…', 'No articles yet — paste a link above.'],
-    // No link hint here — newsletter has no paste box (see addBoxHtml below),
-    // it only ever arrives by mail (knowledge/newsletter.py, #925).
-    newsletter: [null, 'No newsletters yet — they arrive by mail.'],
-  };
-  const [linkHint, emptyHint] = HINTS[_knowledgeTab] || HINTS.article;
-  const rows = _podcastEpisodes.map(ep => _knowledgeMaterialRowHtml(ep)).join('') ||
-    `<div class="keymap-hint">${emptyHint}</div>`;
-  // Paste-text is an article-only escape hatch for paywalled pieces the server
-  // can't fetch (#668) — video/podcast tabs only ever get a link box.
-  const isArticleTab = _knowledgeTab === 'article';
-  // Newsletter has no add box at all (#925): it only ever arrives by mail
-  // (a Gmail forwarding rule -> knowledge/newsletter.py), there's nothing
-  // for Daniel to paste in here.
-  const addBoxHtml = (_knowledgeTab === 'newsletter') ? '' :
-    (isArticleTab && _knowledgeAddMode === 'file')
-    ? `<div class="keymap-panel">
-        <div class="keymap-row" style="align-items:flex-start">
-          <div style="flex:1;display:flex;flex-direction:column;gap:6px">
-            <input type="file" id="knowledge-add-file"
-                   accept=".txt,.md,.markdown,.pdf,.docx" style="font-size:13px">
-            <!-- Same optional metadata as the paste box (#833/#835); blanks
-                 are read out of the file's own text. -->
-            <input type="text" class="edit-input" id="knowledge-add-source-url"
-                   placeholder="Original link (optional)">
-            <input type="text" class="edit-input" id="knowledge-add-title"
-                   placeholder="Title (optional — filename / read from the text)">
-            <input type="text" class="edit-input" id="knowledge-add-author"
-                   placeholder="Author (optional — read from the text)">
-          </div>
-          <button class="btn-secondary" onclick="submitKnowledgeFile()" style="flex-shrink:0">Add</button>
-        </div>
-        <label class="keymap-row" style="gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
-          <input type="checkbox" id="knowledge-add-china" style="margin:0">
-          china-kritisch — summarize with GPT instead of DeepSeek
-        </label>
-        <span id="knowledge-add-msg" style="font-size:12px;color:var(--muted)"></span>
-      </div>`
-    : (isArticleTab && _knowledgeAddMode === 'text')
-    ? `<div class="keymap-panel">
-        <div class="keymap-row" style="align-items:flex-start">
-          <div style="flex:1;display:flex;flex-direction:column;gap:6px">
-            <textarea class="edit-input" id="knowledge-add-text" rows="10"
-                      placeholder="Paste the full article text here…"
-                      style="width:100%;box-sizing:border-box;resize:vertical"></textarea>
-            <!-- #833: all three optional — the server fills whatever is left
-                 blank from the pasted body itself (one cheap AI call). -->
-            <input type="text" class="edit-input" id="knowledge-add-source-url"
-                   placeholder="Original link (optional)">
-            <input type="text" class="edit-input" id="knowledge-add-title"
-                   placeholder="Title (optional — read from the text)">
-            <input type="text" class="edit-input" id="knowledge-add-author"
-                   placeholder="Author (optional — read from the text)">
-          </div>
-          <button class="btn-secondary" onclick="submitKnowledgeText()" style="flex-shrink:0">Add</button>
-        </div>
-        <label class="keymap-row" style="gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
-          <input type="checkbox" id="knowledge-add-china" style="margin:0">
-          china-kritisch — summarize with GPT instead of DeepSeek
-        </label>
-        <span id="knowledge-add-msg" style="font-size:12px;color:var(--muted)"></span>
-      </div>`
-    : `<div class="keymap-panel">
-        <div class="keymap-row">
-          <input type="text" class="opt-input" id="knowledge-add-url"
-                 placeholder="${linkHint}" style="flex:1"
-                 onkeydown="if(event.key==='Enter') submitKnowledgeUrl()">
-          <button class="btn-secondary" onclick="submitKnowledgeUrl()">Add</button>
-        </div>
-        <label class="keymap-row" style="gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
-          <input type="checkbox" id="knowledge-add-china" style="margin:0">
-          china-kritisch — summarize with GPT instead of DeepSeek
-        </label>
-        <span id="knowledge-add-msg" style="font-size:12px;color:var(--muted)"></span>
-      </div>`;
-  el.innerHTML = `
-    ${_knowledgeTabBarHtml()}
-    ${isArticleTab ? _knowledgeAddModeBarHtml() : ''}
-    ${addBoxHtml}
-    <div class="podcast-list">${rows}</div>`;
-}
-
-// Link/text toggle for the article tab's paste box (#668) — reuses the same
-// hcal-seg segmented-control styling as the kind tab bar just above it.
-function _knowledgeAddModeBarHtml() {
-  const modes = [['link', '🔗 Link'], ['text', '📋 Text'], ['file', '📎 File']];
-  const btns = modes.map(([id, label]) =>
-    `<button class="hcal-seg-btn ${_knowledgeAddMode === id ? 'active' : ''}" onclick="switchKnowledgeAddMode('${id}')">${label}</button>`
-  ).join('');
-  return `<div class="hcal-seg" style="margin-bottom:12px">${btns}</div>`;
-}
-
-function switchKnowledgeAddMode(mode) {
-  _knowledgeAddMode = mode;
-  _renderKnowledgeMaterialList();
-}
-
-// Reels get an icon even inside their own tab (#761), so a row stays
-// self-describing wherever it's rendered. Same predicate the tab split uses
-// (#764) — two independent "is this Instagram?" checks would eventually
-// disagree, and then a row shows the phone icon in the Videos tab.
-function _knowledgeSourceIcon(ep) {
-  return _isInstagramEpisode(ep) ? '📱 ' : '';
-}
-
-function _knowledgeMaterialRowHtml(ep) {
-  const date = _localDate(ep.published_at || ep.created_at || '');
-  const status = ep.status || 'pending';
-  const label = PODCAST_STATUS_LABEL[status] || status;
-  const cls = PODCAST_STATUS_CLASS[status] || 'podcast-badge-muted';
-  const clickable = status === 'summarized';
-  let source = ep.channel_title || ep.channel_name || ep.channel_id || '';
-  if (!source && ep.youtube_url) {
-    try { source = new URL(ep.youtube_url).hostname.replace(/^www\./, ''); } catch (e) { /* leave blank */ }
-  }
-  return `<div class="podcast-row${clickable ? ' podcast-row-clickable' : ''}"
-               ${clickable ? `onclick="openKnowledgeItem(${ep.id})"` : ''}>
-    <span class="podcast-row-title" style="display:flex;flex-direction:column;gap:2px;overflow:hidden">
-      <span>${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
-      ${ep.title_en ? `<span style="font-size:12px;color:var(--muted)">${_escHtml(ep.title_en)}</span>` : ''}
-    </span>
-    <span class="podcast-row-meta">
-      ${source ? `<span class="podcast-row-date">${_escHtml(source)}</span>` : ''}
-      <span class="podcast-row-date">${date}</span>
-      <span class="podcast-badge ${cls}">${label}</span>
-    </span>
-  </div>`;
-}
-
-// Paste-a-link box (video/article tabs). Submits, clears immediately so the
-// next link can be pasted right away (same pattern as the #636 add-word box),
-// then kicks off processing and starts polling for the status update.
-async function submitKnowledgeUrl() {
-  const input = document.getElementById('knowledge-add-url');
-  const msg = document.getElementById('knowledge-add-msg');
-  const url = (input?.value || '').trim();
-  if (!url) return;
-  // Read the checkbox BEFORE clearing/re-rendering — _submitKnowledgeAdd
-  // rebuilds this panel's DOM when it refreshes the list.
-  const china_critical = _knowledgeChinaCriticalChecked();
-  if (input) { input.value = ''; input.focus(); }
-  await _submitKnowledgeAdd({ url, china_critical }, msg);
-}
-
-// Paste-text box (article tab only, #668) — for paywalled pieces the server
-// can't fetch. Only the body is required (#833): a blank title/author/link is
-// filled in server-side from the text itself, so there is nothing to validate
-// here beyond "is there a body".
-async function submitKnowledgeText() {
-  const titleInput = document.getElementById('knowledge-add-title');
-  const authorInput = document.getElementById('knowledge-add-author');
-  const urlInput = document.getElementById('knowledge-add-source-url');
-  const textInput = document.getElementById('knowledge-add-text');
-  const msg = document.getElementById('knowledge-add-msg');
-  const text = (textInput?.value || '').trim();
-  if (!text) return;
-  const payload = {
-    text,
-    title: (titleInput?.value || '').trim(),
-    author: (authorInput?.value || '').trim(),
-    source_url: (urlInput?.value || '').trim(),
-    china_critical: _knowledgeChinaCriticalChecked(),
-  };
-  for (const input of [titleInput, authorInput, urlInput]) if (input) input.value = '';
-  if (textInput) { textInput.value = ''; textInput.focus(); }
-  await _submitKnowledgeAdd(payload, msg);
-}
-
-// File upload box (article tab only, #835) — .txt/.md/.pdf/.docx. Goes
-// through ingestKnowledgeFile() in shared.js, which posts the file and then
-// starts processing exactly like a paste does.
-async function submitKnowledgeFile() {
-  const fileInput = document.getElementById('knowledge-add-file');
-  const msg = document.getElementById('knowledge-add-msg');
-  const file = fileInput?.files?.[0];
-  if (!file) {
-    if (msg) msg.textContent = 'Pick a file first.';
-    return;
-  }
-  const fields = {
-    title: (document.getElementById('knowledge-add-title')?.value || '').trim(),
-    author: (document.getElementById('knowledge-add-author')?.value || '').trim(),
-    source_url: (document.getElementById('knowledge-add-source-url')?.value || '').trim(),
-    china_critical: _knowledgeChinaCriticalChecked(),
-  };
-  if (msg) msg.textContent = `Uploading ${file.name}…`;
-  try {
-    const res = await ingestKnowledgeFile(file, fields);
-    const done = res?.status === 'already_exists'
-      ? 'Already in your library.' : 'Added — processing on the server.';
-    if (_knowledgeListKind === _knowledgeTab) {
-      _podcastEpisodes = await _fetchKnowledgeList(_knowledgeTab);
-      _renderKnowledgeMaterialList();
-      _schedulePodcastPollIfNeeded();
-    }
-    // Re-query: the refresh above rebuilds this panel, so the element
-    // captured before it is no longer on the page.
-    const after = document.getElementById('knowledge-add-msg');
-    if (after) after.textContent = done;
-  } catch (e) {
-    if (msg) msg.textContent = 'Error: ' + e.message;
-  }
-}
-
-// china-kritisch (#731): DeepSeek summarizes these dishonestly, so the box
-// sends a flag that makes the server's API fallback use GPT. Deliberately
-// resets to unchecked on every re-render — the overwhelming majority of
-// material is fine on the cheap model, and a sticky checkbox would silently
-// spend GPT money on all of it.
-function _knowledgeChinaCriticalChecked() {
-  return !!document.getElementById('knowledge-add-china')?.checked;
-}
-
-// Shared tail end of both paste boxes: ingest (shared.js kicks off processing),
-// then refresh the currently-shown list if we're still on it.
-async function _submitKnowledgeAdd(payload, msg) {
-  if (msg) msg.textContent = 'Adding…';
-  try {
-    const res = await ingestKnowledge(payload);
-    if (res?.status === 'already_exists') {
-      if (msg) msg.textContent = 'Already in your library.';
-    }
-    if (_knowledgeListKind === _knowledgeTab) {
-      _podcastEpisodes = await _fetchKnowledgeList(_knowledgeTab);
-      _renderKnowledgeMaterialList();
-      _schedulePodcastPollIfNeeded();
-    }
-  } catch (e) {
-    if (msg) msg.textContent = 'Error: ' + e.message;
-  }
-}
-
 async function _loadMorePodcastEpisodes() {
   if (_podcastCurrentFeedId == null) return;
   const btn = document.getElementById('podcast-load-more-btn');
@@ -4344,7 +4568,7 @@ async function _loadMorePodcastEpisodes() {
   if (msg) msg.textContent = 'Loading…';
   try {
     const res = await api('POST', `/api/podcast/feeds/${_podcastCurrentFeedId}/load-more`);
-    const episodes = await api('GET', `/api/podcast/episodes?feed_id=${_podcastCurrentFeedId}&limit=1000`);
+    const episodes = await api('GET', `/api/podcast/episodes?feed_id=${_podcastCurrentFeedId}&limit=1000&sort=published_at&order=desc`);
     _podcastEpisodes = episodes || [];
     _renderPodcastEpisodeList();
     const added = res?.added || 0;
@@ -4361,7 +4585,7 @@ async function _transcribePodcastEpisode(episodeId) {
     await api('POST', `/api/podcast/episodes/${episodeId}/process`);
     const ep = _podcastEpisodes.find(e => e.id === episodeId);
     if (ep) ep.status = 'processing';
-    _renderPodcastEpisodeList();
+    if (_knowledgeScreen === 'feed') _renderPodcastEpisodeList(); else _renderKnowledgeList();
     _schedulePodcastPollIfNeeded();
   } catch (e) {
     showError('Failed to start transcription: ' + e.message);
@@ -4369,24 +4593,23 @@ async function _transcribePodcastEpisode(episodeId) {
 }
 
 // Re-poll while any item in the currently shown list is "processing" — works
-// for both layer 2 (a podcast feed's episodes) and layer 1b (the flat
-// video/article list); which one is active is told apart by which of
-// _podcastCurrentFeedId / _knowledgeListKind is set.
+// for both the unified list and one feed's episodes; _knowledgeScreen says
+// which is on screen, so the poll re-fetches with that screen's own query.
 function _schedulePodcastPollIfNeeded() {
   _clearPodcastPoll();
   const hasProcessing = _podcastEpisodes.some(ep => ep.status === 'processing');
-  if (!hasProcessing || (_podcastCurrentFeedId == null && _knowledgeListKind == null)) return;
+  if (!hasProcessing || (_knowledgeScreen !== 'list' && _knowledgeScreen !== 'feed')) return;
   _podcastPollTimer = setTimeout(async () => {
+    const screen = _knowledgeScreen;
     const feedId = _podcastCurrentFeedId;
-    const kind = _knowledgeListKind;
-    if (feedId == null && kind == null) return;  // left this view meanwhile
+    if (screen !== _knowledgeScreen) return;  // left this view meanwhile
     try {
-      const url = feedId != null
-        ? `/api/podcast/episodes?feed_id=${feedId}&limit=1000`
-        : `/api/podcast/episodes?kind=${kind}&limit=1000`;
+      const url = screen === 'feed'
+        ? `/api/podcast/episodes?feed_id=${feedId}&limit=1000&sort=published_at&order=desc`
+        : `/api/podcast/episodes?${_knowledgeQuery()}`;
       const episodes = await api('GET', url);
       _podcastEpisodes = episodes || [];
-      if (feedId != null) _renderPodcastEpisodeList(); else _renderKnowledgeMaterialList();
+      if (screen === 'feed') _renderPodcastEpisodeList(); else _renderKnowledgeList();
       _schedulePodcastPollIfNeeded();
     } catch (e) { /* transient error — next poll cycle will retry */ }
   }, 10000);
@@ -4419,10 +4642,14 @@ async function openKnowledgeItem(id) {
 
 function closeKnowledgeDetail() {
   _knowledgeDetailId = null;
+  // Back to wherever this item was opened from. Note openKnowledge() is called
+  // with NO argument: an argument would reset the filter bar, and coming back
+  // from an item to a list that has forgotten your filters is the worst
+  // possible moment to lose them.
   if (_podcastCurrentFeedId != null) {
     openPodcastFeed(_podcastCurrentFeedId);
   } else {
-    openKnowledge(_knowledgeListKind || _knowledgeTab || 'podcast');
+    openKnowledge();
   }
 }
 
@@ -4783,7 +5010,7 @@ function _openKnowledgeFromHash() {
   // Tab link (#704): #knowledge-video etc. — the letters-only form, which the
   // digits-only patterns above can never match. This is what the server's
   // /knowledge/videos redirect lands on; nothing in the frontend writes it.
-  const tabMatch = /^#knowledge-(podcast|video|reel|article)$/.exec(location.hash);
+  const tabMatch = /^#knowledge-(podcast|video|reel|article|newsletter)$/.exec(location.hash);
   if (tabMatch) openKnowledge(tabMatch[1]);
 }
 
@@ -12908,7 +13135,7 @@ async function _loadVersionBadge() {
 // are recognized (see _openKnowledgeFromHash).
 if (/^#(?:podcast|knowledge)-feed-\d+$/.test(location.hash)
     || /^#(?:podcast|knowledge)-\d+$/.test(location.hash)
-    || /^#knowledge-(?:podcast|video|reel|article)$/.test(location.hash)) {
+    || /^#knowledge-(?:podcast|video|reel|article|newsletter)$/.test(location.hash)) {
   _openKnowledgeFromHash();
   // Consume the hash: a direct link is a one-shot instruction to open one
   // thing, not a sticky location. Leaving it in the address bar made every

@@ -3271,6 +3271,68 @@ a.nav-btn { text-decoration: none; }
 .podcast-badge-error   { background: #fee2e2; color: #b91c1c; }
 .podcast-badge-pending { background: #fef3c7; color: #b45309; }
 .podcast-transcribe-btn { font-size: 12px; padding: 3px 10px; }
+
+/* ── 知识库统一素材列表（#936，大方向 #934）─────────────────────────────── */
+.knowledge-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.knowledge-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.knowledge-order-btn { padding: 4px 10px; font-size: 14px; line-height: 1; }
+.knowledge-count { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* 筛选器一律换行而不是横向滚动：手机上藏在滚动区右侧的筛选器等于不存在 */
+.knowledge-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.knowledge-filter-select {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 13px;
+  padding: 4px 8px;
+}
+.knowledge-filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.knowledge-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.knowledge-chip {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--primary);
+  background: #eff6ff;
+  color: var(--primary);
+  cursor: pointer;
+}
+.knowledge-chip:hover { background: #dbeafe; }
+.knowledge-chip-clear { border-color: var(--border); background: var(--card); color: var(--muted); }
+.knowledge-chip-clear:hover { background: var(--hover-bg); }
+.knowledge-tag-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.knowledge-tag {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+}
+/* AI 打的标签浅一档：Daniel 一眼看得出哪些是机器猜的（#938） */
+.knowledge-tag-ai { background: transparent; border: 1px dashed var(--border); color: var(--muted); }
+.knowledge-row-archived { opacity: 0.55; }
 #podcast-summary-de { line-height: 1.6; color: var(--text); }
 
 /* Chinese summary (#631; since #708 a full translation of the German one,
