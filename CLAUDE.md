@@ -544,6 +544,9 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 **加西班牙语词与罗曼语形态（#805）**：`lang` 支持 `zh|fr|es`
 
 - **加词必须把全部变位/词形生成出来**，这不是锦上添花：知识库判定"这个词形我学过没有"靠的是 `entry_forms` 的精确匹配（`database.forms_lookup()`，零词干还原），漏掉的变位就等于这个词在阅读里永远显示为生词。提示词对法语/西语强制要求：动词给完整变位表、名词给 `gender:` + 复数、形容词给阴性/复数
+- **词头一律是词典形，输入的变位形自动还原（#924）**：Daniel 是从阅读里挑词的，敲进来的多半是 `mangeons`/`réduites`/`chats`。fr/es 的加词提示词和 `/dict` 提示词都有 `DICTIONARY FORM` 段：动词还原成不定式、名词单数、形容词阳性单数（`expression`/`sentence` 和真正词汇化的分词是例外），输入的那个形式写进 `note` 说明，不当词头。否则整棵 `entry_forms` 会围着一个变位形展开，上一条的精确匹配就全落空
+  - **输入变位形先查库再决定花不花钱**：`database.get_word_by_form(词形, lang)`（`entries.word_zh` ∪ `entry_forms.form`，同样零词干还原）命中就走既有的"已存在的词"分支，`/api/add-word-ai` 和 `/api/save-word` 都查。原来 `get_word_by_zh("mangeons")` 查不到 → 二次付费生成 + 第二个词头，`UNIQUE(word_zh, lang)` 因为拼写不同拦不住
+  - **导入回来的词头可能和输入的不是同一个字符串**，所以 `importer` 的返回值带 `imported_words`，`day='list'` 的入 Saved 和任务汇报都用它——用 Daniel 敲的字符串去 `get_word_by_zh()` 会找不到，卡片静默留在 Daily 牌组里
 - YAML 里 `conjugations:` 进 `entry_forms(kind='conjugation')`，`forms:`（`{维度: {槽位: 形式}}`）进 `kind='inflection'`，`gender:` 进 `entries.gender`。格式见 `docs/yaml-format.md`
 - **词典 `/dict` 支持 fr/es**（`ai.DICTIONARY_PROMPT_ROMANCE`，移植自 `de-fr-bot`）：**返回的 JSON 契约与中文版完全一致**，所以前端渲染代码不分语言。★ 加词仍然走 `/api/add-word-ai`——词典不得成为第二条加词管线（#643）
 - **`GET /api/langs?available=1` 返回全部已注册语言**，`/add` 和 `/dict` 用它；主页标签栏仍用"在用语言"。区别是有意的：**一门新语言还没有牌组，按"在用"过滤就永远加不了它的第一个词**
