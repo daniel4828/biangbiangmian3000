@@ -4467,6 +4467,7 @@ function _renderKnowledgeDetail(ep) {
   setWordTable(isZh ? (ep.hsk_words || [])
                     : ((ep.rendition && ep.rendition.new_words) || []), lang);
   _podcastDetailEpisodeId = ep.id;
+  _knowledgeDetailEpisode = ep;
   const hskTable = wordTableHtml('No HSK vocabulary extracted.');
   const links = [
     ep.youtube_url ? `<a href="${_escHtml(ep.youtube_url)}" target="_blank" rel="noopener" class="btn-secondary">${isPodcast ? 'YouTube' : 'Open'} ↗</a>` : '',
@@ -4474,6 +4475,7 @@ function _renderKnowledgeDetail(ep) {
     ep.status === 'summarized' ? `<button id="podcast-notify-signal" class="btn-secondary" onclick="doPodcastNotify('signal')">Send to Signal</button>` : '',
     ep.status === 'summarized' ? `<button id="podcast-notify-email" class="btn-secondary" onclick="doPodcastNotify('email')">Send Email</button>` : '',
     ep.status === 'summarized' ? `<button id="podcast-regen-summary" class="btn-secondary" onclick="doPodcastRegenerateSummary()">Regenerate summary</button>` : '',
+    _knowledgeSummaryText(ep) ? `<button id="knowledge-copy-summary" class="btn-secondary" onclick="doKnowledgeCopySummary(this)">\u{1F4CB} Copy summary</button>` : '',
     ep.status === 'processing' ? `<span class="keymap-hint">⏳ processing…</span>` : '',
   ].filter(Boolean).join(' ');
   const trPairs = Array.isArray(ep.transcript_de) ? ep.transcript_de : [];
@@ -4486,6 +4488,7 @@ function _renderKnowledgeDetail(ep) {
   const transcript = (trPairs.length || ep.transcript_zh)
     ? `<div class="podcast-transcript-wrap">
          <button class="keymap-reset-all" onclick="_togglePodcastTranscript()">Show/hide ${contentLabel.toLowerCase()}</button>
+         <button class="keymap-reset-all" style="margin-left:8px" id="knowledge-copy-transcript" onclick="doKnowledgeCopyTranscript(this)">\u{1F4CB} Copy ${contentLabel.toLowerCase()}</button>
          <div id="podcast-transcript-body" class="podcast-transcript" style="display:none">${trBody}</div>
        </div>`
     : '';
@@ -4515,10 +4518,98 @@ function _togglePodcastTranscript() {
   body.style.display = body.style.display === 'none' ? 'block' : 'none';
 }
 
+// ── One-click copy of a knowledge item's summary / transcript (#943) ─────────
+// The summary is <p>/<b> markup and the transcript is a two-column bilingual
+// layout: selecting either by hand is painful, so both get a button that puts
+// plain text on the clipboard.
+
+// Plain text out of the summary markup. Everything is pushed through
+// _summaryZhHtml first (escape, then whitelist <p>/<b>/<em>/<i>/<br>), so the
+// detached div below can never be handed model-written markup verbatim.
+function _htmlToPlainText(html) {
+  const div = document.createElement('div');
+  div.innerHTML = String(html || '').replace(/<br\s*\/?>/gi, '\n');
+  const paras = div.querySelectorAll('p');
+  if (paras.length) {
+    return Array.from(paras).map(p => p.textContent.trim()).filter(Boolean).join('\n\n');
+  }
+  return div.textContent.trim();
+}
+
+// Mirrors _knowledgeSummaryHtml's language split: zh copies both the Chinese
+// and the German summary, every other language copies its rendition.
+function _knowledgeSummaryText(ep) {
+  if (!ep) return '';
+  if (activeLang() === 'zh') {
+    return [ep.summary_zh, ep.summary_de]
+      .map(t => _htmlToPlainText(_summaryZhHtml(t)))
+      .filter(Boolean).join('\n\n');
+  }
+  return ep.rendition ? _htmlToPlainText(_summaryZhHtml(ep.rendition.summary || '')) : '';
+}
+
+// Bilingual transcripts (#772) copy as "<Chinese line>\n<other line>" per
+// segment; single-language transcripts copy as they are.
+function _knowledgeTranscriptText(ep) {
+  if (!ep) return '';
+  const pairs = Array.isArray(ep.transcript_de) ? ep.transcript_de : [];
+  if (pairs.length) {
+    return pairs.map(p => [p.zh || '', p.de || ''].map(t => String(t).trim()).filter(Boolean).join('\n'))
+                .filter(Boolean).join('\n\n');
+  }
+  return String(ep.transcript_zh || '').trim();
+}
+
+// navigator.clipboard only exists in a secure context — the local/offline
+// instance runs on plain http, so keep the old execCommand path as a fallback
+// rather than letting the button do nothing there.
+function _copyTextFallback(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
+async function _copyToClipboard(text, btn) {
+  if (!text) { showError('Nothing to copy'); return; }
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (e) { ok = false; }
+  if (!ok) ok = _copyTextFallback(text);
+  if (!ok) { showError('Could not copy to clipboard'); return; }
+  if (!btn) return;
+  const original = btn.textContent;
+  btn.textContent = '\u2713 Copied';
+  setTimeout(() => { btn.textContent = original; }, 1500);
+}
+
+function doKnowledgeCopySummary(btn) {
+  _copyToClipboard(_knowledgeSummaryText(_knowledgeDetailEpisode), btn);
+}
+
+function doKnowledgeCopyTranscript(btn) {
+  _copyToClipboard(_knowledgeTranscriptText(_knowledgeDetailEpisode), btn);
+}
+
 // Episode id for the currently rendered podcast detail — used by
 // doPodcastNotify (#530) so the Send to Signal/Email buttons don't need to
 // embed the id in their onclick attribute.
 let _podcastDetailEpisodeId = null;
+
+// The full episode object behind the detail view (#943) — the copy buttons
+// need summary/transcript text, not just the id.
+let _knowledgeDetailEpisode = null;
 
 // Regenerate the summary of the currently shown episode (#567): POST kicks
 // off a background thread on the server, then poll the detail endpoint until
