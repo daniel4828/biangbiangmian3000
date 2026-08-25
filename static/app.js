@@ -4509,7 +4509,11 @@ function _renderKnowledgeDetail(ep) {
     <div class="keymap-panel">
       <h2 class="keymap-heading">${contentLabel}</h2>
       ${transcript || `<p class="keymap-hint">No ${contentLabel.toLowerCase()} available.</p>`}
-    </div>`;
+    </div>
+    ${_knowledgeChatHtml(ep)}`;
+  // The saved conversation (#945) is fetched after the markup exists, so the
+  // detail view still renders instantly when the chat request is slow.
+  _loadKnowledgeChat(ep.id);
 }
 
 function _togglePodcastTranscript() {
@@ -14025,4 +14029,164 @@ async function openBookChapterSummary(bookId, number) {
     empty.textContent = '本章暂无原句摘录。';
     bodyEl.appendChild(empty);
   }
+}
+
+// ── Chat about a knowledge item (#945) ──────────────────────────────────────
+// Follow-up questions about the material, saved server-side so they are still
+// there on the next visit. Every message is rendered with textContent — the
+// answers are model-written text and never touch innerHTML (same rule /dict
+// follows, #746).
+
+// The model dropdown's options. static/index.html already carries two copies
+// of this list for the story modals; this is deliberately a third *place* but
+// the only one in JS — do not add a fourth by copying it into a template
+// string somewhere else.
+const KNOWLEDGE_CHAT_MODELS = [
+  ['deepseek-v4-flash', 'DeepSeek V4 Flash — cheap, reliable'],
+  ['deepseek-v4-pro', 'DeepSeek V4 Pro — higher quality'],
+  ['glm-4.7', 'GLM-4.7 — Zhipu, best Chinese value'],
+  ['glm-5', 'GLM-5 — Zhipu flagship'],
+  ['glm-4.7-flash', 'GLM-4.7-Flash — Zhipu, free'],
+  ['qwen-turbo', 'Qwen Turbo — Alibaba, cheap'],
+  ['claude-haiku-4-5-20251001', 'Haiku — Anthropic fast'],
+  ['claude-sonnet-4-6', 'Sonnet — Anthropic balanced'],
+  ['claude-opus-4-6', 'Opus — Anthropic flagship'],
+  ['gpt-5-mini', 'GPT-5 Mini — OpenAI, cheap'],
+  ['gpt-5.6-luna', 'GPT-5.6 Luna — OpenAI, cheap + newest'],
+  ['gpt-5.6-terra', 'GPT-5.6 Terra — OpenAI, balanced'],
+  ['gpt-5.6-sol', 'GPT-5.6 Sol — OpenAI flagship'],
+];
+
+function _knowledgeChatModel() {
+  const saved = localStorage.getItem('knowledgeChatModel');
+  return KNOWLEDGE_CHAT_MODELS.some(m => m[0] === saved) ? saved : KNOWLEDGE_CHAT_MODELS[0][0];
+}
+
+// The chat panel's markup. Rendered only when the item actually has material
+// to talk about — an input box that could only ever produce a 400 is worse
+// than no box at all.
+function _knowledgeChatHtml(ep) {
+  const hasMaterial = !!((ep.transcript_zh || '').trim() || (ep.summary_de || '').trim());
+  if (!hasMaterial) return '';
+  const current = _knowledgeChatModel();
+  const options = KNOWLEDGE_CHAT_MODELS
+    .map(([value, label]) => `<option value="${_escHtml(value)}"${value === current ? ' selected' : ''}>${_escHtml(label)}</option>`)
+    .join('');
+  return `
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">💬 Chat</h2>
+      <div id="knowledge-chat-log" class="knowledge-chat-log"></div>
+      <div class="knowledge-chat-input">
+        <textarea id="knowledge-chat-text" class="edit-input" rows="2"
+                  placeholder="Ask about this text… (Ctrl/⌘+Enter to send)"
+                  onkeydown="_knowledgeChatKey(event)"></textarea>
+        <div class="knowledge-chat-controls">
+          <select id="knowledge-chat-model" class="edit-input" onchange="_knowledgeChatModelChanged(this)">${options}</select>
+          <button id="knowledge-chat-send" class="btn-secondary" onclick="doKnowledgeChatSend()">Send</button>
+          <button id="knowledge-chat-clear" class="btn-secondary" onclick="doKnowledgeChatClear()">🗑 Clear chat</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _knowledgeChatModelChanged(sel) {
+  localStorage.setItem('knowledgeChatModel', sel.value);
+}
+
+function _knowledgeChatKey(ev) {
+  if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+    ev.preventDefault();
+    doKnowledgeChatSend();
+  }
+}
+
+// Append one message bubble. textContent only, so a model that writes markup
+// gets displayed, not executed.
+function _appendKnowledgeChatMessage(msg) {
+  const log = document.getElementById('knowledge-chat-log');
+  if (!log) return;
+  const empty = log.querySelector('.knowledge-chat-empty');
+  if (empty) empty.remove();
+  const row = document.createElement('div');
+  row.className = 'knowledge-chat-msg knowledge-chat-' + (msg.role === 'assistant' ? 'ai' : 'me');
+  const who = document.createElement('div');
+  who.className = 'knowledge-chat-who';
+  who.textContent = msg.role === 'assistant' ? (msg.model || 'AI') : 'You';
+  const body = document.createElement('div');
+  body.className = 'knowledge-chat-body';
+  body.textContent = msg.content || '';
+  row.appendChild(who);
+  row.appendChild(body);
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function _renderKnowledgeChatLog(messages) {
+  const log = document.getElementById('knowledge-chat-log');
+  if (!log) return;
+  log.textContent = '';
+  if (!messages.length) {
+    const hint = document.createElement('p');
+    hint.className = 'keymap-hint knowledge-chat-empty';
+    hint.textContent = 'No questions asked about this item yet.';
+    log.appendChild(hint);
+    return;
+  }
+  messages.forEach(_appendKnowledgeChatMessage);
+}
+
+// Loaded after the detail view renders. A failed load shows why instead of an
+// empty log that looks like "you never asked anything".
+async function _loadKnowledgeChat(episodeId) {
+  if (!document.getElementById('knowledge-chat-log')) return;
+  try {
+    const data = await api('GET', `/api/knowledge/${episodeId}/chat`);
+    if (_podcastDetailEpisodeId !== episodeId) return; // navigated away
+    _renderKnowledgeChatLog(data.messages || []);
+  } catch (e) {
+    const log = document.getElementById('knowledge-chat-log');
+    if (log) log.textContent = 'Could not load the chat: ' + (e.message || 'error');
+  }
+}
+
+async function doKnowledgeChatSend() {
+  const box = document.getElementById('knowledge-chat-text');
+  const btn = document.getElementById('knowledge-chat-send');
+  const id = _podcastDetailEpisodeId;
+  if (!box || !btn || !id) return;
+  const message = box.value.trim();
+  if (!message) return;
+  const model = document.getElementById('knowledge-chat-model')?.value || undefined;
+  btn.disabled = true;
+  btn.textContent = 'Thinking…';
+  try {
+    const data = await api('POST', `/api/knowledge/${id}/chat`, { message, model });
+    if (_podcastDetailEpisodeId !== id) return; // navigated away mid-answer
+    (data.messages || []).forEach(_appendKnowledgeChatMessage);
+    // Only clear the box once the turn is safely stored — a failed call must
+    // leave his question where he can just press Send again.
+    box.value = '';
+  } catch (e) {
+    showError(e.message || 'Chat failed');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send';
+  }
+}
+
+async function doKnowledgeChatClear() {
+  const id = _podcastDetailEpisodeId;
+  const log = document.getElementById('knowledge-chat-log');
+  if (!id || !log) return;
+  // Nothing stored yet: the DELETE would honestly 404 (the route refuses to
+  // pretend), which as an error popup would just be confusing noise here.
+  if (!log.querySelector('.knowledge-chat-msg')) return;
+  if (!await showConfirm('Delete this conversation? This cannot be undone.')) return;
+  try {
+    await api('DELETE', `/api/knowledge/${id}/chat`);
+  } catch (e) {
+    showError(e.message || 'Could not clear the chat');
+    return;
+  }
+  _renderKnowledgeChatLog([]);
 }

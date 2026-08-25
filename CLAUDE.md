@@ -635,6 +635,14 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **抽不出文字也报错**：扫描版 PDF（无文字层）错误信息明说需要 OCR —— 同 `knowledge/article.py` 拒绝付费墙残页
   - Markdown 原样当正文，不渲染成 HTML（摘要提示词吃得下，剥掉之后还得加回来）；10 MB 上限
   - 新依赖 `pypdf`、`python-docx`
+- **一键复制摘要 / 转录（#943）**：详情页两个 📋 按钮把纯文本放进剪贴板。摘要是 `<p>`/`<b>` 标记、转录是双语两栏，手动选中拖不准。`_htmlToPlainText()` 先把内容过一遍 `_summaryZhHtml()`（转义 → 白名单）再取 `textContent` —— **绝不把模型写的标记原样塞进 `innerHTML`**；语言分支与 `_knowledgeSummaryHtml()` 一致；`navigator.clipboard` 只在安全上下文可用（本地实例跑 http），保留 `textarea` + `execCommand` 兜底
+- **和 AI 聊这份素材（#945）**：详情页底部 💬 Chat 面板，模型下拉框可选，对话存库，重开素材还在。Daniel 2026-08-25 定的：上下文有转录用转录、没有才用摘要；面板长在详情页里（不做独立页）；**AI 用提问的语言回答**
+  - **上下文每轮重建，绝不复制进对话表**：`routes.story._knowledge_material(episode)`（#661 那条规则，import 而不是抄一份），所以重新生成摘要之后 AI 立刻看到的是新的
+  - **上下文和规则放在第一条 user 消息里，不用 system 角色**：`ai.py` 全文没有一处 system 消息，而 Anthropic 的 `messages.create()` 把 system 当独立参数——混进 `messages` 会让所有 `claude-*` 模型报错，却在 OpenAI 兼容的那些上照常工作，是最难发现的那类坑
+  - **AI 失败什么都不写库**：`database.add_turn()` 一次事务写入问+答两条。存了问题没有答案 = 对话里一个永久的洞；失败时前端保留输入框内容，直接再按一次 Send
+  - **两张表不是一个 JSON 列**（`knowledge_chats` + `knowledge_chat_messages`）：追加一轮若要读-改-写整个 JSON，两个标签页同时聊会互相覆盖。`episode_id` 上的外键 `ON DELETE CASCADE` 负责素材删除时清干净（`get_db()` 开了 `PRAGMA foreign_keys`）
+  - 模型走 `routes.story._validated_model()`，不认识的回落默认模型并 `logger.warning`（#721 的教训）；成本记账自动走 `_call_api` 的 `log_api_call`，`purpose="knowledge_chat"`
+  - **每条消息都会把整份转录（最多 15000 字）重发一遍**，长对话不便宜。先按 Daniel 定的做，嫌贵再加「只发摘要」开关
 - **china-kritisch 复选框（#731）**：摘要默认走便宜的 DeepSeek —— Daniel 的博客素材绝大多数不批评中国，没必要为它们付 OpenAI 的钱。少数确实批评中国的素材勾选后存 `podcast_episodes.china_critical=1`，摘要时把 DeepSeek 从候选模型里**彻底删掉**（不是排后面）：它对这类内容会悄悄弱化或拒答，而弱化后的摘要照样能解析出 `summary_de`，任何"解析失败就回退"的机制都永远不会触发
   - **免费的 NotebookLM 路径不受影响，照旧第一优先**：它是 Google 的，没理由审查这个话题，而且不花钱。勾选只改变它失败之后 API 兜底那一层选谁
   - **标记必须在粘贴那一刻打上**：摘要发生在之后独立的 `POST .../process` 调用里（甚至是 cron 里），那时已经没人在旁边说明这是什么素材
@@ -796,6 +804,9 @@ GET  /api/story-prompt/{story_id}                    → 生成该故事的完�
 POST /api/knowledge/add                               → body {url, china_critical?}（#731，默认 false）→ 新素材 {episode_id}；已存在 {status:"already_exists", episode_id}；不转录不摘要，前端拿 id 后另调 .../process
 POST /api/knowledge/add-text                          → body {text, title?, author?, source_url?, china_critical?}（#668；#833 起除 text 外全可选，留空由 AI 从正文抽取）→ 同上契约
 POST /api/knowledge/add-file                          → multipart：file（.txt/.md/.pdf/.docx，≤10 MB）+ title?/author?/source_url?/china_critical?（#835）→ 同上契约；未知类型 / 抽不出文字 / 正文太短均 400
+GET    /api/knowledge/{episode_id}/chat               → 该素材的对话（#945）：{model, messages[{id,role,content,model,created_at}]}；没聊过是空数组不是 404；素材不存在 404
+POST   /api/knowledge/{episode_id}/chat               → body {message, model?} → 追加一轮，返回刚存的两条消息；AI 失败 500 且**库里什么都不写**（半截对话比报错更糟）；没转录也没摘要 400；AI 关闭 400
+DELETE /api/knowledge/{episode_id}/chat               → 清空该素材的对话；没有对话返回 404（不假装成功）
 GET/POST /api/known-words ；DELETE /api/known-words/{word} → 已认识词库（#710）：标记后 zh_annotate 不再当生词；不建卡不排程；DELETE 词不在表里返回 404（不假装成功）
 POST /api/podcast/check                              → 跑一轮抓取，返回汇总 {new, summarized, emailed, failed}
 GET  /api/podcast/episodes                            → 列表（不含转录全文；?feed_id= 按源过滤；?kind= 按 podcast/video/article 过滤，#650；手动处理中的单集 status 显示为 processing）

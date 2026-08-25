@@ -4261,3 +4261,67 @@ def get_provider_balances() -> list[dict]:
 
     _balance_cache.update(at=now, data=rows)
     return rows
+
+
+# ── Chat about a knowledge item (#945) ──────────────────────────────────────
+# Follow-up questions about a podcast/video/article Daniel just read, with the
+# material as context. Free-form text out, not JSON: this is a conversation,
+# and forcing a schema on it would only get in the way.
+
+KNOWLEDGE_CHAT_PROMPT = """You are helping Daniel understand a text he has just read.
+
+Here is the material (title: {title}):
+
+--- BEGIN MATERIAL ---
+{material}
+--- END MATERIAL ---
+
+Rules for every answer you give in this conversation:
+- Answer in the SAME LANGUAGE the question is written in. German question,
+  German answer; Chinese question, Chinese answer. Never switch languages on
+  your own.
+- Ground your answers in the material above. If the material does not say so,
+  say that plainly instead of inventing an answer; you may then answer from
+  general knowledge as long as you mark it as such.
+- Be concise: a few sentences unless he asks for more. Plain text, no
+  Markdown headings or tables.
+
+His question: {question}"""
+
+
+def chat_about_material(material: str, title: str, history: list[dict],
+                        question: str, model: str | None = None) -> tuple[str, str]:
+    """One turn of the knowledge-item chat (#945). Returns (answer, model used).
+
+    `history` is the stored conversation, oldest first, as
+    [{"role": "user"|"assistant", "content": str}, ...]. The material and the
+    rules ride in the FIRST user message rather than a system message: nothing
+    else in this module uses a system role, and Anthropic's messages.create()
+    takes `system` as its own parameter — a system-role entry inside `messages`
+    would break every claude-* model while quietly working on the
+    OpenAI-compatible ones.
+
+    Raises ValueError on an empty reply: an empty assistant bubble stored in
+    the history is worse than an error the caller can show and let him retry.
+    """
+    use_model = model or DEFAULT_MODEL
+    first_user = KNOWLEDGE_CHAT_PROMPT.format(
+        title=title or "(untitled)", material=material,
+        question=(history[0]["content"] if history else question),
+    )
+    messages = [{"role": "user", "content": first_user}]
+    # history[0] is already baked into first_user above, so replay from [1:].
+    for msg in history[1:]:
+        role = "assistant" if msg.get("role") == "assistant" else "user"
+        messages.append({"role": role, "content": msg.get("content", "")})
+    if history:
+        messages.append({"role": "user", "content": question})
+
+    logger.info("[%s] knowledge chat: %d prior message(s), material %d chars",
+                use_model, len(history), len(material))
+    raw = _call_api(use_model, messages, max_tokens=2000,
+                    purpose="knowledge_chat", thinking=False)
+    answer = (raw or "").strip()
+    if not answer:
+        raise ValueError("the model returned an empty answer")
+    return answer, use_model

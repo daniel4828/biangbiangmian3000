@@ -902,3 +902,37 @@ CREATE TABLE IF NOT EXISTS book_chapter_renditions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_book_chapter_renditions ON book_chapter_renditions(chapter_id, lang);
+
+-- ---------------------------------------------------------------------------
+-- Chat about a knowledge item (#945). After reading a podcast/video/article
+-- summary Daniel wants to ask follow-up questions about it; before this the
+-- only way was copying the text (#943) into another chat app, where the
+-- conversation was lost the moment he closed the tab.
+--
+-- One conversation per knowledge item (episode_id is UNIQUE) — the detail
+-- page shows it again on every visit. Deliberately NOT a single JSON column
+-- of messages: appending a turn would then be a read-modify-write of the
+-- whole blob, and two open tabs would overwrite each other's turns.
+--
+-- The material itself is NOT copied in here: every request rebuilds the
+-- context from podcast_episodes (transcript, else summary), so a regenerated
+-- summary is immediately what the AI sees.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS knowledge_chats (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL UNIQUE REFERENCES podcast_episodes(id) ON DELETE CASCADE,
+    model      TEXT,            -- model used for the most recent turn
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_chat_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL REFERENCES knowledge_chats(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,   -- 'user' | 'assistant'
+    content    TEXT NOT NULL,
+    model      TEXT,            -- which model answered (NULL on user turns)
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_chat_messages ON knowledge_chat_messages(chat_id, id);
