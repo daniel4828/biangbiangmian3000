@@ -664,6 +664,11 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 - **全程吞异常**：HSK 表读不到、jieba 挂了、翻译超时，一律返回原文（翻译失败降级为只有拼音）。少个拼音是小事，为它丢掉整集摘要是荒唐的
 - **`extract_new_words()`（#650）统一了详情页底部生词表格**：原来表格由 AI 在摘要提示词里自己挑词，会漏词、也会挑 Daniel 已学过的词。改成代码从 `summary_zh` + `summary_de` 扫描，和正文括号标注**同源同规则**，两者现在保证一一对应，不再各说各话
 - **已认识词库 `known_words`（#710）**：Daniel 认识但从没进过词库的词。详情页生词表格的 **✓ Known** 按钮 → `POST /api/known-words`（`shared.js` 的 `markWordKnown()`），纯后台请求，行标灰不刷新页面。**判定入口只有 `zh_annotate._known_words()` 一处**：`word_zh_exists(words) | known_words_exists(words)` —— 行内标注、生词表格、德语总结的拼音标注三处因此自动一致，别处不许再写第二份"已知"判定。**不建卡、不进队列**：这是"我认识了，别再给我看"，与加词恰好相反。已存库的摘要文本里的旧标注**不会**消失（生成时就写死了），变的是下一篇
+- **基线词表 `annotate/baseline_*.txt`（#922）**：Daniel 进本系统之前就会的词——法语 CEFR A1-A2、中文 HSK 3.0 1-4。`annotate/baseline.py` 的 `baseline_words(lang)` 读文件（进程内缓存），并入 `zh_annotate._known_words()` 和 `annotate/romance.py` 的 `known`。同样**不建卡不进队列**，与 `known_words` 取并集，✓ Known 按钮行为不变
+  - **放仓库文件不放 `known_words` 表**：① 离线同步只合并 `cards` + `review_log`，往服务器库灌 1.7 万行笔记本永远拿不到，文件随代码走；② 这是"某个等级的词表"这一静态语言学事实，不是 Daniel 逐词点出来的个人标记——后者才是 `known_words` 的语义；③ 生产库零写操作
+  - **法语表必须存全部屈折形式**（13.8k 条，不是 1926 个词元）：罗曼语标注器精确匹配、零词干还原（#803），只存词元的话 `mangeons` 照样算生词。来源 FLELex（CC BY-NC-SA）取 A1/A2 词元 × Lexique 3.83（CC BY-SA）展开，配方写在文件头
+  - **中文表和 `static/hsk_levels.json` 并存，不互相取代**：后者是**旧的 HSK 2.0** 表，1-4 级只有 1193 词（`KNOWN_HSK_MAX = 4`），而且还要供生词表格显示 `hsk` 列；基线表是 HSK 3.0（2021）1-4 级 3172 词，补上的是那 2100 词的缺口
+  - 读不到文件降级为空集合（同 `stopwords()`），西班牙语暂无表，返回空集不报错
 
 ---
 
