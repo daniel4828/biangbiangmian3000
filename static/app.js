@@ -6405,7 +6405,15 @@ function showFront() {
   const _sourceUrl = sentence?.source_url || '';
   const _sentClickable = !isListening && !isCreating && !!_sourceUrl;
   sentFront.classList.toggle('clickable-sentence', _sentClickable);
-  sentFront.onclick = _sentClickable ? () => window.open(_sourceUrl, '_blank', 'noopener') : null;
+  // Knowledge mode (#931): source_url has been an in-app hash link since #790,
+  // so window.open() here threw Daniel out of the review session into a second
+  // tab of the app. Same fix as the back side — pop the summary modal, which
+  // closes back onto the card.
+  const _frontEpId = _episodeIdFromSourceUrl(_sourceUrl);
+  sentFront.onclick = !_sentClickable ? null
+    : _frontEpId !== null
+      ? () => openKnowledgeSummaryPopup(_frontEpId, sentence?.source_title || '')
+      : () => window.open(_sourceUrl, '_blank', 'noopener');
   _renderNewsFront();
 
   // Creating: show translation row + appropriate input. The translation text
@@ -6674,7 +6682,26 @@ function revealAnswer() {
     _currentSourceUrl = sentence.source_url || '';
     _currentReasoningIsNews = false;
     _reasonBtn.style.display = (_currentReasoning || _currentSourceUrl) ? '' : 'none';
+    _currentReasoningIsKnowledge = false;
     _conceptRow.style.display = '';
+  } else if (_episodeIdFromSourceUrl(sentence?.source_url) !== null && sentence?.reasoning_zh) {
+    // Knowledge mode (#931): same 💡 light bulb kahneman has, holding the
+    // model's "Fakt: … Warum: …" note about why it picked this passage. No
+    // concept box — knowledge sentences have no chapter, concept_zh is empty.
+    //
+    // _currentSourceUrl stays EMPTY on purpose: since #790 source_url is an
+    // in-app hash link, and the popup's "open source" anchor is an <a href>
+    // meant for external pages — pointing it at /#knowledge-12 would navigate
+    // away mid-review. The 📄 button (in _renderNewsBackSource) is how the
+    // source gets opened here, in a modal that closes back onto the card.
+    _conceptRow.style.display = '';
+    _conceptEl.innerHTML = '';
+    _conceptEl.style.display = 'none';
+    _currentReasoning = sentence.reasoning_zh || '';
+    _currentSourceUrl = '';
+    _currentReasoningIsNews = false;
+    _currentReasoningIsKnowledge = true;
+    _reasonBtn.style.display = '';
   } else {
     _conceptRow.style.display = 'none';
     _conceptEl.innerHTML = '';
@@ -6683,6 +6710,7 @@ function revealAnswer() {
     _currentReasoning = '';
     _currentSourceUrl = '';
     _currentReasoningIsNews = false;
+    _currentReasoningIsKnowledge = false;
   }
 
   const noteType = wordDetails?.note_type || card.note_type;
@@ -9363,6 +9391,25 @@ function closeKahnemanExamples() {
 let _currentReasoning = '';
 let _currentSourceUrl = '';
 let _currentReasoningIsNews = false;
+// Knowledge mode (#931) is the third kind of reasoning popup, next to
+// kahneman's and news flow's — the title is picked from this rather than from
+// another boolean, because "which of N" stops being expressible as a flag the
+// moment there are three of them.
+let _currentReasoningIsKnowledge = false;
+
+// Episode id encoded in a sentence's source_url, or null.
+//
+// Since #790 knowledge mode stores the IN-APP detail page as source_url
+// ("/#podcast-12" for podcasts, "/#knowledge-12" for everything else), never
+// the external article/video URL. So the episode id a sentence came from is
+// already carried per sentence — no gen_params lookup (which only knows the
+// story's FIRST source, wrong as soon as several were selected, #752/#776)
+// and no new column. Returns null for kahneman, briefing/news flow, book mode
+// and any external URL, which is exactly what keeps those paths untouched.
+function _episodeIdFromSourceUrl(url) {
+  const m = /^\/#(?:podcast|knowledge)-(\d+)$/.exec(url || '');
+  return m ? parseInt(m[1], 10) : null;
+}
 // Mode of the last story generation started from the setup modal ('' when the
 // session was resumed without it) — only used to pick the background-popup title.
 let _currentStoryMode = '';
@@ -9424,13 +9471,38 @@ function _newsSourceHtml(s) {
   return `<span class="news-source-line">${_escHtml(label)}</span>`;
 }
 
+// Knowledge mode's 📄 source button (#931), used on both card faces.
+//
+// Same idea as book mode's chapter link (#865): the source title points at an
+// in-app page (#790), so letting the <a> navigate would throw Daniel out of
+// the review session. Clicking pops the item's summary in the shared modal
+// (#930) and closing it lands back on the card, mid-review.
+//
+// No-op for every other mode — briefing/news flow source titles are real
+// external article links and must keep opening in a new tab.
+function _wireKnowledgeSourceLink(container, s) {
+  const epId = _episodeIdFromSourceUrl(s?.source_url);
+  if (epId === null || !container) return;
+  const link = container.querySelector('a.news-source-line');
+  if (!link) return;
+  link.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openKnowledgeSummaryPopup(epId, s?.source_title || '');
+  };
+}
+
 // Front side: context (above the Chinese sentence) + source line (below it).
 function _renderNewsFront() {
   const ctxDe = document.getElementById('sentence-context-de');
-  const ctxText = _newsContextText(sentence);
+  const url = sentence?.source_url || '';
+  // Knowledge mode (#931): the reasoning lives in the 💡 popup now, not printed
+  // above the sentence. On the front it was worse than clutter — reasoning_zh
+  // starts with the very fact the sentence retells, so a reading card showed
+  // the answer before it was flipped. News flow keeps its context line (#452).
+  const ctxText = _episodeIdFromSourceUrl(url) !== null ? '' : _newsContextText(sentence);
   ctxDe.textContent = ctxText;
   ctxDe.style.display = ctxText ? 'block' : 'none';
-  const url = sentence?.source_url || '';
   const ctxClickable = !!(ctxText && url);
   ctxDe.classList.toggle('clickable-sentence', ctxClickable);
   ctxDe.onclick = ctxClickable ? () => window.open(url, '_blank', 'noopener') : null;
@@ -9442,6 +9514,7 @@ function _renderNewsFront() {
     const html = _newsSourceHtml(sentence);
     srcEl.innerHTML = html;
     srcEl.style.display = html ? 'block' : 'none';
+    _wireKnowledgeSourceLink(srcEl, sentence);
   }
 }
 
@@ -9454,15 +9527,28 @@ function _renderNewsBackSource(s) {
   const srcHtml = _newsSourceHtml(s);
   if (!ctx && !srcHtml) { el.style.display = 'none'; el.innerHTML = ''; return; }
   const url = s?.source_url || '';
+  // Knowledge mode (#931): the reasoning moves into the 💡 popup (wired up in
+  // the card renderer) and the source title becomes the 📄 button below, so
+  // the inline context block is NOT rendered here — Daniel asked for the two
+  // clean kahneman-style buttons instead of a wall of text above the sentence.
+  // News flow keeps its inline context: that block is what #452/#454/#464
+  // deliberately built, and briefing cards have no light bulb to move it into.
+  const knowledgeEpId = _episodeIdFromSourceUrl(url);
   // Title · publisher above the context (issue #454).
   let html = srcHtml;
-  if (ctx) html += `<div class="news-back-context${url ? ' clickable-sentence' : ''}">${_escHtml(ctx)}</div>`;
+  if (ctx && knowledgeEpId === null) html += `<div class="news-back-context${url ? ' clickable-sentence' : ''}">${_escHtml(ctx)}</div>`;
   el.innerHTML = html;
   el.style.display = 'block';
-  if (ctx && url) {
+  if (ctx && url && knowledgeEpId === null) {
     const c = el.querySelector('.news-back-context');
     if (c) c.onclick = () => window.open(url, '_blank', 'noopener');
   }
+  // Knowledge mode's 📄 button (#931): same idea as book mode's chapter link
+  // below — the source title is an in-app page, so opening it in a new tab
+  // would throw Daniel out of the review session. Clicking pops the item's
+  // summary in the shared modal (openKnowledgeSummaryPopup, #930) and closing
+  // it lands back on the card, mid-review, exactly where he was.
+  _wireKnowledgeSourceLink(el, s);
   // Book mode's clickable source title (issue #865): the same news-back-source
   // slot knowledge mode uses, but a book chapter isn't an external page to open
   // in a new tab — clicking it pops the chapter's own summary modal (#864's
@@ -9511,9 +9597,11 @@ function setNewsflowLangFromSwitch(checked) {
 function openReasoning() {
   if (!_currentReasoning && !_currentSourceUrl) return;
   document.getElementById('reasoning-modal-title').textContent =
-    _currentReasoningIsNews
-      ? (_currentStoryMode === 'paste' ? '📋 内容背景' : '📰 新闻背景')
-      : '💡 为什么这句体现本章偏误?';
+    _currentReasoningIsKnowledge
+      ? '💡 为什么选这句?'
+      : _currentReasoningIsNews
+        ? (_currentStoryMode === 'paste' ? '📋 内容背景' : '📰 新闻背景')
+        : '💡 为什么这句体现本章偏误?';
   document.getElementById('reasoning-body').textContent = _currentReasoning;
   const linkEl = document.getElementById('reasoning-source-link');
   if (_currentSourceUrl) {

@@ -486,10 +486,13 @@ Return ONLY a numbered list of Chinese sentences, no explanation:
 18. 只用简体字和中文标点。禁止繁体字、markdown、拼音和括号注释。
 19. 不要给目标词加引号、括号或任何标记，直接写进句子里。
 
-四、reasoning_zh 的写法
-20. 每句都要写 reasoning_zh：先写「事实：」加上该句复述的那条事实，
-    照抄其中的名字和数字（用素材原文的语言写这部分），
-    再用一句中文说明这句话在讲什么。面向 HSK 4-5 学习者，中文部分用词不要太难。
+四、reasoning_zh 的写法（#931：分两段）
+20. 每句都要写 reasoning_zh，分两段：
+    先写「事实：」加上该句复述的那条事实，照抄其中的名字和数字
+    （用素材原文的语言写这部分）；
+    再写「为什么：」加一句中文，说明为什么选这条事实——
+    它在整篇素材里的分量、回答了什么问题、和前后内容的关系。
+    面向 HSK 4-5 学习者，中文部分用词不要太难。
 21. 把事实写出来正是为了自查：任何两句的「事实：」都不许相同。
 
 五、输出前自检（内部进行，不要输出）
@@ -505,7 +508,7 @@ Return ONLY a numbered list of Chinese sentences, no explanation:
 
 仅返回如下 JSON 数组，不加任何其他文字（reasoning_zh 在前，sentence_zh 在后）：
 [
-  {"reasoning_zh": "事实：… + 一句中文说明", "sentence_zh": "含目标词的句子", "target_word": "词汇"}
+  {"reasoning_zh": "事实：… 为什么：…", "sentence_zh": "含目标词的句子", "target_word": "词汇"}
 ]
 
 如果确实有事实因为第 17 条被放弃，最多列 2 条，写在数组最后一个元素里，
@@ -3366,11 +3369,14 @@ Target words:
 
 For every sentence also write reasoning_zh — this is a note ABOUT the
 sentence, not the sentence itself, and it is the only field that is not in
-{lang_name}: start with "Fact: " and the fact that sentence retells, copying
-its names and numbers verbatim from the material, then one short sentence in
-German saying what it is about. Writing the fact out is the self-check — no
-two sentences may carry the same one. The sentence itself (sentence_zh) stays
-{lang_name}, always.
+{lang_name}. It has two parts, both in German (#931):
+- "Fakt: " followed by the fact that sentence retells, copying its names and
+  numbers verbatim from the material.
+- "Warum: " followed by one German sentence explaining why this fact was
+  worth picking — its weight in the material, what question it answers, or
+  how it relates to the surrounding sentences.
+Writing the fact out is the self-check — no two sentences may carry the same
+one. The sentence itself (sentence_zh) stays {lang_name}, always.
 
 Self-check before answering (internally, do not output): is every single
 sentence written in {lang_name} and not in the material's language? as many
@@ -3384,7 +3390,7 @@ Return ONLY this JSON array, no other text (reasoning_zh first, sentence_zh
 second; the key names are historical — sentence_zh holds the {lang_name}
 sentence):
 [
-  {{"reasoning_zh": "Fact: … + one German sentence", "sentence_zh": "the {lang_name} sentence containing the target word", "target_word": "the word"}}
+  {{"reasoning_zh": "Fakt: … Warum: …", "sentence_zh": "the {lang_name} sentence containing the target word", "target_word": "the word"}}
 ]"""
 
 
