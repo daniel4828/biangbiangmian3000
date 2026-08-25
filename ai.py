@@ -4325,3 +4325,95 @@ def chat_about_material(material: str, title: str, history: list[dict],
     if not answer:
         raise ValueError("the model returned an empty answer")
     return answer, use_model
+
+
+# Tag vocabulary limits (#938). Few enough to stay a filter rather than a
+# second copy of the summary; many enough that one item can sit in more than
+# one bucket.
+_TAG_MIN, _TAG_MAX = 3, 6
+_TAG_MAX_CHARS = 40
+# How many existing tags to show the model. All of them would eventually blow
+# past the prompt budget, and the long tail is exactly the part it should not
+# be reaching for anyway.
+_TAG_VOCAB_LIMIT = 60
+
+
+def extract_knowledge_tags(title: str, summary_de: str,
+                           existing_tags: list[str] | None = None) -> list[str]:
+    """One cheap DeepSeek call (#938) proposing 3-6 topic tags for a piece of
+    knowledge-base material.
+
+    Fed the TITLE and the GERMAN SUMMARY, never the full transcript: the topic
+    is in the summary, and shipping tens of thousands of words to get six
+    German nouns back is paying for nothing (same reasoning as #833's 3000-char
+    sample).
+
+    `existing_tags` is the library's current vocabulary, handed to the model
+    with an explicit instruction to reuse it. Without that, a tagger reliably
+    invents `Klimawandel`, `Klima` and `Klimapolitik` for three articles about
+    the same thing — and a filter bar where each of three near-identical tags
+    holds a third of the material is worse than no tags at all.
+
+    Returns [] on ANY failure (no summary, API error, unparseable reply) rather
+    than raising — same contract as translate_title and
+    extract_article_metadata. Losing a fully summarized item over a
+    nice-to-have tag list would be absurd.
+    """
+    summary_de = (summary_de or "").strip()
+    if not summary_de:
+        return []
+
+    vocab = [t for t in (existing_tags or []) if t][:_TAG_VOCAB_LIMIT]
+    vocab_block = (
+        "Tags that already exist in the library — REUSE one of these whenever it "
+        "fits, and do not invent a near-synonym of one (no 'Klima' next to an "
+        f"existing 'Klimawandel'):\n{', '.join(vocab)}\n\n" if vocab else "")
+
+    prompt = (
+        f"Assign {_TAG_MIN}-{_TAG_MAX} topic tags to this material.\n\n"
+        "Rules:\n"
+        "- German nouns, singular, capitalized (Politik, Wirtschaft, Sprachenlernen).\n"
+        "- BROAD subject areas that will group many items together over time — "
+        "not one-off proper nouns, not people's names, not the specific event "
+        "this piece is about.\n"
+        "- Reply with ONLY a JSON array of strings, no markdown fences, no "
+        'explanation: ["Politik", "Wirtschaft"]\n\n'
+        f"{vocab_block}"
+        f"Title: {title or '(untitled)'}\n\n"
+        f"Summary:\n{summary_de[:4000]}"
+    )
+    try:
+        raw = _call_api(DEFAULT_MODEL, [{"role": "user", "content": prompt}], 200,
+                        purpose="knowledge-tags")
+    except Exception as e:
+        logger.warning("extract_knowledge_tags: AI call failed: %s", e)
+        return []
+
+    # Slice between the outermost brackets: this both strips markdown fences
+    # and recovers the array out of a {"tags": [...]} wrapper, which models
+    # produce however plainly the prompt asks for a bare array. The tags are
+    # right there — throwing the answer away over its packaging would be silly.
+    start, end = raw.find("["), raw.rfind("]") + 1
+    try:
+        data = json.loads(raw[start:end]) if start != -1 and end != 0 else []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("extract_knowledge_tags: could not parse reply: %s", raw[:200])
+        return []
+    if not isinstance(data, list):
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, str):
+            continue
+        tag = item.strip().strip('#').strip()
+        # A "tag" the length of a sentence is the model answering the wrong
+        # question; it would also wreck every list row it lands on.
+        if not tag or len(tag) > _TAG_MAX_CHARS or tag.casefold() in seen:
+            continue
+        seen.add(tag.casefold())
+        out.append(tag)
+        if len(out) >= _TAG_MAX:
+            break
+    return out

@@ -4075,6 +4075,7 @@ function _renderKnowledgeList() {
     <div class="knowledge-header">
       <h2 class="keymap-heading" style="margin:0">Knowledge</h2>
       <span style="flex:1"></span>
+      <button class="btn-secondary" onclick="openKnowledgeTags()" title="Manage tags">🏷 Tags</button>
       <button class="btn-secondary" onclick="openKnowledgeFeeds()" title="RSS feeds">📡 Feeds</button>
       <button class="btn-secondary" onclick="toggleKnowledgeAdd()">${_knowledgeAddOpen ? '✕ Close' : '＋ Add'}</button>
     </div>
@@ -4362,6 +4363,78 @@ async function _submitKnowledgeAdd(payload, msg) {
   } catch (e) {
     const after = document.getElementById('knowledge-add-msg') || msg;
     if (after) after.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Screen: tag management (#938) ───────────────────────────────────────────
+// The AI tagger will produce near-duplicates ('KI' next to 'AI') no matter how
+// carefully the prompt asks it not to. Without a place to merge and delete
+// them, the tag vocabulary degrades until the filter is useless — so this
+// screen is part of the feature, not an extra.
+
+let _knowledgeTags = [];
+
+async function openKnowledgeTags() {
+  _clearPodcastPoll();
+  _podcastCurrentFeedId = null;
+  _knowledgeScreen = 'tags';
+  setLoading('Loading…');
+  try {
+    _knowledgeTags = await api('GET', '/api/knowledge/tags') || [];
+    _renderKnowledgeTags();
+    showView('knowledge');
+  } catch (e) {
+    showError('Tags failed: ' + e.message);
+    openKnowledge();
+  }
+}
+
+function _renderKnowledgeTags() {
+  const el = document.getElementById('view-knowledge-content');
+  if (!el) return;
+  const rows = _knowledgeTags.map(t => `
+    <div class="podcast-row">
+      <span class="podcast-row-title">
+        <input type="text" class="edit-input" value="${_escHtml(t.name)}"
+               onchange="renameKnowledgeTag(${t.id}, this.value)">
+      </span>
+      <span class="podcast-row-meta">
+        <span class="podcast-row-date">${t.count} item${t.count === 1 ? '' : 's'}</span>
+        <button class="btn-secondary podcast-transcribe-btn" onclick="deleteKnowledgeTag(${t.id})">Delete</button>
+      </span>
+    </div>`).join('') || '<div class="keymap-hint">No tags yet — they appear once material is summarized.</div>';
+  el.innerHTML = `
+    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Tags</h2>
+      <p class="keymap-hint">Rename a tag onto an existing name to <b>merge</b> the two — that is how near-duplicates from the auto-tagger get cleaned up. Deleting a tag removes it from every item.</p>
+    </div>
+    <div class="podcast-list">${rows}</div>`;
+}
+
+async function renameKnowledgeTag(tagId, name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) { _renderKnowledgeTags(); return; }
+  try {
+    _knowledgeTags = await api('PUT', `/api/knowledge/tags/${tagId}`, { name: trimmed }) || [];
+    _knowledgeFacets = null;   // the vocabulary changed under the filter bar
+    _renderKnowledgeTags();
+  } catch (e) {
+    showError('Rename failed: ' + e.message);
+    _renderKnowledgeTags();
+  }
+}
+
+async function deleteKnowledgeTag(tagId) {
+  const tag = _knowledgeTags.find(t => t.id === tagId);
+  if (!confirm(`Delete "${tag?.name || 'this tag'}"? It is removed from ${tag?.count || 0} item(s).`)) return;
+  try {
+    await api('DELETE', `/api/knowledge/tags/${tagId}`);
+    _knowledgeTags = _knowledgeTags.filter(t => t.id !== tagId);
+    _knowledgeFacets = null;
+    _renderKnowledgeTags();
+  } catch (e) {
+    showError('Delete failed: ' + e.message);
   }
 }
 
@@ -4703,6 +4776,7 @@ function _renderKnowledgeDetail(ep) {
     ep.status === 'summarized' ? `<button id="podcast-notify-signal" class="btn-secondary" onclick="doPodcastNotify('signal')">Send to Signal</button>` : '',
     ep.status === 'summarized' ? `<button id="podcast-notify-email" class="btn-secondary" onclick="doPodcastNotify('email')">Send Email</button>` : '',
     ep.status === 'summarized' ? `<button id="podcast-regen-summary" class="btn-secondary" onclick="doPodcastRegenerateSummary()">Regenerate summary</button>` : '',
+    ep.status === 'summarized' ? `<button id="knowledge-retag" class="btn-secondary" onclick="doKnowledgeRetag()">↻ Retag</button>` : '',
     _knowledgeSummaryText(ep) ? `<button id="knowledge-copy-summary" class="btn-secondary" onclick="doKnowledgeCopySummary(this)">\u{1F4CB} Copy summary</button>` : '',
     ep.status === 'processing' ? `<span class="keymap-hint">⏳ processing…</span>` : '',
   ].filter(Boolean).join(' ');
@@ -4945,6 +5019,24 @@ let _knowledgeDetailEpisode = null;
 // the overlaid status leaves 'processing' and re-render with the new summary.
 // A NotebookLM round can take ~10 min, so polling is deliberately patient.
 let _podcastRegenTimer = null;
+
+// ↻ Retag (#938): replace this item's machine-guessed tags. Synchronous — one
+// cheap call over the summary, not a transcription. Tags Daniel typed himself
+// are untouched (the server only replaces source='ai' rows).
+async function doKnowledgeRetag() {
+  const btn = document.getElementById('knowledge-retag');
+  const id = _podcastDetailEpisodeId;
+  if (id == null) return;
+  if (btn) { btn.disabled = true; btn.textContent = '↻ Tagging…'; }
+  try {
+    await api('POST', `/api/podcast/episodes/${id}/retag`);
+    _knowledgeFacets = null;   // new tags may have entered the vocabulary
+    await openKnowledgeItem(id);
+  } catch (e) {
+    showError('Retag failed: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Retag'; }
+  }
+}
 
 async function doPodcastRegenerateSummary() {
   const btn = document.getElementById('podcast-regen-summary');

@@ -669,6 +669,13 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - 未知字段**忽略而不是报错**：多一个键是前端的 bug，不该让它顺带毁掉同一次请求里的正常编辑。可编辑列的白名单在 `database.EDITABLE_EPISODE_FIELDS`——转录、摘要、状态是结果不是元数据
   - 标签存 `source='user'`，所以 #938 的重新打标签既删不掉它们、也不会被它们删掉；`tags` 键缺席 = 完全不动标签，`[]` = 清空手动标签
   - `shared.js` 的 `api()` 现在把服务端的 `detail` 带回错误信息里：`PATCH … → 400` 什么也没说，`published_at must be YYYY-MM-DD` 才说清了要改什么
+- **AI 自动打标签（#938）**：`ai.extract_knowledge_tags(title, summary_de, existing_tags)` 一次便宜的 DeepSeek 调用产出 3–6 个德语主题标签，接在 `podcast._process_episode` 和 `regenerate_summary` 写库之后（`podcast.autotag_episode()`）
+  - **只喂标题 + `summary_de`，不喂全文**：主题就在摘要里，为拿回六个德语名词而运几万字纯属白花钱（同 #833 只取正文前 3000 字）
+  - **必须把库里已有的标签清单传进提示词并要求复用**：否则同一个主题的三篇文章会拿到 `Klimawandel`/`Klima`/`Klimapolitik` 三个标签各管三分之一，筛选栏就废了
+  - **失败一律返回 `[]` 不抛异常**（同 `translate_title`/`extract_article_metadata` 的契约），`autotag_episode()` 外面再包一层 try：标签是已摘要素材之上的锦上添花，绝不能把成功的一集变成失败的
+  - **只在还没有 AI 标签时打**，`force=True` 才重打（详情页 ↻ Retag / `POST .../retag`）：每次摘要都重打是花钱把同样六个词搅一遍，还会跟 Daniel 已经看过的列表打架
+  - 解析时取**最外层方括号之间**的内容：既剥掉 markdown 围栏，也能从 `{"tags": [...]}` 这种包装里把数组捞出来——标签就在那儿，为包装丢掉答案很荒唐。单个标签超过 40 字符直接丢（那是模型在答别的问题，而且会毁掉列表行）
+  - **标签管理界面是功能的一部分不是附加品**（顶栏 🏷 Tags）：提示词写得再小心，自动标签也一定会产出近义词（`KI` 和 `AI`），没有合并/删除的地方，标签词表会退化到没法用。**改名成已存在的名字 = 合并**
 - **china-kritisch 复选框（#731）**：摘要默认走便宜的 DeepSeek —— Daniel 的博客素材绝大多数不批评中国，没必要为它们付 OpenAI 的钱。少数确实批评中国的素材勾选后存 `podcast_episodes.china_critical=1`，摘要时把 DeepSeek 从候选模型里**彻底删掉**（不是排后面）：它对这类内容会悄悄弱化或拒答，而弱化后的摘要照样能解析出 `summary_de`，任何"解析失败就回退"的机制都永远不会触发
   - **免费的 NotebookLM 路径不受影响，照旧第一优先**：它是 Google 的，没理由审查这个话题，而且不花钱。勾选只改变它失败之后 API 兜底那一层选谁
   - **标记必须在粘贴那一刻打上**：摘要发生在之后独立的 `POST .../process` 调用里（甚至是 cron 里），那时已经没人在旁边说明这是什么素材
@@ -840,6 +847,8 @@ GET  /api/podcast/episodes                            → 统一素材列表（�
                                                        筛选轴 ?kind= ?platform= ?author= ?tag= ?status= 均**可重复**（轴内 OR、轴间 AND）；?since=YYYY-MM-DD、?feed_id=、?list_id=
                                                        ?include_archived=（默认 false，归档素材默认不出现）
 GET  /api/knowledge/facets                            → 筛选栏所有下拉的选项，一次拿全（#936）：{kinds,platforms,authors,statuses,feeds,tags,lists,archived_count}
+POST /api/podcast/episodes/{id}/retag                 → 重跑 AI 标签（#938，同步）；只替换 source='ai' 的行，手打标签不动；无摘要 → 400；不存在 → 404
+GET/PUT/DELETE /api/knowledge/tags[/{id}]             → 标签管理（#938）：PUT 改名，**改成已存在的名字即合并**；名字为空 → 400；不存在 → 404
 GET  /api/podcast/episodes/{id}                       → 详情（摘要 + 转录 + HSK 生词）
 PATCH /api/podcast/episodes/{id}                      → 手改元数据（#937）：body 可含 title/title_en/author/platform/published_at/youtube_url/tags
                                                        只带改动的字段；空串=清空，缺席=不动；未知字段忽略；published_at 非 YYYY-MM-DD → 400；不存在 → 404

@@ -1679,6 +1679,35 @@ def _bilingual_transcript_html(pairs: list[dict]) -> str:
     return f"<h3>Transkript (中德对照)</h3><div style='font-size:14px'>{rows}</div>"
 
 
+def autotag_episode(episode_id: int, title: str, summary_de: str, *, force: bool = False) -> list[str]:
+    """Give one item its AI topic tags (#938). Returns the tags written (possibly
+    empty).
+
+    Only runs when the item has no AI tags yet, unless `force` (the detail
+    page's ↻ Retag button). Re-tagging on every summarize would spend money to
+    churn the same six words, and would fight with a tag list Daniel has
+    already looked at.
+
+    Hand-typed tags are never at risk: set_item_tags(source='ai') replaces only
+    the rows this function wrote (#935).
+
+    Best-effort throughout. A tag list is a convenience on top of an item that
+    is already summarized and stored — nothing here may turn a successful
+    episode into a failed one.
+    """
+    try:
+        if not force and any(t["source"] == "ai" for t in database.item_tags(episode_id)):
+            return []
+        vocabulary = [t["name"] for t in database.list_tags()]
+        tags = ai.extract_knowledge_tags(title, summary_de, vocabulary)
+        if tags:
+            database.set_item_tags(episode_id, tags, source="ai")
+        return tags
+    except Exception as e:
+        logger.warning("podcast: auto-tagging failed for episode %s: %s", episode_id, e)
+        return []
+
+
 def _feed_title(episode: dict) -> str | None:
     """The podcast's own name, looked up from podcast_feeds via the episode's
     channel_id (which holds the feed URL). Shared by the email subject line
@@ -2105,6 +2134,8 @@ def _process_episode(episode_id: int, video: dict, detail_level: str, summary: d
                 logger.info("podcast: replaced placeholder title %r -> %r for %s",
                             video["title"], title_suggestion, video["video_id"])
             database.update_episode(episode_id, **update_fields)
+            autotag_episode(episode_id, update_fields.get("title") or video["title"],
+                            result["summary_de"])
             summary["summarized"] += 1
 
             episode = database.get_episode(episode_id)
@@ -2200,6 +2231,8 @@ def regenerate_summary(episode_id: int) -> dict:
         logger.info("podcast: replaced placeholder title %r -> %r for episode %s",
                     episode["title"], title_suggestion, episode_id)
     database.update_episode(episode_id, **update_fields)
+    autotag_episode(episode_id, update_fields.get("title") or episode["title"],
+                    result["summary_de"])
     # #804: the German summary just changed, so any cached French/Spanish/etc.
     # rendition was translated from the OLD text and is now stale — drop them
     # all, the next per-language detail view regenerates lazily. Best-effort:
