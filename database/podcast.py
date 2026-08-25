@@ -201,6 +201,17 @@ def create_pending_episode(video_id: str, channel_id: str | None, title: str,
     return episode_id
 
 
+# Columns whose contents are in the search index (#939). Writing any of them
+# has to rebuild that episode's index rows — this is the choke point every
+# transcript and summary already goes through, which is why the hook lives
+# here rather than being sprinkled over the six call sites that would each
+# have to remember it.
+_SEARCHABLE_COLUMNS = frozenset({
+    "title", "title_en", "author", "transcript_zh", "transcript_de",
+    "summary_de", "summary_zh",
+})
+
+
 def update_episode(episode_id: int, **fields) -> None:
     """Generic column update for an episode. hsk_words and transcript_de (if
     present) are serialized to JSON automatically."""
@@ -217,6 +228,9 @@ def update_episode(episode_id: int, **fields) -> None:
     )
     conn.commit()
     conn.close()
+    if _SEARCHABLE_COLUMNS & set(fields):
+        from .search import reindex_episode
+        reindex_episode(episode_id)
 
 
 def recover_orphaned_podcast_episodes() -> int:
@@ -540,6 +554,11 @@ def save_knowledge_rendition(episode_id: int, lang: str, summary: str,
     )
     conn.commit()
     conn.close()
+    # #939: the per-language reading version is searchable too — Daniel is just
+    # as likely to remember a word from the French rendition as from the German
+    # original.
+    from .search import reindex_episode
+    reindex_episode(episode_id)
 
 
 def delete_knowledge_renditions(episode_id: int) -> None:
@@ -551,3 +570,5 @@ def delete_knowledge_renditions(episode_id: int) -> None:
     conn.execute("DELETE FROM knowledge_renditions WHERE episode_id = ?", (episode_id,))
     conn.commit()
     conn.close()
+    from .search import reindex_episode
+    reindex_episode(episode_id)

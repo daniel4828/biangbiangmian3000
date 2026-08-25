@@ -815,6 +815,20 @@ CREATE TABLE IF NOT EXISTS knowledge_list_items (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_list_items_episode ON knowledge_list_items(episode_id);
 
+-- Full-text search over everything readable in the knowledge base (#939):
+-- titles, source transcripts, both AI summaries and every per-language
+-- rendition. One row per (episode, field, lang) so a hit can say WHERE it
+-- matched. Chinese is stored character-by-character and queried as a phrase —
+-- unicode61 does not segment CJK, so a whole paragraph would otherwise be a
+-- single token. See database/search.py for the full reasoning.
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    episode_id UNINDEXED,
+    field      UNINDEXED,
+    lang       UNINDEXED,
+    body,
+    tokenize = 'unicode61'
+);
+
 CREATE TABLE IF NOT EXISTS podcast_config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

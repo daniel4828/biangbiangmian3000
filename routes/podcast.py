@@ -188,6 +188,34 @@ def delete_knowledge_tag(tag_id: int):
     return {"deleted": True}
 
 
+@router.get("/api/knowledge/search")
+def search_knowledge(q: str = "", limit: int = 50):
+    """Full-text search over everything readable in the knowledge base (#939):
+    titles, source transcripts, both AI summaries, and every per-language
+    rendition (#804).
+
+    Each result is one EPISODE with the fields it matched in and one snippet —
+    not one row per matching field, which would let a single article push
+    everything else off the screen.
+
+    Snippets carry the match wrapped in \x02/\x03 sentinels. Those cannot occur
+    in real text, so the frontend can highlight them without ever parsing HTML
+    out of material an AI wrote.
+    """
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(400, "q is required")
+    return database.search_knowledge(q, limit=max(1, min(limit, 200)))
+
+
+@router.post("/api/knowledge/reindex")
+def reindex_knowledge():
+    """Rebuild the whole search index. Not needed in normal operation — every
+    write path maintains it — but a manual rebuild is the only repair when an
+    index and its source drift apart."""
+    return {"indexed": database.reindex_all()}
+
+
 @router.get("/api/knowledge/facets")
 def knowledge_facets():
     """Everything the filter bar's dropdowns need, in one request (#936):

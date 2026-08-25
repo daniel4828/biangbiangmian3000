@@ -676,6 +676,16 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **只在还没有 AI 标签时打**，`force=True` 才重打（详情页 ↻ Retag / `POST .../retag`）：每次摘要都重打是花钱把同样六个词搅一遍，还会跟 Daniel 已经看过的列表打架
   - 解析时取**最外层方括号之间**的内容：既剥掉 markdown 围栏，也能从 `{"tags": [...]}` 这种包装里把数组捞出来——标签就在那儿，为包装丢掉答案很荒唐。单个标签超过 40 字符直接丢（那是模型在答别的问题，而且会毁掉列表行）
   - **标签管理界面是功能的一部分不是附加品**（顶栏 🏷 Tags）：提示词写得再小心，自动标签也一定会产出近义词（`KI` 和 `AI`），没有合并/删除的地方，标签词表会退化到没法用。**改名成已存在的名字 = 合并**
+- **全文搜索（`database/search.py`，#939）**：搜标题 / 作者 / 转录 / 两份 AI 摘要 / **每种语言的 rendition**（#804）—— Daniel 记得的往往是转录中段的一句话，或者法语阅读版里的一个词
+  - SQLite **FTS5** 虚拟表 `knowledge_fts(episode_id, field, lang, body)`，**一条素材多行**（每个字段一行），这样命中能说清"匹配在哪儿"
+  - 🔴 **中文逐字入索引，查询时当短语**：`unicode61` 不切中文，整段会变成一个 token，什么都搜不到。**没用 jieba** 是有意的：分词器必须对查询和文档做出完全一致的切分（`生态` vs `生 态学`），一旦不一致匹配就静默消失；单字 + 短语搜索不会跟自己意见不合
+  - 片段（snippet）显示前要**把逐字空格还原**（`_collapse_cjk`），否则读到的是拆开的汉字。CJK 类包含**标点和全角**，因为拆和合必须用同一套规则，否则会出现 `总结 。`
+  - 命中标记用 `\x02`/`\x03` 两个**真实文本里不可能出现的哨兵**，前端**先整体转义再**替换成 `<mark>`：这些文本是 AI 写的或从网上抄的，永远不许它自带标记
+  - **每条素材只出一行结果**：一个词通常同时出现在转录、两份摘要和两个 rendition 里，四行同一篇文章会把别的全挤出屏幕
+  - **用户输入的查询绝不可能变成 FTS5 语法**：每个 token 都加引号变成短语前缀（`"klima"*`），再用 AND 连接。`AND`/`NEAR`/`"`/`*` 打进去就是搜索词，不是操作符也不是报错
+  - **索引不用触发器**：写在 `schema.sql` 里的触发器，之后改这些列的人根本看不见它；而且两个数据源要解析 JSON，SQL 做不到。挂钩点是 `database.update_episode()` 里的 `_SEARCHABLE_COLUMNS` 判断（转录和摘要本来就都从这一个瓶颈过）、`save_knowledge_rendition()` / `delete_knowledge_renditions()`、以及 `update_episode_metadata()`（#937 的手改走的不是 `update_episode`）
+  - 首次全量建索引在 `init_db()` 里，**用 `app_settings.knowledge_fts_built` 标记只跑一次**：它要读遍库里所有转录，而生产每 2 分钟重启一次（#688 的教训）
+  - `knowledge_fts` 是虚拟表**没有外键**，所以删素材时必须显式删它的索引行，否则会一直返回已经不存在的素材
 - **china-kritisch 复选框（#731）**：摘要默认走便宜的 DeepSeek —— Daniel 的博客素材绝大多数不批评中国，没必要为它们付 OpenAI 的钱。少数确实批评中国的素材勾选后存 `podcast_episodes.china_critical=1`，摘要时把 DeepSeek 从候选模型里**彻底删掉**（不是排后面）：它对这类内容会悄悄弱化或拒答，而弱化后的摘要照样能解析出 `summary_de`，任何"解析失败就回退"的机制都永远不会触发
   - **免费的 NotebookLM 路径不受影响，照旧第一优先**：它是 Google 的，没理由审查这个话题，而且不花钱。勾选只改变它失败之后 API 兜底那一层选谁
   - **标记必须在粘贴那一刻打上**：摘要发生在之后独立的 `POST .../process` 调用里（甚至是 cron 里），那时已经没人在旁边说明这是什么素材
@@ -846,6 +856,9 @@ GET  /api/podcast/episodes                            → 统一素材列表（�
                                                        #936 起：?sort=processed_at|published_at|created_at|title|author|duration & ?order=asc|desc（白名单，未知值回落默认而不是 400）
                                                        筛选轴 ?kind= ?platform= ?author= ?tag= ?status= 均**可重复**（轴内 OR、轴间 AND）；?since=YYYY-MM-DD、?feed_id=、?list_id=
                                                        ?include_archived=（默认 false，归档素材默认不出现）
+GET  /api/knowledge/search?q=&limit=                   → 全文搜索（#939）：转录 + 两份摘要 + 各语言 rendition + 标题/作者
+                                                       一条素材一行结果，带 fields[] 与 snippet（命中用 \x02/\x03 哨兵包住）；q 为空 → 400
+POST /api/knowledge/reindex                           → 全量重建索引（正常不需要，写路径自己维护；索引与源漂移时的唯一修法）
 GET  /api/knowledge/facets                            → 筛选栏所有下拉的选项，一次拿全（#936）：{kinds,platforms,authors,statuses,feeds,tags,lists,archived_count}
 POST /api/podcast/episodes/{id}/retag                 → 重跑 AI 标签（#938，同步）；只替换 source='ai' 的行，手打标签不动；无摘要 → 400；不存在 → 404
 GET/PUT/DELETE /api/knowledge/tags[/{id}]             → 标签管理（#938）：PUT 改名，**改成已存在的名字即合并**；名字为空 → 400；不存在 → 404
