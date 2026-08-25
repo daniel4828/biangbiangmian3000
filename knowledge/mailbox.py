@@ -440,7 +440,7 @@ def check_mailbox(imap_factory=None) -> dict:
 
             subject = _decode_header_value(msg.get("Subject")) or "(无主题)"
             try:
-                result = knowledge.ingest.ingest_text(subject, body_text)
+                result = knowledge.ingest.ingest_text(subject, body_text, platform="email")
                 summary["ingested"] += 1
                 summary["processed"] += 1
                 conn.store(msg_id, "+FLAGS", "\\Seen")

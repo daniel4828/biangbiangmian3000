@@ -129,4 +129,5 @@ def ingest_newsletter(sender: str, subject: str, body: str) -> dict:
         text=cleaned,
         author=source_name(sender),
         kind="newsletter",
+        platform="email",
     )

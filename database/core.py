@@ -747,7 +747,54 @@ def init_db() -> None:
         if "china_critical" not in pe_cols:
             conn.execute("ALTER TABLE podcast_episodes ADD COLUMN "
                          "china_critical INTEGER NOT NULL DEFAULT 0")
+        # #935 (umbrella #934): metadata the unified material list sorts and
+        # filters on. See schema.sql for what each one means.
+        for _col, _decl in (("processed_at", "TEXT"), ("author", "TEXT"),
+                            ("platform", "TEXT"), ("manual_fields", "TEXT"),
+                            ("archived_at", "TEXT")):
+            if _col not in pe_cols:
+                conn.execute(f"ALTER TABLE podcast_episodes ADD COLUMN {_col} {_decl}")
         conn.commit()
+
+    # The processed_at index lives here, not in schema.sql: schema.sql runs in
+    # phase 2, before the ALTER TABLE above, so on a pre-existing database the
+    # column doesn't exist yet at that point and the CREATE INDEX would fail.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_processed_at "
+                 "ON podcast_episodes(processed_at)")
+
+    # Backfill the #935 columns for rows that predate them. Written to be
+    # idempotent rather than marker-guarded (every statement is restricted to
+    # rows where the target column is still NULL), because init_db() re-runs on
+    # every production restart — every ~2 minutes, see deploy/deploy.sh. Rows
+    # Daniel later edits by hand keep their values: they are no longer NULL.
+    #
+    #   processed_at: email_sent_at is the closest existing stamp for "the
+    #     summary finished" (the notification goes out right after); rows that
+    #     were never mailed fall back to created_at. Only 'summarized' rows get
+    #     one — anything else genuinely has not been processed yet.
+    #   platform: inferred from kind + URL. author is deliberately NOT
+    #     backfilled — channel_id holds a domain as often as a name, and a wrong
+    #     author is worse than an empty one; #937/#938 fill it going forward.
+    conn.execute(
+        "UPDATE podcast_episodes SET processed_at = COALESCE(email_sent_at, created_at) "
+        "WHERE status = 'summarized' AND processed_at IS NULL")
+    conn.execute(
+        "UPDATE podcast_episodes SET platform = CASE "
+        "  WHEN kind = 'podcast' THEN 'podcast' "
+        "  WHEN youtube_url LIKE '%youtube.com%' OR youtube_url LIKE '%youtu.be%' THEN 'youtube' "
+        "  WHEN youtube_url LIKE '%instagram.com%' THEN 'instagram' "
+        "  WHEN transcript_source = 'pasted' AND (youtube_url IS NULL OR youtube_url = '') THEN 'paste' "
+        "  ELSE 'web' END "
+        "WHERE platform IS NULL")
+
+    # The one built-in list (#940). Guarded on "a built-in list already exists"
+    # rather than on the name: if Daniel renames it, that rename must stick
+    # instead of a second 'Read Later' reappearing on the next restart.
+    if not conn.execute("SELECT 1 FROM knowledge_lists WHERE is_builtin = 1").fetchone():
+        conn.execute(
+            "INSERT OR IGNORE INTO knowledge_lists (name, icon, is_builtin, position) "
+            "VALUES ('Read Later', ?, 1, 0)", ("\N{OPEN BOOK}",))
+    conn.commit()
 
 
     # Purge stale legacy YouTube rows (#497): yt-dlp is retired, so any row
