@@ -3871,7 +3871,7 @@ let _knowledgeAddMode = 'link';     // 'link' | 'text' | 'file' | 'feed'
 const KNOWLEDGE_FILTER_DEFAULTS = {
   sort: 'processed_at', order: 'desc',
   kind: [], platform: [], author: [], tag: [], status: [],
-  since: '', archived: false,
+  since: '', archived: false, listId: null,
 };
 function _loadKnowledgeFilters() {
   try {
@@ -3928,6 +3928,7 @@ function _knowledgeQuery() {
     }
   }
   if (_kFilters.archived) p.set('include_archived', 'true');
+  if (_kFilters.listId != null) p.set('list_id', String(_kFilters.listId));
   return p.toString();
 }
 
@@ -3964,8 +3965,11 @@ async function _loadKnowledgeList() {
     ]);
     _podcastEpisodes = episodes || [];
     _knowledgeFacets = facets || null;
+    // facets already carries the list catalog — no second request for it.
+    _knowledgeLists = facets?.lists || _knowledgeLists;
     _renderKnowledgeList();
     showView('knowledge');
+    _initKnowledgeSwipe();
     _schedulePodcastPollIfNeeded();
   } catch (e) {
     showError('Knowledge failed: ' + e.message);
@@ -3977,7 +3981,12 @@ async function _loadKnowledgeList() {
 // bar stays put, only the rows below it swap.
 async function _refreshKnowledgeList() {
   try {
-    _podcastEpisodes = await api('GET', `/api/podcast/episodes?${_knowledgeQuery()}`) || [];
+    const [episodes, lists] = await Promise.all([
+      api('GET', `/api/podcast/episodes?${_knowledgeQuery()}`),
+      api('GET', '/api/knowledge/lists'),
+    ]);
+    _podcastEpisodes = episodes || [];
+    _knowledgeLists = lists || _knowledgeLists;
     _renderKnowledgeList();
     _schedulePodcastPollIfNeeded();
   } catch (e) {
@@ -4080,6 +4089,7 @@ function _renderKnowledgeList() {
       <button class="btn-secondary" onclick="toggleKnowledgeAdd()">${_knowledgeAddOpen ? '✕ Close' : '＋ Add'}</button>
     </div>
     ${_knowledgeAddOpen ? _knowledgeAddPanelHtml() : ''}
+    ${_knowledgeListsBarHtml()}
     ${_knowledgeSearchBarHtml()}
     ${_knowledgeSearchResults !== null ? _knowledgeSearchResultsHtml() : `
     ${_knowledgeSortBarHtml()}
@@ -4197,7 +4207,8 @@ function knowledgeRemoveFilter(axis, value) {
   _refreshKnowledgeList();
 }
 function knowledgeClearFilters() {
-  _kFilters = { ..._kFilters, kind: [], platform: [], author: [], tag: [], status: [], since: '' };
+  _kFilters = { ..._kFilters, kind: [], platform: [], author: [], tag: [], status: [],
+                since: '', listId: null };
   _saveKnowledgeFilters();
   _refreshKnowledgeList();
 }
@@ -4225,6 +4236,9 @@ function knowledgeToggleArchived(checked) {
 // A row shows what the filters filter on — kind icon, title, author, platform,
 // tags, the processed date. Without those the filter bar would be operating on
 // data the list never displays.
+//
+// The row is wrapped in a swipe container (#940): the two coloured action
+// panes sit behind it and are revealed as the row itself is dragged sideways.
 function _knowledgeMaterialRowHtml(ep) {
   const status = ep.status || 'pending';
   const label = PODCAST_STATUS_LABEL[status] || status;
@@ -4242,21 +4256,243 @@ function _knowledgeMaterialRowHtml(ep) {
   const transcribeBtn = transcribable
     ? `<button class="btn-secondary podcast-transcribe-btn" onclick="event.stopPropagation(); _transcribePodcastEpisode(${ep.id})">Transcribe</button>`
     : '';
-  return `<div class="podcast-row${clickable ? ' podcast-row-clickable' : ''}${ep.archived_at ? ' knowledge-row-archived' : ''}"
-               ${clickable ? `onclick="openKnowledgeItem(${ep.id})"` : ''}>
-    <span class="podcast-row-title" style="display:flex;flex-direction:column;gap:2px;overflow:hidden">
-      <span>${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
-      ${ep.title_en ? `<span style="font-size:12px;color:var(--muted)">${_escHtml(ep.title_en)}</span>` : ''}
-      ${tags ? `<span class="knowledge-tag-row">${tags}</span>` : ''}
-    </span>
-    <span class="podcast-row-meta">
-      ${source ? `<span class="podcast-row-date">${_escHtml(source)}</span>` : ''}
-      ${platform ? `<span class="podcast-row-date">${_escHtml(platform)}</span>` : ''}
-      <span class="podcast-row-date">${date}</span>
-      <span class="podcast-badge ${cls}">${label}</span>
-      ${transcribeBtn}
-    </span>
+  const inReadLater = _knowledgeInReadLater(ep);
+  const archived = !!ep.archived_at;
+  return `<div class="knowledge-swipe" data-episode-id="${ep.id}">
+    <div class="knowledge-swipe-action knowledge-swipe-left">${inReadLater ? '✕ Read Later' : '📖 Read Later'}</div>
+    <div class="knowledge-swipe-action knowledge-swipe-right">${archived ? '↩ Unarchive' : '🗄 Archive'}</div>
+    <div class="podcast-row knowledge-swipe-row${clickable ? ' podcast-row-clickable' : ''}${archived ? ' knowledge-row-archived' : ''}"
+         ${clickable ? `onclick="openKnowledgeItem(${ep.id})"` : ''}>
+      <span class="podcast-row-title" style="display:flex;flex-direction:column;gap:2px;overflow:hidden">
+        <span>${inReadLater ? '<span title="Read Later">📖 </span>' : ''}${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
+        ${ep.title_en ? `<span style="font-size:12px;color:var(--muted)">${_escHtml(ep.title_en)}</span>` : ''}
+        ${tags ? `<span class="knowledge-tag-row">${tags}</span>` : ''}
+      </span>
+      <span class="podcast-row-meta">
+        ${source ? `<span class="podcast-row-date">${_escHtml(source)}</span>` : ''}
+        ${platform ? `<span class="podcast-row-date">${_escHtml(platform)}</span>` : ''}
+        <span class="podcast-row-date">${date}</span>
+        <span class="podcast-badge ${cls}">${label}</span>
+        ${transcribeBtn}
+        <span class="knowledge-hover-actions">
+          <button class="btn-secondary podcast-transcribe-btn" title="Read Later"
+                  onclick="event.stopPropagation(); toggleKnowledgeReadLater(${ep.id})">${inReadLater ? '✕📖' : '📖'}</button>
+          <button class="btn-secondary podcast-transcribe-btn" title="${archived ? 'Unarchive' : 'Archive'}"
+                  onclick="event.stopPropagation(); toggleKnowledgeArchived(${ep.id})">${archived ? '↩' : '🗄'}</button>
+        </span>
+      </span>
+    </div>
   </div>`;
+}
+
+// ── Lists, archiving and the swipe gesture (#940) ───────────────────────────
+// Ingesting and reading are two different moments: material is fetched and
+// summarized long before Daniel sits down with it. Read Later is where the
+// second moment gets recorded, and swiping is how it gets recorded without
+// opening anything.
+
+let _knowledgeLists = [];
+
+function _readLaterId() {
+  const builtin = _knowledgeLists.find(l => l.is_builtin);
+  return builtin ? builtin.id : null;
+}
+
+function _knowledgeInReadLater(ep) {
+  const id = _readLaterId();
+  return id != null && (ep.list_ids || []).includes(id);
+}
+
+function _knowledgeListsBarHtml() {
+  if (!_knowledgeLists.length) return '';
+  const btn = (id, label, count, extra = '') =>
+    `<button class="hcal-seg-btn ${_kFilters.listId === id ? 'active' : ''}"
+             onclick="knowledgeSetList(${id === null ? 'null' : id})">${label}${
+      count != null ? ` (${count})` : ''}${extra}</button>`;
+  const buttons = [btn(null, 'All', null)].concat(_knowledgeLists.map(l =>
+    btn(l.id, `${l.icon || '📂'} ${_escHtml(l.name)}`, l.count))).join('');
+  const current = _knowledgeLists.find(l => l.id === _kFilters.listId);
+  return `<div class="hcal-seg knowledge-lists-bar">
+      ${buttons}
+      <button class="hcal-seg-btn" onclick="createKnowledgeList()">＋</button>
+      ${current && !current.is_builtin
+        ? `<button class="hcal-seg-btn" onclick="deleteKnowledgeList(${current.id})" title="Delete this list">🗑</button>`
+        : ''}
+    </div>`;
+}
+
+function knowledgeSetList(listId) {
+  _kFilters.listId = listId;
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+
+async function createKnowledgeList() {
+  const name = prompt('New list name');
+  if (!name || !name.trim()) return;
+  try {
+    const created = await api('POST', '/api/knowledge/lists', { name: name.trim() });
+    _knowledgeLists = await api('GET', '/api/knowledge/lists') || [];
+    _kFilters.listId = created?.id ?? null;
+    _saveKnowledgeFilters();
+    await _refreshKnowledgeList();
+  } catch (e) {
+    showError('Could not create list: ' + e.message);
+  }
+}
+
+async function deleteKnowledgeList(listId) {
+  const list = _knowledgeLists.find(l => l.id === listId);
+  if (!confirm(`Delete the list "${list?.name || ''}"? The material itself is kept.`)) return;
+  try {
+    await api('DELETE', `/api/knowledge/lists/${listId}`);
+    _knowledgeLists = await api('GET', '/api/knowledge/lists') || [];
+    _kFilters.listId = null;
+    _saveKnowledgeFilters();
+    await _refreshKnowledgeList();
+  } catch (e) {
+    showError('Could not delete list: ' + e.message);
+  }
+}
+
+// Both actions are optimistic — on a phone, a row that sits still for half a
+// second after a swipe feels broken. On failure the change is rolled back and
+// the error is shown; nothing is silently dropped.
+async function toggleKnowledgeReadLater(episodeId) {
+  const listId = _readLaterId();
+  if (listId == null) return;
+  const ep = _podcastEpisodes.find(e => e.id === episodeId);
+  if (!ep) return;
+  const wasIn = _knowledgeInReadLater(ep);
+  ep.list_ids = wasIn ? (ep.list_ids || []).filter(id => id !== listId)
+                      : [...(ep.list_ids || []), listId];
+  _renderKnowledgeList();
+  try {
+    if (wasIn) await api('DELETE', `/api/knowledge/lists/${listId}/items/${episodeId}`);
+    else await api('POST', `/api/knowledge/lists/${listId}/items`, { episode_id: episodeId });
+    _knowledgeToast(wasIn ? 'Removed from Read Later' : 'Added to Read Later',
+                    () => toggleKnowledgeReadLater(episodeId));
+  } catch (e) {
+    ep.list_ids = wasIn ? [...(ep.list_ids || []), listId]
+                        : (ep.list_ids || []).filter(id => id !== listId);
+    _renderKnowledgeList();
+    showError('Read Later failed: ' + e.message);
+  }
+}
+
+async function toggleKnowledgeArchived(episodeId) {
+  const ep = _podcastEpisodes.find(e => e.id === episodeId);
+  if (!ep) return;
+  const wasArchived = !!ep.archived_at;
+  ep.archived_at = wasArchived ? null : new Date().toISOString();
+  // An archived row leaves the default view entirely, so drop it from the
+  // in-memory list too rather than leaving a ghost behind.
+  const hideIt = !wasArchived && !_kFilters.archived;
+  if (hideIt) _podcastEpisodes = _podcastEpisodes.filter(e => e.id !== episodeId);
+  _renderKnowledgeList();
+  try {
+    await api('POST', `/api/podcast/episodes/${episodeId}/archive?archived=${!wasArchived}`);
+    _knowledgeToast(wasArchived ? 'Unarchived' : 'Archived',
+                    () => _undoArchive(episodeId, wasArchived));
+  } catch (e) {
+    showError('Archive failed: ' + e.message);
+    await _refreshKnowledgeList();
+  }
+}
+
+async function _undoArchive(episodeId, wasArchived) {
+  try {
+    await api('POST', `/api/podcast/episodes/${episodeId}/archive?archived=${wasArchived}`);
+    await _refreshKnowledgeList();
+  } catch (e) {
+    showError('Undo failed: ' + e.message);
+  }
+}
+
+// A short-lived undo strip. Mis-swiping on a phone is far too easy for an
+// action to be one-way.
+let _knowledgeToastTimer = null;
+function _knowledgeToast(message, undo) {
+  let el = document.getElementById('knowledge-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'knowledge-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = '';
+  el.appendChild(document.createTextNode(message + ' '));
+  if (undo) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Undo';
+    btn.onclick = () => { _hideKnowledgeToast(); undo(); };
+    el.appendChild(btn);
+  }
+  el.style.display = 'flex';
+  if (_knowledgeToastTimer) clearTimeout(_knowledgeToastTimer);
+  _knowledgeToastTimer = setTimeout(_hideKnowledgeToast, 5000);
+}
+function _hideKnowledgeToast() {
+  const el = document.getElementById('knowledge-toast');
+  if (el) el.style.display = 'none';
+  if (_knowledgeToastTimer) { clearTimeout(_knowledgeToastTimer); _knowledgeToastTimer = null; }
+}
+
+// Swipe, iPhone-Mail style. Plain touch events — this project has no build
+// step and no room for a gesture library.
+const _SWIPE_TRIGGER = 90;     // px past which the action fires on release
+const _SWIPE_MAX = 130;        // px the row can be dragged
+const _SWIPE_DECIDE = 12;      // px of movement before the axis is locked in
+
+let _swipe = null;
+
+function _initKnowledgeSwipe() {
+  const host = document.getElementById('view-knowledge-content');
+  if (!host || host.dataset.swipeBound) return;
+  host.dataset.swipeBound = '1';
+  // Delegated, and bound once: the list's innerHTML is replaced on every
+  // filter change, so per-row listeners would have to be re-attached forever.
+  host.addEventListener('touchstart', _onSwipeStart, { passive: true });
+  host.addEventListener('touchmove', _onSwipeMove, { passive: false });
+  host.addEventListener('touchend', _onSwipeEnd);
+  host.addEventListener('touchcancel', _onSwipeEnd);
+}
+
+function _onSwipeStart(e) {
+  const wrap = e.target.closest?.('.knowledge-swipe');
+  if (!wrap || e.touches.length !== 1) return;
+  const t = e.touches[0];
+  _swipe = { wrap, row: wrap.querySelector('.knowledge-swipe-row'),
+             x0: t.clientX, y0: t.clientY, dx: 0, axis: null,
+             id: parseInt(wrap.dataset.episodeId, 10) };
+}
+
+function _onSwipeMove(e) {
+  if (!_swipe) return;
+  const t = e.touches[0];
+  const dx = t.clientX - _swipe.x0;
+  const dy = t.clientY - _swipe.y0;
+  if (_swipe.axis === null) {
+    if (Math.abs(dx) < _SWIPE_DECIDE && Math.abs(dy) < _SWIPE_DECIDE) return;
+    // Lock the axis once, on the first real movement. Without this the page
+    // can no longer be scrolled past the list — a vertical drag that starts
+    // with a pixel of horizontal noise would be eaten as a swipe.
+    _swipe.axis = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : 'y';
+  }
+  if (_swipe.axis !== 'x') return;
+  e.preventDefault();
+  _swipe.dx = Math.max(-_SWIPE_MAX, Math.min(_SWIPE_MAX, dx));
+  _swipe.wrap.classList.add('knowledge-swipe-active');
+  if (_swipe.row) _swipe.row.style.transform = `translateX(${_swipe.dx}px)`;
+}
+
+function _onSwipeEnd() {
+  const swipe = _swipe;
+  _swipe = null;
+  if (!swipe || swipe.axis !== 'x') return;
+  if (swipe.row) { swipe.row.style.transform = ''; }
+  swipe.wrap.classList.remove('knowledge-swipe-active');
+  if (swipe.dx >= _SWIPE_TRIGGER) toggleKnowledgeReadLater(swipe.id);
+  else if (swipe.dx <= -_SWIPE_TRIGGER) toggleKnowledgeArchived(swipe.id);
 }
 
 // ── The one Add button ──────────────────────────────────────────────────────
