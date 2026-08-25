@@ -4,6 +4,8 @@
   --border:    #e2e8f0;
   --text:      #1e293b;
   --muted:     #64748b;
+  /* 悬停底色：此前从未定义，各处只靠回退值，缺回退的（.cal-nav-btn）直接失效（#941） */
+  --hover-bg:  #f1f5f9;
   --primary:   #2563eb;
   --again:     #dc2626;
   --hard:      #d97706;
@@ -3983,10 +3985,6 @@ select.opt-input {
   background: var(--bg);
 }
 
-@media (prefers-color-scheme: dark) {
-  .cost-prompt-box { background: var(--card-bg, #1e1e1e); }
-}
-
 /* ── Model price info popup ─────────────────────────────────────────────── */
 .price-info-btn {
   background: none; border: none; cursor: pointer;
@@ -4662,10 +4660,6 @@ details[open] .cat-override-summary::before { content: '▼ '; }
 .kahneman-part-header:hover { background: #ede9fe; }
 .kahneman-part-cb { flex-shrink: 0; cursor: pointer; }
 .kahneman-part-header:first-child { border-top: none; }
-@media (prefers-color-scheme: dark) {
-  .kahneman-part-header { color: #c4b5fd; background: #1e1b2e; }
-  .kahneman-part-header:hover { background: #2a2540; }
-}
 
 /* Part label shown in the chapter-examples popup */
 .kahneman-part-label {
@@ -4673,9 +4667,6 @@ details[open] .cat-override-summary::before { content: '▼ '; }
   font-weight: 700;
   color: #7c3aed;
   margin-bottom: 6px;
-}
-@media (prefers-color-scheme: dark) {
-  .kahneman-part-label { color: #c4b5fd; }
 }
 
 /* ── Kahneman concept badge in story modal ──────────────── */
@@ -4690,10 +4681,6 @@ details[open] .cat-override-summary::before { content: '▼ '; }
   border-radius: 10px;
   font-size: 11px;
   color: #5b21b6;
-}
-@media (prefers-color-scheme: dark) {
-  .story-concept-badge { background: #2e1065; border-color: #6d28d9; color: #c4b5fd; }
-  .kahneman-chapter-row:hover { background: var(--hover-bg, #2a2a2a); }
 }
 .concept-name { font-weight: 500; }
 .story-source-link { margin-left: 6px; font-size: 10px; text-decoration: none; color: inherit; opacity: 0.8; }
@@ -4803,18 +4790,6 @@ details[open] .cat-override-summary::before { content: '▼ '; }
 }
 #reasoning-source-link:hover { text-decoration: underline; }
 
-@media (prefers-color-scheme: dark) {
-  .sentence-concept-section { background: #2e1065; border-color: #6d28d9; }
-  .concept-part-label { color: #c4b5fd; }
-  .concept-chapter-title { color: #c4b5fd; }
-  .concept-chapter-desc { color: #a78bfa; }
-  .concept-chapter-hint { color: #c4b5fd; }
-  .sentence-concept-section.concept-clickable:hover { background: #3b1378; border-color: #7c3aed; }
-  .sentence-reasoning-btn { background: #2e1065; border-color: #6d28d9; }
-  .sentence-reasoning-btn:hover { background: #3b1378; border-color: #7c3aed; }
-  .reasoning-body { background: #1e1b4b; border-color: #4c1d95; color: #c4b5fd; }
-}
-
 /* ── Kahneman examples popup (book's original quotes) ──────────────── */
 #kahneman-examples-overlay {
   position: fixed; inset: 0;
@@ -4876,10 +4851,6 @@ details[open] .cat-override-summary::before { content: '▼ '; }
   color: #4c1d95;
 }
 .kahneman-examples-loading { color: var(--muted, #888); font-size: 14px; text-align: center; padding: 12px; }
-@media (prefers-color-scheme: dark) {
-  .kahneman-example { background: #2e1065; border-left-color: #7c3aed; color: #ddd6fe; }
-  .kahneman-summary { background: #241047; border-color: #5b21b6; color: #c4b5fd; }
-}
 
 /* ============================================================================
    Home-page calendar heatmap (issue #307)
@@ -5149,12 +5120,6 @@ body[data-lang] header { border-bottom-color: var(--lang-accent, var(--border));
 }
 .wd-cal-scroll { max-height: 340px; overflow-y: auto; }
 
-@media (prefers-color-scheme: dark) {
-  :root { --hcal-empty: #1f2933; }
-  .hcal-seg-btn.active { background: #6366f1; }
-  .hcal-day:hover { outline-color: #cbd5e1; }
-}
-
 /* ── FSRS scheduler inspector (Shift+S) ──────────────────────────────────── */
 .fsrs-inspect-row { display: flex; justify-content: center; margin-top: 8px; }
 .fsrs-inspect-btn {
@@ -5275,14 +5240,6 @@ table.fsrs-table td.ivl { font-weight: 700; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #version-badge:hover, #version-badge.expanded { opacity: 1; }
-
-@media (prefers-color-scheme: dark) {
-  .cost-warning {
-    color: #ffe69c;
-    background: #4a3b00;
-    border-color: #6b5700;
-  }
-}
 
 .podcast-tr-pair {
   margin: 0 0 10px;
