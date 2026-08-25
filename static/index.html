@@ -101,6 +101,10 @@
     <!-- Generation log (issue #642): cumulative step-by-step lines from the
          backend, so a long run shows what it already did and where it is now -->
     <div id="loading-log" style="display:none"></div>
+    <!-- #929: the knowledge-mode source items this run is generating from — one
+         button each, opening that item's summary in a popup without leaving
+         this screen (waiting is exactly when reading the material is useful) -->
+    <div id="loading-sources" style="display:none"></div>
     <div id="loading-actions">
       <button id="loading-bg-btn" style="display:none" onclick="_continueStoryInBackground()">
         Continue in background ⏎

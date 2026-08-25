@@ -998,6 +998,10 @@ function showView(name) {
   // "processing" poll loop — it has no reason to keep firing once the view
   // isn't visible.
   if (name !== 'knowledge' && typeof _clearPodcastPoll === 'function') _clearPodcastPoll();
+  // #929: the source buttons belong to one story generation. Leaving the
+  // loading screen ends that run, so they must not survive into the next
+  // unrelated setLoading() ("Loading audio…", opening a knowledge item, …).
+  if (name !== 'loading') _storyLoadingSources = [];
   ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books'].forEach(v => {
     document.getElementById(`view-${v}`).style.display = 'none';
   });
@@ -1059,7 +1063,83 @@ function setLoading(msg, useProgress = false) {
   const arts = document.getElementById('loading-articles');
   if (arts) { arts.innerHTML = ''; arts.style.display = 'none'; }
   if (spinner) spinner.style.visibility = '';
+  _renderLoadingSources();
   showView('loading');
+}
+
+// ── Source buttons on the story loading screen (#929) ───────────────────────
+// Knowledge mode can generate from several source items at once (#752), and the
+// generation takes minutes. Reading the material Daniel is about to be quizzed
+// on is exactly what that wait is good for — so each selected item gets a button
+// here, opening its summary in a popup and dropping the user right back on this
+// screen when it closes.
+//
+// Set once in confirmStorySetup() (and restored from the resume context when a
+// background story is re-opened); every _doStartReview*/regenerate variant goes
+// through there, so there is no per-flow plumbing. [{id, title, kind}].
+let _storyLoadingSources = [];
+
+const _KNOWLEDGE_KIND_ICON = { podcast: '\u{1F399}\uFE0F', video: '\u{1F4FA}', article: '\u{1F4C4}' };
+
+function _renderLoadingSources() {
+  const el = document.getElementById('loading-sources');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!_storyLoadingSources.length) { el.style.display = 'none'; return; }
+  const label = document.createElement('div');
+  label.className = 'loading-sources-label';
+  label.textContent = 'Material — tap to read the summary while you wait:';
+  el.appendChild(label);
+  for (const src of _storyLoadingSources) {
+    const btn = document.createElement('button');
+    btn.className = 'loading-source-btn';
+    // textContent, never innerHTML: these titles come from podcast feeds,
+    // YouTube and arbitrary web pages.
+    btn.textContent = `${_KNOWLEDGE_KIND_ICON[src.kind] || '\u{1F4C4}'} ${src.title || '(untitled)'}`;
+    btn.title = src.title || '';
+    btn.onclick = () => openKnowledgeSummaryPopup(src.id, src.title);
+    el.appendChild(btn);
+  }
+  el.style.display = 'block';
+}
+
+// id -> fetched episode, keyed by language too (a non-zh rendition is a
+// different payload). Keeps re-opening a summary instant, and re-opening it is
+// the point — Daniel reads one, closes it, reads the next.
+let _knowledgeSummaryCache = {};
+
+// Popup showing one knowledge item's summary, reusing the kahneman modal (Esc,
+// ✕ and the overlay all already close it, and closing leaves the loading
+// screen exactly as it was — the generation never stopped).
+async function openKnowledgeSummaryPopup(id, title) {
+  const overlay = document.getElementById('kahneman-examples-overlay');
+  const modal   = document.getElementById('kahneman-examples-modal');
+  const titleEl = document.getElementById('kahneman-examples-title');
+  const bodyEl  = document.getElementById('kahneman-examples-body');
+  titleEl.textContent = title || '';
+  bodyEl.innerHTML = '<div class="kahneman-examples-loading">Loading\u2026</div>';
+  overlay.style.display = '';
+  modal.style.display = '';
+
+  const lang = activeLang();
+  const key = `${id}:${lang}`;
+  let ep = _knowledgeSummaryCache[key];
+  if (!ep) {
+    try {
+      ep = await api('GET', `/api/podcast/episodes/${id}?lang=${encodeURIComponent(lang)}`);
+      _knowledgeSummaryCache[key] = ep;
+    } catch (e) {
+      bodyEl.innerHTML = '';
+      bodyEl.appendChild(document.createTextNode('Failed to load: ' + (e.message || 'error')));
+      return;
+    }
+  }
+  if (modal.style.display === 'none') return;   // closed while loading
+  titleEl.textContent = ep.title || title || '';
+  const summary = _knowledgeSummaryHtml(ep);
+  bodyEl.innerHTML = summary.trim()
+    ? summary
+    : `<p class="keymap-hint">${_escHtml('No summary yet for this item.')}</p>`;
 }
 
 // Update progress bar and status text during a multi-step loading operation.
@@ -4340,6 +4420,27 @@ function closeKnowledgeDetail() {
   }
 }
 
+// The summary block of a knowledge item. Shared (#929) by the detail view below
+// and the popup the story loading screen opens — a second copy would drift the
+// moment one of the two language branches changes.
+//
+// #804: zh's summary block is untouched. Every other language shows its
+// rendition (translated from summary_de, new words annotated inline); a
+// failed/not-yet-generated rendition shows the reason rather than silently
+// falling back to a German block Daniel didn't ask to read.
+function _knowledgeSummaryHtml(ep) {
+  if (activeLang() === 'zh') {
+    return `${ep.summary_zh ? `<div id="podcast-summary-zh">${_summaryZhHtml(ep.summary_zh)}</div>` : ''}
+       <div id="podcast-summary-de">${ep.summary_de || ''}</div>`;
+  }
+  return ep.rendition
+    // Same whitelist sanitizer the zh summary uses: the rendition text
+    // passed through Google Translate and the annotator, so it gets
+    // escaped and only <p>/<b>/<em>/<i>/<br> are let back through.
+    ? `<div id="podcast-summary-rendition">${_summaryZhHtml(ep.rendition.summary || '')}</div>`
+    : `<p class="keymap-hint">${_escHtml(ep.rendition_error || 'Rendition unavailable.')}</p>`;
+}
+
 function _renderKnowledgeDetail(ep) {
   const el = document.getElementById('view-knowledge-content');
   if (!el) return;
@@ -4382,19 +4483,7 @@ function _renderKnowledgeDetail(ep) {
          <div id="podcast-transcript-body" class="podcast-transcript" style="display:none">${trBody}</div>
        </div>`
     : '';
-  // #804: zh's summary block is untouched. Every other language shows its
-  // rendition (translated from summary_de, new words annotated inline); a
-  // failed/not-yet-generated rendition shows the reason rather than silently
-  // falling back to a German block Daniel didn't ask to read.
-  const summaryBlock = isZh
-    ? `${ep.summary_zh ? `<div id="podcast-summary-zh">${_summaryZhHtml(ep.summary_zh)}</div>` : ''}
-       <div id="podcast-summary-de">${ep.summary_de || ''}</div>`
-    : (ep.rendition
-        // Same whitelist sanitizer the zh summary uses: the rendition text
-        // passed through Google Translate and the annotator, so it gets
-        // escaped and only <p>/<b>/<em>/<i>/<br> are let back through.
-        ? `<div id="podcast-summary-rendition">${_summaryZhHtml(ep.rendition.summary || '')}</div>`
-        : `<p class="keymap-hint">${_escHtml(ep.rendition_error || 'Rendition unavailable.')}</p>`);
+  const summaryBlock = _knowledgeSummaryHtml(ep);
 
   el.innerHTML = `
     <button class="keymap-reset-all" onclick="closeKnowledgeDetail()">← Back</button>
@@ -5673,6 +5762,7 @@ function _showStoryReadyBanner(ctx) {
 
 // Resume a session whose background story is now cached → starts instantly.
 function _resumeBackgroundReview(ctx) {
+  _storyLoadingSources = ctx.sources || [];   // #929
   deckId     = ctx.deckId;
   category   = ctx.category;
   deckName   = ctx.deckName;
@@ -5712,6 +5802,7 @@ async function _doStartReview(topic, maxHsk, model, grammarFocus, grammarPct, mo
       key: `${storyDeckId}/${storyCategory}`,
       deckId, category, deckName, rootDeckId, storyDeckId, storyCategory,
       topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId,
+      sources: _storyLoadingSources,   // #929: re-shown when this run is re-opened
     };
     _bgLeaveRequested = false;
     _bgActiveResume = resumeCtx;
@@ -9826,6 +9917,12 @@ function confirmStorySetup() {
   const chapterIds  = mode === 'kahneman' ? _getSelectedChapterIds() : null;
   const articles    = mode === 'paste' ? _collectPastedContents() : null;
   const episodeIds  = mode === 'knowledge' ? _getSelectedEpisodeIds() : null;
+  // #929: snapshot the picked items (title + kind) for the loading screen's
+  // source buttons. A snapshot, not a live read of _setupSelectedEpisodes —
+  // that Map is cleared the next time the setup modal opens.
+  _storyLoadingSources = mode === 'knowledge'
+    ? Array.from(_setupSelectedEpisodes.values()).map(e => ({ id: e.id, title: e.title, kind: e.kind }))
+    : [];
   const bookChapterId = mode === 'book' ? _getSelectedBookChapterId() : null;
   // News mode never sends articles: today's news is auto-fetched server-side
   // (issue #387). Paste mode requires at least one non-empty text (issue #396).
