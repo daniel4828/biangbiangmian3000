@@ -154,13 +154,14 @@ def _existing_episode(video_id: str) -> dict | None:
 
 def _store_article(*, video_id: str, title: str, site: str | None, published_at,
                     source_url: str | None, text: str, transcript_source: str,
-                    china_critical: bool = False) -> dict:
-    """Create the kind='article' podcast_episodes row and store `text` as
-    transcript_zh immediately — this is the ONE row-building code path for
-    both _ingest_article (URL) and ingest_text (pasted body, #668); they
-    differ only in where `text`/`title`/`site`/`published_at` come from.
-    Landing transcript_zh here (rather than deferring the fetch to process
-    time) puts both paths straight into _process_episode's "reuse existing
+                    china_critical: bool = False, kind: str = "article") -> dict:
+    """Create the kind='article' (or kind='newsletter', #925) podcast_episodes
+    row and store `text` as transcript_zh immediately — this is the ONE
+    row-building code path for _ingest_article (URL), ingest_text (pasted
+    body, #668) and newsletter.ingest_newsletter() (#925); they differ only
+    in where `text`/`title`/`site`/`published_at`/`kind` come from. Landing
+    transcript_zh here (rather than deferring the fetch to process time)
+    puts both paths straight into _process_episode's "reuse existing
     transcript" fast path when the frontend later calls
     POST /api/podcast/episodes/{id}/process — see article.py's docstring.
 
@@ -182,7 +183,7 @@ def _store_article(*, video_id: str, title: str, site: str | None, published_at,
         youtube_url=source_url or "",
         audio_url=None,
         duration_seconds=None,
-        kind="article",
+        kind=kind,
         china_critical=china_critical,
     )
     updates = {"transcript_zh": text, "transcript_source": transcript_source}
@@ -268,13 +269,18 @@ def _fill_missing_metadata(text: str, title: str, author: str | None,
 
 def ingest_text(title: str | None, text: str, source_url: str | None = None,
                 author: str | None = None, china_critical: bool = False,
-                fallback_title: str | None = None) -> dict:
+                fallback_title: str | None = None, kind: str = "article") -> dict:
     """Ingest a pasted article body (#668) — for paywalled articles
     (Spiegel+, FAZ, ...) the server can't fetch, but the user can read in
-    their browser and paste the text in directly. Same kind='article' row
+    their browser and paste the text in directly. Same row-building path
     and transcript_zh storage as _ingest_article(), via _store_article();
     only the dedup key and body source differ (there's no URL to hash, so
     the body itself is hashed instead — see below).
+
+    `kind` defaults to "article" (every existing caller's behaviour is
+    unchanged) — knowledge/newsletter.py (#925) passes kind="newsletter"
+    for known newsletter senders so their rows are distinguishable in the
+    UI's Newsletter tab without adding a second ingestion path.
 
     `title`, `author` and `source_url` are all optional (#833): whichever
     Daniel left blank is filled in by one cheap AI call over the head of the
@@ -341,4 +347,5 @@ def ingest_text(title: str | None, text: str, source_url: str | None = None,
         text=text,
         transcript_source="pasted",
         china_critical=china_critical,
+        kind=kind,
     )

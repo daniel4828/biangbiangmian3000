@@ -1,6 +1,14 @@
-"""Knowledge base mailbox intake (issue #655, extended #668): poll a
-dedicated mailbox via IMAP, and for each UNSEEN mail either:
+"""Knowledge base mailbox intake (issue #655, extended #668, #925): poll a
+dedicated mailbox via IMAP, and for each UNSEEN mail:
 
+  0. the sender is a known newsletter (knowledge.newsletter.source_name(),
+     #925 — e.g. F.A.Z. Frühdenker, forwarded here by a Gmail rule) -> route
+     to knowledge.newsletter.ingest_newsletter() and process it immediately
+     (podcast.retry_episode()), BEFORE the URL branch below even runs. This
+     check comes first on purpose: a newsletter body is stuffed with dozens
+     of paywalled links back to the source site, and the URL branch would
+     otherwise try (and fail) to fetch every one of them instead of using
+     the content already sitting right there in the mail body;
   1. it contains a URL (phone "share -> mail" is the easiest way to get a
      link onto the server) -> ingest every URL via
      knowledge.ingest.ingest_url() — the exact same pipeline the
@@ -35,6 +43,7 @@ from email.utils import parseaddr
 from html.parser import HTMLParser
 
 import knowledge.ingest
+import knowledge.newsletter
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +121,30 @@ class _HTMLTextExtractor(HTMLParser):
     above leaves tags in on purpose — it only feeds the URL regex, where
     stray markup is harmless — but text handed to the AI summarizer must
     not contain `<div>`/`<a>` soup, so this path strips it. <script>/<style>
-    contents are dropped entirely rather than emitted as text."""
+    contents are dropped entirely rather than emitted as text.
+
+    Block-level tag boundaries MUST become newlines (#925 review fix):
+    marketing/newsletter HTML is frequently minified onto a single physical
+    line, and downstream processing is line-based — knowledge.newsletter's
+    clean_body() decides what to keep or drop line by line. Without an
+    inserted newline at every block boundary, a minified mail collapses to
+    one giant line: if that line happens to contain a boilerplate phrase
+    like "Abbestellen", clean_body() drops the ENTIRE body (real content and
+    all), which then makes ingest_text() raise on "too short" for a mail
+    that in fact had plenty of real content — every 5 minutes, forever,
+    since a raised IngestError normally leaves the mail unread for retry.
+    Inserting a newline back at every block tag is what makes a line-based
+    filter actually operate per-paragraph instead of per-mail."""
 
     _SKIP_TAGS = ("script", "style")
+    # Elements whose boundary is a paragraph/line break in rendered
+    # markup — approximately CSS's default "display: block" set, the tags
+    # this newsletter (and virtually any HTML mail) is built from.
+    _BLOCK_TAGS = (
+        "p", "div", "br", "tr", "td", "th", "li", "ul", "ol",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "table", "blockquote", "section", "article",
+    )
 
     def __init__(self):
         super().__init__()
@@ -124,10 +154,14 @@ class _HTMLTextExtractor(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag in self._SKIP_TAGS:
             self._skip_depth += 1
+        elif tag in self._BLOCK_TAGS and self._skip_depth == 0:
+            self._chunks.append("\n")
 
     def handle_endtag(self, tag):
         if tag in self._SKIP_TAGS and self._skip_depth > 0:
             self._skip_depth -= 1
+        elif tag in self._BLOCK_TAGS and self._skip_depth == 0:
+            self._chunks.append("\n")
 
     def handle_data(self, data):
         if self._skip_depth == 0:
@@ -209,6 +243,34 @@ def _sender_address(msg: email.message.Message) -> str:
     return addr.strip().lower()
 
 
+def _candidate_newsletter_addresses(msg: email.message.Message) -> list:
+    """Every header that might carry a forwarded newsletter's original
+    sender address (#925). Gmail's auto-forward keeps `From` pointing at the
+    original sender, so `_sender_address()` alone is normally enough — but
+    `Sender`/`Return-Path` are checked too for forwarding setups that
+    rewrite `From` (e.g. some mailing-list or "forward as attachment"
+    configurations), so a newsletter still gets recognized rather than
+    silently falling through to the URL branch and failing on every
+    paywalled link in its body."""
+    addrs = []
+    for header in ("From", "Sender", "Return-Path"):
+        _, addr = parseaddr(msg.get(header) or "")
+        addr = addr.strip().lower()
+        if addr:
+            addrs.append(addr)
+    return addrs
+
+
+def _newsletter_source_for(msg: email.message.Message) -> str | None:
+    """First known-newsletter match among the candidate sender headers, or
+    None. Returns the sender address that matched (not the display name),
+    for use as `sender` in newsletter.ingest_newsletter()."""
+    for addr in _candidate_newsletter_addresses(msg):
+        if knowledge.newsletter.source_name(addr):
+            return addr
+    return None
+
+
 def check_mailbox(imap_factory=None) -> dict:
     """Poll KNOWLEDGE_IMAP_HOST's INBOX for UNSEEN mail from whitelisted
     senders, ingest every URL found in each one, and mark the message
@@ -285,6 +347,60 @@ def check_mailbox(imap_factory=None) -> dict:
             if sender not in allowed:
                 logger.info("knowledge.mailbox: 发件人 %s 不在白名单，跳过（不标已读）", sender)
                 summary["skipped"] += 1
+                continue
+
+            # 通讯分支（#925），必须排在 URL 分支之前：F.A.Z. Frühdenker 这类
+            # 通讯正文里有几十个付费墙链接，走 URL 分支会逐个抓取、全部失败
+            # 还浪费时间。转发邮件的 From 通常仍是原发件人（上面的白名单检
+            # 查已经用它判过了），这里额外查 Sender/Return-Path 只是为了兜
+            # 底改写 From 的转发配置。
+            newsletter_addr = _newsletter_source_for(msg)
+            if newsletter_addr:
+                subject = _decode_header_value(msg.get("Subject")) or "(无主题)"
+                body = plain_text_body(msg)
+                try:
+                    result = knowledge.newsletter.ingest_newsletter(newsletter_addr, subject, body)
+                    summary["ingested"] += 1
+                    logger.info("knowledge.mailbox: 通讯已入库 %s -> %s", subject, result)
+                except knowledge.ingest.IngestError as e:
+                    # 永久失败（同 knowledge/signal_inbox.py 对粘贴正文失败
+                    # 的处理）：正文太短这种失败，重试一百次结果完全一样，
+                    # cron 每 5 分钟跑一次——留着不读只会让每一轮都白跑一次
+                    # 注定失败的活儿。标已读，放弃这封。
+                    logger.error(
+                        "knowledge.mailbox: 通讯 %s 永久失败（放弃，标已读）: %s",
+                        subject, e,
+                    )
+                    summary["errors"].append(f"(newsletter {msg_id}, abandoned): {e}")
+                    summary["failed"] += 1
+                    conn.store(msg_id, "+FLAGS", "\\Seen")
+                    continue
+                except Exception as e:
+                    # 网络/数据库/AI 抖动等暂时性故障——不标已读，下轮重试。
+                    logger.warning("knowledge.mailbox: 通讯入库失败 %s: %s", subject, e)
+                    summary["errors"].append(f"(newsletter {msg_id}): {e}")
+                    summary["failed"] += 1
+                    continue
+
+                episode_id = result.get("episode_id")
+                already = result.get("status") == "already_exists"
+                if not already and episode_id:
+                    # "早上就要读"（同 knowledge/signal_inbox.py 的道理）：
+                    # 入库后立即同步转录+摘要+通知，不等前端另外调 .../process。
+                    # 失败仅记日志，不标已读——ingest_text 按正文哈希去重，
+                    # 下一轮重试是安全的（不会造第二行，只会重新处理）。
+                    try:
+                        import podcast
+                        podcast.retry_episode(episode_id)
+                    except Exception as e:
+                        logger.warning(
+                            "knowledge.mailbox: 通讯 episode %s 处理失败: %s", episode_id, e)
+                        summary["errors"].append(f"(newsletter process {episode_id}): {e}")
+                        summary["failed"] += 1
+                        continue
+
+                conn.store(msg_id, "+FLAGS", "\\Seen")
+                summary["processed"] += 1
                 continue
 
             # 主路径不变（#655）：有 URL 就走 ingest_url()，一个字节都不能变。

@@ -690,13 +690,15 @@ CREATE TABLE IF NOT EXISTS known_words (
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS podcast_episodes (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- kind = 'podcast' | 'video' | 'article' (#650, knowledge base stage A).
-    -- The generic columns below are reused across all three kinds with
+    -- kind = 'podcast' | 'video' | 'article' | 'newsletter' (#650 stage A;
+    -- 'newsletter' added #925 for known email newsletters like F.A.Z.
+    -- Frühdenker, ingested via knowledge/newsletter.py + ingest_text()).
+    -- The generic columns below are reused across all kinds with
     -- different meanings — see docs/knowledge-base.md for the full mapping:
-    --   video_id:    RSS item guid (podcast) | YouTube video id (video) | normalized URL, utm params stripped (article)
-    --   channel_id:  source RSS feed URL (podcast) | YouTube channel id if available (video) | site domain (article)
-    --   youtube_url: episode webpage link (podcast) | video link (video) | article link (article)
-    --   transcript_zh: transcript (podcast) | caption/subtitle text (video) | article body (article) — i.e. "source material, any language", not podcast-specific
+    --   video_id:    RSS item guid (podcast) | YouTube video id (video) | normalized URL, utm params stripped (article) | "pasted:<hash of body>" (newsletter, same pasted-text dedup key as ingest_text())
+    --   channel_id:  source RSS feed URL (podcast) | YouTube channel id if available (video) | site domain (article) | newsletter source name, e.g. "F.A.Z. Frühdenker" (newsletter)
+    --   youtube_url: episode webpage link (podcast) | video link (video) | article link (article) | "" (newsletter — no single article URL, the mail body itself is the content)
+    --   transcript_zh: transcript (podcast) | caption/subtitle text (video) | article body (article) | newsletter body, boilerplate-stripped (newsletter) — i.e. "source material, any language", not podcast-specific
     kind             TEXT NOT NULL DEFAULT 'podcast',
     video_id         TEXT NOT NULL UNIQUE,  -- RSS item guid (or enclosure URL if no guid), #497; legacy rows used the YouTube video id
     channel_id       TEXT,   -- source RSS feed URL, #497; legacy rows used the YouTube channel id
