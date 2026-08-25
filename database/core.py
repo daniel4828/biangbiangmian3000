@@ -1,10 +1,13 @@
 import json
+import logging
 import os
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
 
 from languages import DEFAULT_LANG, deck_root, is_valid_lang
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.environ.get("DB_PATH", "data/srs.db")
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "..", "schema.sql")
@@ -787,6 +790,24 @@ def init_db() -> None:
         "  ELSE 'web' END "
         "WHERE platform IS NULL")
 
+    # One-time full index build (#939). Marker-guarded, not idempotent-by-
+    # construction: this reads every transcript in the library, and production
+    # re-runs init_db() on every restart — every ~2 minutes (deploy/deploy.sh).
+    # From here on the index is maintained incrementally by
+    # database.search.reindex_episode() at each point that changes an
+    # episode's text.
+    already_indexed = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'knowledge_fts_built'").fetchone()
+    if not already_indexed:
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('knowledge_fts_built', '1')")
+        conn.commit()
+        # Imported here, not at module scope: database.search imports from
+        # .core, and a top-level import would be circular.
+        from .search import reindex_all
+        n = reindex_all()
+        logger.info("init_db: built the knowledge search index over %d items", n)
+
     # The one built-in list (#940). Guarded on "a built-in list already exists"
     # rather than on the name: if Daniel renames it, that rename must stick
     # instead of a second 'Read Later' reappearing on the next restart.
@@ -831,6 +852,11 @@ def init_db() -> None:
         if stale_ids:
             conn.executemany(
                 "DELETE FROM podcast_episodes WHERE id = ?", [(i,) for i in stale_ids])
+            # knowledge_fts is a virtual table with no foreign keys (#939), so
+            # its rows would otherwise outlive the episode and keep showing up
+            # as hits for material that no longer exists.
+            conn.executemany(
+                "DELETE FROM knowledge_fts WHERE episode_id = ?", [(i,) for i in stale_ids])
         conn.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('purged_legacy_youtube_rows', '1')")
         conn.commit()

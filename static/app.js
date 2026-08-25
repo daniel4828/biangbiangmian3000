@@ -4080,9 +4080,108 @@ function _renderKnowledgeList() {
       <button class="btn-secondary" onclick="toggleKnowledgeAdd()">${_knowledgeAddOpen ? '✕ Close' : '＋ Add'}</button>
     </div>
     ${_knowledgeAddOpen ? _knowledgeAddPanelHtml() : ''}
+    ${_knowledgeSearchBarHtml()}
+    ${_knowledgeSearchResults !== null ? _knowledgeSearchResultsHtml() : `
     ${_knowledgeSortBarHtml()}
     ${_knowledgeFilterBarHtml()}
     ${_knowledgeChipsHtml()}
+    <div class="podcast-list">${rows}</div>`}`;
+  const box = document.getElementById('knowledge-search-input');
+  // Re-focus after the re-render, and put the caret at the end: this input is
+  // rebuilt on every keystroke's response, and losing focus mid-word would
+  // make the search box unusable.
+  if (box && _knowledgeSearchFocused) { box.focus(); box.selectionStart = box.selectionEnd = box.value.length; }
+}
+
+// ── Search (#939) ───────────────────────────────────────────────────────────
+// Searches everything: titles, transcripts, both AI summaries and every
+// per-language rendition. It replaces the list rather than filtering it —
+// relevance order and "which field did this match in?" are the point, and
+// neither survives being folded into the sort/filter bar.
+let _knowledgeSearchQuery = '';
+let _knowledgeSearchResults = null;   // null = not searching; [] = no hits
+let _knowledgeSearchTimer = null;
+let _knowledgeSearchFocused = false;
+
+function _knowledgeSearchBarHtml() {
+  return `<div class="knowledge-search-row">
+    <input type="text" class="opt-input" id="knowledge-search-input"
+           placeholder="🔍 Search titles, transcripts, summaries, translations…"
+           value="${_escHtml(_knowledgeSearchQuery)}"
+           oninput="onKnowledgeSearchInput(this.value)"
+           onfocus="_knowledgeSearchFocused = true"
+           onblur="_knowledgeSearchFocused = false">
+    ${_knowledgeSearchQuery ? `<button class="btn-secondary" onclick="clearKnowledgeSearch()">✕</button>` : ''}
+  </div>`;
+}
+
+function onKnowledgeSearchInput(value) {
+  _knowledgeSearchQuery = value;
+  _knowledgeSearchFocused = true;
+  if (_knowledgeSearchTimer) clearTimeout(_knowledgeSearchTimer);
+  if (!value.trim()) {
+    _knowledgeSearchResults = null;
+    _renderKnowledgeList();
+    return;
+  }
+  // Debounced: this hits FTS over every transcript in the library, and firing
+  // it per keystroke would queue up requests whose answers arrive out of order.
+  _knowledgeSearchTimer = setTimeout(() => _runKnowledgeSearch(value), 250);
+}
+
+async function _runKnowledgeSearch(query) {
+  try {
+    const results = await api('GET', `/api/knowledge/search?q=${encodeURIComponent(query)}`);
+    // A slow response for an older query must not overwrite a newer one.
+    if (query !== _knowledgeSearchQuery) return;
+    _knowledgeSearchResults = results || [];
+    _renderKnowledgeList();
+  } catch (e) {
+    showError('Search failed: ' + e.message);
+  }
+}
+
+function clearKnowledgeSearch() {
+  _knowledgeSearchQuery = '';
+  _knowledgeSearchResults = null;
+  if (_knowledgeSearchTimer) clearTimeout(_knowledgeSearchTimer);
+  _renderKnowledgeList();
+}
+
+// The server marks matches with \x02/\x03 — characters that cannot occur in
+// real text. Escape the snippet FIRST, then turn the sentinels into <mark>:
+// this text was written by an AI or copied off the web, so it never gets to
+// contribute markup of its own.
+function _knowledgeSnippetHtml(snippet) {
+  return _escHtml(snippet || '')
+    .split('\u0002').join('<mark>')
+    .split('\u0003').join('</mark>');
+}
+
+function _knowledgeSearchResultsHtml() {
+  const results = _knowledgeSearchResults || [];
+  if (!results.length) {
+    return `<div class="keymap-hint">Nothing matches “${_escHtml(_knowledgeSearchQuery)}”.</div>`;
+  }
+  const rows = results.map(r => {
+    const clickable = r.status === 'summarized';
+    return `<div class="podcast-row${clickable ? ' podcast-row-clickable' : ''}"
+                 ${clickable ? `onclick="openKnowledgeItem(${r.episode_id})"` : ''}>
+      <span class="podcast-row-title" style="display:flex;flex-direction:column;gap:3px;overflow:hidden">
+        <span>${_knowledgeSourceIcon(r)}${_escHtml(r.title || '(untitled)')}</span>
+        <span class="knowledge-snippet">${_knowledgeSnippetHtml(r.snippet)}</span>
+        <span class="knowledge-snippet-fields">${r.fields.map(f => _escHtml(f)).join(' · ')}</span>
+      </span>
+      <span class="podcast-row-meta">
+        ${r.author ? `<span class="podcast-row-date">${_escHtml(r.author)}</span>` : ''}
+        <span class="podcast-row-date">${_localDate(r.processed_at || r.published_at || r.created_at || '')}</span>
+      </span>
+    </div>`;
+  }).join('');
+  return `<div class="knowledge-sort-row">
+      <span class="keymap-label">Search results</span>
+      <span class="knowledge-count">${results.length} item${results.length === 1 ? '' : 's'}</span>
+    </div>
     <div class="podcast-list">${rows}</div>`;
 }
 

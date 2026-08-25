@@ -8,6 +8,7 @@ from .stories import *
 from .stats import *
 from .podcast import *
 from .knowledge import *
+from .search import *
 from .prompts import *
 from .dictionary import *
 from .books import *

@@ -489,5 +489,9 @@ def update_episode_metadata(episode_id: int, fields: dict, *, source: str = "use
             conn.commit()
     finally:
         conn.close()
+    # #939: title/author are indexed, so a hand edit has to update the search
+    # index too — otherwise searching for the title Daniel just typed fails.
+    from .search import reindex_episode
+    reindex_episode(episode_id)
     from .podcast import get_episode
     return get_episode(episode_id)
