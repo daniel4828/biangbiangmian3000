@@ -5533,6 +5533,62 @@ table.fsrs-table td.ivl { font-weight: 700; }
 /* A word marked "✓ Known" (#710) — kept in the table but visibly settled, so
    it's obvious which rows still need a decision. */
 .podcast-word-known { opacity: 0.45; }
+
+/* Tappable new words in the text (#967). The marker has to be visible enough
+   to invite a tap but quiet enough to read a whole paragraph through, so it is
+   a dotted underline rather than a background or a colour. */
+.tap-word {
+  border-bottom: 1px dotted var(--primary);
+  cursor: pointer;
+  /* Phones: without this a tap flashes a grey box over the word. */
+  -webkit-tap-highlight-color: transparent;
+}
+.tap-word:active { background: var(--hover-bg); }
+
+.word-actions {
+  position: fixed;
+  z-index: 1200;
+  min-width: 200px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.word-actions-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.word-actions-word { font-size: 18px; font-weight: 600; }
+.word-actions-pinyin { color: var(--muted); font-size: 14px; }
+.word-actions-close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.word-actions-gloss { margin: 6px 0 0; color: var(--text); font-size: 14px; }
+.word-actions-buttons { display: flex; gap: 8px; margin-top: 12px; }
+.word-actions-buttons .word-table-btn { flex: 1; padding: 8px; font-size: 14px; }
+
+/* Narrow screens: a bottom sheet instead of a panel pinned to the word. It
+   needs no positioning and stays under the thumb, which is the whole reason
+   this feature exists — a phone cannot run the Chrome extension. */
+@media (max-width: 600px) {
+  .word-actions {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto !important;
+    max-width: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 16px 18px calc(16px + env(safe-area-inset-bottom));
+  }
+}
 /* A failed add stays clickable to retry, so it must not look like success */
 .podcast-add-error {
   color: var(--again);
