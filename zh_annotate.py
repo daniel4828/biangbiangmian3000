@@ -43,10 +43,6 @@ _HSK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # Words at or below this level count as known — Daniel reads at HSK 4-5.
 KNOWN_HSK_MAX = 4
 
-# jieba POS tags skipped in the Chinese summary: person names (nr) and place
-# names (ns). Institution names (nt) are kept — "清华大学" is worth a gloss.
-_SKIP_POS = ("nr", "ns")
-
 _CJK = r"一-鿿"
 _CJK_RUN = re.compile(f"[{_CJK}]+")
 _ALL_CJK = re.compile(f"^[{_CJK}]+$")
@@ -178,8 +174,11 @@ def _segment(text: str) -> list[tuple[str, str]]:
 
 def find_new_words(text: str) -> list[str]:
     """The annotatable words of a Chinese text, in order of first appearance:
-    multi-character, all-CJK, not a person/place name, not in the collection,
-    HSK 5+ or unlisted."""
+    multi-character, all-CJK, not in the collection, HSK 5+ or unlisted.
+
+    Proper names are NOT filtered out (#961): a place or person he cannot
+    pronounce blocks the sentence exactly like any other unknown word, and the
+    German summary has always annotated them for that reason."""
     return _new_words_from_pairs(_segment(text))
 
 
@@ -187,9 +186,8 @@ def _new_words_from_pairs(pairs: list[tuple[str, str]]) -> list[str]:
     if not pairs:
         return []
     candidates: list[str] = []
-    for word, pos in pairs:
-        if (len(word) >= 2 and _ALL_CJK.match(word)
-                and pos not in _SKIP_POS and word not in candidates):
+    for word, _pos in pairs:
+        if len(word) >= 2 and _ALL_CJK.match(word) and word not in candidates:
             candidates.append(word)
     hsk = _hsk_levels()
     known = _known_words(candidates)
