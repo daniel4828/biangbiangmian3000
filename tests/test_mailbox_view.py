@@ -254,3 +254,36 @@ def test_turning_a_switch_off_keeps_the_display_name():
 
     row = next(s for s in database.get_mail_senders() if s["address"] == "zeitung@example.com")
     assert row["name"] == "Zeitung"
+
+
+# ---------------------------------------------------------------------------
+# frontend wiring (#960) — the front end has no build step and no test
+# runner, so the few things that silently break it are pinned here
+# ---------------------------------------------------------------------------
+
+import pathlib
+
+_STATIC = pathlib.Path(__file__).resolve().parent.parent / "static"
+
+
+def test_mailbox_view_is_registered_in_show_view():
+    """A view whose id isn't in showView()'s list is never hidden again: it
+    stays visible underneath every other screen."""
+    app_js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    index = (_STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "'knowledge', 'books', 'mailbox'" in app_js
+    assert 'id="view-mailbox"' in index
+    assert 'id="view-mailbox-content"' in index
+    assert "onclick=\"openMailbox()\"" in app_js
+
+
+def test_mailbox_frontend_talks_only_to_the_mailbox_api():
+    """It must not grow a second path into the ingest pipeline (#643's
+    single-entry-point rule): everything goes through /api/mailbox."""
+    app_js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("const _MAILBOX_PAGE")
+    section = app_js[start:]
+
+    assert "/api/knowledge/add" not in section
+    assert "/api/podcast/episodes" not in section

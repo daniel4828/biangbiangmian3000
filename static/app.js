@@ -1008,7 +1008,7 @@ function showView(name) {
   // loading screen ends that run, so they must not survive into the next
   // unrelated setLoading() ("Loading audio…", opening a knowledge item, …).
   if (name !== 'loading') _storyLoadingSources = [];
-  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books'].forEach(v => {
+  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books', 'mailbox'].forEach(v => {
     document.getElementById(`view-${v}`).style.display = 'none';
   });
   document.getElementById(`view-${name}`).style.display =
@@ -1034,7 +1034,8 @@ function showView(name) {
     name === 'stats'        ? 'Stats' :
     name === 'settings'     ? 'Settings' :
     name === 'knowledge'    ? 'Knowledge' :
-    name === 'books'        ? 'Books' : 'biangbiangmian3000';
+    name === 'books'        ? 'Books' :
+    name === 'mailbox'      ? 'Mailbox' : 'biangbiangmian3000';
   if (name === 'decks') quickMode = false;
   // ＋ in every view (#829 review-only, widened in #958). Hidden offline for
   // the same reason as ↺: the whole entry generation is an AI call, so it can
@@ -1937,6 +1938,7 @@ function renderDecks(decks) {
       <button class="nav-btn" onclick="openStats()">Stats</button>
       <button class="nav-btn" onclick="openKnowledge()">🧠 Knowledge</button>
       <button class="nav-btn" onclick="openBooks()" title="Read an uploaded book">📚 Books</button>
+      <button class="nav-btn" onclick="openMailbox()" title="Browse the inbox and pick what to read">📬 Mailbox</button>
       <button class="nav-btn" onclick="openSettings()" title="Customize shortcuts">⚙ Settings</button>
       <button class="nav-btn" onclick="openCostModal()">API Costs</button>
       <button class="nav-btn" onclick="openImportModal()" title="Shortcut: Command+I">Import</button>
@@ -14941,4 +14943,182 @@ async function doKnowledgeChatClear() {
     return;
   }
   _renderKnowledgeChatLog([]);
+}
+
+// ---------------------------------------------------------------------------
+// 📬 Mailbox (#960)
+//
+// Daniel subscribes to newsletters with his Gmail address and picks what is
+// worth reading here — the same "process" button a podcast episode has. The
+// list is a live IMAP view, never a mirror: every render re-fetches, so it
+// can't go stale against the real inbox, and nothing about his mail is
+// stored on the server unless he presses Process on it.
+// ---------------------------------------------------------------------------
+
+const _MAILBOX_PAGE = 50;
+
+const _mailboxState = {
+  offset: 0,
+  query: '',
+  total: 0,
+  uidvalidity: '',
+  messages: [],
+  busy: null,     // uid currently being processed — one at a time, see below
+  notice: null,   // {text, error} shown under the toolbar
+};
+
+// This page has no toast mechanism to borrow (the rest of the app reports
+// per-row results in the button itself), so results land in one line under
+// the toolbar. Cleared on every navigation so a stale "Processing…" can't
+// outlive the page it belonged to.
+function _mailboxNotice(text, error) {
+  _mailboxState.notice = text ? { text, error: !!error } : null;
+  _renderMailbox();
+}
+
+async function openMailbox() {
+  _mailboxState.offset = 0;
+  _mailboxState.query = '';
+  showView('mailbox');
+  await _loadMailbox();
+}
+
+async function _loadMailbox() {
+  _mailboxState.notice = null;
+  const el = document.getElementById('view-mailbox-content');
+  el.innerHTML = '<p class="keymap-hint">Loading inbox…</p>';
+  try {
+    const params = new URLSearchParams({
+      offset: _mailboxState.offset,
+      limit: _MAILBOX_PAGE,
+    });
+    if (_mailboxState.query) params.set('q', _mailboxState.query);
+    const data = await api('GET', `/api/mailbox?${params}`);
+    _mailboxState.total = data.total || 0;
+    _mailboxState.uidvalidity = data.uidvalidity || '';
+    _mailboxState.messages = data.messages || [];
+    _renderMailbox();
+  } catch (e) {
+    // The server's message says which of the two it is — mailbox
+    // unreachable vs. credentials missing — so it is shown verbatim
+    // rather than replaced by a generic "could not load".
+    el.innerHTML = `<p class="keymap-hint">Could not load the inbox: ${_escHtml(e.message || 'error')}</p>`;
+  }
+}
+
+function _mailboxDate(raw) {
+  const d = new Date(raw);
+  if (isNaN(d)) return _escHtml(raw || '');
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+function _renderMailbox() {
+  const st = _mailboxState;
+  const from = st.total === 0 ? 0 : st.offset + 1;
+  const to = Math.min(st.offset + _MAILBOX_PAGE, st.total);
+
+  const rows = st.messages.map(m => {
+    const busy = st.busy === m.uid;
+    // An already-processed mail links to its entry instead of offering to
+    // spend the AI call a second time.
+    const action = m.processed
+      ? `<a class="btn-secondary mailbox-btn" href="#knowledge-${m.episode_id}" onclick="openKnowledgeItem(${m.episode_id});return false;">✓ Open</a>`
+      : `<button class="btn-secondary mailbox-btn" onclick="processMail('${_escHtml(m.uid)}')"${busy ? ' disabled' : ''}>${busy ? '…' : 'Process'}</button>`;
+    const autoTitle = m.auto_process
+      ? 'Every new mail from this sender is processed automatically — click to stop that'
+      : 'Process every future mail from this sender automatically';
+    return `
+      <div class="mailbox-row${m.processed ? ' mailbox-row-done' : ''}">
+        <div class="mailbox-meta">
+          <span class="mailbox-from" title="${_escHtml(m.from)}">${_escHtml(m.from_name)}</span>
+          <span class="mailbox-date">${_mailboxDate(m.date)}</span>
+        </div>
+        <div class="mailbox-subject">${_escHtml(m.subject)}</div>
+        <div class="mailbox-actions">
+          <button class="mailbox-auto${m.auto_process ? ' on' : ''}"
+                  title="${autoTitle}"
+                  onclick="toggleMailSender('${_escHtml(m.from)}', ${m.auto_process ? 'false' : 'true'}, '${_escHtml(m.from_name)}')">
+            ${m.auto_process ? '⚡ Auto' : '⚡'}
+          </button>
+          ${action}
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('view-mailbox-content').innerHTML = `
+    <div class="mailbox-toolbar">
+      <input id="mailbox-search" class="opt-input" placeholder="Search sender or subject…"
+             value="${_escHtml(st.query)}" onkeydown="if(event.key==='Enter')searchMailbox()">
+      <button class="btn-secondary" onclick="searchMailbox()">Search</button>
+      <button class="btn-secondary" onclick="_loadMailbox()" title="Refetch from Gmail">⟳</button>
+    </div>
+    <p class="keymap-hint" style="margin:8px 0 12px">
+      ${st.total ? `${from}–${to} of ${st.total}` : 'No mail found'}
+      · ⚡ = process every future mail from that sender automatically
+    </p>
+    ${st.notice ? `<p class="mailbox-notice${st.notice.error ? ' error' : ''}">${_escHtml(st.notice.text)}</p>` : ''}
+    ${rows || ''}
+    <div class="mailbox-pager">
+      <button class="btn-secondary" onclick="pageMailbox(-1)"${st.offset === 0 ? ' disabled' : ''}>← Newer</button>
+      <button class="btn-secondary" onclick="pageMailbox(1)"${to >= st.total ? ' disabled' : ''}>Older →</button>
+    </div>`;
+}
+
+function searchMailbox() {
+  _mailboxState.query = (document.getElementById('mailbox-search').value || '').trim();
+  _mailboxState.offset = 0;
+  _loadMailbox();
+}
+
+function pageMailbox(direction) {
+  const next = _mailboxState.offset + direction * _MAILBOX_PAGE;
+  if (next < 0 || next >= _mailboxState.total) return;
+  _mailboxState.offset = next;
+  _loadMailbox();
+}
+
+async function processMail(uid) {
+  // One at a time: each Process is an AI call, and a double tap on a phone
+  // would otherwise fire two of them before the first response lands.
+  if (_mailboxState.busy) return;
+  _mailboxState.busy = uid;
+  _renderMailbox();
+  try {
+    const params = _mailboxState.uidvalidity
+      ? `?uidvalidity=${encodeURIComponent(_mailboxState.uidvalidity)}` : '';
+    const res = await api('POST', `/api/mailbox/${encodeURIComponent(uid)}/process${params}`);
+    const msg = _mailboxState.messages.find(m => m.uid === uid);
+    if (msg) {
+      msg.processed = true;
+      msg.episode_id = res.episode_id;
+    }
+    _mailboxState.notice = res.status === 'already_exists'
+      ? { text: 'Already in the knowledge base — opened from the ✓ button.', error: false }
+      // Summarising runs in the background (it can take minutes); the entry
+      // exists already, so the row turns into a link right away and the
+      // top-bar task indicator reports the rest.
+      : { text: 'Processing — the summary will appear under 🧠 Knowledge.', error: false };
+  } catch (e) {
+    _mailboxState.notice = { text: `Could not process: ${e.message || 'error'}`, error: true };
+  } finally {
+    _mailboxState.busy = null;
+    _renderMailbox();
+  }
+}
+
+async function toggleMailSender(address, auto, name) {
+  try {
+    await api('PUT', '/api/mailbox/senders', { address, auto, name });
+    // Every row from this sender flips, not just the one clicked — the
+    // switch is per sender, and showing two rows of the same sender in
+    // different states would be a lie.
+    _mailboxState.messages.forEach(m => {
+      if (m.from === address) m.auto_process = auto;
+    });
+    _mailboxNotice(auto
+      ? `Mail from ${address} is now processed automatically.`
+      : `Automatic processing for ${address} is off.`);
+  } catch (e) {
+    _mailboxNotice(`Could not change the setting: ${e.message || 'error'}`, true);
+  }
 }
