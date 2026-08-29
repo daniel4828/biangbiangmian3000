@@ -271,6 +271,40 @@ def _newsletter_source_for(msg: email.message.Message) -> str | None:
     return None
 
 
+def _search_allowed(conn, allowed, summary):
+    """UNSEEN mail from whitelisted senders only — the union of one
+    `UNSEEN FROM <addr>` search per address, never a bare `UNSEEN`.
+
+    The mailbox being polled is Daniel's personal Gmail inbox, not the
+    dedicated empty mailbox #655 assumed. A bare UNSEEN search would pull
+    every unread private mail's full body through this process; the
+    whitelist check downstream keeps them out of the database, but by then
+    they have already passed through here (the #755 lesson: blocking
+    ingestion is not the same as never reading it). Asking the IMAP server
+    to filter means they are never fetched at all.
+
+    IMAP FROM is a substring match, so this is a narrowing filter, not a
+    guarantee — `sender not in allowed` downstream stays as the exact check.
+
+    Returns the message ids, or None if a search failed (caller returns the
+    summary as-is: acting on a partial id list would mark a subset processed
+    and leave the rest silently unexamined).
+    """
+    msg_ids = []
+    for addr in sorted(allowed):
+        status, data = conn.search(None, "UNSEEN", "FROM", addr)
+        if status != "OK":
+            logger.warning(
+                "knowledge.mailbox: IMAP SEARCH 失败（发件人 %s）: %s", addr, status
+            )
+            summary["reason"] = "search_failed"
+            return None
+        for msg_id in (data[0].split() if data and data[0] else []):
+            if msg_id not in msg_ids:
+                msg_ids.append(msg_id)
+    return msg_ids
+
+
 def check_mailbox(imap_factory=None) -> dict:
     """Poll KNOWLEDGE_IMAP_HOST's INBOX for UNSEEN mail from whitelisted
     senders, ingest every URL found in each one, and mark the message
@@ -324,17 +358,18 @@ def check_mailbox(imap_factory=None) -> dict:
         conn.login(user, password)
         conn.select("INBOX")
 
-        status, data = conn.search(None, "UNSEEN")
-        if status != "OK":
-            logger.warning("knowledge.mailbox: IMAP SEARCH 失败: %s", status)
-            summary["reason"] = "search_failed"
+        msg_ids = _search_allowed(conn, allowed, summary)
+        if msg_ids is None:
             return summary
-
-        msg_ids = data[0].split() if data and data[0] else []
         summary["checked"] = len(msg_ids)
 
         for msg_id in msg_ids:
-            status, msg_data = conn.fetch(msg_id, "(RFC822)")
+            # BODY.PEEK[] instead of RFC822: fetching RFC822 implicitly sets
+            # \Seen, which would mark a mail read before the whitelist check
+            # below ever runs. PEEK leaves the flag alone, so the only thing
+            # that ever marks a mail read is the explicit store(+FLAGS) after
+            # a successful ingest.
+            status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
             if status != "OK" or not msg_data or not msg_data[0]:
                 logger.warning("knowledge.mailbox: 无法读取邮件 %s，本轮跳过（不标已读）", msg_id)
                 summary["failed"] += 1

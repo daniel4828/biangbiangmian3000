@@ -113,6 +113,8 @@ class FakeImap:
         self._messages = messages
         self.seen_flagged = []
         self.logged_in = False
+        self.searches = []
+        self.fetch_parts = []
 
     def login(self, user, password):
         self.logged_in = True
@@ -121,11 +123,17 @@ class FakeImap:
     def select(self, mailbox_name):
         return "OK", [b"1"]
 
-    def search(self, charset, criterion):
+    def search(self, charset, *criteria):
+        # Records the criteria but ignores them: returning every message
+        # regardless of sender is what keeps the exact `sender not in
+        # allowed` check downstream under test (IMAP FROM is only a
+        # substring match, so it must not be the only filter).
+        self.searches.append(criteria)
         ids = b" ".join(self._messages.keys())
         return "OK", [ids]
 
     def fetch(self, msg_id, parts):
+        self.fetch_parts.append(parts)
         msg = self._messages.get(msg_id)
         if msg is None:
             return "NO", [None]
@@ -491,3 +499,67 @@ def test_html_only_body_used_for_text_fallback_after_stripping(monkeypatch):
     assert summary["processed"] == 1
     assert len(calls) == 1
     assert "<" not in calls[0] and ">" not in calls[0]
+
+
+# ---------------------------------------------------------------------------
+# #954 — polling a personal inbox: fetching must not mark mail read, and
+# non-whitelisted mail must not be fetched at all
+# ---------------------------------------------------------------------------
+
+def test_fetch_uses_body_peek_not_rfc822(monkeypatch):
+    """RFC822 implicitly sets \\Seen, and the whitelist check runs *after*
+    the fetch — with a personal inbox that would mark every unread private
+    mail read on the first poll."""
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    msg = _make_plain_message("Geteilt", "https://example.com/x")
+    fake = FakeImap({b"1": msg})
+    monkeypatch.setattr(knowledge.ingest, "ingest_url", lambda url: {"episode_id": 1})
+
+    mailbox.check_mailbox(imap_factory=lambda: fake)
+
+    assert fake.fetch_parts == ["(BODY.PEEK[])"]
+    assert all("RFC822" not in part for part in fake.fetch_parts)
+
+
+def test_non_whitelisted_mail_is_never_marked_seen(monkeypatch):
+    """The fetch itself must leave the flag alone: a stranger's mail passes
+    through the fetch before the sender check and must come out unread."""
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    msg = _make_plain_message("Privat", "https://example.com/private", sender="mutter@example.org")
+    fake = FakeImap({b"1": msg})
+    monkeypatch.setattr(knowledge.ingest, "ingest_url", lambda url: {"episode_id": 1})
+
+    mailbox.check_mailbox(imap_factory=lambda: fake)
+
+    assert fake.seen_flagged == []
+
+
+def test_search_is_scoped_to_each_whitelisted_sender(monkeypatch):
+    """One `UNSEEN FROM <addr>` search per whitelisted address — a bare
+    UNSEEN would pull every private mail's body through this process."""
+    _configure_env(monkeypatch, allowed="daniel@example.com, newsletter@nl.faz.net")
+    fake = FakeImap({})
+
+    mailbox.check_mailbox(imap_factory=lambda: fake)
+
+    assert fake.searches == [
+        ("UNSEEN", "FROM", "daniel@example.com"),
+        ("UNSEEN", "FROM", "newsletter@nl.faz.net"),
+    ]
+
+
+def test_search_failure_aborts_without_processing(monkeypatch):
+    """A partial id list would mark a subset processed and leave the rest
+    silently unexamined — abort the whole round instead."""
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    msg = _make_plain_message("Geteilt", "https://example.com/x")
+    fake = FakeImap({b"1": msg})
+    fake.search = lambda charset, *criteria: ("NO", [None])
+    called = {"n": 0}
+    monkeypatch.setattr(knowledge.ingest, "ingest_url", lambda url: called.__setitem__("n", called["n"] + 1))
+
+    summary = mailbox.check_mailbox(imap_factory=lambda: fake)
+
+    assert summary["reason"] == "search_failed"
+    assert called["n"] == 0
+    assert fake.seen_flagged == []
