@@ -229,6 +229,7 @@
 │   └── cards.py / decks.py / entries.py / presets.py / stories.py / browse.py / stats.py / podcast.py
 ├── routes/                # FastAPI 路由模块
 │   ├── browse.py / decks.py / imports.py / review.py / story.py / podcast.py / knowledge.py（`POST /api/knowledge/add`，#651/#652）
+│   ├── mailbox.py         # 信箱（#960）：列 Gmail 信封、按需处理单封、发件人自动开关
 │   ├── tasks.py           # 顶栏后台任务指示器（#821）：`GET /api/tasks` 聚合各子系统已有的进度状态
 │   ├── books.py           # 书籍阅读器 API（#836）：上传/列表/删除/取一页/存进度
 │   ├── sync.py            # 一键同步（#625，只在笔记本实例注册）
@@ -389,7 +390,7 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 | `TINGWU_APP_KEY` | 可选 | 播客爬虫（#498）通义听悟控制台创建的应用 AppKey；与上面两个 AccessKey 变量任一缺失都会跳过听悟。一次性开通步骤见 `scripts/README.md` |
 | `KNOWLEDGE_IMAP_HOST` / `KNOWLEDGE_IMAP_PORT` | 可选 | 知识库邮件收件（#655）的 IMAP 服务器；端口默认 `993`（SSL） |
 | `KNOWLEDGE_IMAP_USER` / `KNOWLEDGE_IMAP_PASSWORD` | 可选 | 知识库邮件收件（#655）专用邮箱的登录凭据；三者（含上面两个变量）任一未配置时 `scripts/knowledge_mail_check.py` 直接跳过，不连接 |
-| `KNOWLEDGE_MAIL_ALLOWED_SENDERS` | 可选 | 知识库邮件收件（#655）发件人白名单，逗号分隔的邮箱地址（不区分大小写，兼容 `Name <addr@x.de>` 格式）；**留空则整个邮箱检查被跳过，不处理任何邮件**——这是防止任何知道邮箱地址的人往服务器塞 URL 触发 AI 调用的唯一防线。已知邮件通讯的发件人（`newsletter@nl.faz.net`，#925）也必须列在这里 |
+| `KNOWLEDGE_MAIL_ALLOWED_SENDERS` | 已废弃 | #960 起自动处理哪些发件人由库里的 `mail_senders.auto_process` 开关决定（📬 Mailbox 里逐个发件人点开），不再读这个变量。设了也没有任何作用 |
 | `GROQ_API_KEY` | 可选 | Instagram Reel 转录（#750）的主力，Groq `whisper-large-v3-turbo`（约比 OpenAI 便宜 9 倍、快 10 倍）；未配置时自动回退已有的 OpenAI `whisper-1`（`OPENAI_API_KEY`），只是单价贵约 9 倍——不是本功能能否使用的前提。获取方式见 `scripts/README.md` |
 | `INSTAGRAM_COOKIES_FILE` | `data/instagram_cookies.txt` | Instagram Reel 摄取（#750）用的登录态 cookies（Netscape 格式，`yt-dlp --cookies`）；文件不存在时公开 Reel 仍会尝试下载，不一定成功。会过期，过期时的错误信息会明说，一次性导出步骤见 `scripts/README.md` |
 | `YT_DLP_PATH` | `yt-dlp` | Instagram Reel 摄取（#750）用的 yt-dlp 可执行文件路径；系统级命令行工具（同 `ffmpeg` 的处理方式），装在非默认位置时指过去 |
@@ -607,8 +608,8 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 - **不新建表，泛化 `podcast_episodes`**：加两列 `kind`（`podcast`|`video`|`article`|`newsletter`，最后一个 #925 加的）、`title_en`。**表名和历史列名故意不改**——改名要重建表+迁移生产库，风险远大于收益，本仓库已有同类先例（`youtube_url` 现在也存文章/播客链接，`word_zh` 对法语存法语词形）。`video_id` 对文章存 `normalize_url()` 去掉跟踪参数后的规范化 URL（`podcast_episodes` 的去重键），`transcript_source` 存 `youtube_captions`/`article`/`tingwu`/`whisper`/`notebooklm`
 - **`knowledge/` 包，`ingest.py` 是唯一入库管线**：`ingest_url()` 判断 YouTube 链接走 `youtube.py`（oEmbed 拿标题 + `youtube-transcript-api` 拿字幕，语言优先级 zh-Hans→zh-CN→zh→zh-TW→de→en，找不到任何字幕轨直接 `no_transcript`，**不跑 Whisper**；**YouTube 封锁云服务商 IP，所以服务器上字幕 API 恒返回 `RequestBlocked`，实际走的是 NotebookLM 兜底**，见下条），否则当文章走 `article.py`（`trafilatura` 抽正文，不足 200 字视为失败并抛 `ArticleExtractionError`——付费墙/登录墙/JS 页面绝不能存进库冒充正文，见其 docstring）。界面「粘贴 URL」框（`POST /api/knowledge/add`）和邮件收件（`mailbox.py`）**共用这一个函数**——理由同 #643 加词单一入口：两条平行管线迟早会让修好的坑在另一条上复活
-- **邮件收件（`knowledge/mailbox.py`，#655）**：IMAP 轮询 UNSEEN 邮件，标题+正文都扫 URL（手机分享到邮件，链接位置因 App 而异）。`KNOWLEDGE_MAIL_ALLOWED_SENDERS` 未配置时**整个邮箱检查被跳过，不读取也不标已读**——这是防止任何知道邮箱地址的人远程触发付费 AI 调用的唯一防线；处理失败的邮件同样不标已读，留给下一轮重试（`ingest_url()` 对已入库 URL 幂等返回 `already_exists`，重试安全）
-- **邮件通讯（`knowledge/newsletter.py`，#925）**：Daniel 每天早上收到 F.A.Z. Frühdenker，Gmail 规则转发到上面那个收件邮箱（`newsletter@nl.faz.net` 必须在 `KNOWLEDGE_MAIL_ALLOWED_SENDERS` 里，否则整封被白名单挡掉）。新 `kind='newsletter'`（该列**没有 CHECK 约束**，加值不需要迁移生产库），知识页有独立的 📰 标签且**没有粘贴框**——通讯只从邮箱进来
+- **邮件收件（`knowledge/mailbox.py`，#655，#960 起直连 Gmail）**：IMAP 轮询，标题+正文都扫 URL（手机分享到邮件，链接位置因 App 而异）。**收的就是 Daniel 本人的 Gmail 收件箱**（`imap.gmail.com`，凭据与 `SMTP_*` 是同一个应用专用密码），不再是一个专用空邮箱——所以 `conn.fetch(..., "(RFC822)")` 那种隐式设 `\Seen` 的写法绝对不能再出现（#954：白名单检查排在 fetch 之后，第一轮就会把他所有未读私人邮件标成已读），SEARCH 也必须带上发件人条件，别让私人邮件的正文白白经过本进程（同 #755 Signal envelope 那条教训）。cron 只处理**开了自动开关**的发件人（`database.auto_mail_senders()`）；开关一个都没开 = 谁都不处理，绝不是「读不出来所以全处理」。处理失败的邮件不标已读，留给下一轮重试（`ingest_url()` 幂等，重试安全）
+- **邮件通讯（`knowledge/newsletter.py`，#925）**：Daniel 每天早上收到 F.A.Z. Frühdenker，服务器直接从他的 Gmail 收（#960，不再需要转发规则）。`newsletter@nl.faz.net` 的自动开关由 `init_db()` 用 `INSERT OR IGNORE` 种进 `mail_senders`——用 OR IGNORE 而不是 UPDATE，是因为他在界面上关掉之后，每 2 分钟一次的重启不能再给他打开。新 `kind='newsletter'`（该列**没有 CHECK 约束**，加值不需要迁移生产库），知识页有独立的 📰 标签且**没有粘贴框**——通讯只从邮箱进来
   - **必须排在 `mailbox.py` 的 URL 分支之前**：通讯正文里有几十个 faz.net 付费墙链接，走 URL 分支等于每轮对每个链接做一次注定失败的网络往返，而真正的内容就在邮件正文里。入库仍走**同一个** `ingest_text()`，只是多传一个 `kind`
   - **入库后立即同步处理**（转录+摘要+通知），同 `signal_inbox.py`——"早上就要读"的语义
   - **`_HTMLTextExtractor` 必须在块级标签处插入换行**（#925 改的）：原来 `"".join(chunks)` 一个换行都不产生，压缩成一行的营销邮件因此整封是**一行**，而 `clean_body()` 是按行删样板的——那一行里只要有 "Abbestellen"，整封正文就被删光。#668 的粘贴正文路径同样受益（原来段落会被粘成一坨喂给 AI）
@@ -616,7 +617,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **`IngestError`（正文太短）是永久失败 → 标已读放弃**，其它异常才留着不读重试。cron 每 5 分钟一轮，留着一封永远不可能成功的邮件等于每轮白跑一次（同 `signal_inbox.py` 对粘贴正文失败不进重试队列的判断）
   - **通知里额外带法语**（`podcast._rendition_fr_html`）：中文是 AI 原生的 `summary_zh`，法语复用 `knowledge/rendition.py`。**只对 `kind='newsletter'` 生效**，播客/视频/文章的邮件与 Signal 消息一个字节不变；法语失败只记日志，照常发德/中两份
 - **Signal 分享入口（`knowledge/signal_inbox.py`，#749）**：手机把链接分享到 Signal 自己的「Note to Self」，服务器用 #521 早就关联好的**同一个** signal-cli 设备（`SIGNAL_ACCOUNT`）把消息收下来，正文里的 URL 同样走 `ingest_url()`。与邮件收件方向相反、账号相同——`send_signal()` 是服务器→Daniel，这个是 Daniel→服务器
-  - **安全防线**：只收下**源账号和目的账号都等于 `SIGNAL_ACCOUNT` 自己**的消息（真正的 Note to Self）——关联设备会同步收到 Daniel 手机发出的所有消息，包括发给别人的，那些一律忽略。作用等同于 `KNOWLEDGE_MAIL_ALLOWED_SENDERS` 之于邮件入口
+  - **安全防线**：只收下**源账号和目的账号都等于 `SIGNAL_ACCOUNT` 自己**的消息（真正的 Note to Self）——关联设备会同步收到 Daniel 手机发出的所有消息，包括发给别人的，那些一律忽略。作用等同于邮件入口的发件人开关（#960 之前是 `KNOWLEDGE_MAIL_ALLOWED_SENDERS`）
   - **粘贴正文入口（#834）**：消息第一行只写 `text`（小写，大小写不敏感；也接受 `text:` / `文本`）→ 剩下的整条消息当文章正文，走 `ingest_text()`。**关键字必须独占第一行**，否则 "Text von gestern, siehe Link" 这种普通句子会被误认；正文里的**第一个链接自动存为 `source_url`**；标题/作者交给 #833 的服务端 AI 抽取。**粘贴正文的失败不进重试队列**——那个队列在 `app_settings` 里存 JSON（是给 URL 用的），而且正文失败的方式是"太短"，重试一百次结果一样；回执说明原因，重发一次即可。🔴 正文绝不进日志/错误信息/回执（下面 Privacy 那条同样适用）
   - **失败重试靠自己存队列，不是靠"留着不读"**：`signal-cli receive` 一次调用就把消息从 Signal 服务器上取走，不像 IMAP 能把邮件留成 UNSEEN 等下一轮。入库失败的 URL 存进 `app_settings['signal_retry_queue']`（JSON 列表），下一轮优先处理，满 3 次放弃并在回执里说明
   - **新链接入库后立即同步处理**（转录+摘要），不像邮件/网页粘贴那样只入库、等前端另外调 `.../process`——Signal 分享的语义就是"现在就要"。处理复用 `podcast.retry_episode()`（`routes/podcast.py` 的 process 端点背后那个同步函数，脚本进程里直接调用，不起后台线程——脚本跑完就退出，线程会被杀掉）
@@ -783,6 +784,19 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 
 ---
 
+## 信箱（Mailbox，#960）
+
+Daniel 用他的 Gmail 地址订阅各种邮件通讯，但**不希望全部自动处理**。主页 `📬 Mailbox` 列出 Gmail 收件箱里的所有邮件，他挑想读的点「Process」，才走摘要管线——跟播客单集的 process 按钮同一个心智模型。
+
+- **手动点「处理」本身就是那道防线**：`KNOWLEDGE_MAIL_ALLOWED_SENDERS` 因此退役（见环境变量表）。自动处理只认 `mail_senders.auto_process`——Daniel 在每行的 ⚡ 按钮上逐个发件人打开的开关。**最关键的性质原样继承：开关一个都没开 = 谁都不处理，绝不是「门读不出来所以全处理」**
+- **列表是实时 IMAP 视图，不是镜像**：库里不存任何邮件。`list_inbox()` 用 `UID SEARCH` + `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]` 只取信封，连接是 `SELECT ... readonly=True`——**这条连接想改标志位都改不了**。1600 封的私人收件箱每次翻页都重取，正文一个字节都不下载，除非他按了 Process
+- **必须用 UID，不能用序号**：序号会随邮箱变动漂移，网页把 id 传回来时就会处理到另一封邮件。`uidvalidity` 对不上直接报错让他刷新，**不拿过期 UID 猜**
+- **「已处理」标记存 `podcast_episodes.mail_message_id`**：`ingest_text()` 的去重键是**正文哈希**，算它得先下载正文——而列表恰恰不下载。Message-ID 就在已有的信封里。正文哈希去重**保留**作第二道防线（同一封通讯从 Signal 粘过一次照样认得出来）。#960 之前入库的邮件没有这个标记，所以列表上仍显示「Process」；点下去会命中正文哈希去重返回 `already_exists`，不会二次付费
+- **分支顺序只有一份**：`route_message()`（通讯 → URL → 正文 → 跳过）由 cron 和手动按钮共用。入库函数本来就是共用的，会漂移的恰恰是分支顺序
+- **摘要交给既有的 `routes.podcast.process_episode()`**：入库同步做（要拿 `episode_id` 给界面跳转），慢的部分走它——409 重复提交保护和 #821 顶栏任务指示器因此白拿，也不必再写一份进度记账
+- 搜索交给 IMAP 服务器做（`OR FROM x SUBJECT x`）：客户端过滤等于把整箱信头下载下来再扔掉
+- 测试见 `tests/test_mailbox_view.py`
+
 ## 书籍阅读器（#836）
 
 上传一本德语/英语的 EPUB 或 PDF，用正在学的语言逐页阅读：每页翻译成目标语言，HSK 4 以上、又不在词库里的词就地标上 `词（pīnyīn - 德语释义）`——和知识库素材一模一样的读法。界面在主页 `📚 Books`。
@@ -912,6 +926,13 @@ DELETE /api/books/{id}                               → 删书（级联删页/r
 GET    /api/books/{id}/page/{page_no}[?lang=zh]      → 该页译文+生词 {text, new_words, ref_label, page_count, cached}
                                                        未缓存时同步翻译+标注（几秒）；翻译失败 → 502 且**不写库**；越界 → 404
 POST   /api/books/{id}/progress                      → body {lang, page_no}；进度按 (书, 语言) 各存一份
+
+# 信箱（#960，详见「信箱」节）
+GET    /api/mailbox[?offset=&limit=&q=]              → 收件箱一页（倒序），只取信封；不下载正文、不改任何标志位
+POST   /api/mailbox/{uid}/process[?uidvalidity=]     → 取这封（BODY.PEEK）→ 入库 → 摘要交给播客那条 process
+                                                       正文无法成文 → 400 带原因（不建空条目）；UID 过期 → 502 让前端刷新
+                                                       已存在 → {status:"already_exists", episode_id}，不二次付费
+GET/PUT /api/mailbox/senders                         → 发件人自动开关；PUT body {address, auto, name?}
 
 # AI 词典（#746，详见「AI 词典页」节）
 GET    /dict[?q=anordnen]                            → 独立词典页（不加载 app.js）；带 q 时打开即查询并抹掉参数

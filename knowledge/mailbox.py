@@ -22,17 +22,21 @@ dedicated mailbox via IMAP, and for each UNSEEN mail:
 No second/parallel "URL/text -> episode row" implementation here, see
 knowledge/ingest.py's docstring for why that matters in this repo.
 
+Since #960 this module also serves the 📬 Mailbox UI: list_inbox() lists
+envelopes (never bodies) and process_uid() ingests one mail on demand.
+
 Security: this is the one intake channel that lets *anyone who knows the
 mailbox address* trigger a server-side fetch + paid AI call on Daniel's
-account. KNOWLEDGE_MAIL_ALLOWED_SENDERS is mandatory — if it's unset/empty
-the whole mailbox is skipped (nothing is read, nothing is marked seen),
-never "process everything because the allowlist check couldn't run".
-Non-whitelisted senders are skipped individually (their mail is left
-UNSEEN, harmless, and simply ignored every run).
+account. The gate is auto_process_senders() — the per-sender switches
+Daniel sets by hand (#960, replacing KNOWLEDGE_MAIL_ALLOWED_SENDERS). If it
+comes back empty the whole poll is skipped (nothing read, nothing marked
+seen), never "process everything because the gate came back empty".
+Everyone else's mail is only ever ingested when Daniel presses a button.
 
 Only stdlib (imaplib/email/html.parser) is used — no new dependency for
 this.
 """
+import contextlib
 import email
 import imaplib
 import logging
@@ -66,9 +70,27 @@ _TRAILING_PUNCT = '.,;:!?)]}\'"'
 _MIN_BODY_CHARS = knowledge.ingest._MIN_TEXT_CHARS
 
 
-def _env_allowed_senders() -> set:
-    raw = os.environ.get("KNOWLEDGE_MAIL_ALLOWED_SENDERS", "")
-    return {addr.strip().lower() for addr in raw.split(",") if addr.strip()}
+def auto_process_senders() -> set:
+    """Addresses the cron may process unattended — Daniel's per-sender
+    switches in the 📬 Mailbox UI (mail_senders.auto_process, #960).
+
+    This replaces KNOWLEDGE_MAIL_ALLOWED_SENDERS (#655). That variable
+    existed to stop anyone who knows the address from triggering a paid AI
+    call; now that every other sender is processed only when Daniel presses
+    a button, the switch table IS that gate. Its most important property is
+    inherited unchanged: an empty result means process NOBODY, never
+    "process everybody because the gate came back empty".
+
+    Falls back to an empty set if the database is unreachable — the failure
+    direction has to stay "do nothing", not "do everything".
+    """
+    try:
+        import database
+        return {addr.strip().lower() for addr in database.auto_mail_senders() if addr.strip()}
+    except Exception as e:
+        logger.error(
+            "knowledge.mailbox: 读取自动处理发件人失败，本轮不处理任何邮件: %s", e)
+        return set()
 
 
 def _decode_header_value(value) -> str:
@@ -305,6 +327,239 @@ def _search_allowed(conn, allowed, summary):
     return msg_ids
 
 
+class MailboxError(Exception):
+    """IMAP-side failure the UI should show verbatim (no credentials, login
+    refused, the UID vanished). Kept distinct from IngestError so the route
+    layer can tell "your mailbox is unreachable" from "this mail can't be
+    turned into an article"."""
+
+
+def _imap_config():
+    host = os.environ.get("KNOWLEDGE_IMAP_HOST")
+    user = os.environ.get("KNOWLEDGE_IMAP_USER")
+    password = os.environ.get("KNOWLEDGE_IMAP_PASSWORD")
+    try:
+        port = int(os.environ.get("KNOWLEDGE_IMAP_PORT", "993"))
+    except ValueError:
+        port = 993
+    return host, port, user, password
+
+
+@contextlib.contextmanager
+def _connection(imap_factory=None, readonly=True):
+    """Log in, SELECT INBOX, and always log out again.
+
+    readonly=True issues SELECT in IMAP's read-only mode, which makes it
+    impossible for this connection to change a flag even by accident — the
+    mailbox view's central promise is that browsing Gmail from the app
+    changes nothing in Gmail.
+    """
+    host, port, user, password = _imap_config()
+    if not host or not user or not password:
+        raise MailboxError(
+            "IMAP 凭据未配置（KNOWLEDGE_IMAP_HOST/KNOWLEDGE_IMAP_USER/KNOWLEDGE_IMAP_PASSWORD）")
+    if imap_factory is None:
+        def imap_factory():
+            return imaplib.IMAP4_SSL(host, port)
+    conn = imap_factory()
+    try:
+        conn.login(user, password)
+        conn.select("INBOX", readonly=readonly)
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        try:
+            conn.logout()
+        except Exception:
+            pass
+
+
+def _uidvalidity(conn) -> str:
+    """UIDVALIDITY of the selected mailbox. A change means the server
+    renumbered everything and every UID the browser is holding now points
+    somewhere else — the list must be refetched rather than acted upon."""
+    try:
+        status, data = conn.response("UIDVALIDITY")
+        if data and data[0]:
+            return data[0].decode() if isinstance(data[0], bytes) else str(data[0])
+    except Exception:
+        pass
+    return ""
+
+
+# IMAP header set for the list. Deliberately NOT the body: the inbox this
+# points at is Daniel's personal Gmail (1600 mails and counting), and the
+# list is re-fetched on every page view. Envelope-sized fetches keep that
+# cheap, and — the actual point — mean his private mail is never downloaded
+# to the server at all unless he presses "process" on it.
+_ENVELOPE_PARTS = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])"
+
+
+def list_inbox(offset: int = 0, limit: int = 50, query: str = "",
+               imap_factory=None) -> dict:
+    """One page of the inbox, newest first, envelopes only (#960).
+
+    `query` is matched by the IMAP server against From and Subject (OR'd),
+    not by us — filtering client-side would mean downloading every header
+    in a 1600-mail mailbox to throw almost all of them away.
+    """
+    with _connection(imap_factory=imap_factory, readonly=True) as conn:
+        if query:
+            criteria = ("OR", "FROM", query, "SUBJECT", query)
+        else:
+            criteria = ("ALL",)
+        status, data = conn.uid("SEARCH", None, *criteria)
+        if status != "OK":
+            raise MailboxError(f"IMAP SEARCH 失败: {status}")
+        uidvalidity = _uidvalidity(conn)
+
+        # SEARCH returns ascending UIDs; the newest mail is what Daniel
+        # wants to see first, so the page is cut from the reversed list.
+        uids = list(reversed(data[0].split() if data and data[0] else []))
+        total = len(uids)
+        page = uids[offset:offset + limit]
+
+        messages = []
+        for uid in page:
+            status, msg_data = conn.uid("FETCH", uid, _ENVELOPE_PARTS)
+            if status != "OK" or not msg_data or not msg_data[0]:
+                # One unreadable mail must not blank the whole page — the
+                # other 49 still tell Daniel what arrived.
+                logger.warning("knowledge.mailbox: 无法读取邮件信封 uid=%s", uid)
+                continue
+            msg = email.message_from_bytes(msg_data[0][1])
+            name, addr = parseaddr(msg.get("From") or "")
+            messages.append({
+                "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
+                "from": (addr or "").lower(),
+                "from_name": _decode_header_value(name) or (addr or ""),
+                "subject": _decode_header_value(msg.get("Subject")) or "(无主题)",
+                "date": _decode_header_value(msg.get("Date")),
+                "message_id": (msg.get("Message-ID") or "").strip(),
+            })
+
+    import database
+    processed = database.processed_mail_message_ids([m["message_id"] for m in messages])
+    auto = database.auto_mail_senders()
+    for m in messages:
+        episode_id = processed.get(m["message_id"])
+        m["processed"] = episode_id is not None
+        m["episode_id"] = episode_id
+        m["auto_process"] = m["from"] in auto
+
+    return {
+        "messages": messages,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "uidvalidity": uidvalidity,
+    }
+
+
+def fetch_message(uid: str, uidvalidity: str = "", imap_factory=None):
+    """Fetch one full message by UID, without touching its \\Seen flag.
+
+    `uidvalidity`, when the caller has one, is verified first: UIDs are only
+    meaningful within one UIDVALIDITY generation, so acting on a stale UID
+    after the server renumbered would process a different mail than the one
+    Daniel clicked. Mismatch is an error, never a best guess.
+    """
+    with _connection(imap_factory=imap_factory, readonly=True) as conn:
+        current = _uidvalidity(conn)
+        if uidvalidity and current and uidvalidity != current:
+            raise MailboxError(
+                "邮箱已重新编号（UIDVALIDITY 变化），列表已过期，请刷新后重试")
+        status, msg_data = conn.uid("FETCH", str(uid), "(BODY.PEEK[])")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            raise MailboxError(f"读取邮件失败（uid={uid}），它可能已被删除或移动")
+        return email.message_from_bytes(msg_data[0][1])
+
+
+def ingest_message(msg) -> dict:
+    """Ingest one already-fetched mail through whichever pipeline
+    route_message() picked, and remember which mail it came from.
+
+    Returns {"route", "episode_id", "episode_ids", "status"}. Raises
+    knowledge.ingest.IngestError for "this mail can't become an article"
+    (too short, extraction failed) — the route layer turns that into a 400
+    with the reason shown to Daniel, rather than an empty knowledge entry.
+    """
+    import database
+
+    route, payload = route_message(msg)
+    message_id = (msg.get("Message-ID") or "").strip()
+    subject = _decode_header_value(msg.get("Subject")) or "(无主题)"
+
+    if route == "skip":
+        raise knowledge.ingest.IngestError(f"这封邮件无法处理：{payload}")
+
+    if route == "newsletter":
+        result = knowledge.newsletter.ingest_newsletter(
+            payload, subject, plain_text_body(msg))
+        episode_ids = [result.get("episode_id")]
+    elif route == "urls":
+        episode_ids = []
+        for url in payload:
+            result = knowledge.ingest.ingest_url(url)
+            episode_ids.append(result.get("episode_id"))
+    else:
+        result = knowledge.ingest.ingest_text(subject, payload, platform="email")
+        episode_ids = [result.get("episode_id")]
+
+    episode_ids = [e for e in episode_ids if e]
+    for episode_id in episode_ids:
+        database.set_mail_message_id(episode_id, message_id)
+
+    return {
+        "route": route,
+        "episode_id": episode_ids[0] if episode_ids else None,
+        "episode_ids": episode_ids,
+        "status": result.get("status") if route != "urls" else None,
+    }
+
+
+def route_message(msg):
+    """Decide what a mail *is*, once, for both callers (#960).
+
+    Returns (route, payload):
+      ("newsletter", sender_address) — a registered newsletter (#925). Must
+          be tested first: a newsletter body carries dozens of paywalled
+          links back to the source site, so the URL route below would fire
+          off a guaranteed-failing fetch for every one of them instead of
+          using the content already sitting in the body.
+      ("urls", [url, ...])           — shared-from-phone link mail (#655).
+      ("text", body_text)            — no URL but a long enough body (#668).
+      ("skip", reason)               — nothing usable in it.
+
+    The cron (check_mailbox) and the mailbox UI's per-mail "process" button
+    both call this. The ingest functions were already shared; the *order*
+    of the branches was not, and a second copy of it would quietly drift —
+    the same reason this repo keeps one add-word pipeline (#643) and one
+    ingest pipeline (knowledge/ingest.py).
+
+    Flag handling is deliberately NOT part of this: marking mail \\Seen is
+    the cron's business (that is how it remembers what it did). The manual
+    path never touches a flag — the mailbox view is read-only against
+    Gmail, and "already processed" is answered from mail_message_id.
+    """
+    newsletter_addr = _newsletter_source_for(msg)
+    if newsletter_addr:
+        return "newsletter", newsletter_addr
+
+    urls = extract_urls_from_message(msg)
+    if urls:
+        return "urls", urls
+
+    body_text = plain_text_body(msg)
+    if len(body_text) >= _MIN_BODY_CHARS:
+        return "text", body_text
+
+    return "skip", f"正文过短（{len(body_text)} 字）且未提取到 URL"
+
+
 def check_mailbox(imap_factory=None) -> dict:
     """Poll KNOWLEDGE_IMAP_HOST's INBOX for UNSEEN mail from whitelisted
     senders, ingest every URL found in each one, and mark the message
@@ -323,13 +578,13 @@ def check_mailbox(imap_factory=None) -> dict:
         "ingested": 0, "errors": [],
     }
 
-    allowed = _env_allowed_senders()
+    allowed = auto_process_senders()
     if not allowed:
-        logger.warning(
-            "knowledge.mailbox: KNOWLEDGE_MAIL_ALLOWED_SENDERS 未配置，"
-            "拒绝处理任何邮件（不读取、不标已读）"
+        logger.info(
+            "knowledge.mailbox: 没有发件人开着自动处理开关，本轮不处理任何邮件"
+            "（不读取、不标已读）"
         )
-        summary["reason"] = "no_allowed_senders"
+        summary["reason"] = "no_auto_senders"
         return summary
 
     host = os.environ.get("KNOWLEDGE_IMAP_HOST")
@@ -389,8 +644,13 @@ def check_mailbox(imap_factory=None) -> dict:
             # 还浪费时间。转发邮件的 From 通常仍是原发件人（上面的白名单检
             # 查已经用它判过了），这里额外查 Sender/Return-Path 只是为了兜
             # 底改写 From 的转发配置。
-            newsletter_addr = _newsletter_source_for(msg)
-            if newsletter_addr:
+            # 分支顺序统一由 route_message() 决定（#960）——手动「处理」走
+            # 的是同一个函数。这里各分支只保留自己的 \Seen 处理：那是 cron
+            # 特有的记账方式，手动路径根本不碰标志位。
+            route, payload = route_message(msg)
+
+            if route == "newsletter":
+                newsletter_addr = payload
                 subject = _decode_header_value(msg.get("Subject")) or "(无主题)"
                 body = plain_text_body(msg)
                 try:
@@ -439,8 +699,8 @@ def check_mailbox(imap_factory=None) -> dict:
                 continue
 
             # 主路径不变（#655）：有 URL 就走 ingest_url()，一个字节都不能变。
-            urls = extract_urls_from_message(msg)
-            if urls:
+            if route == "urls":
+                urls = payload
                 all_ok = True
                 for url in urls:
                     try:
@@ -464,14 +724,14 @@ def check_mailbox(imap_factory=None) -> dict:
 
             # 无 URL 时的正文投递路径（#668）：正文（HTML 已去标签）够长就
             # 当作粘贴文章处理，标题取邮件主题。
-            body_text = plain_text_body(msg)
-            if len(body_text) < _MIN_BODY_CHARS:
+            if route != "text":
                 logger.info(
-                    "knowledge.mailbox: 邮件 %s（来自 %s）未提取到 URL 且正文过短（%d 字），跳过（不标已读）",
-                    msg_id, sender, len(body_text),
+                    "knowledge.mailbox: 邮件 %s（来自 %s）无法处理，跳过（不标已读）：%s",
+                    msg_id, sender, payload,
                 )
                 summary["skipped"] += 1
                 continue
+            body_text = payload
 
             subject = _decode_header_value(msg.get("Subject")) or "(无主题)"
             try:

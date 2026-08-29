@@ -6175,3 +6175,63 @@ table.fsrs-table td.ivl { font-weight: 700; }
   margin-top: 8px;
 }
 .knowledge-chat-controls select { flex: 1 1 220px; min-width: 0; }
+
+/* --------------------------------------------------------------------------
+   📬 Mailbox (#960) — the inbox list. Built on the same visual language as
+   .podcast-row (the knowledge item list), because it is the same kind of
+   object: a piece of material with one action on it.
+   -------------------------------------------------------------------------- */
+.mailbox-toolbar { display: flex; gap: 8px; align-items: center; }
+.mailbox-toolbar .opt-input { flex: 1; min-width: 0; }
+
+.mailbox-row {
+  display: grid;
+  /* Sender/date and subject share the first column so a long subject wraps
+     instead of shoving the buttons off a phone screen. */
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card, var(--bg));
+}
+.mailbox-meta {
+  grid-column: 1;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--text-dim, #888);
+  min-width: 0;
+}
+.mailbox-from { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailbox-date { flex-shrink: 0; }
+.mailbox-subject { grid-column: 1; color: var(--text); overflow-wrap: anywhere; }
+.mailbox-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+/* A processed mail is done with — it recedes, but stays readable. */
+.mailbox-row-done .mailbox-subject { color: var(--text-dim, #888); }
+
+.mailbox-btn { padding: 4px 10px; font-size: 13px; text-decoration: none; }
+.mailbox-auto {
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim, #888);
+  cursor: pointer;
+}
+.mailbox-auto.on { border-color: var(--primary); color: var(--primary); }
+
+.mailbox-notice { margin: 0 0 12px; font-size: 13px; color: var(--primary); }
+.mailbox-notice.error { color: #e74c3c; }
+
+.mailbox-pager { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }

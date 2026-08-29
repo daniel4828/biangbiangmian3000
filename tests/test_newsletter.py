@@ -164,7 +164,12 @@ def _configure_env(monkeypatch, allowed="newsletter@nl.faz.net"):
     monkeypatch.setenv("KNOWLEDGE_IMAP_USER", "kb@example.com")
     monkeypatch.setenv("KNOWLEDGE_IMAP_PASSWORD", "secret")
     if allowed is not None:
-        monkeypatch.setenv("KNOWLEDGE_MAIL_ALLOWED_SENDERS", allowed)
+        # #960: the cron's gate is mail_senders.auto_process, not an env
+        # var. Stubbed here for the same reason as in
+        # tests/test_knowledge_mailbox.py — these tests are about the
+        # newsletter branch, not about how the switch is stored.
+        addrs = {a.strip().lower() for a in allowed.split(",") if a.strip()}
+        monkeypatch.setattr(mailbox, "auto_process_senders", lambda: addrs)
 
 
 @pytest.fixture(autouse=True)
@@ -187,7 +192,10 @@ class FakeImap:
     def select(self, mailbox_name):
         return "OK", [b"1"]
 
-    def search(self, charset, criterion):
+    def search(self, charset, *criteria):
+        # #954: the real code searches `UNSEEN FROM <addr>` per whitelisted
+        # sender. This stub ignores the criteria and returns everything, so
+        # the exact `sender not in allowed` check downstream stays covered.
         ids = b" ".join(self._messages.keys())
         return "OK", [ids]
 

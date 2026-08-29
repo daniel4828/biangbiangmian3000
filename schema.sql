@@ -720,6 +720,10 @@ CREATE TABLE IF NOT EXISTS podcast_episodes (
     transcript_source TEXT,  -- 'tingwu' | 'whisper' | 'notebooklm' | 'youtube_captions' (#651) | 'article' (#652) | 'groq_whisper' (#750, Instagram Reels — 'whisper' also occurs here when the Groq step was skipped/failed and the OpenAI whisper-1 fallback ran instead) | NULL; legacy rows may say 'captions'
     error            TEXT,
     email_sent_at    TEXT,
+    -- #960: Message-ID of the mail this row was ingested from (mailbox view),
+    -- so the mail list can say "already processed" without downloading bodies.
+    -- NULL for every row that didn't come from a mail.
+    mail_message_id  TEXT,
     processing_started_at TEXT,  -- set while _process_episode runs, cleared on exit; a leftover value = killed mid-transcription, recovered at startup (#598)
     -- china_critical (#731): set at paste time, read at summarize time. The
     -- API summary fallback normally prefers DeepSeek to save money; for
@@ -1017,3 +1021,31 @@ CREATE TABLE IF NOT EXISTS knowledge_chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_chat_messages ON knowledge_chat_messages(chat_id, id);
+
+-- ---------------------------------------------------------------------------
+-- Mailbox view (#960): Daniel subscribes to newsletters with his Gmail address
+-- and browses everything that arrives in the 📬 Mailbox section, processing
+-- the ones he wants by hand — the same mental model as a podcast episode's
+-- "process" button. Mail itself is NOT stored here: the list is fetched live
+-- from IMAP (envelopes only, no bodies) on every request, so there is no
+-- mirror of his inbox in this database that could drift or leak.
+--
+-- This table holds only the per-sender "process every mail from this address
+-- automatically" switch (same idea as podcast_feeds.auto_process). A row
+-- exists only for senders Daniel explicitly touched; every other sender is
+-- manual, which is the default and the safe direction.
+--
+-- It also replaces KNOWLEDGE_MAIL_ALLOWED_SENDERS as the cron's source of
+-- truth (#960 retires that variable). That variable existed to stop anyone
+-- who knows the address from triggering a paid AI call (#655); with manual
+-- processing as the default, the switch below IS that gate — but the cron
+-- must therefore search ONLY these addresses, never "all unseen mail", or
+-- the default would silently flip from "process nobody" to "process
+-- everybody".
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mail_senders (
+    address      TEXT PRIMARY KEY,          -- envelope From address, lowercased
+    name         TEXT,                      -- display name as last seen, for the UI
+    auto_process INTEGER NOT NULL DEFAULT 0,-- 1 = cron ingests+summarizes every new mail
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);

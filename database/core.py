@@ -757,7 +757,33 @@ def init_db() -> None:
                             ("archived_at", "TEXT")):
             if _col not in pe_cols:
                 conn.execute(f"ALTER TABLE podcast_episodes ADD COLUMN {_col} {_decl}")
+        # #960: which mail this row was ingested from, so the mailbox list
+        # can mark rows "already processed" from the envelope alone.
+        if "mail_message_id" not in pe_cols:
+            conn.execute("ALTER TABLE podcast_episodes ADD COLUMN mail_message_id TEXT")
         conn.commit()
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_mail_message_id "
+                 "ON podcast_episodes(mail_message_id)")
+
+    # #960: seed the sender switch table from knowledge/newsletter.py's
+    # registry, so retiring KNOWLEDGE_MAIL_ALLOWED_SENDERS doesn't silently
+    # stop the F.A.Z. Frühdenker mail Daniel gets every morning (#925).
+    # INSERT OR IGNORE, not an update: once he flips a switch off in the UI,
+    # every restart afterwards (production restarts every ~2 minutes, see
+    # deploy/deploy.sh) must not turn it back on.
+    try:
+        import knowledge.newsletter
+        for _addr in knowledge.newsletter.known_sender_addresses():
+            conn.execute(
+                "INSERT OR IGNORE INTO mail_senders (address, name, auto_process) "
+                "VALUES (?, ?, 1)",
+                (_addr, knowledge.newsletter.source_name(_addr)),
+            )
+        conn.commit()
+    except Exception as e:
+        # A seeding failure must not take the whole app down at startup —
+        # the mailbox UI still works, that sender just starts out manual.
+        logger.warning("mail_senders seeding failed: %s", e)
 
     # The processed_at index lives here, not in schema.sql: schema.sql runs in
     # phase 2, before the ALTER TABLE above, so on a pre-existing database the
