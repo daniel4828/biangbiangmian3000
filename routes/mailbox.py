@@ -94,10 +94,19 @@ def process_mail(uid: str, uidvalidity: str = ""):
 
 
 @router.get("/api/mailbox/senders")
-def list_senders():
-    """The per-sender automatic switches. Senders with no row here are
-    manual — that is the default and it is not stored."""
-    return {"senders": database.get_mail_senders()}
+def list_senders(refresh: bool = False):
+    """Who writes to this mailbox, with their subscription state (#965).
+
+    The scan reads every header in the mailbox in one IMAP round trip, so
+    it is cached for a few minutes; `refresh=1` (the ⟳ button) bypasses it.
+    If the mailbox is unreachable the configured senders are still returned
+    — unsubscribing must not depend on IMAP being up.
+    """
+    try:
+        return knowledge.mailbox.list_senders(refresh=refresh)
+    except knowledge.mailbox.MailboxError as e:
+        return {"senders": database.get_mail_senders(), "scanned": 0,
+                "cached": False, "error": str(e)}
 
 
 class SenderUpdate(BaseModel):

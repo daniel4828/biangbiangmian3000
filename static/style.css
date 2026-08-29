@@ -6235,3 +6235,18 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .mailbox-notice.error { color: #e74c3c; }
 
 .mailbox-pager { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+
+/* Sender view tabs (#965) */
+.mailbox-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.mailbox-tab {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim, #888);
+  cursor: pointer;
+  font-size: 14px;
+}
+.mailbox-tab.active { border-color: var(--primary); color: var(--primary); }
+/* A subscribed sender is the one state worth spotting from across the list. */
+.mailbox-row-sub { border-color: var(--primary); }
