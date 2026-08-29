@@ -88,14 +88,15 @@ def test_segmentation_failure_returns_original_text(monkeypatch):
     assert zh_annotate.annotate_zh_summary("对就业的影响。") == "对就业的影响。"
 
 
-def test_person_and_place_names_are_skipped_in_chinese(monkeypatch):
-    """Daniel chose not to have names glossed in the Chinese summary; the
-    filter is jieba's POS tag, so stub the segmentation to pin the rule down
-    independently of the dictionary."""
+def test_person_and_place_names_are_annotated_in_chinese(monkeypatch):
+    """Names used to be dropped by their jieba POS tag (nr/ns); since #961 they
+    go through the same chain as any other word — Daniel needs the reading of a
+    province he cannot pronounce just as much. Stub the segmentation to pin the
+    rule down independently of the dictionary."""
     monkeypatch.setattr(zh_annotate, "_segment",
-                        lambda text: [("北京", "ns"), ("的", "uj"), ("瓶颈", "n")])
-    out = zh_annotate.annotate_zh_summary("北京的瓶颈")
-    assert "北京（" not in out
+                        lambda text: [("浙江", "ns"), ("的", "uj"), ("瓶颈", "n")])
+    out = zh_annotate.annotate_zh_summary("浙江的瓶颈")
+    assert "浙江（zhèjiāng - DE:浙江）" in out
     assert "瓶颈（píngjǐng - DE:瓶颈）" in out
 
 
