@@ -14965,6 +14965,9 @@ const _mailboxState = {
   messages: [],
   busy: null,     // uid currently being processed — one at a time, see below
   notice: null,   // {text, error} shown under the toolbar
+  tab: 'inbox',   // 'inbox' | 'senders' (#965)
+  senders: null,  // aggregated sender list, loaded on first switch
+  sendersBusy: null,
 };
 
 // This page has no toast mechanism to borrow (the rest of the app reports
@@ -14979,6 +14982,7 @@ function _mailboxNotice(text, error) {
 async function openMailbox() {
   _mailboxState.offset = 0;
   _mailboxState.query = '';
+  _mailboxState.tab = 'inbox';
   showView('mailbox');
   await _loadMailbox();
 }
@@ -15010,6 +15014,87 @@ function _mailboxDate(raw) {
   const d = new Date(raw);
   if (isNaN(d)) return _escHtml(raw || '');
   return d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+function _mailboxTabs() {
+  const t = _mailboxState.tab;
+  return `
+    <div class="mailbox-tabs">
+      <button class="mailbox-tab${t === 'inbox' ? ' active' : ''}" onclick="switchMailboxTab('inbox')">📥 Inbox</button>
+      <button class="mailbox-tab${t === 'senders' ? ' active' : ''}" onclick="switchMailboxTab('senders')">👤 Senders</button>
+    </div>`;
+}
+
+function switchMailboxTab(tab) {
+  if (_mailboxState.tab === tab) return;
+  _mailboxState.tab = tab;
+  _mailboxState.notice = null;
+  if (tab === 'senders') {
+    // Loaded on first switch, then kept: the scan reads every header in the
+    // mailbox, so it is not something to redo on every tab click. ⟳ forces it.
+    if (_mailboxState.senders) _renderMailboxSenders();
+    else _loadMailboxSenders();
+  } else {
+    _renderMailbox();
+  }
+}
+
+async function _loadMailboxSenders(refresh) {
+  const el = document.getElementById('view-mailbox-content');
+  el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Scanning the mailbox…</p>`;
+  try {
+    const data = await api('GET', `/api/mailbox/senders${refresh ? '?refresh=1' : ''}`);
+    _mailboxState.senders = data.senders || [];
+    // A scan failure still returns the configured senders, so unsubscribing
+    // works even while IMAP is down — but say so rather than showing a list
+    // that silently lost everyone Daniel never subscribed to.
+    _mailboxState.notice = data.error
+      ? { text: `Could not read the mailbox (${data.error}) — showing subscribed senders only.`, error: true }
+      : null;
+    _renderMailboxSenders();
+  } catch (e) {
+    el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Could not load senders: ${_escHtml(e.message || 'error')}</p>`;
+  }
+}
+
+function _renderMailboxSenders() {
+  const st = _mailboxState;
+  const rows = (st.senders || []).map(sn => {
+    const busy = st.sendersBusy === sn.address;
+    return `
+      <div class="mailbox-row${sn.auto_process ? ' mailbox-row-sub' : ''}">
+        <div class="mailbox-meta">
+          <span class="mailbox-from" title="${_escHtml(sn.address)}">${_escHtml(sn.address)}</span>
+          <span class="mailbox-date">${sn.count} mail${sn.count === 1 ? '' : 's'}${sn.last_date ? ' · ' + _mailboxDate(sn.last_date) : ''}</span>
+        </div>
+        <div class="mailbox-subject">${_escHtml(sn.name)}</div>
+        <div class="mailbox-actions">
+          <button class="btn-secondary mailbox-btn" onclick="filterMailboxBySender('${_escHtml(sn.address)}')" title="Show this sender's mail">📥</button>
+          <button class="mailbox-auto${sn.auto_process ? ' on' : ''}"${busy ? ' disabled' : ''}
+                  onclick="toggleMailSender('${_escHtml(sn.address)}', ${sn.auto_process ? 'false' : 'true'}, '${_escHtml(sn.name)}')">
+            ${sn.auto_process ? '⚡ Subscribed' : 'Subscribe'}
+          </button>
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('view-mailbox-content').innerHTML = `
+    ${_mailboxTabs()}
+    <div class="mailbox-toolbar">
+      <span class="keymap-hint" style="flex:1">
+        Subscribing processes every <em>future</em> mail from that sender automatically — it does not go back over old ones.
+      </span>
+      <button class="btn-secondary" onclick="_loadMailboxSenders(true)" title="Rescan the mailbox">⟳</button>
+    </div>
+    ${st.notice ? `<p class="mailbox-notice${st.notice.error ? ' error' : ''}">${_escHtml(st.notice.text)}</p>` : ''}
+    ${rows || '<p class="keymap-hint">No senders found.</p>'}`;
+}
+
+function filterMailboxBySender(address) {
+  _mailboxState.tab = 'inbox';
+  _mailboxState.query = address;
+  _mailboxState.offset = 0;
+  _loadMailbox();
 }
 
 function _renderMailbox() {
@@ -15046,6 +15131,7 @@ function _renderMailbox() {
   }).join('');
 
   document.getElementById('view-mailbox-content').innerHTML = `
+    ${_mailboxTabs()}
     <div class="mailbox-toolbar">
       <input id="mailbox-search" class="opt-input" placeholder="Search sender or subject…"
              value="${_escHtml(st.query)}" onkeydown="if(event.key==='Enter')searchMailbox()">

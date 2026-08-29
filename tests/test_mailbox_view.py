@@ -257,6 +257,96 @@ def test_turning_a_switch_off_keeps_the_display_name():
 
 
 # ---------------------------------------------------------------------------
+# sender view (#965)
+# ---------------------------------------------------------------------------
+
+class FakeBulkImap(FakeImap):
+    """Returns every header in one response, the way a real server answers
+    `UID FETCH 1:* (...)`."""
+
+    def uid(self, command, *args):
+        self.commands.append((command, args))
+        if command == "FETCH" and args[0] == "1:*":
+            out = []
+            for _uid, msg in self._messages:
+                out.append((b"1 (x {1})", msg.as_bytes()))
+                out.append(b")")
+            return "OK", out
+        return super().uid(command, *args)
+
+
+@pytest.fixture(autouse=True)
+def _clear_sender_cache():
+    mailbox._SENDER_CACHE.update({"at": 0.0, "senders": None, "scanned": 0})
+
+
+def test_sender_scan_is_one_fetch_and_never_writes_flags():
+    """1600 mails: per-message fetches here would be 1600 round trips, and
+    any store() would break the "browsing changes nothing" promise."""
+    fake = FakeBulkImap([
+        (b"1", _mail(sender="A <a@example.com>")),
+        (b"2", _mail(sender="A <a@example.com>")),
+        (b"3", _mail(sender="B <b@example.com>")),
+    ])
+
+    result = mailbox.list_senders(imap_factory=lambda: fake)
+
+    fetches = [args for cmd, args in fake.commands if cmd == "FETCH"]
+    assert len(fetches) == 1
+    assert "BODY.PEEK" in fetches[0][1]
+    assert fake.store_calls == []
+    assert fake.selected_readonly is True
+
+    # Only the scanned senders are asserted on: init_db seeds the F.A.Z.
+    # sender (#960), which correctly shows up with count 0 — that is the
+    # subject of test_subscribed_senders_appear_even_with_no_mail_left.
+    counts = {s["address"]: s["count"] for s in result["senders"] if s["count"]}
+    assert counts == {"a@example.com": 2, "b@example.com": 1}
+
+
+def test_subscribed_senders_appear_even_with_no_mail_left():
+    """Otherwise a sender whose mail was all archived could never be
+    unsubscribed again."""
+    database.set_mail_sender_auto("gone@example.com", True, name="Weg")
+    fake = FakeBulkImap([(b"1", _mail(sender="A <a@example.com>"))])
+
+    result = mailbox.list_senders(imap_factory=lambda: fake)
+
+    row = next(s for s in result["senders"] if s["address"] == "gone@example.com")
+    assert row["count"] == 0
+    assert row["auto_process"] is True
+    # subscribed senders sort first
+    assert result["senders"][0]["address"] == "gone@example.com"
+
+
+def test_second_call_is_served_from_cache_and_refresh_bypasses_it():
+    fake = FakeBulkImap([(b"1", _mail())])
+
+    first = mailbox.list_senders(imap_factory=lambda: fake)
+    second = mailbox.list_senders(imap_factory=lambda: fake)
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert len([c for c, _ in fake.commands if c == "FETCH"]) == 1
+
+    third = mailbox.list_senders(refresh=True, imap_factory=lambda: fake)
+    assert third["cached"] is False
+    assert len([c for c, _ in fake.commands if c == "FETCH"]) == 2
+
+
+def test_subscription_state_survives_a_cached_scan():
+    """The scan is cached; the switches are not — subscribing must show up
+    immediately instead of waiting out the cache TTL."""
+    fake = FakeBulkImap([(b"1", _mail(sender="News <news@example.com>"))])
+    mailbox.list_senders(imap_factory=lambda: fake)
+
+    database.set_mail_sender_auto("news@example.com", True)
+    result = mailbox.list_senders(imap_factory=lambda: fake)
+
+    assert result["cached"] is True
+    assert result["senders"][0]["auto_process"] is True
+
+
+# ---------------------------------------------------------------------------
 # frontend wiring (#960) — the front end has no build step and no test
 # runner, so the few things that silently break it are pinned here
 # ---------------------------------------------------------------------------

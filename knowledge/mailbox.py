@@ -459,6 +459,109 @@ def list_inbox(offset: int = 0, limit: int = 50, query: str = "",
     }
 
 
+# Aggregated sender scan (#965). Cached because it reads every header in the
+# mailbox, while a single page of the list reads 50 — and the set of people
+# who write to Daniel does not change from one minute to the next. Only the
+# aggregate is kept: addresses, display names, counts, dates. No subject and
+# no body ever enters this cache, for the same reason none of it enters the
+# database (#960).
+_SENDER_CACHE = {"at": 0.0, "senders": None, "scanned": 0}
+_SENDER_CACHE_TTL = 300  # seconds
+
+
+def _parse_from_headers(conn):
+    """Every mail's From/Date, in ONE round trip.
+
+    `UID FETCH 1:* (...)` returns the whole mailbox's headers as a single
+    response. Fetching per message the way list_inbox() does is right for a
+    50-row page and wrong here: it would be 1600 round trips.
+    """
+    status, data = conn.uid(
+        "FETCH", "1:*", "(BODY.PEEK[HEADER.FIELDS (FROM DATE)])")
+    if status != "OK":
+        raise MailboxError(f"IMAP FETCH 失败: {status}")
+
+    senders = {}
+    scanned = 0
+    for item in data or []:
+        # imaplib yields b')' separators between messages alongside the
+        # (metadata, payload) tuples — only the tuples carry headers.
+        if not isinstance(item, tuple) or len(item) < 2 or not item[1]:
+            continue
+        msg = email.message_from_bytes(item[1])
+        name, addr = parseaddr(msg.get("From") or "")
+        addr = (addr or "").lower()
+        if not addr:
+            continue
+        scanned += 1
+        entry = senders.setdefault(addr, {
+            "address": addr,
+            "name": _decode_header_value(name) or addr,
+            "count": 0,
+            "last_date": "",
+        })
+        entry["count"] += 1
+        date = _decode_header_value(msg.get("Date"))
+        # Headers come back oldest-first, so the last one seen is the most
+        # recent — but a mailbox with out-of-order dates shouldn't make this
+        # go backwards, so keep whichever parses as later.
+        if date and (not entry["last_date"] or _date_sorts_after(date, entry["last_date"])):
+            entry["last_date"] = date
+    return senders, scanned
+
+
+def _date_sorts_after(a: str, b: str) -> bool:
+    from email.utils import parsedate_to_datetime
+    try:
+        return parsedate_to_datetime(a) > parsedate_to_datetime(b)
+    except (TypeError, ValueError):
+        # An unparseable Date header is not worth failing a sender list over.
+        return False
+
+
+def list_senders(refresh: bool = False, imap_factory=None) -> dict:
+    """Who writes to this mailbox, with their subscription state (#965).
+
+    The result is the union of what the scan saw and what Daniel has
+    configured: a sender he subscribed to whose mail has all been archived
+    still has to appear, or he could never unsubscribe from it again.
+    """
+    import time
+
+    import database
+
+    cached = (
+        not refresh
+        and _SENDER_CACHE["senders"] is not None
+        and (time.time() - _SENDER_CACHE["at"]) < _SENDER_CACHE_TTL
+    )
+    if cached:
+        senders = dict(_SENDER_CACHE["senders"])
+        scanned = _SENDER_CACHE["scanned"]
+    else:
+        with _connection(imap_factory=imap_factory, readonly=True) as conn:
+            senders, scanned = _parse_from_headers(conn)
+        _SENDER_CACHE.update({"at": time.time(), "senders": dict(senders), "scanned": scanned})
+
+    configured = {row["address"]: row for row in database.get_mail_senders()}
+    for addr, row in configured.items():
+        entry = senders.setdefault(addr, {
+            "address": addr,
+            "name": row.get("name") or addr,
+            "count": 0,
+            "last_date": "",
+        })
+        entry["auto_process"] = bool(row.get("auto_process"))
+    for entry in senders.values():
+        entry.setdefault("auto_process", False)
+
+    ordered = sorted(
+        senders.values(),
+        key=lambda e: (not e["auto_process"], -e["count"], e["address"]),
+    )
+    return {"senders": ordered, "scanned": scanned, "cached": cached}
+
+
 def fetch_message(uid: str, uidvalidity: str = "", imap_factory=None):
     """Fetch one full message by UID, without touching its \\Seen flag.
 

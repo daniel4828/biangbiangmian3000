@@ -794,6 +794,12 @@ Daniel 用他的 Gmail 地址订阅各种邮件通讯，但**不希望全部自�
 - **「已处理」标记存 `podcast_episodes.mail_message_id`**：`ingest_text()` 的去重键是**正文哈希**，算它得先下载正文——而列表恰恰不下载。Message-ID 就在已有的信封里。正文哈希去重**保留**作第二道防线（同一封通讯从 Signal 粘过一次照样认得出来）。#960 之前入库的邮件没有这个标记，所以列表上仍显示「Process」；点下去会命中正文哈希去重返回 `already_exists`，不会二次付费
 - **分支顺序只有一份**：`route_message()`（通讯 → URL → 正文 → 跳过）由 cron 和手动按钮共用。入库函数本来就是共用的，会漂移的恰恰是分支顺序
 - **摘要交给既有的 `routes.podcast.process_episode()`**：入库同步做（要拿 `episode_id` 给界面跳转），慢的部分走它——409 重复提交保护和 #821 顶栏任务指示器因此白拿，也不必再写一份进度记账
+- **发件人视图（#965）**：顶部两个标签 📥 Inbox / 👤 Senders。发件人视图把整箱按发件人聚合（实测 1600 封 → 145 个发件人），每行可一键订阅=打开该发件人的自动开关——和收件箱里每行的 ⚡ 是**同一个开关**，两个视图不能各说各话
+  - **聚合用一条 `UID FETCH 1:* (BODY.PEEK[HEADER.FIELDS (FROM DATE)])`**：IMAP 不能按发件人分组，但整箱信头可以一次往返取回。照列表页那样逐封 FETCH 在这里就是 1600 次往返
+  - **必须缓存（TTL 5 分钟）+ ⟳ 强制刷新**：整箱扫描比翻一页贵得多，而发件人构成几分钟内不会变。**缓存只存聚合结果**（地址/显示名/封数/最近日期），主题和正文一律不进——同上一条，邮件不进服务器
+  - **订阅状态不走缓存**：开关存在库里，订阅完必须立刻显示，不能等缓存过期
+  - **已订阅但本次扫描没见到的发件人仍要列出**（封数 0）：邮件都归档掉的发件人，只列"扫描中见到的"就再也退订不了了
+  - **订阅只对以后的邮件生效，不回溯**：cron 处理的是新到的未读邮件。补处理历史可能是几十封、每封一次付费 AI 调用——界面上写明了这一点
 - 搜索交给 IMAP 服务器做（`OR FROM x SUBJECT x`）：客户端过滤等于把整箱信头下载下来再扔掉
 - 测试见 `tests/test_mailbox_view.py`
 
@@ -932,7 +938,9 @@ GET    /api/mailbox[?offset=&limit=&q=]              → 收件箱一页（倒�
 POST   /api/mailbox/{uid}/process[?uidvalidity=]     → 取这封（BODY.PEEK）→ 入库 → 摘要交给播客那条 process
                                                        正文无法成文 → 400 带原因（不建空条目）；UID 过期 → 502 让前端刷新
                                                        已存在 → {status:"already_exists", episode_id}，不二次付费
-GET/PUT /api/mailbox/senders                         → 发件人自动开关；PUT body {address, auto, name?}
+GET    /api/mailbox/senders[?refresh=1]              → 按发件人聚合（扫描结果 ∪ 已订阅），已订阅优先、再按封数倒序（#965）
+                                                       缓存 5 分钟，refresh=1 绕过；IMAP 不可达时仍返回已订阅的发件人（退订不能依赖邮箱在线）
+PUT    /api/mailbox/senders                          → 订阅/退订，body {address, auto, name?}
 
 # AI 词典（#746，详见「AI 词典页」节）
 GET    /dict[?q=anordnen]                            → 独立词典页（不加载 app.js）；带 q 时打开即查询并抹掉参数
