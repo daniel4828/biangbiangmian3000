@@ -596,3 +596,41 @@ def update_config(body: PodcastConfigUpdate):
     for key, value in updates.items():
         database.set_podcast_config(key, value)
     return get_config()
+
+
+@router.get("/api/podcast/episodes/{episode_id}/fulltext")
+def get_fulltext(episode_id: int, lang: str = "zh"):
+    """The cached full-text reading version, or {"status": "absent"} (#972).
+
+    This never generates. Opening a detail page must not silently start
+    translating an hour-long transcript — generation is the POST below, i.e.
+    always something Daniel asked for.
+    """
+    if not database.get_episode(episode_id):
+        raise HTTPException(404, "Episode not found")
+    try:
+        result = knowledge.rendition.get_or_create_fulltext(episode_id, lang)
+    except knowledge.rendition.RenditionError as e:
+        raise HTTPException(400, str(e))
+    if not result:
+        return {"status": "absent", "lang": lang}
+    return {"status": "ready", **result}
+
+
+@router.post("/api/podcast/episodes/{episode_id}/fulltext")
+def create_fulltext(episode_id: int, lang: str = "zh"):
+    """Generate the full-text reading version on request (#972).
+
+    Synchronous: it is a chain of free Google Translate calls, seconds for a
+    newsletter and a while for a long transcript, but no AI spend and no
+    state to poll. On failure nothing is written — the same contract as
+    every other rendition (#804): never store source-language text under a
+    target language's name.
+    """
+    if not database.get_episode(episode_id):
+        raise HTTPException(404, "Episode not found")
+    try:
+        result = knowledge.rendition.get_or_create_fulltext(episode_id, lang, generate=True)
+    except knowledge.rendition.RenditionError as e:
+        raise HTTPException(502, str(e))
+    return {"status": "ready", **result}

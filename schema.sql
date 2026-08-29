@@ -776,6 +776,32 @@ CREATE TABLE IF NOT EXISTS knowledge_renditions (
     UNIQUE(episode_id, lang)
 );
 
+-- ---------------------------------------------------------------------------
+-- Full-text reading versions (#972). The untruncated source text of a piece of
+-- material, translated into the reading language and annotated exactly like a
+-- summary (knowledge/rendition.render_html — one pipeline, same annotation
+-- rules for a book page, a summary and a full text).
+--
+-- Why a separate table instead of a `kind` column on knowledge_renditions:
+-- that table carries UNIQUE(episode_id, lang), which would have to be relaxed
+-- to hold both a summary and a full text for the same language — and SQLite
+-- cannot alter a constraint, only rebuild the table and migrate production
+-- data. book_renditions already sets the precedent of a same-shaped table with
+-- a different owner (#836).
+--
+-- Unlike knowledge_renditions, `lang` here CAN be 'zh': a summary has an
+-- AI-native Chinese version (summary_zh), a full text has none.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS knowledge_fulltexts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL REFERENCES podcast_episodes(id) ON DELETE CASCADE,
+    lang       TEXT NOT NULL,
+    text       TEXT NOT NULL,   -- target-language full text, new words annotated inline
+    new_words  TEXT,            -- JSON array of {word, lemma, definition_de}
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(episode_id, lang)
+);
+
 -- Tags and user-defined lists over knowledge material (#935, umbrella #934).
 -- Tags come from two sources: the AI tagger (#938) and Daniel's own edits
 -- (#937). `source` keeps them apart so re-tagging can never clobber a manual

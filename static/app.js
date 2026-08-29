@@ -5036,6 +5036,8 @@ let _knowledgeDetailId = null;
 async function openKnowledgeItem(id) {
   setLoading('Loading…');
   _knowledgeEditOpen = false;   // #937: a fresh item opens read-only
+  _knowledgeView = 'summary';   // #972: and on the summary, not whichever
+  _knowledgeFulltext = null;    //       view the previous item was left on
   try {
     // lang (#804): the detail endpoint returns a translated+annotated
     // rendition of the summary for non-Chinese tabs; zh's response is
@@ -5138,6 +5140,96 @@ function _knowledgeSummaryHtml(ep) {
     : `<p class="keymap-hint">${_escHtml(ep.rendition_error || 'Rendition unavailable.')}</p>`);
 }
 
+// ── Summary / Full text (#972) ─────────────────────────────────────────────
+// Two views of the same item: the AI summary, and the untruncated source
+// text translated into the reading language and annotated by exactly the
+// same pipeline (knowledge/rendition.render_html).
+//
+// Per episode+language, because it is a property of what is on screen: the
+// full text of a French reading of item 12 is not the one of its Chinese
+// reading, and switching languages must not show the other one's text.
+let _knowledgeView = 'summary';        // 'summary' | 'fulltext'
+let _knowledgeFulltext = null;         // {episode_id, lang, text, new_words} | null
+let _knowledgeFulltextBusy = false;
+
+// A record with text === null means "asked, there is none yet" — without it
+// every re-render (tab switch, word marked known) would fire the GET again.
+function _knowledgeFulltextChecked(ep, lang) {
+  const ft = _knowledgeFulltext;
+  return !!(ft && ft.episode_id === ep.id && ft.lang === lang);
+}
+
+function _knowledgeFulltextFor(ep, lang) {
+  const ft = _knowledgeFulltext;
+  return _knowledgeFulltextChecked(ep, lang) && ft.text ? ft : null;
+}
+
+function _knowledgeViewTabs(ep) {
+  return `
+    <div class="mailbox-tabs" style="margin:10px 0 12px">
+      <button class="mailbox-tab${_knowledgeView === 'summary' ? ' active' : ''}"
+              onclick="switchKnowledgeView('summary')">Summary</button>
+      <button class="mailbox-tab${_knowledgeView === 'fulltext' ? ' active' : ''}"
+              onclick="switchKnowledgeView('fulltext')">Full text</button>
+    </div>`;
+}
+
+function switchKnowledgeView(view) {
+  if (_knowledgeView === view) return;
+  _knowledgeView = view;
+  if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+function _knowledgeFulltextHtml(ep, lang) {
+  if (_knowledgeFulltextBusy) {
+    return `<p class="keymap-hint">Translating and annotating the full text — this takes a moment for long material…</p>`;
+  }
+  const ft = _knowledgeFulltextFor(ep, lang);
+  if (ft) {
+    // Same whitelist sanitizer as the summary blocks: this text went
+    // through Google Translate and the annotator, so it is escaped and only
+    // <p>/<b>/<em>/<i>/<br> come back through.
+    return `<div id="knowledge-fulltext">${_summaryZhHtml(ft.text || '')}</div>`;
+  }
+  // Never generated silently on open: for anything but a newsletter this is
+  // a whole transcript to translate, and most items Daniel only reads the
+  // summary of.
+  return `
+    <p class="keymap-hint">The full text has not been generated for this language yet.</p>
+    <button class="btn-secondary" onclick="doGenerateFulltext()">Generate full text</button>`;
+}
+
+async function _loadKnowledgeFulltext(episodeId, lang) {
+  try {
+    const data = await api('GET', `/api/podcast/episodes/${episodeId}/fulltext?lang=${encodeURIComponent(lang)}`);
+    _knowledgeFulltext = data.status === 'ready'
+      ? { episode_id: episodeId, lang, text: data.text, new_words: data.new_words || [] }
+      : { episode_id: episodeId, lang, text: null, new_words: [] };
+    if (data.status === 'ready' && _knowledgeView === 'fulltext' && _knowledgeDetailEpisode &&
+        _knowledgeDetailEpisode.id === episodeId) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+  } catch (e) {
+    // A missing full text is not an error worth interrupting the page for —
+    // the tab shows the Generate button instead.
+  }
+}
+
+async function doGenerateFulltext() {
+  const ep = _knowledgeDetailEpisode;
+  if (!ep || _knowledgeFulltextBusy) return;
+  const lang = activeLang();
+  _knowledgeFulltextBusy = true;
+  _renderKnowledgeDetail(ep);
+  try {
+    const data = await api('POST', `/api/podcast/episodes/${ep.id}/fulltext?lang=${encodeURIComponent(lang)}`);
+    _knowledgeFulltext = { episode_id: ep.id, lang, text: data.text, new_words: data.new_words || [] };
+  } catch (e) {
+    showError('Could not generate the full text: ' + (e.message || 'error'));
+  } finally {
+    _knowledgeFulltextBusy = false;
+    _renderKnowledgeDetail(ep);
+  }
+}
+
 function _renderKnowledgeDetail(ep) {
   const el = document.getElementById('view-knowledge-content');
   if (!el) return;
@@ -5155,8 +5247,14 @@ function _renderKnowledgeDetail(ep) {
   // Keep the raw word objects around so click handlers can look them up by
   // index instead of serializing them into onclick attributes (avoids
   // quote/apostrophe escaping issues in word_zh/definition_de text).
-  setWordTable(isZh ? (ep.hsk_words || [])
-                    : ((ep.rendition && ep.rendition.new_words) || []), lang);
+  // The word list belongs to whatever is on screen: reading the full text
+  // and being offered the summary's words would be two different texts'
+  // vocabulary side by side.
+  const _ft = _knowledgeFulltextFor(ep, lang);
+  setWordTable(
+    _knowledgeView === 'fulltext' ? ((_ft && _ft.new_words) || [])
+      : isZh ? (ep.hsk_words || [])
+             : ((ep.rendition && ep.rendition.new_words) || []), lang);
   _podcastDetailEpisodeId = ep.id;
   _knowledgeDetailEpisode = ep;
   const hskTable = wordTableHtml('No HSK vocabulary extracted.');
@@ -5198,7 +5296,8 @@ function _renderKnowledgeDetail(ep) {
       ${_knowledgeTagRowHtml(ep)}
       ${_knowledgeEditOpen ? _knowledgeEditFormHtml(ep) : ''}
       <div style="margin:4px 0 10px">${links}</div>
-      ${summaryBlock}
+      ${_knowledgeViewTabs(ep)}
+      ${_knowledgeView === 'fulltext' ? _knowledgeFulltextHtml(ep, lang) : summaryBlock}
     </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">${isZh ? 'HSK vocabulary' : 'New words'}</h2>
@@ -5212,8 +5311,12 @@ function _renderKnowledgeDetail(ep) {
   // #967: only the summary/rendition blocks, not the transcript below — the
   // word list was extracted from the summary, and the bilingual transcript
   // columns are for reading along, not for picking words out of.
-  ['podcast-summary-zh', 'podcast-summary-de', 'podcast-summary-rendition']
+  ['podcast-summary-zh', 'podcast-summary-de', 'podcast-summary-rendition', 'knowledge-fulltext']
     .forEach(id => _makeWordsTappable(document.getElementById(id)));
+  // Ask whether a full text already exists (a newsletter's was built when it
+  // was processed). GET never generates, so this is cheap and safe to fire
+  // on every detail view.
+  if (!_knowledgeFulltextChecked(ep, lang) && !_knowledgeFulltextBusy) _loadKnowledgeFulltext(ep.id, lang);
   // The saved conversation (#945) is fetched after the markup exists, so the
   // detail view still renders instantly when the chat request is slow.
   _loadKnowledgeChat(ep.id);

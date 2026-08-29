@@ -174,3 +174,78 @@ def get_or_create_rendition(episode_id: int, lang: str) -> dict:
     logger.info("knowledge.rendition: generated episode %s lang=%s (%d new word(s))",
                episode_id, lang, len(new_words))
     return {"lang": lang, "summary": annotated, "new_words": new_words}
+
+
+# --- full text (#972) -------------------------------------------------------
+
+def text_to_paragraph_html(text: str) -> str:
+    """Turn plain source text into the markup render_html() expects.
+
+    transcript_zh holds plain text with newlines; render_html only sends
+    *text nodes* to the translator, so the text has to sit inside tags to
+    survive the round trip with its structure intact. Escaping first is not
+    optional: a '<' in the source would otherwise become a tag boundary and
+    everything after it would be treated as markup — swallowed by the
+    translator's tag handling instead of translated (the same reason
+    books/paginate.py escapes before wrapping).
+    """
+    import html as html_mod
+
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", (text or "").strip()) if b.strip()]
+    if not blocks:
+        return ""
+    return "".join(
+        # Single newlines inside a block are line breaks, not paragraph
+        # breaks — newsletters wrap their lines.
+        f"<p>{html_mod.escape(b).replace(chr(10), '<br>')}</p>" for b in blocks
+    )
+
+
+def _source_lang_of(text: str) -> str:
+    """Which language the source text is in, as a translator source code.
+
+    transcript_zh means "source material in any language" (#772): a
+    newsletter is German, a Chinese podcast's transcript is Chinese. Getting
+    this wrong is not cosmetic — asking Google to translate de→zh text that
+    is already Chinese returns it essentially unchanged, which would look
+    like success and store un-translated text under a target language.
+    """
+    import zh_annotate
+    return "zh-CN" if zh_annotate.cjk_ratio(text) >= 0.2 else "de"
+
+
+def get_or_create_fulltext(episode_id: int, lang: str, generate: bool = False) -> dict | None:
+    """The full source text of an episode, in `lang` (#972).
+
+    Returns None when nothing is cached and `generate` is False — reading a
+    detail page must not silently kick off a translation of an hour-long
+    transcript. Only an explicit request (POST) passes generate=True.
+
+    Unlike get_or_create_rendition(), `lang` may be 'zh': a summary has an
+    AI-native Chinese version to fall back on, a full text has none.
+    """
+    if not languages.is_valid_lang(lang):
+        raise RenditionError(f"unknown language: {lang!r}")
+
+    cached = database.get_knowledge_fulltext(episode_id, lang)
+    if cached:
+        return {"lang": lang, "text": cached["text"], "new_words": cached["new_words"]}
+    if not generate:
+        return None
+
+    episode = database.get_episode(episode_id)
+    if not episode:
+        raise RenditionError(f"episode {episode_id} not found")
+    source_text = (episode.get("transcript_zh") or "").strip()
+    if not source_text:
+        raise RenditionError("这条素材没有原文可读（还没转录/抽取正文）")
+
+    html = text_to_paragraph_html(source_text)
+    if not html:
+        raise RenditionError("这条素材的原文是空的")
+
+    annotated, new_words = render_html(html, lang, source=_source_lang_of(source_text))
+    database.save_knowledge_fulltext(episode_id, lang, annotated, new_words)
+    logger.info("knowledge.rendition: full text for episode %s lang=%s (%d new word(s))",
+                episode_id, lang, len(new_words))
+    return {"lang": lang, "text": annotated, "new_words": new_words}
