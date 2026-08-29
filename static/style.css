@@ -1294,7 +1294,7 @@ main.browse-open {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted, #888);
+  color: var(--muted);
 }
 .unf-radio {
   display: flex;
@@ -1309,7 +1309,7 @@ main.browse-open {
 }
 .unf-radio:hover { border-color: var(--primary); }
 .unf-radio input { margin-top: 3px; }
-.unf-radio small { display: block; color: var(--muted, #888); font-size: 12px; font-weight: 400; }
+.unf-radio small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
 .unf-radio:has(input:checked) { border-color: var(--primary); background: var(--bg); }
 #setup-modal {
   position: fixed;
@@ -3449,6 +3449,30 @@ a.nav-btn { text-decoration: none; }
 }
 #podcast-summary-de { line-height: 1.6; color: var(--text); }
 
+/* Kurzfassung (#971): the German lead sentences of summary_de, foldable, at
+   the very top of the summary block. Deliberately quieter than the summary it
+   sits above — it is a decision aid, not the reading material. */
+.knowledge-tldr {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--primary);
+  background: var(--hover-bg);
+  border-radius: 4px;
+}
+.knowledge-tldr > summary {
+  cursor: pointer;
+  font-size: 0.85em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  user-select: none;
+}
+.knowledge-tldr > p {
+  margin: 8px 0 0;
+  line-height: 1.55;
+  color: var(--text);
+}
+
 /* Chinese summary (#631; since #708 a full translation of the German one,
    same paragraphs, same bold lead sentences). Set apart with a background so
    it reads as its own version of the text rather than as the opening
@@ -4817,7 +4841,7 @@ details[open] .cat-override-summary::before { content: '▼ '; }
 .kahneman-chapter-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; }
 .kahneman-chapter-info { display: flex; flex-direction: column; gap: 2px; }
 .kahneman-chapter-title { font-size: 13px; font-weight: 600; color: var(--text, #222); }
-.kahneman-chapter-concept { font-size: 12px; color: var(--muted, #888); line-height: 1.4; }
+.kahneman-chapter-concept { font-size: 12px; color: var(--muted); line-height: 1.4; }
 
 /* Book-part group header inside the chapter selector list */
 .kahneman-part-header {
@@ -4993,7 +5017,7 @@ details[open] .cat-override-summary::before { content: '▼ '; }
   font-size: 12px;
   font-style: italic;
   line-height: 1.4;
-  color: var(--muted, #888);
+  color: var(--muted);
   margin-top: -6px;
 }
 .kahneman-summary {
@@ -5009,7 +5033,7 @@ details[open] .cat-override-summary::before { content: '▼ '; }
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: var(--muted, #888);
+  color: var(--muted);
   margin-top: 4px;
 }
 .kahneman-detail {
@@ -5026,7 +5050,7 @@ details[open] .cat-override-summary::before { content: '▼ '; }
   line-height: 1.6;
   color: #4c1d95;
 }
-.kahneman-examples-loading { color: var(--muted, #888); font-size: 14px; text-align: center; padding: 12px; }
+.kahneman-examples-loading { color: var(--muted); font-size: 14px; text-align: center; padding: 12px; }
 
 /* ============================================================================
    Home-page calendar heatmap (issue #307)
@@ -5424,7 +5448,7 @@ table.fsrs-table td.ivl { font-weight: 700; }
 }
 .podcast-tr-zh { line-height: 1.5; }
 .podcast-tr-de {
-  color: var(--muted, #888);
+  color: var(--muted);
   font-size: 0.92em;
   line-height: 1.4;
   margin-top: 2px;
@@ -6213,7 +6237,7 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .knowledge-chat-me { border-left: 3px solid var(--primary); }
 .knowledge-chat-who {
   font-size: 0.78em;
-  color: var(--muted, #888);
+  color: var(--muted);
   margin-bottom: 4px;
 }
 .knowledge-chat-body {
