@@ -8,6 +8,7 @@ mail he didn't ask for. Both are easy to break by accident later (one
 notice from the UI, so they are asserted directly.
 """
 import email.message
+import re
 
 import pytest
 
@@ -67,6 +68,8 @@ class FakeImap:
 
     def uid(self, command, *args):
         self.commands.append((command, args))
+        if command == "MOVE":
+            return "OK", [b"moved"]
         if command == "SEARCH":
             return "OK", [b" ".join(uid for uid, _ in self._messages)]
         if command == "FETCH":
@@ -81,6 +84,9 @@ class FakeImap:
     def store(self, *args):
         self.store_calls.append(args)
         return "OK", [b"done"]
+
+    def moved(self):
+        return [args for cmd, args in self.commands if cmd == "MOVE"]
 
     def close(self):
         return "OK", [b"closed"]
@@ -135,7 +141,9 @@ def test_search_is_delegated_to_the_imap_server():
     mailbox.list_inbox(query="faz", imap_factory=lambda: fake)
 
     search = next(args for cmd, args in fake.commands if cmd == "SEARCH")
-    assert search == (None, "OR", "FROM", "faz", "SUBJECT", "faz")
+    # The range's SINCE comes first, then the OR — both are the server's job
+    assert search[1] == "SINCE"
+    assert search[3:] == ("OR", "FROM", "faz", "SUBJECT", "faz")
 
 
 def test_processed_mails_are_marked_from_the_message_id(monkeypatch):
@@ -257,6 +265,135 @@ def test_turning_a_switch_off_keeps_the_display_name():
 
 
 # ---------------------------------------------------------------------------
+# date range, delete, block (#968)
+# ---------------------------------------------------------------------------
+
+def test_range_is_translated_into_an_imap_since():
+    """Filtering has to happen on the server — fetching everything and
+    slicing here would make the setting pointless, since the cost is in
+    what crosses the wire."""
+    fake = FakeImap([(b"1", _mail())])
+
+    mailbox.list_inbox(range_name="week", imap_factory=lambda: fake)
+
+    search = next(args for cmd, args in fake.commands if cmd == "SEARCH")
+    assert search[1] == "SINCE"
+    # dd-Mon-yyyy with an English month — strftime("%b") would localise it
+    assert re.match(r"^\d{2}-[A-Z][a-z]{2}-\d{4}$", search[2])
+
+
+def test_range_all_has_no_since_term():
+    fake = FakeImap([(b"1", _mail())])
+
+    mailbox.list_inbox(range_name="all", imap_factory=lambda: fake)
+
+    search = next(args for cmd, args in fake.commands if cmd == "SEARCH")
+    assert search == (None, "ALL")
+
+
+def test_week_range_starts_on_monday():
+    """"This week" is the calendar week, not a sliding 7 days — that is
+    what was asked for, and it keeps the answer stable through the day."""
+    since = mailbox._since_date("week")
+    assert since.weekday() == 0
+
+
+def test_delete_moves_to_trash_and_never_expunges():
+    """A wrong click has to stay undoable: Gmail keeps trashed mail for 30
+    days, an expunge keeps nothing."""
+    fake = FakeImap([(b"9", _mail())])
+
+    mailbox.delete_message("9", imap_factory=lambda: fake)
+
+    assert fake.moved() == [("9", "[Gmail]/Trash")]
+    assert not any(cmd == "EXPUNGE" for cmd, _ in fake.commands)
+    assert fake.store_calls == []
+
+
+def test_delete_is_the_only_writable_connection():
+    """Everything else keeps #960's promise that browsing the mailbox from
+    the app changes nothing in Gmail."""
+    fake = FakeImap([(b"9", _mail())])
+    mailbox.list_inbox(imap_factory=lambda: fake)
+    assert fake.selected_readonly is True
+
+    fake2 = FakeImap([(b"9", _mail())])
+    mailbox.fetch_message("9", imap_factory=lambda: fake2)
+    assert fake2.selected_readonly is True
+
+    fake3 = FakeImap([(b"9", _mail())])
+    mailbox.delete_message("9", imap_factory=lambda: fake3)
+    assert fake3.selected_readonly is False
+
+
+def test_blocking_clears_the_subscription():
+    """"Subscribed AND blocked" is a contradiction — it must not become
+    representable, or something later has to decide which one wins."""
+    database.set_mail_sender_auto("news@example.com", True)
+    database.set_mail_sender_blocked("news@example.com", True)
+
+    assert "news@example.com" not in database.auto_mail_senders()
+    assert "news@example.com" in database.blocked_mail_senders()
+
+
+def test_subscribing_a_blocked_sender_unblocks_them():
+    database.set_mail_sender_blocked("news@example.com", True)
+    database.set_mail_sender_auto("news@example.com", True)
+
+    assert database.blocked_mail_senders() == set()
+    assert "news@example.com" in database.auto_mail_senders()
+
+
+def test_blocked_senders_are_hidden_from_the_mail_list():
+    database.set_mail_sender_blocked("spam@example.com", True)
+    fake = FakeImap([
+        (b"1", _mail(sender="Spam <spam@example.com>")),
+        (b"2", _mail(sender="Gut <ok@example.com>", subject="behalten")),
+    ])
+
+    result = mailbox.list_inbox(imap_factory=lambda: fake)
+
+    assert [m["subject"] for m in result["messages"]] == ["behalten"]
+    # reported, not silently swallowed — otherwise the page just looks short
+    assert result["hidden"] == 1
+
+
+def test_blocked_senders_stay_in_the_sender_view():
+    """Otherwise blocking a sender would make them impossible to unblock."""
+    database.set_mail_sender_blocked("spam@example.com", True)
+    fake = FakeBulkImap([(b"1", _mail(sender="Spam <spam@example.com>"))])
+
+    result = mailbox.list_senders(imap_factory=lambda: fake)
+
+    row = next(s for s in result["senders"] if s["address"] == "spam@example.com")
+    assert row["blocked"] is True
+    # blocked senders sort last
+    assert result["senders"][-1]["address"] == "spam@example.com"
+
+
+def test_deleting_a_sender_row_deletes_no_mail():
+    """"Delete sender" is about the stored setting. The mail list is a live
+    IMAP view — there is nothing about it in the database to delete."""
+    database.set_mail_sender_auto("news@example.com", True)
+
+    assert database.delete_mail_sender("news@example.com") is True
+    assert database.delete_mail_sender("news@example.com") is False
+    assert database.auto_mail_senders() == {"newsletter@nl.faz.net"}
+
+
+def test_sender_cache_is_per_range():
+    """Sharing one cache slot would serve one range's counts under the
+    other range's label."""
+    fake = FakeBulkImap([(b"1", _mail())])
+
+    first = mailbox.list_senders(range_name="week", imap_factory=lambda: fake)
+    other = mailbox.list_senders(range_name="all", imap_factory=lambda: fake)
+
+    assert first["cached"] is False
+    assert other["cached"] is False
+
+
+# ---------------------------------------------------------------------------
 # sender view (#965)
 # ---------------------------------------------------------------------------
 
@@ -266,7 +403,9 @@ class FakeBulkImap(FakeImap):
 
     def uid(self, command, *args):
         self.commands.append((command, args))
-        if command == "FETCH" and args[0] == "1:*":
+        # Any UID set — "1:*" for range=all, an explicit "1,2,3" list once a
+        # SINCE search narrowed it down (#968).
+        if command == "FETCH":
             out = []
             for _uid, msg in self._messages:
                 out.append((b"1 (x {1})", msg.as_bytes()))
@@ -277,7 +416,7 @@ class FakeBulkImap(FakeImap):
 
 @pytest.fixture(autouse=True)
 def _clear_sender_cache():
-    mailbox._SENDER_CACHE.update({"at": 0.0, "senders": None, "scanned": 0})
+    mailbox._SENDER_CACHE.clear()
 
 
 def test_sender_scan_is_one_fetch_and_never_writes_flags():

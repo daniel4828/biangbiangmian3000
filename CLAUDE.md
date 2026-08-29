@@ -789,6 +789,10 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 Daniel 用他的 Gmail 地址订阅各种邮件通讯，但**不希望全部自动处理**。主页 `📬 Mailbox` 列出 Gmail 收件箱里的所有邮件，他挑想读的点「Process」，才走摘要管线——跟播客单集的 process 按钮同一个心智模型。
 
 - **手动点「处理」本身就是那道防线**：`KNOWLEDGE_MAIL_ALLOWED_SENDERS` 因此退役（见环境变量表）。自动处理只认 `mail_senders.auto_process`——Daniel 在每行的 ⚡ 按钮上逐个发件人打开的开关。**最关键的性质原样继承：开关一个都没开 = 谁都不处理，绝不是「门读不出来所以全处理」**
+- **默认只看本周（#968）**：收件箱和发件人扫描都带时间范围，转成 IMAP 的 `SINCE dd-Mon-yyyy` 交给服务器过滤（实测：本周 22 封 / 8 个发件人，4 周 48 封，全部 1600 封）。`week` 是**日历周（周一起）**不是滑动 7 天——问的是「这周有什么」，而且滑动窗口会让答案一天之内不停变。界面可切 4 weeks / All：默认满足需求，但上个月的邮件不能变得**够不着**，那会逼他回 Gmail 网页版，等于这个功能白做。`SINCE` 的月份缩写必须手写英文表，`strftime("%b")` 会按 locale 变
+- **删除邮件 = `UID MOVE` 到 `[Gmail]/Trash`（#968）**，30 天内可在 Gmail 恢复；**不做 expunge**——一次误点必须还有救。**这是本模块唯一会写邮箱的操作**，所以 `_connection()` 默认 `readonly=True`，只有删除那条路径传 `readonly=False`，有测试逐个函数守着
+- **屏蔽发件人（#968）**：`mail_senders.blocked`。屏蔽的发件人不出现在收件箱列表（列表返回 `hidden` 计数，页面说明少了几封，否则只是看起来短），也永远不会被自动处理——**`auto_mail_senders()` 里必须一并排除**，两处判断只改一处就等于屏蔽了还在每天花钱。**屏蔽会清掉自动开关**：「已订阅 + 已屏蔽」是矛盾状态，让它在库里可表达，迟早要有人解释哪个赢；反过来订阅一个被屏蔽的发件人则自动解除屏蔽。屏蔽的发件人仍列在发件人视图里（排最后），否则再也解不开
+- **「删除发件人」删的是设置那一行，不删任何邮件**：邮件列表是实时 IMAP 视图，库里根本没有邮件可删。界面上两个动作的措辞必须分得开——都叫「删除」就一定会误点
 - **列表是实时 IMAP 视图，不是镜像**：库里不存任何邮件。`list_inbox()` 用 `UID SEARCH` + `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]` 只取信封，连接是 `SELECT ... readonly=True`——**这条连接想改标志位都改不了**。1600 封的私人收件箱每次翻页都重取，正文一个字节都不下载，除非他按了 Process
 - **必须用 UID，不能用序号**：序号会随邮箱变动漂移，网页把 id 传回来时就会处理到另一封邮件。`uidvalidity` 对不上直接报错让他刷新，**不拿过期 UID 猜**
 - **「已处理」标记存 `podcast_episodes.mail_message_id`**：`ingest_text()` 的去重键是**正文哈希**，算它得先下载正文——而列表恰恰不下载。Message-ID 就在已有的信封里。正文哈希去重**保留**作第二道防线（同一封通讯从 Signal 粘过一次照样认得出来）。#960 之前入库的邮件没有这个标记，所以列表上仍显示「Process」；点下去会命中正文哈希去重返回 `already_exists`，不会二次付费
@@ -934,13 +938,18 @@ GET    /api/books/{id}/page/{page_no}[?lang=zh]      → 该页译文+生词 {te
 POST   /api/books/{id}/progress                      → body {lang, page_no}；进度按 (书, 语言) 各存一份
 
 # 信箱（#960，详见「信箱」节）
-GET    /api/mailbox[?offset=&limit=&q=]              → 收件箱一页（倒序），只取信封；不下载正文、不改任何标志位
+GET    /api/mailbox[?offset=&limit=&q=&range=week|month|all] → 收件箱一页（倒序），只取信封；不下载正文、不改任何标志位
+                                                       range 默认 week（日历周，周一起，#968）；非法值回落默认而不是 400
+                                                       屏蔽发件人的邮件不返回，返回 hidden 计数说明少了几封
+DELETE /api/mailbox/{uid}[?uidvalidity=]             → 移到 [Gmail]/Trash（#968），30 天内可恢复；不做 expunge
 POST   /api/mailbox/{uid}/process[?uidvalidity=]     → 取这封（BODY.PEEK）→ 入库 → 摘要交给播客那条 process
                                                        正文无法成文 → 400 带原因（不建空条目）；UID 过期 → 502 让前端刷新
                                                        已存在 → {status:"already_exists", episode_id}，不二次付费
-GET    /api/mailbox/senders[?refresh=1]              → 按发件人聚合（扫描结果 ∪ 已订阅），已订阅优先、再按封数倒序（#965）
+GET    /api/mailbox/senders[?refresh=1&range=]       → 按发件人聚合（封数按 range 统计，缓存按 range 分开）（扫描结果 ∪ 已订阅），已订阅优先、再按封数倒序（#965）
                                                        缓存 5 分钟，refresh=1 绕过；IMAP 不可达时仍返回已订阅的发件人（退订不能依赖邮箱在线）
-PUT    /api/mailbox/senders                          → 订阅/退订，body {address, auto, name?}
+PUT    /api/mailbox/senders                          → 订阅/退订，body {address, auto, name?}（订阅会自动解除屏蔽）
+PUT    /api/mailbox/senders/block                    → 屏蔽/解除，body {address, blocked, name?}（屏蔽会清掉自动开关，#968）
+DELETE /api/mailbox/senders/{address}                → 忘掉该发件人的设置（回到手动、不屏蔽）；**不删任何邮件**；无该行 → 404
 
 # AI 词典（#746，详见「AI 词典页」节）
 GET    /dict[?q=anordnen]                            → 独立词典页（不加载 app.js）；带 q 时打开即查询并抹掉参数

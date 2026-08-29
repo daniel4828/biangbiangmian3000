@@ -6306,3 +6306,20 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .mailbox-tab.active { border-color: var(--primary); color: var(--primary); }
 /* A subscribed sender is the one state worth spotting from across the list. */
 .mailbox-row-sub { border-color: var(--primary); }
+
+/* Delete / block (#968). Destructive actions stay visually quiet until
+   hovered — they sit next to buttons pressed dozens of times a session. */
+.mailbox-del, .mailbox-block {
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim, #888);
+  cursor: pointer;
+}
+.mailbox-del:hover, .mailbox-block:hover { color: #e53e3e; border-color: #e53e3e; }
+.mailbox-block.on { color: #e53e3e; border-color: #e53e3e; }
+.mailbox-range { flex: 0 0 auto; width: auto; }
+/* A blocked sender is still listed (so it can be unblocked) but recedes. */
+.mailbox-row-blocked { opacity: 0.55; }

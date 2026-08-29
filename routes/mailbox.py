@@ -30,15 +30,34 @@ router = APIRouter()
 _MAX_LIMIT = 200
 
 
+def _range(name: str) -> str:
+    """Fall back to the default rather than 400 on an unknown range: the
+    range is a view preference, and refusing to show the mailbox over a
+    typo in a query string helps nobody."""
+    return name if name in knowledge.mailbox._RANGES else knowledge.mailbox.DEFAULT_RANGE
+
+
 @router.get("/api/mailbox")
-def list_mailbox(offset: int = 0, limit: int = 50, q: str = ""):
+def list_mailbox(offset: int = 0, limit: int = 50, q: str = "",
+                 range: str = knowledge.mailbox.DEFAULT_RANGE):
     """One page of the inbox, newest first. Envelopes only — no mail body
     is downloaded here, and no flag is ever changed (the IMAP session is
     opened read-only)."""
     limit = max(1, min(limit, _MAX_LIMIT))
     offset = max(0, offset)
     try:
-        return knowledge.mailbox.list_inbox(offset=offset, limit=limit, query=q.strip())
+        return knowledge.mailbox.list_inbox(offset=offset, limit=limit,
+                                            query=q.strip(), range_name=_range(range))
+    except knowledge.mailbox.MailboxError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.delete("/api/mailbox/{uid}")
+def delete_mail(uid: str, uidvalidity: str = ""):
+    """Move one mail to Gmail's trash — recoverable there for 30 days.
+    Never an expunge (#968)."""
+    try:
+        return knowledge.mailbox.delete_message(uid, uidvalidity=uidvalidity)
     except knowledge.mailbox.MailboxError as e:
         raise HTTPException(502, str(e))
 
@@ -94,7 +113,8 @@ def process_mail(uid: str, uidvalidity: str = ""):
 
 
 @router.get("/api/mailbox/senders")
-def list_senders(refresh: bool = False):
+def list_senders(refresh: bool = False,
+                 range: str = knowledge.mailbox.DEFAULT_RANGE):
     """Who writes to this mailbox, with their subscription state (#965).
 
     The scan reads every header in the mailbox in one IMAP round trip, so
@@ -103,15 +123,21 @@ def list_senders(refresh: bool = False):
     — unsubscribing must not depend on IMAP being up.
     """
     try:
-        return knowledge.mailbox.list_senders(refresh=refresh)
+        return knowledge.mailbox.list_senders(refresh=refresh, range_name=_range(range))
     except knowledge.mailbox.MailboxError as e:
         return {"senders": database.get_mail_senders(), "scanned": 0,
-                "cached": False, "error": str(e)}
+                "cached": False, "range": _range(range), "error": str(e)}
 
 
 class SenderUpdate(BaseModel):
     address: str
     auto: bool
+    name: str | None = None
+
+
+class SenderBlock(BaseModel):
+    address: str
+    blocked: bool
     name: str | None = None
 
 
@@ -125,3 +151,24 @@ def set_sender(payload: SenderUpdate):
         return database.set_mail_sender_auto(payload.address, payload.auto, payload.name)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.put("/api/mailbox/senders/block")
+def block_sender(payload: SenderBlock):
+    """Block or unblock a sender (#968): blocked mail is hidden from the
+    list and never processed. Blocking clears the automatic switch — the
+    two states contradict each other."""
+    try:
+        return database.set_mail_sender_blocked(payload.address, payload.blocked, payload.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/api/mailbox/senders/{address}")
+def delete_sender(address: str):
+    """Forget a sender's settings — back to manual and unblocked. Deletes
+    no mail: "delete sender" is about the setting, and the two must not be
+    confusable. 404 when there was nothing stored, rather than a silent OK."""
+    if not database.delete_mail_sender(address):
+        raise HTTPException(404, "This sender has no stored settings")
+    return {"status": "deleted", "address": address.strip().lower()}
