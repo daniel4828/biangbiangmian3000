@@ -74,6 +74,7 @@
     <button id="sync-btn" onclick="openSyncPopup()" title="Sync with the server" style="display:none">⟳</button>
     <!-- ＋ / 📖 / 🎲 moved to the deck-list nav row (#816) so the header can
          hold the language tabs. -->
+    <button id="header-regen-btn" onclick="regenerateStory()" title="Regenerate story" style="display:none">↺</button>
     <!-- #816 moved ＋ to the deck-list nav row, which left review with no
          add-word entry point at all on a phone (⌘A only helps on a desktop) —
          and reading a sentence is exactly when a new word turns up (#829).
@@ -81,10 +82,12 @@
          reading a book or a knowledge item just as often as during review.
          toggleAddWordModal() (not openAddWordModal) so the language rule lives
          in exactly one place — review uses the card's language, elsewhere the
-         home page's tab decides. -->
+         home page's tab decides.
+         Last child on purpose (#975): every other button here is conditional
+         (⚙ only while something runs, ⟳ only on the laptop, ↺ only in review),
+         so anywhere but the end makes the most-pressed button slide around. -->
     <button id="header-add-btn" onclick="toggleAddWordModal()"
             title="Add a new word (⌘A)" style="display:none">＋</button>
-    <button id="header-regen-btn" onclick="regenerateStory()" title="Regenerate story" style="display:none">↺</button>
   </div>
 </header>
 
