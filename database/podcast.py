@@ -561,6 +561,40 @@ def save_knowledge_rendition(episode_id: int, lang: str, summary: str,
     reindex_episode(episode_id)
 
 
+def get_knowledge_fulltext(episode_id: int, lang: str) -> dict | None:
+    """The cached full text for (episode_id, lang), or None (#972)."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM knowledge_fulltexts WHERE episode_id = ? AND lang = ?",
+        (episode_id, lang),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    d["new_words"] = json.loads(d["new_words"]) if d.get("new_words") else []
+    return d
+
+
+def save_knowledge_fulltext(episode_id: int, lang: str, text: str,
+                            new_words: list[dict] | None = None) -> None:
+    """Store the full text for (episode_id, lang). Same contract as
+    save_knowledge_rendition: only ever reached after a translation
+    succeeded — never store source-language text under a target language."""
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO knowledge_fulltexts (episode_id, lang, text, new_words)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(episode_id, lang) DO UPDATE SET
+               text = excluded.text,
+               new_words = excluded.new_words,
+               created_at = datetime('now')""",
+        (episode_id, lang, text, json.dumps(new_words or [], ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
 def delete_knowledge_renditions(episode_id: int) -> None:
     """Wipe every cached rendition for an episode (#804) — called whenever
     summary_de is regenerated, so a stale French/Spanish translation of the

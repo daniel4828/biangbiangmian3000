@@ -784,6 +784,22 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 
 ---
 
+## 知识条目的「全文」视图（#972）
+
+详情页两个标签：**Summary**（AI 摘要，原样不变）/ **Full text**——未删节的原文，翻成正在读的语言、同样标注生词。FAZ 通讯是主场景（每天一篇），其它素材也能用。
+
+- **复用 `rendition.render_html()`，不新建管线**：一页书（#836）、一篇摘要（#804）、一份全文按同一套规则翻译+标注。差别只在输入准备
+- **纯文本要先转义再包 `<p>`**（`text_to_paragraph_html()`）：`render_html` 只把**文本节点**送去翻译，所以文字必须待在标签里；源文里的 `<` 不转义就会变成标签边界，后面整段被当标记吞掉（同 `books/paginate.py`）。单个换行是 `<br>`（通讯是硬折行的），空行才分段
+- **源语言要判定**（`_source_lang_of`，`cjk_ratio ≥ 0.2`）：`transcript_zh` 存的是「任意语言的源文本」（#772），通讯是德语、中文播客的转录是中文。判错不是小事——拿 de→zh 去翻一段本来就是中文的文本，谷歌基本原样返回，**看起来像翻译成功了**
+- **zh 必须允许**：摘要那边 `get_or_create_rendition()` 拒绝 zh（`summary_zh` 是 AI 原生的），全文**没有** AI 原生的中文版
+- **生成时机（Daniel 2026-08-29 定）**：`kind='newsletter'` 在处理时顺带生成（早上打开就能读）；**其余一律点了才生成**——播客转录是一小时的话，多数条目他只看摘要。`GET .../fulltext` **永不生成**，只有 POST 会
+- **通讯的全文生成失败不能让整条素材失败**（`podcast._maybe_prepare_fulltext` 吞异常）：同 `summary_zh`（#708），全文是增量，不是成功判定的一部分
+- **失败不写库**（`RenditionError`）：宁可显示原因，不把德语顶着中文的名字存进去
+- **新建 `knowledge_fulltexts` 表，不给 `knowledge_renditions` 加 `kind` 列**：后者带 `UNIQUE(episode_id, lang)`，要在同一张表里放摘要版和全文版就得放宽这个约束，而 SQLite 改不了约束——只能重建表并迁移生产库。`book_renditions` 已经是「同结构不同归属」的先例（#836）
+- **生词表跟着当前视图走**：读全文却给你摘要的生词，等于把两篇文章的词并排放
+- 重新生成摘要**不清**全文缓存：全文来自转录，跟摘要无关
+- 测试见 `tests/test_knowledge_fulltext.py`
+
 ## 信箱（Mailbox，#960）
 
 Daniel 用他的 Gmail 地址订阅各种邮件通讯，但**不希望全部自动处理**。主页 `📬 Mailbox` 列出 Gmail 收件箱里的所有邮件，他挑想读的点「Process」，才走摘要管线——跟播客单集的 process 按钮同一个心智模型。
@@ -904,6 +920,9 @@ PATCH /api/podcast/episodes/{id}                      → 手改元数据（#937
 POST /api/podcast/episodes/{id}/retry                 → 同步重跑单集（error/no_transcript/pending；#491/#500）
 POST /api/podcast/episodes/{id}/process               → 手动触发单集转录+摘要（后台线程，立即返回；重复提交 409；#502）
 POST /api/podcast/episodes/{id}/notify                → 按需重发通知，body {channel: signal|email}（同步；仅 summarized；重发不更新 email_sent_at；返回 {sent}，失败时 sent:false 带 detail；#530）
+GET  /api/podcast/episodes/{id}/fulltext[?lang=zh]    → 已缓存的全文阅读版 {status:"ready", text, new_words}；没有则 {status:"absent"}（#972）
+                                                       **永不生成** —— 打开详情页不该悄悄跑一次几万字的翻译
+POST /api/podcast/episodes/{id}/fulltext[?lang=zh]    → 生成全文阅读版（同步，谷歌翻译无 AI 花费）；失败 502 带原因且**不写库**
 POST /api/podcast/episodes/{id}/regenerate-summary    → 仅重跑摘要步骤（后台线程，复用已存转录，不重发通知；仅 summarized 且有转录；失败不动旧摘要/状态；#567）
 GET/POST /api/podcast/feeds ；PUT/DELETE /api/podcast/feeds/{id} → RSS 源管理（#502；POST 抓取验证并提取节目标题；PUT 改 auto_process/title）
 GET/PUT /api/podcast/config                           → 读/改设置（email_to/detail_level/enabled/transcriber/whisper_max_minutes/summarizer[auto|api]（#510）；feeds 已迁到 podcast_feeds 表（#502），whisper_fallback、channel_url、channel_id、whisper_title_filter 已废弃但兼容，#497）

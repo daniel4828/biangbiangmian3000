@@ -2010,6 +2010,30 @@ _AUTO_RETRY_PER_CYCLE = 3
 _RUN_LOCK_PATH = os.path.join(_BASE_DIR, "data", "podcast_check.lock")
 
 
+def _maybe_prepare_fulltext(episode_id: int, kind: str) -> None:
+    """Pre-build the full-text reading version for newsletters (#972).
+
+    Only newsletters: Daniel reads one every morning and wants it ready, not
+    a button to press first. Every other kind generates on request — a
+    podcast transcript is an hour of speech, and most items he only ever
+    reads the summary of.
+
+    Failure is logged and swallowed, exactly like summary_zh (#708): the
+    full text is an extra, and an episode whose summary succeeded must not
+    be marked failed because a translation round hiccupped. The detail page
+    can always generate it later.
+    """
+    if kind != "newsletter":
+        return
+    try:
+        import knowledge.rendition
+        from languages import DEFAULT_LANG
+        knowledge.rendition.get_or_create_fulltext(episode_id, DEFAULT_LANG, generate=True)
+    except Exception as e:
+        logger.warning("podcast: full text for episode %s failed (skipped): %s",
+                       episode_id, e)
+
+
 def _process_episode(episode_id: int, video: dict, detail_level: str, summary: dict) -> None:
     """Process one already-inserted episode end-to-end: transcript -> AI
     summary -> HSK word filter -> Spotify link -> store -> email. Shared by
@@ -2137,6 +2161,7 @@ def _process_episode(episode_id: int, video: dict, detail_level: str, summary: d
             autotag_episode(episode_id, update_fields.get("title") or video["title"],
                             result["summary_de"])
             summary["summarized"] += 1
+            _maybe_prepare_fulltext(episode_id, video.get("kind"))
 
             episode = database.get_episode(episode_id)
             try:
