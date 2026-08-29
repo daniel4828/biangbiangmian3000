@@ -646,6 +646,13 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **抽不出文字也报错**：扫描版 PDF（无文字层）错误信息明说需要 OCR —— 同 `knowledge/article.py` 拒绝付费墙残页
   - Markdown 原样当正文，不渲染成 HTML（摘要提示词吃得下，剥掉之后还得加回来）；10 MB 上限
   - 新依赖 `pypdf`、`python-docx`
+- **摘要最上面的德语 Kurzfassung（#971）**：详情页（和故事加载页的摘要弹窗，两者共用 `_knowledgeSummaryHtml()`）摘要区顶部一个可折叠的 `<details>`，极短的德语要点——判断"这篇值不值得读"用的，不是阅读材料
+  - **从 `summary_de` 派生，零 AI 调用、零新列**：摘要提示词本来就要求每个 `<p>` 的首句用 `<b>` 包住做本段总结，把这些首句拼起来就是现成的 TL;DR。因此**对库里已有的全部素材立刻生效**，不用重新生成摘要，也不可能和正文说两套话
+  - **只取"开头就是 `<b>` 的那个"**（`_knowledgeTldrDe`）：同一份提示词还用 `<strong>` 做段中高亮，`querySelectorAll('b, strong')` 会把那些零碎短语一起拼进去
+  - 旧的纯文本摘要没有 `<b>` → 回退成正文前两句；都拿不到就整块不渲染（不显示一个空框）
+  - **所有语言都显示这块德语**：下面是 Daniel 用来练的 rendition，上面是他用来做决定的德语原文要点
+  - 文本经 `DOMParser` 解析后一律 `_escHtml` 再渲染——同 `_summaryZhHtml` 的规矩，AI 写的文本永远不许自带标记
+  - 展开状态存 `localStorage.knowledgeTldrOpen`，**默认展开**（没人看见的 TL;DR 等于不存在）
 - **一键复制摘要 / 转录（#943）**：详情页两个 📋 按钮把纯文本放进剪贴板。摘要是 `<p>`/`<b>` 标记、转录是双语两栏，手动选中拖不准。`_htmlToPlainText()` 先把内容过一遍 `_summaryZhHtml()`（转义 → 白名单）再取 `textContent` —— **绝不把模型写的标记原样塞进 `innerHTML`**；语言分支与 `_knowledgeSummaryHtml()` 一致；`navigator.clipboard` 只在安全上下文可用（本地实例跑 http），保留 `textarea` + `execCommand` 兜底
 - **和 AI 聊这份素材（#945）**：详情页底部 💬 Chat 面板，模型下拉框可选，对话存库，重开素材还在。Daniel 2026-08-25 定的：上下文有转录用转录、没有才用摘要；面板长在详情页里（不做独立页）；**AI 用提问的语言回答**
   - **上下文每轮重建，绝不复制进对话表**：`routes.story._knowledge_material(episode)`（#661 那条规则，import 而不是抄一份），所以重新生成摘要之后 AI 立刻看到的是新的

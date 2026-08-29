@@ -5064,6 +5064,56 @@ function closeKnowledgeDetail() {
   }
 }
 
+// A very short German TL;DR, derived from summary_de at render time (#971).
+//
+// No new column and no extra AI call: the summary prompt (#567) already
+// requires summary_de to be <p> paragraphs whose FIRST sentence is wrapped in
+// <b> and summarises that paragraph. Stringing those lead sentences together
+// is the TL;DR, and it works retroactively on every item already in the
+// database instead of only on ones summarised from now on.
+//
+// Pre-#708 summaries are plain text with no <b> at all — those fall back to
+// the first two sentences of the text. Returns '' when neither yields
+// anything, so the caller can drop the block entirely.
+function _knowledgeTldrDe(summaryDe) {
+  const raw = (summaryDe || '').trim();
+  if (!raw) return '';
+  // Parsed, never injected: the result is escaped again before it reaches the
+  // page, same rule as _summaryZhHtml — AI-written text never carries markup.
+  const doc = new DOMParser().parseFromString(`<div>${raw}</div>`, 'text/html');
+  // Only the <b> that OPENS a paragraph counts. The same prompt also uses
+  // <strong> for mid-paragraph highlights, and a plain querySelectorAll would
+  // splice those loose fragments into the TL;DR.
+  const leads = Array.from(doc.querySelectorAll('p'))
+    .map(par => par.firstElementChild)
+    .filter(el => el && /^(B|STRONG)$/.test(el.tagName)
+                 && !(el.previousSibling && el.previousSibling.textContent.trim()))
+    .map(el => (el.textContent || '').trim())
+    .filter(Boolean);
+  if (leads.length) return leads.join(' ');
+  const plain = (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+  if (!plain) return '';
+  const sentences = plain.match(/[^.!?]+[.!?]+/g);
+  return sentences ? sentences.slice(0, 2).join(' ').trim() : plain.slice(0, 300);
+}
+
+// Open by default: a TL;DR nobody sees is pointless. The toggle is remembered
+// so Daniel can fold it away for good once he stops wanting it.
+function _knowledgeTldrHtml(ep) {
+  const text = _knowledgeTldrDe(ep.summary_de);
+  if (!text) return '';
+  const open = localStorage.getItem('knowledgeTldrOpen') === '0' ? '' : ' open';
+  return `<details class="knowledge-tldr" onclick="setTimeout(_rememberKnowledgeTldr, 0)"${open}>
+      <summary>Kurzfassung</summary>
+      <p>${_escHtml(text)}</p>
+    </details>`;
+}
+
+function _rememberKnowledgeTldr() {
+  const el = document.querySelector('.knowledge-tldr');
+  if (el) localStorage.setItem('knowledgeTldrOpen', el.open ? '1' : '0');
+}
+
 // The summary block of a knowledge item. Shared (#929) by the detail view below
 // and the popup the story loading screen opens — a second copy would drift the
 // moment one of the two language branches changes.
@@ -5074,15 +5124,18 @@ function closeKnowledgeDetail() {
 // falling back to a German block Daniel didn't ask to read.
 function _knowledgeSummaryHtml(ep) {
   if (activeLang() === 'zh') {
-    return `${ep.summary_zh ? `<div id="podcast-summary-zh">${_summaryZhHtml(ep.summary_zh)}</div>` : ''}
+    return `${_knowledgeTldrHtml(ep)}
+       ${ep.summary_zh ? `<div id="podcast-summary-zh">${_summaryZhHtml(ep.summary_zh)}</div>` : ''}
        <div id="podcast-summary-de">${ep.summary_de || ''}</div>`;
   }
-  return ep.rendition
+  // The TL;DR stays German in every language (#971): the block below is the
+  // rendition Daniel reads for practice, this is the gist he reads to decide.
+  return _knowledgeTldrHtml(ep) + (ep.rendition
     // Same whitelist sanitizer the zh summary uses: the rendition text
     // passed through Google Translate and the annotator, so it gets
     // escaped and only <p>/<b>/<em>/<i>/<br> are let back through.
     ? `<div id="podcast-summary-rendition">${_summaryZhHtml(ep.rendition.summary || '')}</div>`
-    : `<p class="keymap-hint">${_escHtml(ep.rendition_error || 'Rendition unavailable.')}</p>`;
+    : `<p class="keymap-hint">${_escHtml(ep.rendition_error || 'Rendition unavailable.')}</p>`);
 }
 
 function _renderKnowledgeDetail(ep) {
