@@ -112,10 +112,12 @@ def get_cards_for_word(word_id: int) -> list[dict]:
     """Return all cards for a word with full deck path (parent › child)."""
     conn = get_db()
     rows = conn.execute(
-        """SELECT c.*, d.name as deck_name, p.name as parent_deck_name
+        """SELECT c.*, d.name as deck_name, p.name as parent_deck_name,
+                  pr.reading_enabled as reading_enabled
            FROM cards c
            JOIN decks d ON d.id = c.deck_id
            LEFT JOIN decks p ON p.id = d.parent_id
+           JOIN deck_presets pr ON pr.id = d.preset_id
            WHERE c.word_id = ? AND c.deleted_at IS NULL ORDER BY c.category""",
         (word_id,),
     ).fetchall()

@@ -7746,6 +7746,8 @@ function renderReviewCatRow() {
   const html = CATS.map(cat => {
     const c = cards.find(c => c.category === cat && !c.deleted_at);
     if (!c) return '';
+    // Reading disabled via preset → no R circle (the card is kept but hidden)
+    if (cat === 'reading' && !c.reading_enabled) return '';
     const isCurrent = cat === card?.category;
     const isSusp = c.state === 'suspended';
     const cls = ['rcat-btn', isSusp ? 'rcat-susp' : 'rcat-active', isCurrent ? 'rcat-current' : ''].join(' ').trim();
@@ -7759,7 +7761,9 @@ function renderReviewCatRow() {
 function _toggleSuspendCat(category) {
   const cards = wordDetails?.cards || [];
   const c = cards.find(c => c.category === category && !c.deleted_at);
-  if (c) toggleReviewCat(c.id);
+  if (!c) return;
+  if (category === 'reading' && !c.reading_enabled) return; // hidden circle → shortcut inert
+  toggleReviewCat(c.id);
 }
 
 async function toggleReviewCat(cardId) {
