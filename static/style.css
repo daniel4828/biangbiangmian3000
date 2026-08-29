@@ -3309,6 +3309,19 @@ a.nav-btn { text-decoration: none; }
   color: var(--muted);
   cursor: pointer;
 }
+/* 手机上每行放两个筛选器。`select.opt-input` 的固定 210px 优先级比
+   .knowledge-filter-select 高（元素+类 vs 单类），所以这里必须同样带上元素
+   选择器，否则 390px 宽的屏幕上六个筛选器各占一行，一屏全是空白（#955） */
+@media (max-width: 600px) {
+  .knowledge-filter-bar select.knowledge-filter-select {
+    width: auto;
+    flex: 1 1 calc(50% - 3px);
+    min-width: 0;
+    font-size: 13px;
+    height: 32px;
+  }
+  .knowledge-filter-toggle { flex: 1 1 100%; }
+}
 .knowledge-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .knowledge-chip {
   font-size: 12px;
