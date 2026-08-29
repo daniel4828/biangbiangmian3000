@@ -162,20 +162,32 @@ def _knowledge_mail_env(monkeypatch):
 
 
 def _configure_env(monkeypatch, allowed="daniel@example.com"):
+    """IMAP credentials, plus the senders whose mail the cron may process.
+
+    Since #960 that list is not an environment variable any more but
+    mail_senders.auto_process in the database, so it is stubbed at
+    knowledge.mailbox.auto_process_senders() — these tests are about the
+    polling logic, not about how the switch is stored (database/mailbox.py
+    owns that, and tests/test_mailbox_view.py covers it).
+    """
     monkeypatch.setenv("KNOWLEDGE_IMAP_HOST", "imap.example.com")
     monkeypatch.setenv("KNOWLEDGE_IMAP_USER", "kb@example.com")
     monkeypatch.setenv("KNOWLEDGE_IMAP_PASSWORD", "secret")
-    if allowed is not None:
-        monkeypatch.setenv("KNOWLEDGE_MAIL_ALLOWED_SENDERS", allowed)
+    addrs = set()
+    if allowed:
+        addrs = {a.strip().lower() for a in allowed.split(",") if a.strip()}
+    monkeypatch.setattr(mailbox, "auto_process_senders", lambda: addrs)
 
 
-def test_no_allowed_senders_processes_nothing(monkeypatch):
+def test_no_auto_senders_processes_nothing(monkeypatch):
     """Security-critical (#655): with the allowlist unset, nothing gets
     read or marked seen — not even an IMAP connection is opened."""
     monkeypatch.setenv("KNOWLEDGE_IMAP_HOST", "imap.example.com")
     monkeypatch.setenv("KNOWLEDGE_IMAP_USER", "kb@example.com")
     monkeypatch.setenv("KNOWLEDGE_IMAP_PASSWORD", "secret")
-    # KNOWLEDGE_MAIL_ALLOWED_SENDERS deliberately left unset
+    # No sender has the automatic switch on (#960) — the empty gate must
+    # mean "process nobody", never "process everybody".
+    monkeypatch.setattr(mailbox, "auto_process_senders", lambda: set())
 
     called = {"factory": False}
 
@@ -186,13 +198,13 @@ def test_no_allowed_senders_processes_nothing(monkeypatch):
     summary = mailbox.check_mailbox(imap_factory=factory)
 
     assert called["factory"] is False
-    assert summary["reason"] == "no_allowed_senders"
+    assert summary["reason"] == "no_auto_senders"
     assert summary["checked"] == 0
     assert summary["processed"] == 0
 
 
 def test_missing_credentials_skips(monkeypatch):
-    monkeypatch.setenv("KNOWLEDGE_MAIL_ALLOWED_SENDERS", "daniel@example.com")
+    monkeypatch.setattr(mailbox, "auto_process_senders", lambda: {"daniel@example.com"})
     # host/user/password left unset
 
     summary = mailbox.check_mailbox(imap_factory=lambda: (_ for _ in ()).throw(
@@ -534,7 +546,7 @@ def test_non_whitelisted_mail_is_never_marked_seen(monkeypatch):
     assert fake.seen_flagged == []
 
 
-def test_search_is_scoped_to_each_whitelisted_sender(monkeypatch):
+def test_search_is_scoped_to_each_auto_sender(monkeypatch):
     """One `UNSEEN FROM <addr>` search per whitelisted address — a bare
     UNSEEN would pull every private mail's body through this process."""
     _configure_env(monkeypatch, allowed="daniel@example.com, newsletter@nl.faz.net")

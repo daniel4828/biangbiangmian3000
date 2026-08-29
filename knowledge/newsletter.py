@@ -72,6 +72,14 @@ def source_name(addr: str) -> str | None:
     return _NEWSLETTER_SOURCES.get(addr.strip().lower())
 
 
+def known_sender_addresses() -> list:
+    """Registered newsletter senders, for seeding the mail_senders switch
+    table at startup (#960). The registry here stays the source of the
+    *cleaning rules* (clean_body); which senders get processed unattended
+    is Daniel's call, stored in mail_senders."""
+    return sorted(_NEWSLETTER_SOURCES)
+
+
 def clean_body(text: str) -> str:
     """Strip newsletter boilerplate lines out of an already-detagged body
     (mailbox.plain_text_body() has already turned the HTML mail into plain

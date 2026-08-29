@@ -23,8 +23,8 @@ cron 每分钟触发时上一轮还没跑完就叠跑——处理邮件里的 UR
     KNOWLEDGE_IMAP_HOST              IMAP 服务器
     KNOWLEDGE_IMAP_PORT              默认 993（SSL）
     KNOWLEDGE_IMAP_USER / _PASSWORD  凭据
-    KNOWLEDGE_MAIL_ALLOWED_SENDERS   逗号分隔的白名单发件人；留空则整个
-                                      邮箱检查被跳过，不处理任何邮件
+    （#960 起自动处理哪些发件人由库里的 mail_senders 开关决定，
+     不再是 KNOWLEDGE_MAIL_ALLOWED_SENDERS；一个都没开就整轮跳过）
     DB_PATH                          数据库路径，默认 data/srs.db
 """
 import fcntl
@@ -63,8 +63,8 @@ def main() -> int:
         summary = knowledge.mailbox.check_mailbox()
 
         reason = summary.get("reason")
-        if reason == "no_allowed_senders":
-            _log("KNOWLEDGE_MAIL_ALLOWED_SENDERS 未配置，跳过（未处理任何邮件）。")
+        if reason == "no_auto_senders":
+            _log("没有发件人开着自动处理开关，跳过（未处理任何邮件）。")
             return 0
         if reason == "no_credentials":
             _log("IMAP 凭据未完整配置，跳过。")
