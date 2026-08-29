@@ -1036,11 +1036,11 @@ function showView(name) {
     name === 'knowledge'    ? 'Knowledge' :
     name === 'books'        ? 'Books' : 'biangbiangmian3000';
   if (name === 'decks') quickMode = false;
-  // ＋ during review (#829). Hidden offline for the same reason as ↺: the whole
-  // entry generation is an AI call, so it can only fail there (#612).
+  // ＋ in every view (#829 review-only, widened in #958). Hidden offline for
+  // the same reason as ↺: the whole entry generation is an AI call, so it can
+  // only fail there (#612).
   const headerAddBtn = document.getElementById('header-add-btn');
-  if (headerAddBtn) headerAddBtn.style.display =
-    (name === 'review' && !_offlineMode) ? '' : 'none';
+  if (headerAddBtn) headerAddBtn.style.display = _offlineMode ? 'none' : '';
   const headerRegenBtn = document.getElementById('header-regen-btn');
   // Offline mode hides both regenerate affordances — they can only fail (#612).
   if (headerRegenBtn) headerRegenBtn.style.display =
