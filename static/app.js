@@ -5156,6 +5156,11 @@ function _renderKnowledgeDetail(ep) {
       ${transcript || `<p class="keymap-hint">No ${contentLabel.toLowerCase()} available.</p>`}
     </div>
     ${_knowledgeChatHtml(ep)}`;
+  // #967: only the summary/rendition blocks, not the transcript below — the
+  // word list was extracted from the summary, and the bilingual transcript
+  // columns are for reading along, not for picking words out of.
+  ['podcast-summary-zh', 'podcast-summary-de', 'podcast-summary-rendition']
+    .forEach(id => _makeWordsTappable(document.getElementById(id)));
   // The saved conversation (#945) is fetched after the markup exists, so the
   // detail view still renders instantly when the chat request is slow.
   _loadKnowledgeChat(ep.id);
@@ -5427,15 +5432,18 @@ async function doPodcastNotify(channel) {
   }
 }
 
-function doWordTableAdd(idx) {
+// `extraBtn` (#967) is the button of the tap-a-word popup over the text. Both
+// it and the table row's own button show the same progress, so a word added
+// from the text does not leave a still-clickable "★ List" in the table below
+// suggesting nothing happened.
+function doWordTableAdd(idx, extraBtn) {
   const w = _wordTableWords[idx];
-  const btn = document.getElementById(`word-table-add-${idx}`);
-  if (!w || !btn) return;
+  const btns = [document.getElementById(`word-table-add-${idx}`), extraBtn].filter(Boolean);
+  if (!w || !btns.length) return;
   const wordZh = w.word || w.word_zh || '';
   if (!wordZh) return;
 
-  btn.disabled = true;
-  btn.textContent = '…';
+  _setWordBtns(btns, '…', { disabled: true });
   // Generation takes ~30s in the background — the other rows stay clickable,
   // so several words can be queued up at once.
   //
@@ -5450,16 +5458,22 @@ function doWordTableAdd(idx) {
     // cancelled — nothing happened, so put the row's button back as if it
     // had never been clicked.
     if (state === 'idle') {
-      btn.disabled = false;
-      btn.textContent = '★ List';
-      btn.classList.remove('podcast-add-error');
+      _setWordBtns(btns, '★ List', { disabled: false, error: false });
       return;
     }
-    btn.textContent = text;
-    btn.classList.toggle('podcast-add-error', state === 'error');
     // Only a failure is worth retrying; a finished add is not repeatable.
-    if (state === 'error') btn.disabled = false;
+    _setWordBtns(btns, text, { disabled: state !== 'error', error: state === 'error' });
   }, _wordTableLang);
+}
+
+// Same label and state on every button standing for one word — the table row's
+// and, when the word was tapped in the text, the popup's (#967).
+function _setWordBtns(btns, text, { disabled, error } = {}) {
+  btns.forEach(b => {
+    b.textContent = text;
+    if (disabled !== undefined) b.disabled = disabled;
+    if (error !== undefined) b.classList.toggle('podcast-add-error', error);
+  });
 }
 
 // ── New-words table, shared by the knowledge detail page and the book reader ─
@@ -5501,24 +5515,156 @@ function wordTableHtml(emptyHint) {
 // the summary text above were baked in when it was generated and don't change,
 // so making the row vanish would suggest the word is gone from the page when
 // it plainly isn't. What actually changes is the NEXT summary.
-function doWordTableKnown(idx) {
+function doWordTableKnown(idx, extraBtn) {
   const w = _wordTableWords[idx];
-  const btn = document.getElementById(`word-table-known-${idx}`);
-  if (!w || !btn) return;
+  const btns = [document.getElementById(`word-table-known-${idx}`), extraBtn].filter(Boolean);
+  if (!w || !btns.length) return;
   const wordZh = w.word || w.word_zh || '';
   if (!wordZh) return;
 
-  btn.disabled = true;
-  btn.textContent = '…';
+  _setWordBtns(btns, '…', { disabled: true });
   // lang (#804): known_words is per-language — see markWordKnown's docstring.
   markWordKnown(wordZh, _wordTableLang).then(() => {
-    btn.textContent = '✓ known';
+    _setWordBtns(btns, '✓ known');
     document.getElementById(`word-table-row-${idx}`)?.classList.add('podcast-word-known');
   }).catch(e => {
-    btn.textContent = e.message || 'failed';
-    btn.classList.add('podcast-add-error');
-    btn.disabled = false;  // only a failure is worth retrying
+    // only a failure is worth retrying
+    _setWordBtns(btns, e.message || 'failed', { disabled: false, error: true });
   });
+}
+
+// ── Tapping a new word in the text itself (#967) ────────────────────────────
+//
+// The word table under the text already offers ★ List and ✓ Known, but while
+// reading, the eye is up in the sentence and the hand has to go hunt for the
+// same word in a table below — on a phone especially. The Chrome extension
+// solves this on the desktop (K / Shift+K over any word); a phone cannot run
+// extensions at all, which is what this is for.
+//
+// Only the two screens that render text and word table in the same pass call
+// this (knowledge detail, book page). The story loading screen shares
+// _knowledgeSummaryHtml() but never sets the word table, so it would wrap
+// against whatever list the previous screen left behind.
+function _makeWordsTappable(root) {
+  if (!root || !_wordTableWords.length) return;
+  const isZh = _wordTableLang === 'zh';
+  // First index wins: the table is in order of first appearance, and a word
+  // repeated in the list would otherwise point the text at the later row.
+  const index = new Map();
+  _wordTableWords.forEach((w, i) => {
+    const key = (w.word || w.word_zh || '').trim();
+    if (key && !index.has(isZh ? key : key.toLowerCase())) {
+      index.set(isZh ? key : key.toLowerCase(), i);
+    }
+  });
+  if (!index.size) return;
+  // Longest first, so "大语言模型" wins over "模型" at the same position.
+  const alternation = [...index.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const re = new RegExp(`(${alternation})`, isZh ? 'g' : 'gi');
+
+  const nodes = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+
+  nodes.forEach(node => {
+    const text = node.nodeValue;
+    if (!text || !text.trim()) return;
+    re.lastIndex = 0;
+    let match, cursor = 0, frag = null;
+    while ((match = re.exec(text)) !== null) {
+      // Letter boundaries are checked here rather than with a lookbehind in
+      // the pattern: Safari only learned lookbehind in 16.4, and a phone is
+      // exactly where this feature matters. Chinese needs no check — it has
+      // no letter boundaries to respect.
+      if (!isZh && (_isLetter(text[match.index - 1]) ||
+                    _isLetter(text[match.index + match[0].length]))) continue;
+      frag = frag || document.createDocumentFragment();
+      frag.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+      const span = document.createElement('span');
+      span.className = 'tap-word';
+      span.dataset.wordIdx = String(index.get(isZh ? match[0] : match[0].toLowerCase()));
+      span.textContent = match[0];
+      frag.appendChild(span);
+      cursor = match.index + match[0].length;
+    }
+    if (!frag) return;
+    frag.appendChild(document.createTextNode(text.slice(cursor)));
+    node.parentNode.replaceChild(frag, node);
+  });
+
+  root.addEventListener('click', (e) => {
+    const span = e.target.closest?.('.tap-word');
+    if (!span) return;
+    e.preventDefault();
+    _openWordActions(Number(span.dataset.wordIdx), span);
+  });
+}
+
+function _isLetter(ch) {
+  return !!ch && /[\p{L}\p{M}]/u.test(ch);
+}
+
+// The tap target's own little panel: what the word means, and the same two
+// actions as its table row. Both buttons hand off to the table's handlers —
+// there is exactly one add path in this application (#643) and exactly one
+// "I know this" path (#710), and neither gets a second copy here.
+function _openWordActions(idx, anchor) {
+  closeWordActions();
+  const w = _wordTableWords[idx];
+  if (!w) return;
+  const word = w.word || w.word_zh || '';
+  const gloss = w.definition_de || w.definition || '';
+
+  const box = document.createElement('div');
+  box.className = 'word-actions';
+  box.id = 'word-actions';
+  box.innerHTML = `
+    <div class="word-actions-head">
+      <span class="word-actions-word">${_escHtml(word)}</span>
+      ${w.pinyin ? `<span class="word-actions-pinyin">${_escHtml(w.pinyin)}</span>` : ''}
+      <button class="word-actions-close" aria-label="Close">✕</button>
+    </div>
+    ${gloss ? `<p class="word-actions-gloss">${_escHtml(gloss)}</p>` : ''}
+    <div class="word-actions-buttons">
+      <button class="word-table-btn" id="word-actions-add">★ List</button>
+      <button class="word-table-btn" id="word-actions-known">✓ Known</button>
+    </div>`;
+  document.body.appendChild(box);
+
+  box.querySelector('.word-actions-close').onclick = closeWordActions;
+  const addBtn = box.querySelector('#word-actions-add');
+  const knownBtn = box.querySelector('#word-actions-known');
+  addBtn.onclick = () => doWordTableAdd(idx, addBtn);
+  knownBtn.onclick = () => doWordTableKnown(idx, knownBtn);
+
+  // Wide screens anchor the panel under the word; narrow ones get a bottom
+  // sheet (see style.css), which needs no positioning and stays reachable by
+  // the thumb.
+  if (window.innerWidth > 600) {
+    const rect = anchor.getBoundingClientRect();
+    const width = box.offsetWidth;
+    box.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - box.offsetHeight - 8)}px`;
+    box.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+  }
+  setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);
+  document.addEventListener('keydown', _wordActionsEscape);
+}
+
+function _wordActionsOutside(e) {
+  if (!e.target.closest?.('#word-actions')) closeWordActions();
+}
+
+function _wordActionsEscape(e) {
+  if (e.key === 'Escape') closeWordActions();
+}
+
+function closeWordActions() {
+  document.getElementById('word-actions')?.remove();
+  document.removeEventListener('click', _wordActionsOutside);
+  document.removeEventListener('keydown', _wordActionsEscape);
 }
 
 // Hash direct-link support: pre-#653 podcast emails/Signal messages link to
@@ -14529,6 +14675,7 @@ function _renderBookPage(page) {
       <h2 class="keymap-heading">New words on this page</h2>
       ${wordTableHtml('Nothing above your level on this page.')}
     </div>`;
+  _makeWordsTappable(document.querySelector('#view-books-content .book-page'));
 }
 
 function turnBookPage(delta) {
