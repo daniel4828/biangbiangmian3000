@@ -765,6 +765,16 @@ def init_db() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_mail_message_id "
                  "ON podcast_episodes(mail_message_id)")
 
+    # #968: blocked senders. mail_senders is younger than the app, but a
+    # database created between #960 and #968 already has the table without
+    # this column.
+    if "mail_senders" in existing:
+        ms_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mail_senders)").fetchall()}
+        if "blocked" not in ms_cols:
+            conn.execute("ALTER TABLE mail_senders ADD COLUMN "
+                         "blocked INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+
     # #960: seed the sender switch table from knowledge/newsletter.py's
     # registry, so retiring KNOWLEDGE_MAIL_ALLOWED_SENDERS doesn't silently
     # stop the F.A.Z. Frühdenker mail Daniel gets every morning (#925).

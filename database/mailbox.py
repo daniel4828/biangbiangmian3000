@@ -19,19 +19,66 @@ def get_mail_senders() -> list:
     here are manual — the default, and the safe direction."""
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT address, name, auto_process, created_at "
+            "SELECT address, name, auto_process, blocked, created_at "
             "FROM mail_senders ORDER BY auto_process DESC, address"
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def auto_mail_senders() -> set:
-    """Addresses whose mail the cron processes unattended."""
+    """Addresses whose mail the cron processes unattended.
+
+    Blocked senders are excluded here as well as in the UI: the switch and
+    the block live in the same row, and a check that exists in only one of
+    the two places is a blocked sender who still costs money every morning.
+    """
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT address FROM mail_senders WHERE auto_process = 1"
+            "SELECT address FROM mail_senders WHERE auto_process = 1 AND blocked = 0"
         ).fetchall()
     return {r["address"] for r in rows}
+
+
+def blocked_mail_senders() -> set:
+    """Addresses hidden from the mail list entirely (#968)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT address FROM mail_senders WHERE blocked = 1"
+        ).fetchall()
+    return {r["address"] for r in rows}
+
+
+def set_mail_sender_blocked(address: str, blocked: bool, name: str = None) -> dict:
+    """Block or unblock a sender. Blocking clears auto_process — see the
+    column comment in schema.sql for why the contradictory state is not
+    allowed to exist rather than resolved later."""
+    address = (address or "").strip().lower()
+    if not address:
+        raise ValueError("address is required")
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO mail_senders (address, name, blocked, auto_process) "
+            "VALUES (?, ?, ?, 0) "
+            "ON CONFLICT(address) DO UPDATE SET "
+            "  blocked = excluded.blocked, "
+            "  auto_process = CASE WHEN excluded.blocked = 1 THEN 0 ELSE mail_senders.auto_process END, "
+            "  name = COALESCE(excluded.name, mail_senders.name)",
+            (address, name, 1 if blocked else 0),
+        )
+        conn.commit()
+    return {"address": address, "blocked": 1 if blocked else 0}
+
+
+def delete_mail_sender(address: str) -> bool:
+    """Forget a sender's settings — back to the default (manual, not
+    blocked). Deletes no mail: the mail list is a live IMAP view, nothing
+    about it is stored here. Returns False if there was no row, so the API
+    can 404 instead of pretending."""
+    address = (address or "").strip().lower()
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM mail_senders WHERE address = ?", (address,))
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def set_mail_sender_auto(address: str, auto: bool, name: str = None) -> dict:
@@ -49,6 +96,9 @@ def set_mail_sender_auto(address: str, auto: bool, name: str = None) -> dict:
             "INSERT INTO mail_senders (address, name, auto_process) VALUES (?, ?, ?) "
             "ON CONFLICT(address) DO UPDATE SET "
             "  auto_process = excluded.auto_process, "
+            # Subscribing to a blocked sender unblocks them — that is what
+            # the click means, and the two states must not coexist.
+            "  blocked = CASE WHEN excluded.auto_process = 1 THEN 0 ELSE mail_senders.blocked END, "
             "  name = COALESCE(excluded.name, mail_senders.name)",
             (address, name, 1 if auto else 0),
         )

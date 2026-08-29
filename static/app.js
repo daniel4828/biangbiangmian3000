@@ -14966,6 +14966,8 @@ const _mailboxState = {
   busy: null,     // uid currently being processed — one at a time, see below
   notice: null,   // {text, error} shown under the toolbar
   tab: 'inbox',   // 'inbox' | 'senders' (#965)
+  range: 'week',  // 'week' | 'month' | 'all' (#968) — this week by default
+  hidden: 0,      // mails from blocked senders left out of this page
   senders: null,  // aggregated sender list, loaded on first switch
   sendersBusy: null,
 };
@@ -14995,12 +14997,14 @@ async function _loadMailbox() {
     const params = new URLSearchParams({
       offset: _mailboxState.offset,
       limit: _MAILBOX_PAGE,
+      range: _mailboxState.range,
     });
     if (_mailboxState.query) params.set('q', _mailboxState.query);
     const data = await api('GET', `/api/mailbox?${params}`);
     _mailboxState.total = data.total || 0;
     _mailboxState.uidvalidity = data.uidvalidity || '';
     _mailboxState.messages = data.messages || [];
+    _mailboxState.hidden = data.hidden || 0;
     _renderMailbox();
   } catch (e) {
     // The server's message says which of the two it is — mailbox
@@ -15014,6 +15018,25 @@ function _mailboxDate(raw) {
   const d = new Date(raw);
   if (isNaN(d)) return _escHtml(raw || '');
   return d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+const _MAILBOX_RANGES = [['week', 'This week'], ['month', '4 weeks'], ['all', 'All']];
+
+function _mailboxRangePicker() {
+  return `<select class="opt-input mailbox-range" onchange="setMailboxRange(this.value)">
+    ${_MAILBOX_RANGES.map(([v, label]) =>
+      `<option value="${v}"${_mailboxState.range === v ? ' selected' : ''}>${label}</option>`).join('')}
+  </select>`;
+}
+
+function setMailboxRange(range) {
+  _mailboxState.range = range;
+  _mailboxState.offset = 0;
+  // The sender counts are per range, so a cached scan for the old range
+  // must not be shown under the new one's label.
+  _mailboxState.senders = null;
+  if (_mailboxState.tab === 'senders') _loadMailboxSenders();
+  else _loadMailbox();
 }
 
 function _mailboxTabs() {
@@ -15043,7 +15066,8 @@ async function _loadMailboxSenders(refresh) {
   const el = document.getElementById('view-mailbox-content');
   el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Scanning the mailbox…</p>`;
   try {
-    const data = await api('GET', `/api/mailbox/senders${refresh ? '?refresh=1' : ''}`);
+    const data = await api('GET',
+      `/api/mailbox/senders?range=${_mailboxState.range}${refresh ? '&refresh=1' : ''}`);
     _mailboxState.senders = data.senders || [];
     // A scan failure still returns the configured senders, so unsubscribing
     // works even while IMAP is down — but say so rather than showing a list
@@ -15062,7 +15086,7 @@ function _renderMailboxSenders() {
   const rows = (st.senders || []).map(sn => {
     const busy = st.sendersBusy === sn.address;
     return `
-      <div class="mailbox-row${sn.auto_process ? ' mailbox-row-sub' : ''}">
+      <div class="mailbox-row${sn.auto_process ? ' mailbox-row-sub' : ''}${sn.blocked ? ' mailbox-row-blocked' : ''}">
         <div class="mailbox-meta">
           <span class="mailbox-from" title="${_escHtml(sn.address)}">${_escHtml(sn.address)}</span>
           <span class="mailbox-date">${sn.count} mail${sn.count === 1 ? '' : 's'}${sn.last_date ? ' · ' + _mailboxDate(sn.last_date) : ''}</span>
@@ -15070,9 +15094,14 @@ function _renderMailboxSenders() {
         <div class="mailbox-subject">${_escHtml(sn.name)}</div>
         <div class="mailbox-actions">
           <button class="btn-secondary mailbox-btn" onclick="filterMailboxBySender('${_escHtml(sn.address)}')" title="Show this sender's mail">📥</button>
-          <button class="mailbox-auto${sn.auto_process ? ' on' : ''}"${busy ? ' disabled' : ''}
+          <button class="mailbox-auto${sn.auto_process ? ' on' : ''}"${busy || sn.blocked ? ' disabled' : ''}
                   onclick="toggleMailSender('${_escHtml(sn.address)}', ${sn.auto_process ? 'false' : 'true'}, '${_escHtml(sn.name)}')">
             ${sn.auto_process ? '⚡ Subscribed' : 'Subscribe'}
+          </button>
+          <button class="mailbox-block${sn.blocked ? ' on' : ''}"
+                  title="${sn.blocked ? 'Show this sender again' : 'Hide this sender from the list and never process it'}"
+                  onclick="blockMailSender('${_escHtml(sn.address)}', ${sn.blocked ? 'false' : 'true'}, '${_escHtml(sn.name)}')">
+            ${sn.blocked ? 'Unblock' : '🚫'}
           </button>
         </div>
       </div>`;
@@ -15082,8 +15111,10 @@ function _renderMailboxSenders() {
     ${_mailboxTabs()}
     <div class="mailbox-toolbar">
       <span class="keymap-hint" style="flex:1">
-        Subscribing processes every <em>future</em> mail from that sender automatically — it does not go back over old ones.
+        Counts are for the selected period. Subscribing processes every <em>future</em>
+        mail from that sender automatically — it does not go back over old ones.
       </span>
+      ${_mailboxRangePicker()}
       <button class="btn-secondary" onclick="_loadMailboxSenders(true)" title="Rescan the mailbox">⟳</button>
     </div>
     ${st.notice ? `<p class="mailbox-notice${st.notice.error ? ' error' : ''}">${_escHtml(st.notice.text)}</p>` : ''}
@@ -15126,6 +15157,8 @@ function _renderMailbox() {
             ${m.auto_process ? '⚡ Auto' : '⚡'}
           </button>
           ${action}
+          <button class="mailbox-del" title="Move to the Gmail trash"
+                  onclick="deleteMail('${_escHtml(m.uid)}')">🗑</button>
         </div>
       </div>`;
   }).join('');
@@ -15136,10 +15169,12 @@ function _renderMailbox() {
       <input id="mailbox-search" class="opt-input" placeholder="Search sender or subject…"
              value="${_escHtml(st.query)}" onkeydown="if(event.key==='Enter')searchMailbox()">
       <button class="btn-secondary" onclick="searchMailbox()">Search</button>
+      ${_mailboxRangePicker()}
       <button class="btn-secondary" onclick="_loadMailbox()" title="Refetch from Gmail">⟳</button>
     </div>
     <p class="keymap-hint" style="margin:8px 0 12px">
       ${st.total ? `${from}–${to} of ${st.total}` : 'No mail found'}
+      ${st.hidden ? `· ${st.hidden} hidden (blocked sender)` : ''}
       · ⚡ = process every future mail from that sender automatically
     </p>
     ${st.notice ? `<p class="mailbox-notice${st.notice.error ? ' error' : ''}">${_escHtml(st.notice.text)}</p>` : ''}
@@ -15204,6 +15239,48 @@ async function toggleMailSender(address, auto, name) {
     _mailboxNotice(auto
       ? `Mail from ${address} is now processed automatically.`
       : `Automatic processing for ${address} is off.`);
+  } catch (e) {
+    _mailboxNotice(`Could not change the setting: ${e.message || 'error'}`, true);
+  }
+}
+
+async function deleteMail(uid) {
+  const msg = _mailboxState.messages.find(m => m.uid === uid);
+  const what = msg ? `“${msg.subject}”` : 'this mail';
+  // Recoverable for 30 days in Gmail — the confirmation says so, because a
+  // dialog that reads like a permanent deletion trains people to hesitate
+  // over something that is in fact undoable.
+  if (!await showConfirm(`Move ${what} to the Gmail trash? You can restore it there for 30 days.`)) return;
+  try {
+    const params = _mailboxState.uidvalidity
+      ? `?uidvalidity=${encodeURIComponent(_mailboxState.uidvalidity)}` : '';
+    await api('DELETE', `/api/mailbox/${encodeURIComponent(uid)}${params}`);
+    _mailboxState.messages = _mailboxState.messages.filter(m => m.uid !== uid);
+    _mailboxState.total = Math.max(0, _mailboxState.total - 1);
+    _mailboxState.notice = { text: 'Moved to the Gmail trash.', error: false };
+    _renderMailbox();
+  } catch (e) {
+    _mailboxNotice(`Could not delete: ${e.message || 'error'}`, true);
+  }
+}
+
+async function blockMailSender(address, blocked, name) {
+  if (blocked && !await showConfirm(
+      `Block ${address}? Their mail disappears from this list and is never processed. No mail is deleted.`)) return;
+  try {
+    await api('PUT', '/api/mailbox/senders/block', { address, blocked, name });
+    (_mailboxState.senders || []).forEach(sn => {
+      if (sn.address === address) {
+        sn.blocked = blocked;
+        // Blocking clears the subscription server-side; showing it still on
+        // here would be the client telling a different story than the row.
+        if (blocked) sn.auto_process = false;
+      }
+    });
+    _mailboxState.notice = { text: blocked
+      ? `${address} is blocked — their mail is hidden and never processed.`
+      : `${address} is unblocked.`, error: false };
+    _renderMailboxSenders();
   } catch (e) {
     _mailboxNotice(`Could not change the setting: ${e.message || 'error'}`, true);
   }

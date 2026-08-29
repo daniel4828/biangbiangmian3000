@@ -390,6 +390,45 @@ def _uidvalidity(conn) -> str:
     return ""
 
 
+# Time ranges the UI offers (#968). Daniel's question is "what arrived this
+# week worth reading", not "show me the archive" — a 1600-mail inbox answers
+# the second question by default, which is why "week" is the default here.
+# "all" stays reachable so a mail from last month isn't unreachable without
+# going back to Gmail's web UI, which would defeat the point of this view.
+_RANGES = ("week", "month", "all")
+DEFAULT_RANGE = "week"
+
+
+def _since_date(range_name: str):
+    """Start date for an IMAP SINCE, or None for no limit.
+
+    "week" means this calendar week (from Monday), not the last 7 days —
+    that is what "seit dieser Woche" asks for, and it keeps the answer
+    stable through the day instead of sliding.
+    """
+    from datetime import date, timedelta
+    if range_name == "all":
+        return None
+    today = date.today()
+    if range_name == "month":
+        return today - timedelta(days=28)
+    return today - timedelta(days=today.weekday())
+
+
+def _since_criteria(range_name: str):
+    """IMAP SEARCH terms for a range. Filtering happens on the server —
+    fetching everything and slicing here would make the range setting
+    pointless, since the cost is in what crosses the wire."""
+    since = _since_date(range_name)
+    if since is None:
+        return ()
+    # IMAP wants dd-Mon-yyyy with an English month abbreviation, which
+    # strftime("%b") would localise. Spelled out to stay locale-proof.
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    return ("SINCE", f"{since.day:02d}-{months[since.month - 1]}-{since.year}")
+
+
 # IMAP header set for the list. Deliberately NOT the body: the inbox this
 # points at is Daniel's personal Gmail (1600 mails and counting), and the
 # list is re-fetched on every page view. Envelope-sized fetches keep that
@@ -399,18 +438,20 @@ _ENVELOPE_PARTS = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])"
 
 
 def list_inbox(offset: int = 0, limit: int = 50, query: str = "",
-               imap_factory=None) -> dict:
+               range_name: str = DEFAULT_RANGE, imap_factory=None) -> dict:
     """One page of the inbox, newest first, envelopes only (#960).
 
     `query` is matched by the IMAP server against From and Subject (OR'd),
     not by us — filtering client-side would mean downloading every header
-    in a 1600-mail mailbox to throw almost all of them away.
+    in a 1600-mail mailbox to throw almost all of them away. `range_name`
+    (#968) is likewise turned into an IMAP SINCE.
     """
+    since = _since_criteria(range_name)
     with _connection(imap_factory=imap_factory, readonly=True) as conn:
         if query:
-            criteria = ("OR", "FROM", query, "SUBJECT", query)
+            criteria = since + ("OR", "FROM", query, "SUBJECT", query)
         else:
-            criteria = ("ALL",)
+            criteria = since or ("ALL",)
         status, data = conn.uid("SEARCH", None, *criteria)
         if status != "OK":
             raise MailboxError(f"IMAP SEARCH 失败: {status}")
@@ -442,6 +483,14 @@ def list_inbox(offset: int = 0, limit: int = 50, query: str = "",
             })
 
     import database
+    # Blocked senders are dropped after the fetch, not filtered in IMAP: a
+    # NOT FROM term per blocked address would make the search grow without
+    # bound, and the page is 50 rows either way. The count below reports
+    # what was hidden so the page doesn't just look short for no reason.
+    blocked = database.blocked_mail_senders()
+    hidden = [m for m in messages if m["from"] in blocked]
+    messages = [m for m in messages if m["from"] not in blocked]
+
     processed = database.processed_mail_message_ids([m["message_id"] for m in messages])
     auto = database.auto_mail_senders()
     for m in messages:
@@ -456,6 +505,8 @@ def list_inbox(offset: int = 0, limit: int = 50, query: str = "",
         "offset": offset,
         "limit": limit,
         "uidvalidity": uidvalidity,
+        "range": range_name,
+        "hidden": len(hidden),
     }
 
 
@@ -465,19 +516,34 @@ def list_inbox(offset: int = 0, limit: int = 50, query: str = "",
 # aggregate is kept: addresses, display names, counts, dates. No subject and
 # no body ever enters this cache, for the same reason none of it enters the
 # database (#960).
-_SENDER_CACHE = {"at": 0.0, "senders": None, "scanned": 0}
+_SENDER_CACHE = {}  # range name -> {"at", "senders", "scanned"}
 _SENDER_CACHE_TTL = 300  # seconds
 
 
-def _parse_from_headers(conn):
-    """Every mail's From/Date, in ONE round trip.
+def _parse_from_headers(conn, range_name=DEFAULT_RANGE):
+    """Every in-range mail's From/Date, in ONE round trip.
 
-    `UID FETCH 1:* (...)` returns the whole mailbox's headers as a single
-    response. Fetching per message the way list_inbox() does is right for a
-    50-row page and wrong here: it would be 1600 round trips.
+    `UID FETCH <set> (...)` returns them as a single response. Fetching per
+    message the way list_inbox() does is right for a 50-row page and wrong
+    here: on the full mailbox it would be 1600 round trips.
+
+    The range is resolved by an IMAP SEARCH first, so out-of-range mail is
+    never transferred at all.
     """
+    since = _since_criteria(range_name)
+    if since:
+        status, data = conn.uid("SEARCH", None, *since)
+        if status != "OK":
+            raise MailboxError(f"IMAP SEARCH 失败: {status}")
+        uids = data[0].split() if data and data[0] else []
+        if not uids:
+            return {}, 0
+        uid_set = b",".join(uids).decode()
+    else:
+        uid_set = "1:*"
+
     status, data = conn.uid(
-        "FETCH", "1:*", "(BODY.PEEK[HEADER.FIELDS (FROM DATE)])")
+        "FETCH", uid_set, "(BODY.PEEK[HEADER.FIELDS (FROM DATE)])")
     if status != "OK":
         raise MailboxError(f"IMAP FETCH 失败: {status}")
 
@@ -519,7 +585,8 @@ def _date_sorts_after(a: str, b: str) -> bool:
         return False
 
 
-def list_senders(refresh: bool = False, imap_factory=None) -> dict:
+def list_senders(refresh: bool = False, range_name: str = DEFAULT_RANGE,
+                 imap_factory=None) -> dict:
     """Who writes to this mailbox, with their subscription state (#965).
 
     The result is the union of what the scan saw and what Daniel has
@@ -530,18 +597,18 @@ def list_senders(refresh: bool = False, imap_factory=None) -> dict:
 
     import database
 
-    cached = (
-        not refresh
-        and _SENDER_CACHE["senders"] is not None
-        and (time.time() - _SENDER_CACHE["at"]) < _SENDER_CACHE_TTL
-    )
+    # Cached per range: "this week" and "all" are different scans, and
+    # sharing one slot would serve one range's counts under the other's name.
+    entry = _SENDER_CACHE.get(range_name)
+    cached = not refresh and entry is not None and (time.time() - entry["at"]) < _SENDER_CACHE_TTL
     if cached:
-        senders = dict(_SENDER_CACHE["senders"])
-        scanned = _SENDER_CACHE["scanned"]
+        senders = dict(entry["senders"])
+        scanned = entry["scanned"]
     else:
         with _connection(imap_factory=imap_factory, readonly=True) as conn:
-            senders, scanned = _parse_from_headers(conn)
-        _SENDER_CACHE.update({"at": time.time(), "senders": dict(senders), "scanned": scanned})
+            senders, scanned = _parse_from_headers(conn, range_name)
+        _SENDER_CACHE[range_name] = {
+            "at": time.time(), "senders": dict(senders), "scanned": scanned}
 
     configured = {row["address"]: row for row in database.get_mail_senders()}
     for addr, row in configured.items():
@@ -552,14 +619,19 @@ def list_senders(refresh: bool = False, imap_factory=None) -> dict:
             "last_date": "",
         })
         entry["auto_process"] = bool(row.get("auto_process"))
+        entry["blocked"] = bool(row.get("blocked"))
     for entry in senders.values():
         entry.setdefault("auto_process", False)
+        entry.setdefault("blocked", False)
 
+    # Subscribed first, blocked last: the two ends of the list are the two
+    # things Daniel is looking for when he opens this view.
     ordered = sorted(
         senders.values(),
-        key=lambda e: (not e["auto_process"], -e["count"], e["address"]),
+        key=lambda e: (e["blocked"], not e["auto_process"], -e["count"], e["address"]),
     )
-    return {"senders": ordered, "scanned": scanned, "cached": cached}
+    return {"senders": ordered, "scanned": scanned, "cached": cached,
+            "range": range_name}
 
 
 def fetch_message(uid: str, uidvalidity: str = "", imap_factory=None):
@@ -579,6 +651,30 @@ def fetch_message(uid: str, uidvalidity: str = "", imap_factory=None):
         if status != "OK" or not msg_data or not msg_data[0]:
             raise MailboxError(f"读取邮件失败（uid={uid}），它可能已被删除或移动")
         return email.message_from_bytes(msg_data[0][1])
+
+
+# Gmail's trash folder. Deleting means moving here — recoverable for 30
+# days in Gmail — never an expunge. This is the ONE operation in this module
+# that writes to the mailbox at all (see _connection's readonly default).
+_TRASH_FOLDER = "[Gmail]/Trash"
+
+
+def delete_message(uid: str, uidvalidity: str = "", imap_factory=None) -> dict:
+    """Move one mail to Gmail's trash (#968).
+
+    Not an expunge: a wrong click here has to stay undoable, and Gmail keeps
+    trashed mail for 30 days. This opens the module's only writable
+    connection, and does nothing else with it.
+    """
+    with _connection(imap_factory=imap_factory, readonly=False) as conn:
+        current = _uidvalidity(conn)
+        if uidvalidity and current and uidvalidity != current:
+            raise MailboxError(
+                "邮箱已重新编号（UIDVALIDITY 变化），列表已过期，请刷新后重试")
+        status, data = conn.uid("MOVE", str(uid), _TRASH_FOLDER)
+        if status != "OK":
+            raise MailboxError(f"删除失败（uid={uid}）：{status} {data}")
+    return {"status": "deleted", "uid": str(uid)}
 
 
 def ingest_message(msg) -> dict:

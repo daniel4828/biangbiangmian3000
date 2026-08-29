@@ -1047,5 +1047,10 @@ CREATE TABLE IF NOT EXISTS mail_senders (
     address      TEXT PRIMARY KEY,          -- envelope From address, lowercased
     name         TEXT,                      -- display name as last seen, for the UI
     auto_process INTEGER NOT NULL DEFAULT 0,-- 1 = cron ingests+summarizes every new mail
+    -- 1 = hidden from the mail list and never processed (#968). Blocking clears
+    -- auto_process rather than coexisting with it: "subscribed AND blocked" is a
+    -- contradiction, and letting it be representable means someone eventually has
+    -- to explain which one wins.
+    blocked      INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
