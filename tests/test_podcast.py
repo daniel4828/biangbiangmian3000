@@ -216,12 +216,14 @@ def test_signal_message_leads_with_chinese_summary(monkeypatch):
 
 # --- prompt & parser --------------------------------------------------------
 
-def test_prompt_asks_for_chinese_summary_and_generous_annotation():
+def test_prompt_asks_for_chinese_summary_and_a_german_only_german_one():
     prompt = ai.build_podcast_summary_prompt("转录文本", "标题", "detailed")
     assert "summary_zh" in prompt
     assert "HSK 4-5 level" in prompt
-    # Annotation must no longer be restricted to the extracted word list.
-    assert "NOT limited to" in prompt
+    # #979: the German summary carries no pinyin/汉字 asides any more — asking
+    # for them again would refill the knowledge base with them.
+    assert "GERMAN ONLY" in prompt
+    assert "pinyin/汉字" not in prompt
 
 
 def test_prompt_asks_for_chinese_summary_as_full_translation():

@@ -3751,19 +3751,11 @@ Task:
      ein exzessiver Fokus auf quantitativen Output. ...</p>
    Be concrete: include the specific facts, numbers,
    names and arguments actually mentioned in the episode — do not stay generic or vague.
-   - Whenever you name a company, organization, brand or institution, add its common Chinese
-     name in parentheses right after it, e.g. "Airbnb (爱彼迎)", "Lawn Tennis Association
-     (英国草地网球协会)". If no established Chinese name exists, give a natural Chinese rendering.
-   - Annotate Chinese vocabulary generously. Whenever the German text expresses a concept,
-     term or set phrase that is HSK 5 or above in Chinese, add its pinyin AND Chinese form
-     in parentheses right after the German rendering, in the format "pinyin/汉字",
-     e.g. "Rezession (jīngjì shuāituì/经济衰退)", "Lieferkette (gōngyìng liàn/供应链)", so
-     Daniel links the German meaning to the Chinese word — and its pronunciation.
-     This is NOT limited to the words you extract in Task 3 — annotate any non-basic Chinese
-     term the episode uses, including ones that did not make that list. When in doubt,
-     annotate: a redundant annotation costs Daniel nothing, a missing one costs him the link
-     between the German meaning and the Chinese word he is about to hear. For words that ARE
-     in the Task 3 list, use the same pinyin (with tone marks) you give there.
+   - Write it in GERMAN ONLY. No Chinese characters, no pinyin, not even in parentheses:
+     no "Airbnb (爱彼迎)", no "Rezession (jīngjì shuāituì/经济衰退)". This text is what
+     Daniel reads to understand the content; the Chinese vocabulary belongs in the Chinese
+     summary and in the word list of Task 3, not sprinkled through the German prose.
+     Names of people, companies and institutions keep their original spelling.
    - If (and ONLY if) the transcript contains timestamps, add an approximate timestamp in
      parentheses when you introduce each major topic, e.g. "(ca. 12:30)", so the listener can
      jump to it. If the transcript contains no timestamps, do NOT invent any.
@@ -3782,9 +3774,8 @@ Task:
      short sentences. This is a comprehension aid, not another study exercise, so do NOT
      reach for literary or specialist words where an everyday one works. Splitting one long
      German sentence into two short Chinese ones is fine — dropping its content is not.
-   - Do NOT carry over the "pinyin/汉字" annotations from the German version — the text is
-     already Chinese. Likewise, write company/organization names directly in their Chinese
-     form ("爱彼迎"), without repeating the foreign name.
+   - Write company/organization names directly in their Chinese form ("爱彼迎"), without
+     repeating the foreign name.
    - <strong> highlights are not needed here; keep only <p> and <b>.
 3. Extract the 20-35 most important Chinese words/phrases from the transcript that are HSK
    level 5 or above (i.e. non-basic vocabulary Daniel would benefit from pre-learning). For
@@ -3858,15 +3849,15 @@ def summary_de_is_german(summary_de: str) -> bool:
     The summary prompt asks for German first and a Chinese translation second
     (#708), and the model occasionally answers with Chinese in *both* JSON
     fields. Nothing downstream could tell: a Chinese summary_de parses fine,
-    passes the "summary_de is non-empty" success test, gets pinyin-annotated
-    by zh_annotate.annotate_de_summary(), and — worst of all — is fed to
-    knowledge/rendition.py as the German source text every other study
+    passes the "summary_de is non-empty" success test, and — worst of all — is
+    fed to knowledge/rendition.py as the German source text every other study
     language is translated from, which yields the unreadable pinyin soup that
     filed this issue.
 
-    Judged purely on script, not on grammar: a real German summary carries at
-    most a handful of Chinese asides, and the gap to a summary actually
-    written in Chinese is wide and empty (see zh_annotate's threshold)."""
+    Judged purely on script, not on grammar: a real German summary carries no
+    Chinese at all since #979 (and at most a handful of asides before that),
+    while a summary actually written in Chinese sits far above the threshold —
+    the gap is wide and empty (see zh_annotate's threshold)."""
     return zh_annotate.cjk_ratio(summary_de or "") < zh_annotate.NON_CHINESE_TEXT_MAX_CJK
 
 
