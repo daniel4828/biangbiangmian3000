@@ -9040,6 +9040,13 @@ const _HINT_MODES = {
   hsk:   { label: 'HSK only',  storeKey: 'listenHintHskLevel',   def: 3 },
 };
 
+// The two ends of the slider (#983) sit outside the HSK scale on purpose:
+// they are not "HSK <= -1" / "HSK <= 7" but two absolute rules, identical in
+// both modes — show the whole sentence, or blank every character of it.
+// Everything between them keeps the per-mode behaviour unchanged.
+const _HINT_MIN = -1;  // nothing hidden at all, target word included
+const _HINT_MAX = 7;   // every CJK character hidden, whatever its level
+
 function _hintMode() {
   const m = localStorage.getItem('listenHintMode');
   return _HINT_MODES[m] ? m : 'union';
@@ -9054,6 +9061,8 @@ function _hintSavedDefault(mode = _hintMode()) {
 }
 
 function _hintLabelFor(level, mode = _hintMode()) {
+  if (level <= _HINT_MIN) return 'Show all';
+  if (level >= _HINT_MAX) return 'Hide all';
   if (mode === 'hsk') return level === 0 ? 'Off' : `HSK≤${level}`;
   return level === 0 ? 'Saved only' : `Saved + HSK≤${level}`;
 }
@@ -9145,6 +9154,11 @@ function _renderListenHint(level) {
   const el = document.getElementById('listen-hint-sentence');
   if (!zh) { el.textContent = ''; return; }
 
+  // Leftmost stop (#983): the target word is blanked in every other setting,
+  // so "show all" has to short-circuit before any of the rules below.
+  if (level <= _HINT_MIN) { el.textContent = zh; return; }
+  const hideEverything = level >= _HINT_MAX;
+
   const isCjk = ch => ch >= '一' && ch <= '鿿';
   // Sentence notes have no single "target word" to blank — reveal based on vocab only.
   const targetPositions = isSentenceNote && !sentence ? new Set() : _getTargetPositions(zh);
@@ -9190,7 +9204,7 @@ function _renderListenHint(level) {
       html += ch;
     } else if (targetPositions.has(i)) {
       html += `<span class="hint-blank hint-blank-target">_</span>`;
-    } else if (hidePositions.has(i)) {
+    } else if (hideEverything || hidePositions.has(i)) {
       html += `<span class="hint-blank">_</span>`;
     } else {
       html += ch;
@@ -9209,7 +9223,7 @@ function onListenHintSlider(val) {
 function _adjustListenHintSlider(delta) {
   const slider = document.getElementById('listen-hint-slider');
   if (!slider || slider.closest('#listen-hint-wrap')?.style.display === 'none') return;
-  const next = Math.max(0, Math.min(6, parseInt(slider.value, 10) + delta));
+  const next = Math.max(_HINT_MIN, Math.min(_HINT_MAX, parseInt(slider.value, 10) + delta));
   slider.value = next;
   onListenHintSlider(next);
 }
