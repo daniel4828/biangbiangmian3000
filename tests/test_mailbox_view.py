@@ -495,16 +495,31 @@ import pathlib
 _STATIC = pathlib.Path(__file__).resolve().parent.parent / "static"
 
 
-def test_mailbox_view_is_registered_in_show_view():
-    """A view whose id isn't in showView()'s list is never hidden again: it
-    stays visible underneath every other screen."""
+def test_mailbox_is_a_knowledge_screen():
+    """#988: the mailbox stopped being a top-level view and became one of the
+    Knowledge screens, reachable from the Knowledge header. Its own container
+    is gone, so anything still rendering into it would write into nothing."""
     app_js = (_STATIC / "app.js").read_text(encoding="utf-8")
     index = (_STATIC / "index.html").read_text(encoding="utf-8")
 
-    assert "'knowledge', 'books', 'mailbox'" in app_js
-    assert 'id="view-mailbox"' in index
-    assert 'id="view-mailbox-content"' in index
+    assert 'id="view-mailbox"' not in index
+    assert "view-mailbox-content" not in app_js
+    assert "showView('mailbox')" not in app_js
+    assert "_knowledgeScreen = 'mailbox'" in app_js
     assert "onclick=\"openMailbox()\"" in app_js
+
+
+def test_subscribing_has_exactly_one_home():
+    """Daniel could not find where to (un)subscribe because newsletter senders
+    and podcast feeds lived in two unrelated places (#988). Both are now tabs
+    of the one Subscriptions screen."""
+    app_js = (_STATIC / "app.js").read_text(encoding="utf-8")
+
+    assert "function openKnowledgeSubs" in app_js
+    assert "openKnowledgeSubs('newsletters')" in app_js
+    assert "openKnowledgeSubs('feeds')" in app_js
+    # The old standalone feeds entry point still works — hash routes use it.
+    assert "function openKnowledgeFeeds" in app_js
 
 
 def test_mailbox_frontend_talks_only_to_the_mailbox_api():

@@ -626,7 +626,9 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **`receive` 会把 Daniel 与所有人的对话都同步下来**（#755 实测）：别人的消息正文、附件元数据、已读回执、正在输入指示，全都在返回的 envelope 流里。上面那道安全门挡住了它们入库，但它们**经过了本进程的内存**。所以：**永远不要把 envelope 原文写进日志**，也不要放进错误信息或 Signal 回执——只记 URL 和处理结果
   - `scripts/signal_check.py`：cron 入口，结构照抄 `knowledge_mail_check.py`（同款 PID 锁 + `database.init_db()` 直连）
 - **前端：统一素材列表（#936，取代 #653 的四个 kind 子标签）**：一个列表 + 排序栏 + 筛选栏 + **一个 Add 按钮**。kind 从"你放在哪个桶里"降级成众多筛选之一——因为找东西的方式是"上周处理的、那个作者的那篇"，不是"它属于四类中的哪一类"；而且两套并行的列表实现意味着以后每个排序和筛选都要写两遍
-  - 三个屏幕（`_knowledgeScreen`）：`list` 统一列表 / `feed` 某个 RSS 源的单集（**保留独立屏幕**，因为"Load more"是按源翻页的动作，在混合列表里没有意义）/ `feeds` RSS 源管理（从旧播客标签页搬到顶栏 📡 按钮后面）
+  - 屏幕（`_knowledgeScreen`）：`list` 统一列表 / `feed` 某个 RSS 源的单集（**保留独立屏幕**，因为"Load more"是按源翻页的动作，在混合列表里没有意义）/ `mailbox` Gmail 收件箱（#988 从主页独立视图搬进来）/ `subs` 订阅管理 / `tags` 标签管理
+  - **订阅只有一个去处（#988）**：顶栏 📡 Subscriptions，两个标签 📰 Newsletters（邮件发件人自动开关）+ 🎙 Podcasts（RSS 源增删）。原来这两半分别藏在 📡 Feeds 和主页 📬 Mailbox 的 👤 Senders 标签里，Daniel 两个都找不到。收件箱每行的 ⚡ 仍是**同一个开关**（`mail_senders.auto_process`），两处不能各说各话，所以 `toggleMailSender()` 同时更新 `messages` 和 `senders` 两份客户端状态
+  - **行布局不许依赖断点（#988）**：`.podcast-row-meta` 原来是 `flex-shrink: 0`，而"标题独占一行"只写在 `max-width: 600px` 里（#913）。601–950px 这一段宽度上 meta 的五个 nowrap 元素占满整行，标题被压到接近 0 宽——横向被 `overflow: hidden` 裁掉，纵向照常撑开，中文标题每字一行叠成一个几百像素高的**空白卡片**。现在 `.podcast-row` 恒 `flex-wrap: wrap`，标题 `flex: 1 1 240px`（放不下就整行换行），meta 可收缩可换行。行内 `style="display:flex"` 也搬进 `.podcast-row-title-stack` 了——它曾把移动端的 `display:-webkit-box` 顶掉，`-webkit-line-clamp` 从来没生效过
   - **Reels 不再是"虚拟标签"**（#764 那套按 URL 判 Instagram 的前端拆分）：`platform='instagram'` 现在是库里的真列，`#knowledge-reel` 链接翻译成 `platform=instagram` 筛选。`_isInstagramEpisode()` 优先读 `platform`，URL 判断只作为老行的兜底
   - **筛选状态存 `localStorage.knowledgeFilters`**，读出来时**合并到默认值上**而不是直接信任存的对象——以后新增的筛选轴对老用户不能是 `undefined`
   - 从素材详情返回时 `openKnowledge()` **不传参数**：传了就会重置筛选栏，而"看完一篇回到列表发现筛选没了"是最糟的时机
@@ -809,7 +811,7 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 
 ## 信箱（Mailbox，#960）
 
-Daniel 用他的 Gmail 地址订阅各种邮件通讯，但**不希望全部自动处理**。主页 `📬 Mailbox` 列出 Gmail 收件箱里的所有邮件，他挑想读的点「Process」，才走摘要管线——跟播客单集的 process 按钮同一个心智模型。
+Daniel 用他的 Gmail 地址订阅各种邮件通讯，但**不希望全部自动处理**。Knowledge 顶栏的 `📬 Inbox`（#988 之前是主页的独立视图）列出 Gmail 收件箱里的所有邮件，他挑想读的点「Process」，才走摘要管线——跟播客单集的 process 按钮同一个心智模型。
 
 - **手动点「处理」本身就是那道防线**：`KNOWLEDGE_MAIL_ALLOWED_SENDERS` 因此退役（见环境变量表）。自动处理只认 `mail_senders.auto_process`——Daniel 在每行的 ⚡ 按钮上逐个发件人打开的开关。**最关键的性质原样继承：开关一个都没开 = 谁都不处理，绝不是「门读不出来所以全处理」**
 - **默认只看本周（#968）**：收件箱和发件人扫描都带时间范围，转成 IMAP 的 `SINCE dd-Mon-yyyy` 交给服务器过滤（实测：本周 22 封 / 8 个发件人，4 周 48 封，全部 1600 封）。`week` 是**日历周（周一起）**不是滑动 7 天——问的是「这周有什么」，而且滑动窗口会让答案一天之内不停变。界面可切 4 weeks / All：默认满足需求，但上个月的邮件不能变得**够不着**，那会逼他回 Gmail 网页版，等于这个功能白做。`SINCE` 的月份缩写必须手写英文表，`strftime("%b")` 会按 locale 变
@@ -821,7 +823,7 @@ Daniel 用他的 Gmail 地址订阅各种邮件通讯，但**不希望全部自�
 - **「已处理」标记存 `podcast_episodes.mail_message_id`**：`ingest_text()` 的去重键是**正文哈希**，算它得先下载正文——而列表恰恰不下载。Message-ID 就在已有的信封里。正文哈希去重**保留**作第二道防线（同一封通讯从 Signal 粘过一次照样认得出来）。#960 之前入库的邮件没有这个标记，所以列表上仍显示「Process」；点下去会命中正文哈希去重返回 `already_exists`，不会二次付费
 - **分支顺序只有一份**：`route_message()`（通讯 → URL → 正文 → 跳过）由 cron 和手动按钮共用。入库函数本来就是共用的，会漂移的恰恰是分支顺序
 - **摘要交给既有的 `routes.podcast.process_episode()`**：入库同步做（要拿 `episode_id` 给界面跳转），慢的部分走它——409 重复提交保护和 #821 顶栏任务指示器因此白拿，也不必再写一份进度记账
-- **发件人视图（#965）**：顶部两个标签 📥 Inbox / 👤 Senders。发件人视图把整箱按发件人聚合（实测 1600 封 → 145 个发件人），每行可一键订阅=打开该发件人的自动开关——和收件箱里每行的 ⚡ 是**同一个开关**，两个视图不能各说各话
+- **发件人视图（#965，#988 起是 Knowledge → 📡 Subscriptions → 📰 Newsletters）**：把整箱按发件人聚合（实测 1600 封 → 145 个发件人），每行可一键订阅=打开该发件人的自动开关——和收件箱里每行的 ⚡ 是**同一个开关**，两个视图不能各说各话
   - **聚合用一条 `UID FETCH 1:* (BODY.PEEK[HEADER.FIELDS (FROM DATE)])`**：IMAP 不能按发件人分组，但整箱信头可以一次往返取回。照列表页那样逐封 FETCH 在这里就是 1600 次往返
   - **必须缓存（TTL 5 分钟）+ ⟳ 强制刷新**：整箱扫描比翻一页贵得多，而发件人构成几分钟内不会变。**缓存只存聚合结果**（地址/显示名/封数/最近日期），主题和正文一律不进——同上一条，邮件不进服务器
   - **订阅状态不走缓存**：开关存在库里，订阅完必须立刻显示，不能等缓存过期

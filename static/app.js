@@ -1008,7 +1008,7 @@ function showView(name) {
   // loading screen ends that run, so they must not survive into the next
   // unrelated setLoading() ("Loading audio…", opening a knowledge item, …).
   if (name !== 'loading') _storyLoadingSources = [];
-  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books', 'mailbox'].forEach(v => {
+  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books'].forEach(v => {
     document.getElementById(`view-${v}`).style.display = 'none';
   });
   document.getElementById(`view-${name}`).style.display =
@@ -1034,8 +1034,7 @@ function showView(name) {
     name === 'stats'        ? 'Stats' :
     name === 'settings'     ? 'Settings' :
     name === 'knowledge'    ? 'Knowledge' :
-    name === 'books'        ? 'Books' :
-    name === 'mailbox'      ? 'Mailbox' : 'biangbiangmian3000';
+    name === 'books'        ? 'Books' : 'biangbiangmian3000';
   if (name === 'decks') quickMode = false;
   // ＋ in every view (#829 review-only, widened in #958). Hidden offline for
   // the same reason as ↺: the whole entry generation is an AI call, so it can
@@ -1952,7 +1951,6 @@ function renderDecks(decks) {
       <button class="nav-btn" onclick="openStats()">Stats</button>
       <button class="nav-btn" onclick="openKnowledge()">🧠 Knowledge</button>
       <button class="nav-btn" onclick="openBooks()" title="Read an uploaded book">📚 Books</button>
-      <button class="nav-btn" onclick="openMailbox()" title="Browse the inbox and pick what to read">📬 Mailbox</button>
       <button class="nav-btn" onclick="openSettings()" title="Customize shortcuts">⚙ Settings</button>
       <button class="nav-btn" onclick="openCostModal()">API Costs</button>
       <button class="nav-btn" onclick="openImportModal()" title="Shortcut: Command+I">Import</button>
@@ -4101,7 +4099,8 @@ function _renderKnowledgeList() {
       <h2 class="keymap-heading" style="margin:0">Knowledge</h2>
       <span style="flex:1"></span>
       <button class="btn-secondary" onclick="openKnowledgeTags()" title="Manage tags">🏷 Tags</button>
-      <button class="btn-secondary" onclick="openKnowledgeFeeds()" title="RSS feeds">📡 Feeds</button>
+      <button class="btn-secondary" onclick="openMailbox()" title="Gmail inbox — pick what to read">📬 Inbox</button>
+      <button class="btn-secondary" onclick="openKnowledgeSubs()" title="Newsletters and podcast feeds you subscribe to">📡 Subscriptions</button>
       <button class="btn-secondary" onclick="toggleKnowledgeAdd()">${_knowledgeAddOpen ? '✕ Close' : '＋ Add'}</button>
     </div>
     ${_knowledgeAddOpen ? _knowledgeAddPanelHtml() : ''}
@@ -4193,7 +4192,7 @@ function _knowledgeSearchResultsHtml() {
     const clickable = r.status === 'summarized';
     return `<div class="podcast-row${clickable ? ' podcast-row-clickable' : ''}"
                  ${clickable ? `onclick="openKnowledgeItem(${r.episode_id})"` : ''}>
-      <span class="podcast-row-title" style="display:flex;flex-direction:column;gap:3px;overflow:hidden">
+      <span class="podcast-row-title podcast-row-title-stack">
         <span>${_knowledgeSourceIcon(r)}${_escHtml(r.title || '(untitled)')}</span>
         <span class="knowledge-snippet">${_knowledgeSnippetHtml(r.snippet)}</span>
         <span class="knowledge-snippet-fields">${r.fields.map(f => _escHtml(f)).join(' · ')}</span>
@@ -4279,8 +4278,8 @@ function _knowledgeMaterialRowHtml(ep) {
     <div class="knowledge-swipe-action knowledge-swipe-right">${archived ? '↩ Unarchive' : '🗄 Archive'}</div>
     <div class="podcast-row knowledge-swipe-row${clickable ? ' podcast-row-clickable' : ''}${archived ? ' knowledge-row-archived' : ''}"
          ${clickable ? `onclick="openKnowledgeItem(${ep.id})"` : ''}>
-      <span class="podcast-row-title" style="display:flex;flex-direction:column;gap:2px;overflow:hidden">
-        <span>${inReadLater ? '<span title="Read Later">📖 </span>' : ''}${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
+      <span class="podcast-row-title podcast-row-title-stack">
+        <span class="podcast-row-title-main">${inReadLater ? '<span title="Read Later">📖 </span>' : ''}${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
         ${ep.title_en ? `<span style="font-size:12px;color:var(--muted)">${_escHtml(ep.title_en)}</span>` : ''}
         ${tags ? `<span class="knowledge-tag-row">${tags}</span>` : ''}
       </span>
@@ -4789,31 +4788,76 @@ async function deleteKnowledgeTag(tagId) {
   }
 }
 
-// ── Screen: RSS feed management ─────────────────────────────────────────────
+// ── Screen: Subscriptions (#988) ────────────────────────────────────────────
+// "Where do I subscribe / unsubscribe?" must have exactly one answer. Before
+// this the two halves lived in unrelated places — podcast RSS behind the
+// Knowledge header's 📡 button, newsletter senders behind a tab inside the
+// standalone Mailbox view — and Daniel could not find either. Both are now
+// tabs of one screen. The ⚡ button on each inbox row stays: it is the *same*
+// switch (database.mail_senders.auto_process), so the two can never disagree.
+let _subsTab = 'newsletters';        // 'newsletters' | 'feeds'
 
-async function openKnowledgeFeeds() {
+async function openKnowledgeSubs(tab) {
   _clearPodcastPoll();
   _podcastCurrentFeedId = null;
-  _knowledgeScreen = 'feeds';
+  _knowledgeScreen = 'subs';
+  if (tab) _subsTab = tab;
+  _mailboxState.notice = null;
   setLoading('Loading…');
-  try {
-    const [feeds, config] = await Promise.all([
-      api('GET', '/api/podcast/feeds'),
-      api('GET', '/api/podcast/config'),
-    ]);
-    _podcastFeeds = feeds || [];
-    _podcastConfig = config || {};
-    _renderPodcastFeedList();
-    showView('knowledge');
-  } catch (e) {
-    showError('Feeds failed: ' + e.message);
-    openKnowledge();
+  if (_subsTab === 'feeds') {
+    try {
+      const [feeds, config] = await Promise.all([
+        api('GET', '/api/podcast/feeds'),
+        api('GET', '/api/podcast/config'),
+      ]);
+      _podcastFeeds = feeds || [];
+      _podcastConfig = config || {};
+      _renderKnowledgeSubs();
+      showView('knowledge');
+    } catch (e) {
+      showError('Feeds failed: ' + e.message);
+      openKnowledge();
+    }
+    return;
   }
+  showView('knowledge');
+  // Cached from a previous visit: a full mailbox scan is expensive, and the
+  // sender list does not change from one minute to the next (⟳ forces it).
+  if (_mailboxState.senders) _renderKnowledgeSubs();
+  else await _loadMailboxSenders();
+}
+
+// Kept as the old entry point — hash routes and the feed screen's back button
+// still call it.
+function openKnowledgeFeeds() { return openKnowledgeSubs('feeds'); }
+
+function _subsTabsHtml() {
+  return `
+    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
+    <div class="knowledge-header">
+      <h2 class="keymap-heading" style="margin:0">Subscriptions</h2>
+    </div>
+    <div class="mailbox-tabs">
+      <button class="mailbox-tab${_subsTab === 'newsletters' ? ' active' : ''}"
+              onclick="openKnowledgeSubs('newsletters')">📰 Newsletters</button>
+      <button class="mailbox-tab${_subsTab === 'feeds' ? ' active' : ''}"
+              onclick="openKnowledgeSubs('feeds')">🎙 Podcasts</button>
+    </div>`;
+}
+
+function _renderKnowledgeSubs() {
+  const el = document.getElementById('view-knowledge-content');
+  if (!el) return;
+  el.innerHTML = _subsTabsHtml() +
+    (_subsTab === 'feeds' ? _podcastFeedsBodyHtml() : _mailboxSendersBodyHtml());
 }
 
 function _renderPodcastFeedList() {
-  const el = document.getElementById('view-knowledge-content');
-  if (!el) return;
+  if (_knowledgeScreen !== 'subs') return;
+  _renderKnowledgeSubs();
+}
+
+function _podcastFeedsBodyHtml() {
   const detailLevel = _podcastConfig?.detail_level || 'medium';
   const cards = _podcastFeeds.map(f => `
     <div class="podcast-feed-card">
@@ -4830,10 +4874,8 @@ function _renderPodcastFeedList() {
       </div>
     </div>`).join('') || '<div class="keymap-hint">No feeds yet — add one below.</div>';
 
-  el.innerHTML = `
-    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
+  return `
     <div class="keymap-panel">
-      <h2 class="keymap-heading">Podcast feeds</h2>
       <p class="keymap-hint">RSS feeds crawled hourly for new episodes. Auto-process feeds are transcribed+summarized automatically; other feeds only store new episodes' metadata until you pick one to transcribe.</p>
       <div class="keymap-row">
         <span class="keymap-label">Summary detail level</span>
@@ -15313,7 +15355,6 @@ const _mailboxState = {
   messages: [],
   busy: null,     // uid currently being processed — one at a time, see below
   notice: null,   // {text, error} shown under the toolbar
-  tab: 'inbox',   // 'inbox' | 'senders' (#965)
   range: 'week',  // 'week' | 'month' | 'all' (#968) — this week by default
   hidden: 0,      // mails from blocked senders left out of this page
   senders: null,  // aggregated sender list, loaded on first switch
@@ -15326,21 +15367,32 @@ const _mailboxState = {
 // outlive the page it belonged to.
 function _mailboxNotice(text, error) {
   _mailboxState.notice = text ? { text, error: !!error } : null;
-  _renderMailbox();
+  // The same senders are reachable from two screens (#988): the ⚡ button on
+  // an inbox row and the Subscriptions list. Re-render whichever is on screen
+  // — repainting the inbox over the Subscriptions screen would swap the page
+  // out from under the click that caused it.
+  if (_knowledgeScreen === 'subs') _renderKnowledgeSubs();
+  else _renderMailbox();
 }
 
 async function openMailbox() {
   _mailboxState.offset = 0;
   _mailboxState.query = '';
-  _mailboxState.tab = 'inbox';
-  showView('mailbox');
+  _mailboxState.notice = null;
+  _clearPodcastPoll();
+  _podcastCurrentFeedId = null;
+  _knowledgeScreen = 'mailbox';
+  showView('knowledge');
   await _loadMailbox();
 }
 
 async function _loadMailbox() {
   _mailboxState.notice = null;
-  const el = document.getElementById('view-mailbox-content');
-  el.innerHTML = '<p class="keymap-hint">Loading inbox…</p>';
+  const el = document.getElementById('view-knowledge-content');
+  if (!el) return;
+  // Keep the chrome around the placeholder: without ← Knowledge a slow or
+  // failing mailbox is a dead end.
+  el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Loading inbox…</p>`;
   try {
     const params = new URLSearchParams({
       offset: _mailboxState.offset,
@@ -15358,7 +15410,7 @@ async function _loadMailbox() {
     // The server's message says which of the two it is — mailbox
     // unreachable vs. credentials missing — so it is shown verbatim
     // rather than replaced by a generic "could not load".
-    el.innerHTML = `<p class="keymap-hint">Could not load the inbox: ${_escHtml(e.message || 'error')}</p>`;
+    el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Could not load the inbox: ${_escHtml(e.message || 'error')}</p>`;
   }
 }
 
@@ -15383,36 +15435,27 @@ function setMailboxRange(range) {
   // The sender counts are per range, so a cached scan for the old range
   // must not be shown under the new one's label.
   _mailboxState.senders = null;
-  if (_mailboxState.tab === 'senders') _loadMailboxSenders();
+  if (_knowledgeScreen === 'subs') _loadMailboxSenders();
   else _loadMailbox();
 }
 
+// The inbox screen's chrome. Subscribing/unsubscribing is deliberately NOT a
+// tab here any more (#988) — it lives on the Subscriptions screen, so that
+// "where do I manage what I get" has exactly one answer.
 function _mailboxTabs() {
-  const t = _mailboxState.tab;
   return `
-    <div class="mailbox-tabs">
-      <button class="mailbox-tab${t === 'inbox' ? ' active' : ''}" onclick="switchMailboxTab('inbox')">📥 Inbox</button>
-      <button class="mailbox-tab${t === 'senders' ? ' active' : ''}" onclick="switchMailboxTab('senders')">👤 Senders</button>
+    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
+    <div class="knowledge-header">
+      <h2 class="keymap-heading" style="margin:0">Inbox</h2>
+      <span style="flex:1"></span>
+      <button class="btn-secondary" onclick="openKnowledgeSubs('newsletters')"
+              title="Manage which senders are processed automatically">📡 Subscriptions</button>
     </div>`;
 }
 
-function switchMailboxTab(tab) {
-  if (_mailboxState.tab === tab) return;
-  _mailboxState.tab = tab;
-  _mailboxState.notice = null;
-  if (tab === 'senders') {
-    // Loaded on first switch, then kept: the scan reads every header in the
-    // mailbox, so it is not something to redo on every tab click. ⟳ forces it.
-    if (_mailboxState.senders) _renderMailboxSenders();
-    else _loadMailboxSenders();
-  } else {
-    _renderMailbox();
-  }
-}
-
 async function _loadMailboxSenders(refresh) {
-  const el = document.getElementById('view-mailbox-content');
-  el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Scanning the mailbox…</p>`;
+  const el = document.getElementById('view-knowledge-content');
+  if (el) el.innerHTML = `${_subsTabsHtml()}<p class="keymap-hint">Scanning the mailbox…</p>`;
   try {
     const data = await api('GET',
       `/api/mailbox/senders?range=${_mailboxState.range}${refresh ? '&refresh=1' : ''}`);
@@ -15425,11 +15468,16 @@ async function _loadMailboxSenders(refresh) {
       : null;
     _renderMailboxSenders();
   } catch (e) {
-    el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Could not load senders: ${_escHtml(e.message || 'error')}</p>`;
+    if (el) el.innerHTML = `${_subsTabsHtml()}<p class="keymap-hint">Could not load senders: ${_escHtml(e.message || 'error')}</p>`;
   }
 }
 
 function _renderMailboxSenders() {
+  if (_knowledgeScreen !== 'subs') return;
+  _renderKnowledgeSubs();
+}
+
+function _mailboxSendersBodyHtml() {
   const st = _mailboxState;
   const rows = (st.senders || []).map(sn => {
     const busy = st.sendersBusy === sn.address;
@@ -15455,8 +15503,7 @@ function _renderMailboxSenders() {
       </div>`;
   }).join('');
 
-  document.getElementById('view-mailbox-content').innerHTML = `
-    ${_mailboxTabs()}
+  return `
     <div class="mailbox-toolbar">
       <span class="keymap-hint" style="flex:1">
         Counts are for the selected period. Subscribing processes every <em>future</em>
@@ -15470,13 +15517,14 @@ function _renderMailboxSenders() {
 }
 
 function filterMailboxBySender(address) {
-  _mailboxState.tab = 'inbox';
   _mailboxState.query = address;
   _mailboxState.offset = 0;
+  _knowledgeScreen = 'mailbox';
   _loadMailbox();
 }
 
 function _renderMailbox() {
+  if (_knowledgeScreen !== 'mailbox') return;
   const st = _mailboxState;
   const from = st.total === 0 ? 0 : st.offset + 1;
   const to = Math.min(st.offset + _MAILBOX_PAGE, st.total);
@@ -15511,7 +15559,7 @@ function _renderMailbox() {
       </div>`;
   }).join('');
 
-  document.getElementById('view-mailbox-content').innerHTML = `
+  document.getElementById('view-knowledge-content').innerHTML = `
     ${_mailboxTabs()}
     <div class="mailbox-toolbar">
       <input id="mailbox-search" class="opt-input" placeholder="Search sender or subject…"
@@ -15583,6 +15631,13 @@ async function toggleMailSender(address, auto, name) {
     // different states would be a lie.
     _mailboxState.messages.forEach(m => {
       if (m.from === address) m.auto_process = auto;
+    });
+    (_mailboxState.senders || []).forEach(sn => {
+      if (sn.address === address) {
+        sn.auto_process = auto;
+        // Subscribing lifts a block server-side (#968) — the row must say so.
+        if (auto) sn.blocked = false;
+      }
     });
     _mailboxNotice(auto
       ? `Mail from ${address} is now processed automatically.`
