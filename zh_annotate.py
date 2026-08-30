@@ -16,19 +16,20 @@ A word is "new" when it is NOT in Daniel's collection AND is either HSK 5+ or
 absent from the HSK list entirely (per #638: annotate generously, a redundant
 annotation costs nothing, a missing one costs him a lookup).
 
-Two entry points, deliberately different because the two texts need different
-things:
+Two entry points, deliberately opposite because the two texts serve different
+purposes:
 
   annotate_zh_summary()  Chinese summary -> inline "词（pīnyīn - Gloss）",
                          first occurrence only, skips person/place names.
-  annotate_de_summary()  German summary -> prefixes bare Chinese runs with
-                         pinyin ("(浙江)" -> "(Zhèjiāng/浙江)"). No gloss: the
-                         German meaning is already right there in the sentence.
-                         No name filtering either — a Chinese name inside German
-                         prose is exactly what Daniel cannot pronounce.
+  strip_chinese_annotations()
+                         German summary -> the opposite operation (#979):
+                         removes every parenthetical containing Chinese. The
+                         German summary is prose Daniel reads to understand the
+                         content, and the annotations #631 asked for buried it.
 
-Both are best-effort: any failure returns the original text unchanged, because
-losing a whole episode over a missing pinyin table would be absurd.
+annotate_zh_summary() is best-effort: any failure returns the original text
+unchanged, because losing a whole episode over a missing pinyin table would be
+absurd.
 """
 import json
 import logging
@@ -44,7 +45,6 @@ _HSK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 KNOWN_HSK_MAX = 4
 
 _CJK = r"一-鿿"
-_CJK_RUN = re.compile(f"[{_CJK}]+")
 _ALL_CJK = re.compile(f"^[{_CJK}]+$")
 
 _hsk_cache: dict[str, int] | None = None
@@ -266,39 +266,38 @@ def annotate_zh_summary(text: str) -> str:
         return text
 
 
-def annotate_de_summary(html: str) -> str:
-    """Prefix pinyin to Chinese runs in the German summary that the model left
-    bare: "Provinz Zhejiang (浙江)" -> "Provinz Zhejiang (Zhèjiāng/浙江)".
+# A parenthesis group holding any Chinese at all: "(爱彼迎)",
+# "(jīngjì shuāituì/经济衰退)", "(Björn Höcke, déguó…/德国选择党图林根州主席)".
+# Nesting is not handled on purpose — the summaries never nest these.
+_CJK_PAREN_RE = re.compile(r" *[(（][^()（）]*[一-鿿][^()（）]*[)）]")
 
-    A run already preceded by "/" is one the model annotated itself
-    ("(jīngjì shuāituì/经济衰退)") and is left alone. Runs made up entirely of
-    HSK1-4 / collection words ("(中国)") need no help either. HTML tags are
-    never touched — they contain no CJK."""
-    if not html or not html.strip():
-        return html
-    try:
-        runs = _CJK_RUN.findall(html)
-        if not runs:
-            return html
-        hsk = _hsk_levels()
-        # Judge a run word by word: a run is worth annotating if any of its
-        # words is new. Names are NOT skipped here — see the module docstring.
-        run_words = {run: [w for w, _pos in _segment(run)] or [run] for run in runs}
-        known = _known_words(sorted({w for ws in run_words.values() for w in ws}))
 
-        def _replace(m: re.Match) -> str:
-            run = m.group(0)
-            if m.start() > 0 and html[m.start() - 1] == "/":
-                return run  # already annotated by the model
-            if not any(_is_new_word(w, hsk, known) for w in run_words.get(run, [run])):
-                return run
-            py = pinyin_of(run)
-            return f"{py}/{run}" if py else run
+def strip_chinese_annotations(text: str) -> str:
+    """Drop every parenthetical that contains Chinese from a German text (#979).
 
-        return _CJK_RUN.sub(_replace, html)
-    except Exception as e:
-        logger.warning("zh_annotate: German annotation failed — %s", e)
-        return html
+    Until #979 the summary prompt asked for "pinyin/汉字" after any HSK5+
+    concept and for the Chinese name of every company, and annotate_de_summary()
+    added pinyin to whatever the model left bare — which buried the German prose
+    under annotations Daniel does not want to read. New summaries no longer
+    carry them, but every summary already in the database does, so this runs on
+    the READ path (database.podcast._hydrate) and cleans them all at once
+    instead of demanding a re-summarize of the whole knowledge base.
+
+    Only groups containing CJK are removed, so timestamps like "(ca. 12:30)" and
+    ordinary German parentheses survive. The Chinese summary is never passed
+    through here — its annotations are the learning material."""
+    if not text:
+        return text
+
+    def _drop(m: re.Match) -> str:
+        # Full-width brackets ("Ökologie（生态）zählt") carry no space of their
+        # own, so removing the group would glue the two words together.
+        after = m.string[m.end():m.end() + 1]
+        before = m.string[:m.start()][-1:]
+        glued = before and after and not before.isspace() and not after.isspace()
+        return " " if glued and after not in ".,;:!?)»" else ""
+
+    return _CJK_PAREN_RE.sub(_drop, text)
 
 
 # ---------------------------------------------------------------------------

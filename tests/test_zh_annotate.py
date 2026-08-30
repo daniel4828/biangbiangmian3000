@@ -100,39 +100,49 @@ def test_person_and_place_names_are_annotated_in_chinese(monkeypatch):
     assert "瓶颈（píngjǐng - DE:瓶颈）" in out
 
 
-# --- German summary: pinyin only, no gloss ---------------------------------
+# --- German summary: strip every Chinese aside (#979) -----------------------
 
-def test_bare_chinese_run_in_german_gets_pinyin():
-    out = zh_annotate.annotate_de_summary("<p>Engpass (瓶颈) im Chipsektor.</p>")
-    assert "(píngjǐng/瓶颈)" in out
-
-
-def test_run_already_annotated_by_the_model_is_left_alone():
-    """"pinyin/汉字" written by the AI must not get a second pinyin."""
-    text = "<p>Rezession (jīngjì shuāituì/经济衰退) trifft alle.</p>"
-    assert zh_annotate.annotate_de_summary(text) == text
+def test_pinyin_annotation_is_stripped_from_german():
+    out = zh_annotate.strip_chinese_annotations(
+        "<p>Rezession (jīngjì shuāituì/经济衰退) trifft alle.</p>")
+    assert out == "<p>Rezession trifft alle.</p>"
 
 
-def test_basic_run_in_german_needs_no_pinyin():
-    text = "<p>Die Firma in China (中国) wächst.</p>"
-    assert zh_annotate.annotate_de_summary(text) == text
+def test_chinese_company_name_is_stripped():
+    out = zh_annotate.strip_chinese_annotations("<p>Airbnb (爱彼迎) wächst.</p>")
+    assert out == "<p>Airbnb wächst.</p>"
 
 
-def test_place_names_are_annotated_in_german():
-    """Unlike the Chinese summary, a place name in German prose is exactly what
-    Daniel cannot pronounce — no POS filtering here."""
-    out = zh_annotate.annotate_de_summary("<p>Provinz Zhejiang (浙江).</p>")
-    assert "(zhèjiāng/浙江)" in out
+def test_mixed_aside_with_a_latin_name_goes_entirely():
+    """The whole group goes, not just its Chinese half: "(Björn Höcke, pinyin/
+    汉字)" is an annotation of a name already spelled out right before it."""
+    out = zh_annotate.strip_chinese_annotations(
+        "<p>AfD-Chef Björn Höcke (Björn Höcke, déguóxuǎnzédǎng/德国选择党) "
+        "will stürzen.</p>")
+    assert out == "<p>AfD-Chef Björn Höcke will stürzen.</p>"
+
+
+def test_parentheses_without_chinese_survive():
+    """Timestamps (#479) and ordinary German parentheses are not annotations."""
+    text = "<p>Das Thema beginnt (ca. 12:30) und dauert (etwa 20 Minuten).</p>"
+    assert zh_annotate.strip_chinese_annotations(text) == text
 
 
 def test_german_text_without_chinese_is_untouched():
     text = "<p><b>Nur Deutsch.</b> Kein Chinesisch hier.</p>"
-    assert zh_annotate.annotate_de_summary(text) == text
+    assert zh_annotate.strip_chinese_annotations(text) == text
+
+
+def test_full_width_parentheses_are_stripped_too():
+    """Models write both bracket shapes. This is also why the Chinese summary
+    must never be passed through here — those annotations are the material."""
+    out = zh_annotate.strip_chinese_annotations("<p>Ökologie（生态）zählt.</p>")
+    assert out == "<p>Ökologie zählt.</p>"
 
 
 def test_empty_input_is_passed_through():
     assert zh_annotate.annotate_zh_summary("") == ""
-    assert zh_annotate.annotate_de_summary("") == ""
+    assert zh_annotate.strip_chinese_annotations("") == ""
     assert zh_annotate.annotate_zh_summary(None) is None
 
 

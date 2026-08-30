@@ -24,8 +24,9 @@ import podcast
 import zh_annotate
 
 
-# A realistic German summary: German prose with the handful of Chinese asides
-# zh_annotate.annotate_de_summary() inserts.
+# A realistic pre-#979 German summary: German prose with a Chinese aside. The
+# threshold has to keep tolerating those — the whole existing knowledge base
+# still has them stored (they are stripped on read, not in the database).
 GERMAN = ("<p><b>Der Fall der Berliner Mauer (bólínqiáng/柏林墙) war für viele "
           "Menschen ein einschneidendes Erlebnis.</b> Die Sendung ordnet die "
           "Ereignisse historisch ein und lässt Zeitzeugen zu Wort kommen.</p>")

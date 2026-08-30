@@ -8,6 +8,10 @@ All SQL for the podcast feature lives here — podcast.py (the crawler logic)
 and routes/podcast.py only call into this module.
 """
 import json
+
+# Safe to import at module level: zh_annotate imports nothing from this project
+# at import time (its `import database` calls are inside functions).
+import zh_annotate
 from .core import get_db
 from .knowledge import tags_for_items, list_membership
 
@@ -261,6 +265,15 @@ def recover_orphaned_podcast_episodes() -> int:
 
 def _hydrate(row: dict) -> dict:
     d = dict(row)
+    # #979: the German summary is German. Every summary written before #979
+    # carries "(pinyin/汉字)" asides the prompt used to demand, and stripping
+    # them here — the one row-reading choke point get_episode() and
+    # list_episodes() share — cleans the whole existing knowledge base at once
+    # (detail page, Kurzfassung, email, the French rendition translated from
+    # it) without re-summarizing anything. summary_zh is deliberately left
+    # alone: its annotations ARE the learning material.
+    if d.get("summary_de"):
+        d["summary_de"] = zh_annotate.strip_chinese_annotations(d["summary_de"])
     raw = d.get("hsk_words")
     try:
         d["hsk_words"] = json.loads(raw) if raw else []

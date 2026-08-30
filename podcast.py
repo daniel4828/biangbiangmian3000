@@ -1438,21 +1438,24 @@ def _annotate_summary(result: dict) -> dict:
     zh_annotate never raises: on any failure the untouched text comes back, so
     a missing pinyin table can't cost Daniel the episode.
 
+    The German summary is NOT annotated (#979): it is German prose Daniel reads
+    to understand the content, and the pinyin/汉字 asides #631 put in there
+    buried it. Whatever the model still writes in Chinese is stripped on the
+    read path (database.podcast._hydrate), which also cleans up every summary
+    stored before #979.
+
     Also replaces result["words"] (#650) — the AI's own pick from the summary
     prompt, which regularly misses words and includes ones Daniel already
-    knows — with a deterministic scan of the just-annotated summaries using
-    zh_annotate.extract_new_words(). That's the exact same "new word" rule
-    used for the inline annotations above, so the bottom word table and the
-    parenthetical annotations in the text are guaranteed to agree. An empty
+    knows — with a deterministic scan of the just-annotated Chinese summary
+    using zh_annotate.extract_new_words(). That's the exact same "new word"
+    rule used for the inline annotations above, so the bottom word table and
+    the parenthetical annotations in the text are guaranteed to agree. An empty
     scan (extraction failed, or genuinely no new words) keeps the AI's list
     as a fallback rather than wiping the table."""
     if result.get("summary_zh"):
         result["summary_zh"] = zh_annotate.annotate_zh_summary(result["summary_zh"])
-    if result.get("summary_de"):
-        result["summary_de"] = zh_annotate.annotate_de_summary(result["summary_de"])
     try:
-        combined = f"{result.get('summary_zh') or ''} {result.get('summary_de') or ''}"
-        scanned = zh_annotate.extract_new_words(combined)
+        scanned = zh_annotate.extract_new_words(result.get("summary_zh") or "")
         if scanned:
             result["words"] = scanned
     except Exception as e:
