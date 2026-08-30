@@ -10221,8 +10221,13 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
   document.getElementById('setup-hsk-slider').value =
     _prefillGp?.max_hsk ?? (_setupLang === 'zh' ? 3 : 2);
   const _modeSel = document.getElementById('setup-mode');
-  _modeSel.value = _prefillGp?.mode || 'story';
-  if (_modeSel.selectedIndex < 0) _modeSel.value = 'story'; // unknown mode in gen_params
+  // Remembered mode (#972): Daniel almost always regenerates with the same mode
+  // he used last time, so re-defaulting to 'story' on every open means picking
+  // it again by hand each day. Stored per language because the zh-only modes
+  // (kahneman/briefing/paste) don't exist for fr/es — a fr deck must not
+  // inherit 'briefing' from the zh tab. gen_params still wins for regenerate.
+  _modeSel.value = _prefillGp?.mode || localStorage.getItem('setupMode:' + _setupLang) || 'story';
+  if (_modeSel.selectedIndex < 0) _modeSel.value = 'story'; // unknown/stale mode
   updateHskLabel();
   _applySetupLangRestrictions();
   updateSetupMode();
@@ -11170,6 +11175,8 @@ function confirmStorySetup() {
   // the user may deliberately keep it (#910).
   if (model && (model !== SERVER_MODEL_VALUE || mode === 'paste'))
     localStorage.setItem('setupModel:' + mode, model);
+  // Remember the mode itself, per language (#972) — see openStorySetup().
+  localStorage.setItem('setupMode:' + setupLang(), mode);
   const chapterIds  = mode === 'kahneman' ? _getSelectedChapterIds() : null;
   const articles    = mode === 'paste' ? _collectPastedContents() : null;
   const episodeIds  = mode === 'knowledge' ? _getSelectedEpisodeIds() : null;
