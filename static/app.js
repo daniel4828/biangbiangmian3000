@@ -1086,7 +1086,7 @@ function setLoading(msg, useProgress = false) {
 // through there, so there is no per-flow plumbing. [{id, title, kind}].
 let _storyLoadingSources = [];
 
-const _KNOWLEDGE_KIND_ICON = { podcast: '\u{1F399}\uFE0F', video: '\u{1F4FA}', article: '\u{1F4C4}' };
+const _KNOWLEDGE_KIND_ICON = { podcast: '\u{1F399}\uFE0F', video: '\u{1F4FA}', article: '\u{1F4C4}', kahneman: '\u{1F4A1}' };
 
 function _renderLoadingSources() {
   const el = document.getElementById('loading-sources');
@@ -1095,7 +1095,7 @@ function _renderLoadingSources() {
   if (!_storyLoadingSources.length) { el.style.display = 'none'; return; }
   const label = document.createElement('div');
   label.className = 'loading-sources-label';
-  label.textContent = 'Material — tap to read the summary while you wait:';
+  label.textContent = 'Material — tap to read it while you wait:';
   el.appendChild(label);
   for (const src of _storyLoadingSources) {
     const btn = document.createElement('button');
@@ -1104,7 +1104,12 @@ function _renderLoadingSources() {
     // YouTube and arbitrary web pages.
     btn.textContent = `${_KNOWLEDGE_KIND_ICON[src.kind] || '\u{1F4C4}'} ${src.title || '(untitled)'}`;
     btn.title = src.title || '';
-    btn.onclick = () => openKnowledgeSummaryPopup(src.id, src.title);
+    // Kahneman chapters (#980) open the chapter modal that the concept box
+    // opens during review — the same shared modal knowledge items use, so
+    // closing it lands back on this loading screen either way.
+    btn.onclick = src.kind === 'kahneman'
+      ? () => openKahnemanExamples(src.id, src.title)
+      : () => openKnowledgeSummaryPopup(src.id, src.title);
     el.appendChild(btn);
   }
   el.style.display = 'block';
@@ -1226,6 +1231,15 @@ function _startStoryProgressPoll(deckId, cat) {
           }
         }
         artEl.style.display = titles.length ? 'block' : 'none';
+      }
+      // Material buttons (#980): the backend reports the chapters/items this run
+      // actually uses, which for kahneman's "none selected → random 5" is the
+      // only place they exist. Compared by key so the buttons are not rebuilt
+      // (and their click handlers dropped) every 400 ms.
+      if (Array.isArray(p.sources) && p.sources.length) {
+        const srcKey = p.sources.map(x => `${x.kind}:${x.id}`).join('|');
+        const curKey = _storyLoadingSources.map(x => `${x.kind}:${x.id}`).join('|');
+        if (srcKey !== curKey) { _storyLoadingSources = p.sources; _renderLoadingSources(); }
       }
       // Generation log (issue #642): cumulative backend lines, appended only
       // (re-rendering the whole list every 400ms would fight the scrollbar).
@@ -11183,8 +11197,17 @@ function confirmStorySetup() {
   // #929: snapshot the picked items (title + kind) for the loading screen's
   // source buttons. A snapshot, not a live read of _setupSelectedEpisodes —
   // that Map is cleared the next time the setup modal opens.
+  // Kahneman (#980) gets the same buttons for its chapters. Seeded here so they
+  // appear the instant the loading screen does; the server then reports the
+  // chapters it actually used through /api/story-progress (authoritative — an
+  // empty selection means "random 5", which only the server knows).
   _storyLoadingSources = mode === 'knowledge'
     ? Array.from(_setupSelectedEpisodes.values()).map(e => ({ id: e.id, title: e.title, kind: e.kind }))
+    : mode === 'kahneman'
+    ? (chapterIds || []).map(n => {
+        const ch = _kahnemanChapters?.find(c => c.number === n);
+        return { id: n, kind: 'kahneman', title: `第${n}章 ${ch?.title_zh || ''}`.trim() };
+      })
     : [];
   const bookChapterId = mode === 'book' ? _getSelectedBookChapterId() : null;
   // News mode never sends articles: today's news is auto-fetched server-side

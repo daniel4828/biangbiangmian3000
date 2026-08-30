@@ -85,6 +85,24 @@ def _set_progress(key: str | None, **kwargs) -> None:
         _story_progress[key] = kwargs
 
 
+# Source items the current run draws on, per progress key (#929 knowledge,
+# #980 kahneman). The loading screen turns these into "read the material while
+# you wait" buttons. Kept outside _story_progress because _set_progress
+# overwrites that dict wholesale on every update — a list stored there would
+# survive exactly one progress tick.
+_story_sources: dict[str, list[dict]] = {}
+
+
+def set_story_sources(key: str | None, sources: list[dict]) -> None:
+    if key:
+        _story_sources[key] = list(sources)
+
+
+def reset_story_sources(key: str | None) -> None:
+    if key:
+        _story_sources.pop(key, None)
+
+
 # Cumulative log lines per progress key (issue #642). _set_progress overwrites
 # the whole dict on every update, so its single `msg` can only ever show the
 # current step — never what already happened or where a run got stuck. The
