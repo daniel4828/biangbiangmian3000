@@ -9048,18 +9048,42 @@ function _getTargetPositions(zh) {
 //   union (default, #862) — hidden = (in my deck) ∪ (HSK <= N)
 //   hsk   (the original)  — hidden = HSK <= N, N=0 blanks nothing but the target
 //
+// N is the HSK level the slider position carries, not the position itself (#984).
+//
 // The target word is always blanked in both.
 const _HINT_MODES = {
-  union: { label: 'Saved+HSK', storeKey: 'listenHideLevel',      def: 4 },
-  hsk:   { label: 'HSK only',  storeKey: 'listenHintHskLevel',   def: 3 },
+  union: { label: 'Saved+HSK', storeKey: 'listenHideLevel',      def: 5 },
+  hsk:   { label: 'HSK only',  storeKey: 'listenHintHskLevel',   def: 4 },
 };
 
 // The two ends of the slider (#983) sit outside the HSK scale on purpose:
-// they are not "HSK <= -1" / "HSK <= 7" but two absolute rules, identical in
-// both modes — show the whole sentence, or blank every character of it.
-// Everything between them keeps the per-mode behaviour unchanged.
-const _HINT_MIN = -1;  // nothing hidden at all, target word included
-const _HINT_MAX = 7;   // every CJK character hidden, whatever its level
+// they are not "HSK <= x" but two absolute rules, identical in both modes —
+// show the whole sentence, or blank every character of it. Everything between
+// them keeps the per-mode behaviour unchanged.
+//
+// The slider therefore runs 0..8 while the HSK scale it carries runs -1..6,
+// hence the offset (#984): the leftmost stop had to be 0, not -1, so every
+// value shifted right by one.
+const _HINT_MIN = 0;   // nothing hidden at all, target word included
+const _HINT_MAX = 8;   // every CJK character hidden, whatever its level
+const _HINT_OFFSET = 1;
+
+// Slider position -> the HSK level it means (0 = "Saved only" / "Off").
+function _hintHskOf(level) { return level - _HINT_OFFSET; }
+
+// One-time bump of the two saved defaults onto the shifted scale (#984).
+// Without it a saved 4 would silently start meaning what 3 used to mean.
+function _migrateHintScale() {
+  if (localStorage.getItem('listenHintScaleV2')) return;
+  for (const cfg of Object.values(_HINT_MODES)) {
+    const raw = localStorage.getItem(cfg.storeKey);
+    if (raw !== null && raw !== '') {
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n)) localStorage.setItem(cfg.storeKey, String(n + _HINT_OFFSET));
+    }
+  }
+  localStorage.setItem('listenHintScaleV2', '1');
+}
 
 function _hintMode() {
   const m = localStorage.getItem('listenHintMode');
@@ -9077,8 +9101,9 @@ function _hintSavedDefault(mode = _hintMode()) {
 function _hintLabelFor(level, mode = _hintMode()) {
   if (level <= _HINT_MIN) return 'Show all';
   if (level >= _HINT_MAX) return 'Hide all';
-  if (mode === 'hsk') return level === 0 ? 'Off' : `HSK≤${level}`;
-  return level === 0 ? 'Saved only' : `Saved + HSK≤${level}`;
+  const hsk = _hintHskOf(level);
+  if (mode === 'hsk') return hsk === 0 ? 'Off' : `HSK≤${hsk}`;
+  return hsk === 0 ? 'Saved only' : `Saved + HSK≤${hsk}`;
 }
 
 function toggleListenHintMode() {
@@ -9110,6 +9135,7 @@ function _updateHintStar(currentVal) {
 
 async function _initListenHint() {
   const slider = document.getElementById('listen-hint-slider');
+  _migrateHintScale();
   const saved = _hintSavedDefault();
   slider.value = saved;
   _syncHintModeButton();
@@ -9184,7 +9210,7 @@ function _renderListenHint(level) {
   // outside the deck that are HSK 5/6 or missing from the table entirely.
   //
   // hsk mode (#874, the original rule): hidden = HSK <= level, the deck plays no
-  // part. level 0 therefore blanks nothing but the target word.
+  // part. HSK level 0 therefore blanks nothing but the target word.
   const mode = _hintMode();
   const vocabSet = mode === 'hsk' ? new Set() : (_vocabIndex || new Set());
   const hidePositions = new Set();
@@ -9201,7 +9227,7 @@ function _renderListenHint(level) {
       const overlapsTarget = [...Array(tok.length).keys()].some(k => targetPositions.has(tokStart + k));
       if (!overlapsTarget) {
         const hskLevel = _hskLevels ? _hskLevelOf(tok) : null;
-        const shouldHide = vocabSet.has(tok) || (hskLevel !== null && hskLevel <= level);
+        const shouldHide = vocabSet.has(tok) || (hskLevel !== null && hskLevel <= _hintHskOf(level));
         if (shouldHide) {
           for (let k = tokStart; k < tokEnd; k++) hidePositions.add(k);
         }
