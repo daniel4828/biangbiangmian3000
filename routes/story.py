@@ -432,6 +432,9 @@ def _generate_and_store(deck_id: int, category: str, today: str, cards: list, *,
     # #642: a fresh run starts with a fresh log — the previous run's lines would
     # otherwise stay on the loading screen and read as if they belonged to this one.
     ai.reset_story_log(progress_key)
+    # #980: same reasoning for the loading screen's source buttons — the
+    # previous run's chapters must not linger next to this run's progress bar.
+    ai.reset_story_sources(progress_key)
     with database.action_context(_action_label_for_story(mode, deck_id)):
         # Inside the action context (issue #578): fix_commas calls previously ran
         # before it and showed up as orphan "fix_commas · legacy" cost rows.
@@ -1378,6 +1381,20 @@ def _generate_kahneman_story_sentences(
     if not selected:
         raise RuntimeError("No valid chapters selected.")
 
+    # #980: tell the loading screen which chapters this run uses, so it can offer
+    # the same "read the material while you wait" buttons knowledge mode has
+    # (#929). Reported from here rather than read off the frontend's checkboxes
+    # because an empty selection means "random 5" — only this function knows
+    # which five.
+    ai.set_story_sources(progress_key, [
+        {
+            "id": ch["number"],
+            "kind": "kahneman",
+            "title": f"第{ch['number']}章 {ch.get('title_zh') or ''}".strip(),
+        }
+        for ch in selected
+    ])
+
     n = len(selected)
     # Cap words per AI call: large batches make the model skip words and dilute
     # sentence quality. Extra batches cycle through the selected chapters.
@@ -1829,4 +1846,8 @@ def story_progress_endpoint(deck_id: int, category: str, lang: str | None = None
     # #642: the cumulative log lives outside _story_progress (which gets fully
     # overwritten on each update), so merge it in here for the loading screen.
     prog["log"] = ai._story_log.get(key, [])
+    # #980: the material this run draws on (kahneman chapters today), for the
+    # loading screen's source buttons. Outside _story_progress for the same
+    # reason the log is: that dict is overwritten on every update.
+    prog["sources"] = ai._story_sources.get(key, [])
     return prog
