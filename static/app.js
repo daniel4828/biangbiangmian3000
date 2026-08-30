@@ -1086,7 +1086,7 @@ function setLoading(msg, useProgress = false) {
 // through there, so there is no per-flow plumbing. [{id, title, kind}].
 let _storyLoadingSources = [];
 
-const _KNOWLEDGE_KIND_ICON = { podcast: '\u{1F399}\uFE0F', video: '\u{1F4FA}', article: '\u{1F4C4}', kahneman: '\u{1F4A1}' };
+const _KNOWLEDGE_KIND_ICON = { podcast: '\u{1F399}\uFE0F', video: '\u{1F4FA}', article: '\u{1F4C4}', newsletter: '\u{1F4F0}', kahneman: '\u{1F4A1}' };
 
 function _renderLoadingSources() {
   const el = document.getElementById('loading-sources');
@@ -10956,7 +10956,8 @@ async function _loadPodcastEpisodesForSetup() {
   await _loadPodcastEpisodesForCurrentFeed();
 }
 
-// Source-type switch (🎙️ podcast | 📺 video | 📄 article, issue #654) —
+// Source-type switch (🎙️ podcast | 📺 video | 📄 article |
+// 📰 newsletter, issues #654/#925) —
 // re-renders the episode list for the newly selected kind.
 function _onKnowledgeKindChange() {
   const kindSel = document.getElementById('setup-knowledge-kind');
@@ -11053,7 +11054,7 @@ function _renderSetupSelectedEpisodes() {
   const items = Array.from(_setupSelectedEpisodes.values());
   if (!items.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
   box.style.display = 'block';
-  const kindIcon = { podcast: '🎙️', video: '📺', article: '📄' };
+  const kindIcon = { podcast: '🎙️', video: '📺', article: '📄', newsletter: '📰' };
   box.innerHTML = `<div style="font-size:12px;color:var(--muted,#888);margin-bottom:4px">Selected: ${items.length}</div>` +
     items.map(it => `
       <span style="display:inline-flex;align-items:center;gap:4px;background:var(--hover-bg,#f0f0f0);
