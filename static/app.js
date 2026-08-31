@@ -5852,17 +5852,34 @@ function _openWordActions(idx, anchor) {
   addBtn.onclick = () => doWordTableAdd(idx, addBtn);
   knownBtn.onclick = () => doWordTableKnown(idx, knownBtn);
 
-  // Wide screens anchor the panel under the word; narrow ones get a bottom
-  // sheet (see style.css), which needs no positioning and stays reachable by
-  // the thumb.
-  if (window.innerWidth > 600) {
-    const rect = anchor.getBoundingClientRect();
-    const width = box.offsetWidth;
-    box.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - box.offsetHeight - 8)}px`;
-    box.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
-  }
+  _placeWordActions(box, anchor);
   setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);
   document.addEventListener('keydown', _wordActionsEscape);
+}
+
+// Pin the panel to the word itself on every screen size (#994). It used to
+// become a bottom sheet under 600px, but on a phone that puts the translation
+// at the far end of the screen while the eye is up in the sentence — and it
+// covers the text it is explaining. Below the word by default, above it when
+// below does not fit and above has more room, horizontally centred on the
+// word and clamped 8px inside the viewport.
+const _WORD_ACTIONS_GAP = 6;
+const _WORD_ACTIONS_EDGE = 8;
+
+function _placeWordActions(box, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const w = box.offsetWidth;
+  const h = box.offsetHeight;
+  const below = window.innerHeight - rect.bottom;
+  const above = rect.top;
+  // Flip only when the panel genuinely does not fit below — a word near the
+  // middle of the screen keeps the reading direction (word, then gloss).
+  const flip = below < h + _WORD_ACTIONS_GAP + _WORD_ACTIONS_EDGE && above > below;
+  const top = flip ? rect.top - h - _WORD_ACTIONS_GAP : rect.bottom + _WORD_ACTIONS_GAP;
+  const left = rect.left + rect.width / 2 - w / 2;
+  const maxTop = window.innerHeight - h - _WORD_ACTIONS_EDGE;
+  box.style.top = `${Math.max(_WORD_ACTIONS_EDGE, Math.min(top, maxTop))}px`;
+  box.style.left = `${Math.max(_WORD_ACTIONS_EDGE, Math.min(left, window.innerWidth - w - _WORD_ACTIONS_EDGE))}px`;
 }
 
 function _wordActionsOutside(e) {
