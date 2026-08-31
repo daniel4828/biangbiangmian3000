@@ -271,9 +271,17 @@ def _hydrate(row: dict) -> dict:
     # list_episodes() share — cleans the whole existing knowledge base at once
     # (detail page, Kurzfassung, email, the French rendition translated from
     # it) without re-summarizing anything. summary_zh is deliberately left
-    # alone: its annotations ARE the learning material.
+    # alone by that call: what it carries is a different kind of annotation,
+    # handled right below.
     if d.get("summary_de"):
         d["summary_de"] = zh_annotate.strip_chinese_annotations(d["summary_de"])
+    # #1001: the Chinese summary no longer carries inline
+    # "词（pīnyīn - Gloss）" either — every word in the reader is tappable
+    # (#967) and Cmd / a left swipe glosses all of them (#996). Stripped on
+    # the same read path and for the same reason as summary_de: it cleans
+    # every summary already in the database without re-summarizing anything.
+    if d.get("summary_zh"):
+        d["summary_zh"] = zh_annotate.strip_inline_glosses(d["summary_zh"])
     raw = d.get("hsk_words")
     try:
         d["hsk_words"] = json.loads(raw) if raw else []

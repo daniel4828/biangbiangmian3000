@@ -210,7 +210,9 @@ def test_swipe_listeners_are_delegated_and_bound_once():
     listeners would have to be re-attached forever."""
     src = _app_js()
     assert "dataset.swipeBound" in src
-    assert src.count("addEventListener('touchstart'") == 1
+    # Scoped to the list's own host element: the reader has a second,
+    # unrelated touchstart listener since #996 (left-swipe to gloss the text).
+    assert src.count("host.addEventListener('touchstart'") == 1
 
 
 def test_desktop_keeps_the_same_two_actions():

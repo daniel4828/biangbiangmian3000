@@ -12,8 +12,9 @@ still do, so the cleanup lives on the READ path — database.podcast._hydrate(),
 the one place get_episode() and list_episodes() both go through — which fixes
 the whole existing knowledge base without re-summarizing anything.
 
-What must NOT change: summary_zh. Its inline annotations are the learning
-material.
+#1001 extended the same treatment to summary_zh: its inline
+"词（pīnyīn - Gloss）" annotations are gone too, because the reader can now
+gloss any word on demand (#967/#996).
 
 Isolation follows the house pattern: monkeypatch database.core.DB_PATH, never
 database.DB_PATH (#615).
@@ -60,9 +61,13 @@ def test_stored_summary_is_cleaned_when_read(tmp_db):
     assert ep["summary_de"] == CLEAN_DE
 
 
-def test_chinese_summary_keeps_its_annotations(tmp_db):
+def test_chinese_summary_is_cleaned_too(tmp_db):
+    """#1001: the Chinese side lost its inline glosses as well — every word in
+    the reader is tappable (#967) and Cmd / a left swipe glosses all of them
+    (#996), so the parentheses only broke up the prose. Same read path, same
+    reason: it fixes every summary already stored."""
     ep = database.get_episode(_episode_with_summary())
-    assert ep["summary_zh"] == ANNOTATED_ZH
+    assert ep["summary_zh"] == "<p><b>社民党必须节省开支。</b></p>"
 
 
 def test_list_rows_are_cleaned_too(tmp_db):
@@ -72,14 +77,17 @@ def test_list_rows_are_cleaned_too(tmp_db):
     assert rows and rows[0]["summary_de"] == CLEAN_DE
 
 
-def test_fresh_summaries_are_not_annotated_in_german(monkeypatch):
-    """_annotate_summary annotates the Chinese side only (#979)."""
-    monkeypatch.setattr(zh_annotate, "annotate_zh_summary", lambda t: t + "[zh]")
-    monkeypatch.setattr(zh_annotate, "extract_new_words", lambda t: [])
+def test_fresh_summaries_are_annotated_on_neither_side(monkeypatch):
+    """#979 stopped annotating the German side, #1001 the Chinese one — what
+    _annotate_summary still does is SCAN for the new words (the word table and
+    the tappable words in the reader), never rewrite the text."""
+    monkeypatch.setattr(zh_annotate, "extract_new_words",
+                        lambda t: [{"word": "开支"}])
     out = podcast._annotate_summary({"summary_de": "Nur Deutsch.",
                                      "summary_zh": "只有中文。"})
     assert out["summary_de"] == "Nur Deutsch."
-    assert out["summary_zh"] == "只有中文。[zh]"
+    assert out["summary_zh"] == "只有中文。"
+    assert out["words"] == [{"word": "开支"}]
 
 
 def test_summary_prompt_forbids_chinese_in_the_german_summary():

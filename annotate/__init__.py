@@ -22,7 +22,14 @@ logger = logging.getLogger(__name__)
 
 
 def annotate_summary(text: str, lang: str) -> tuple[str, list[dict]]:
-    """(annotated_text, new_words) for `text` in `lang`. new_words is a list
+    """(text, new_words) for `text` in `lang`.
+
+    Since #1001 the text comes back UNCHANGED: nothing is written into it
+    inline any more. Every new word is tappable in the reader (#967) and a
+    modifier key / left swipe shows all the glosses under the words (#996),
+    which is the same information without the parentheses breaking up the
+    prose. What this function still does — and the only reason it exists — is
+    decide WHICH words are new, per language. new_words is a list
     of dicts (shape varies slightly per annotator — see the individual
     implementations) in order of first appearance.
 
@@ -38,9 +45,7 @@ def annotate_summary(text: str, lang: str) -> tuple[str, list[dict]]:
     try:
         if annotator == "zh":
             import zh_annotate
-            annotated = zh_annotate.annotate_zh_summary(text)
-            new_words = zh_annotate.extract_new_words(text)
-            return annotated, new_words
+            return text, zh_annotate.extract_new_words(text)
         if annotator == "romance":
             from . import romance
             return romance.annotate_summary(text, lang)

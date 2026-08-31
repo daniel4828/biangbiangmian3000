@@ -73,13 +73,15 @@ def test_inflected_form_of_an_a1_lemma_is_not_annotated(fr_annotator):
     assert new_words == []
 
 
-def test_word_above_a2_is_still_annotated(fr_annotator):
-    """The baseline is a floor, not a mute button — anything past A2 must keep
-    its gloss."""
+def test_word_above_a2_is_still_flagged(fr_annotator):
+    """The baseline is a floor, not a mute button — anything past A2 must still
+    come back as a new word. Since #1001 nothing is written into the text
+    itself, so the new_words list is the whole result."""
     assert "amoindrir" not in baseline.baseline_words("fr")
     annotated, new_words = fr_annotator("Cela va amoindrir le risque.")
-    assert "amoindrir (DE:amoindrir)" in annotated
+    assert annotated == "Cela va amoindrir le risque."
     assert "amoindrir" in [w["word"] for w in new_words]
+    assert [w["definition_de"] for w in new_words if w["word"] == "amoindrir"] == ["DE:amoindrir"]
 
 
 def test_elided_baseline_word_is_not_annotated(fr_annotator):
