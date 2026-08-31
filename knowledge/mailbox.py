@@ -301,20 +301,57 @@ def _newsletter_source_for(msg: email.message.Message) -> str | None:
     return None
 
 
-def _search_allowed(conn, allowed, summary):
-    """UNSEEN mail from whitelisted senders only — the union of one
-    `UNSEEN FROM <addr>` search per address, never a bare `UNSEEN`.
+_AUTO_LOOKBACK_DAYS = 3
+
+
+def _auto_since_criteria(auto_since):
+    """IMAP SINCE terms for one subscribed sender (#997).
+
+    Two bounds, whichever is later:
+      * when the switch was turned on — subscribing is a promise about
+        future mail, not an order to pay for the archive;
+      * _AUTO_LOOKBACK_DAYS — an old subscription must not re-scan years of
+        mail on every run just because read state is no longer the filter.
+
+    The date is deliberately generous by a day: IMAP SINCE compares
+    internal dates, and mail that arrives near midnight in another timezone
+    should be seen, not silently missed.
+    """
+    from datetime import date, datetime, timedelta
+    floor = date.today() - timedelta(days=_AUTO_LOOKBACK_DAYS)
+    if auto_since:
+        try:
+            stamp = datetime.strptime(str(auto_since)[:10], "%Y-%m-%d").date()
+            floor = max(floor, stamp - timedelta(days=1))
+        except ValueError:
+            pass
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    return ("SINCE", f"{floor.day:02d}-{months[floor.month - 1]}-{floor.year}")
+
+
+def _search_allowed(conn, allowed, windows, summary):
+    """Recent mail from subscribed senders only — the union of one
+    `FROM <addr> SINCE <date>` search per address, never a bare search.
 
     The mailbox being polled is Daniel's personal Gmail inbox, not the
-    dedicated empty mailbox #655 assumed. A bare UNSEEN search would pull
-    every unread private mail's full body through this process; the
-    whitelist check downstream keeps them out of the database, but by then
-    they have already passed through here (the #755 lesson: blocking
-    ingestion is not the same as never reading it). Asking the IMAP server
-    to filter means they are never fetched at all.
+    dedicated empty mailbox #655 assumed. An unscoped search would pull
+    every private mail through this process; the sender check downstream
+    keeps them out of the database, but by then they have already passed
+    through here (the #755 lesson: blocking ingestion is not the same as
+    never reading it). Asking the IMAP server to filter means they are
+    never fetched at all.
+
+    UNSEEN is deliberately NOT part of this any more (#997). Read state is
+    the mail client's, not ours: Daniel opens the F.A.Z. newsletter on his
+    phone over breakfast, and under the old criteria that one glance made
+    the mail invisible to the cron forever — the switch said "Auto" and
+    nothing ever happened. "Already processed" is now answered by
+    podcast_episodes.mail_message_id, which is a fact about our database
+    instead of a fact about his reading habits.
 
     IMAP FROM is a substring match, so this is a narrowing filter, not a
-    guarantee — `sender not in allowed` downstream stays as the exact check.
+    guarantee — the exact `sender not in allowed` check downstream stays.
 
     Returns the message ids, or None if a search failed (caller returns the
     summary as-is: acting on a partial id list would mark a subset processed
@@ -322,7 +359,8 @@ def _search_allowed(conn, allowed, summary):
     """
     msg_ids = []
     for addr in sorted(allowed):
-        status, data = conn.search(None, "UNSEEN", "FROM", addr)
+        criteria = ("FROM", addr) + _auto_since_criteria(windows.get(addr))
+        status, data = conn.search(None, *criteria)
         if status != "OK":
             logger.warning(
                 "knowledge.mailbox: IMAP SEARCH 失败（发件人 %s）: %s", addr, status
@@ -747,10 +785,9 @@ def route_message(msg):
     the same reason this repo keeps one add-word pipeline (#643) and one
     ingest pipeline (knowledge/ingest.py).
 
-    Flag handling is deliberately NOT part of this: marking mail \\Seen is
-    the cron's business (that is how it remembers what it did). The manual
-    path never touches a flag — the mailbox view is read-only against
-    Gmail, and "already processed" is answered from mail_message_id.
+    Neither caller touches a flag (#997): this module is read-only against
+    Gmail apart from the mailbox view's explicit delete. "Already
+    processed" is answered from mail_message_id on both paths.
     """
     newsletter_addr = _newsletter_source_for(msg)
     if newsletter_addr:
@@ -768,22 +805,34 @@ def route_message(msg):
 
 
 def check_mailbox(imap_factory=None) -> dict:
-    """Poll KNOWLEDGE_IMAP_HOST's INBOX for UNSEEN mail from whitelisted
-    senders, ingest every URL found in each one, and mark the message
-    \\Seen only if every URL in it ingested without error (failures are
-    left UNSEEN so the next run retries them; ingest_url() is idempotent
-    for already-ingested URLs via its existing_exists dedup, so retrying a
-    partially-succeeded message is safe).
+    """Poll KNOWLEDGE_IMAP_HOST's INBOX for recent mail from subscribed
+    senders and ingest it — one paid AI summary each, so what counts as
+    "recent" and what counts as "already done" are the whole design:
+
+    * recent = arrived after the subscription was switched on, and within
+      _AUTO_LOOKBACK_DAYS (see _search_allowed / _auto_since_criteria);
+    * already done = its Message-ID is stamped on a podcast_episodes row,
+      or it is on the abandoned list. **Not** the \\Seen flag any more
+      (#997): reading the mail on his phone used to make it invisible to
+      the cron forever, which is exactly what "Auto is on but nothing
+      happens" looked like.
+
+    A failure leaves no stamp, so the next run retries it; ingest_url() /
+    ingest_text() are idempotent (URL and body-hash dedup), so retrying a
+    partially-succeeded message is safe. Permanent failures — a body that
+    can never be an article — are abandoned by Message-ID instead, or the
+    same doomed mail is re-attempted every five minutes.
 
     `imap_factory` is injectable for tests: a zero-arg callable returning
     an object implementing the imaplib.IMAP4_SSL interface (login/select/
-    search/fetch/store/close/logout). Never used for real network I/O in
-    tests.
+    search/fetch/close/logout). Never used for real network I/O in tests.
     """
     summary = {
         "checked": 0, "processed": 0, "skipped": 0, "failed": 0,
         "ingested": 0, "errors": [],
     }
+
+    import database
 
     allowed = auto_process_senders()
     if not allowed:
@@ -811,6 +860,8 @@ def check_mailbox(imap_factory=None) -> dict:
         summary["reason"] = "no_credentials"
         return summary
 
+    windows = database.auto_mail_sender_windows()
+
     if imap_factory is None:
         def imap_factory():
             return imaplib.IMAP4_SSL(host, port, timeout=_IMAP_TIMEOUT)
@@ -818,33 +869,61 @@ def check_mailbox(imap_factory=None) -> dict:
     conn = imap_factory()
     try:
         conn.login(user, password)
-        conn.select("INBOX")
+        # readonly：本轮一个标志位都不会改（#997），那就让连接自己保证这件
+        # 事，别指望以后改这段代码的人记得（同 _connection() 的做法）。
+        conn.select("INBOX", readonly=True)
 
-        msg_ids = _search_allowed(conn, allowed, summary)
+        msg_ids = _search_allowed(conn, allowed, windows, summary)
         if msg_ids is None:
             return summary
         summary["checked"] = len(msg_ids)
 
+        # 两段式取信（#997）：先只取信封判断该不该处理，确定要处理了才下载
+        # 正文。既省掉每五分钟把已处理过的通讯整封重下一遍，也把「发件人精
+        # 确匹配」提前到了下载正文之前——IMAP 的 FROM 只是子串匹配，原来那
+        # 版会先把子串命中的陌生邮件正文拉进本进程再判断（#755 的教训）。
+        pending = []
         for msg_id in msg_ids:
-            # BODY.PEEK[] instead of RFC822: fetching RFC822 implicitly sets
-            # \Seen, which would mark a mail read before the whitelist check
-            # below ever runs. PEEK leaves the flag alone, so the only thing
-            # that ever marks a mail read is the explicit store(+FLAGS) after
-            # a successful ingest.
+            status, env_data = conn.fetch(msg_id, _ENVELOPE_PARTS)
+            if status != "OK" or not env_data or not env_data[0]:
+                logger.warning("knowledge.mailbox: 无法读取邮件信封 %s，本轮跳过", msg_id)
+                summary["failed"] += 1
+                continue
+            env = email.message_from_bytes(env_data[0][1])
+            sender = _sender_address(env)
+            if sender not in allowed:
+                logger.info("knowledge.mailbox: 发件人 %s 不在白名单，跳过（不下载正文）", sender)
+                summary["skipped"] += 1
+                continue
+            pending.append((msg_id, sender, (env.get("Message-ID") or "").strip()))
+
+        # 「这封处理过没有」由库里的 mail_message_id 回答，不再由邮件的已读
+        # 标志回答（#997）：Daniel 早上在手机上扫一眼通讯，旧写法就让 cron
+        # 永远看不见它——开关写着 Auto，却什么都不会发生。
+        processed = database.processed_mail_message_ids(
+            [mid for _, _, mid in pending if mid])
+        abandoned = database.abandoned_mail_message_ids()
+
+        for msg_id, sender, message_id in pending:
+            if message_id and message_id in processed:
+                summary["skipped"] += 1
+                continue
+            if message_id and message_id in abandoned:
+                logger.info("knowledge.mailbox: 邮件 %s 此前已永久放弃，跳过", message_id)
+                summary["skipped"] += 1
+                continue
+
+            # BODY.PEEK[]，不是 RFC822：后者会隐式给邮件打上 \Seen。这个模块
+            # 对 Gmail 的承诺是只读（唯一的例外是收件箱视图里显式的删除），
+            # 读一封通讯不该改变他收件箱里的任何状态。
             status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
             if status != "OK" or not msg_data or not msg_data[0]:
-                logger.warning("knowledge.mailbox: 无法读取邮件 %s，本轮跳过（不标已读）", msg_id)
+                logger.warning("knowledge.mailbox: 无法读取邮件 %s，本轮跳过", msg_id)
                 summary["failed"] += 1
                 continue
 
             raw = msg_data[0][1]
             msg = email.message_from_bytes(raw)
-
-            sender = _sender_address(msg)
-            if sender not in allowed:
-                logger.info("knowledge.mailbox: 发件人 %s 不在白名单，跳过（不标已读）", sender)
-                summary["skipped"] += 1
-                continue
 
             # 通讯分支（#925），必须排在 URL 分支之前：F.A.Z. Frühdenker 这类
             # 通讯正文里有几十个付费墙链接，走 URL 分支会逐个抓取、全部失败
@@ -852,8 +931,8 @@ def check_mailbox(imap_factory=None) -> dict:
             # 查已经用它判过了），这里额外查 Sender/Return-Path 只是为了兜
             # 底改写 From 的转发配置。
             # 分支顺序统一由 route_message() 决定（#960）——手动「处理」走
-            # 的是同一个函数。这里各分支只保留自己的 \Seen 处理：那是 cron
-            # 特有的记账方式，手动路径根本不碰标志位。
+            # 的是同一个函数。这里各分支只保留自己的记账（打 Message-ID /
+            # 记入放弃名单），那是 cron 特有的。
             route, payload = route_message(msg)
 
             if route == "newsletter":
@@ -870,12 +949,12 @@ def check_mailbox(imap_factory=None) -> dict:
                     # cron 每 5 分钟跑一次——留着不读只会让每一轮都白跑一次
                     # 注定失败的活儿。标已读，放弃这封。
                     logger.error(
-                        "knowledge.mailbox: 通讯 %s 永久失败（放弃，标已读）: %s",
+                        "knowledge.mailbox: 通讯 %s 永久失败（放弃）: %s",
                         subject, e,
                     )
                     summary["errors"].append(f"(newsletter {msg_id}, abandoned): {e}")
                     summary["failed"] += 1
-                    conn.store(msg_id, "+FLAGS", "\\Seen")
+                    database.abandon_mail_message_id(message_id)
                     continue
                 except Exception as e:
                     # 网络/数据库/AI 抖动等暂时性故障——不标已读，下轮重试。
@@ -885,12 +964,14 @@ def check_mailbox(imap_factory=None) -> dict:
                     continue
 
                 episode_id = result.get("episode_id")
+                # 这一步是新记账的核心（#997）：不打标记就等于「没处理过」，
+                # 下一轮会把同一封通讯再摘要一遍——每轮一次付费 AI 调用。
+                if episode_id:
+                    database.set_mail_message_id(episode_id, message_id)
                 already = result.get("status") == "already_exists"
                 if not already and episode_id:
                     # "早上就要读"（同 knowledge/signal_inbox.py 的道理）：
                     # 入库后立即同步转录+摘要+通知，不等前端另外调 .../process。
-                    # 失败仅记日志，不标已读——ingest_text 按正文哈希去重，
-                    # 下一轮重试是安全的（不会造第二行，只会重新处理）。
                     try:
                         import podcast
                         podcast.retry_episode(episode_id)
@@ -901,7 +982,6 @@ def check_mailbox(imap_factory=None) -> dict:
                         summary["failed"] += 1
                         continue
 
-                conn.store(msg_id, "+FLAGS", "\\Seen")
                 summary["processed"] += 1
                 continue
 
@@ -920,12 +1000,16 @@ def check_mailbox(imap_factory=None) -> dict:
                         summary["errors"].append(f"{url}: {e}")
 
                 if all_ok:
-                    conn.store(msg_id, "+FLAGS", "\\Seen")
+                    # 整封都成功了才记账。一封邮件对应多个 URL 时，标记只打
+                    # 在第一条上——它的作用是「这封邮件处理过了」，不是「这
+                    # 一行是从哪封邮件来的」。
+                    if result.get("episode_id"):
+                        database.set_mail_message_id(result["episode_id"], message_id)
                     summary["processed"] += 1
                 else:
-                    # 邮件里至少一个 URL 处理失败——整封不标已读，下轮重试。
-                    # ingest_url() 对已入库的 URL 返回 already_exists，重试
-                    # 部分成功的邮件是安全的，不会重复造行。
+                    # 至少一个 URL 失败——整封不记账，下一轮重试。ingest_url()
+                    # 对已入库的 URL 返回 already_exists，重试部分成功的邮件
+                    # 是安全的，不会重复造行。
                     summary["failed"] += 1
                 continue
 
@@ -933,10 +1017,11 @@ def check_mailbox(imap_factory=None) -> dict:
             # 当作粘贴文章处理，标题取邮件主题。
             if route != "text":
                 logger.info(
-                    "knowledge.mailbox: 邮件 %s（来自 %s）无法处理，跳过（不标已读）：%s",
+                    "knowledge.mailbox: 邮件 %s（来自 %s）无法处理，永久放弃：%s",
                     msg_id, sender, payload,
                 )
                 summary["skipped"] += 1
+                database.abandon_mail_message_id(message_id)
                 continue
             body_text = payload
 
@@ -945,7 +1030,8 @@ def check_mailbox(imap_factory=None) -> dict:
                 result = knowledge.ingest.ingest_text(subject, body_text, platform="email")
                 summary["ingested"] += 1
                 summary["processed"] += 1
-                conn.store(msg_id, "+FLAGS", "\\Seen")
+                if result.get("episode_id"):
+                    database.set_mail_message_id(result["episode_id"], message_id)
                 logger.info("knowledge.mailbox: 已按正文投递处理邮件 %s -> %s", msg_id, result)
             except Exception as e:
                 logger.warning("knowledge.mailbox: 正文投递处理失败 %s: %s", msg_id, e)

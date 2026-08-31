@@ -9,10 +9,21 @@ from email.message import EmailMessage
 
 import pytest
 
+import database
+import database.core
 import knowledge.ingest
 import knowledge.mailbox as mailbox
 import knowledge.newsletter as newsletter
 import podcast
+
+
+@pytest.fixture(autouse=True)
+def _db(tmp_path, monkeypatch):
+    """Real (empty) schema per test: since #997 the poller asks the database
+    what it already processed instead of reading \\Seen flags. Patched on
+    database.core.DB_PATH — database.DB_PATH is only a name copy (#615)."""
+    monkeypatch.setattr(database.core, "DB_PATH", str(tmp_path / "test.db"))
+    database.init_db()
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +200,15 @@ class FakeImap:
     def login(self, user, password):
         return "OK", [b"logged in"]
 
-    def select(self, mailbox_name):
+    def select(self, mailbox_name, readonly=False):
+        self.readonly = readonly
         return "OK", [b"1"]
 
     def search(self, charset, *criteria):
-        # #954: the real code searches `UNSEEN FROM <addr>` per whitelisted
-        # sender. This stub ignores the criteria and returns everything, so
-        # the exact `sender not in allowed` check downstream stays covered.
+        # #954/#997: the real code searches `FROM <addr> SINCE <date>` per
+        # subscribed sender. This stub ignores the criteria and returns
+        # everything, so the exact `sender not in allowed` check downstream
+        # stays covered.
         ids = b" ".join(self._messages.keys())
         return "OK", [ids]
 
@@ -204,7 +217,17 @@ class FakeImap:
         if msg is None:
             return "NO", [None]
         raw = msg.as_bytes() if hasattr(msg, "as_bytes") else msg
-        return "OK", [(b"1 (RFC822 {123})", raw)]
+        if parts == mailbox._ENVELOPE_PARTS:
+            # Header-only, like a real server: since #997 the poller decides
+            # from the envelope alone whether to download the body.
+            import email as _email
+            parsed = _email.message_from_bytes(raw)
+            head = _email.message.Message()
+            for key in ("From", "Subject", "Date", "Message-ID"):
+                if parsed.get(key):
+                    head[key] = parsed.get(key)
+            raw = head.as_bytes()
+        return "OK", [(b"1 (BODY[HEADER] {123})", raw)]
 
     def store(self, msg_id, flag_set, flags):
         self.seen_flagged.append(msg_id)
@@ -266,10 +289,10 @@ def test_newsletter_sender_takes_priority_over_url_branch(monkeypatch):
     assert retry_calls == [42]
     assert summary["processed"] == 1
     assert summary["ingested"] == 1
-    assert fake.seen_flagged == [b"1"]
+    assert fake.seen_flagged == []  # #997：处理成功也不改任何标志位
 
 
-def test_newsletter_already_exists_skips_retry_but_still_marks_seen(monkeypatch):
+def test_newsletter_already_exists_skips_retry_but_still_counts_processed(monkeypatch):
     _configure_env(monkeypatch, allowed="newsletter@nl.faz.net")
     msg = _make_plain_message(
         "F.A.Z. Frühdenker: Nochmal die gleiche Ausgabe",
@@ -292,20 +315,21 @@ def test_newsletter_already_exists_skips_retry_but_still_marks_seen(monkeypatch)
 
     assert retry_calls == []  # already-existing rows are not reprocessed
     assert summary["processed"] == 1
-    assert fake.seen_flagged == [b"1"]
+    assert fake.seen_flagged == []  # #997：处理成功也不改任何标志位
 
 
-def test_newsletter_permanent_ingest_error_marks_seen(monkeypatch):
+def test_newsletter_permanent_ingest_error_is_abandoned(monkeypatch):
     """#925 review fix: IngestError (e.g. cleaned body too short) is a
     PERMANENT failure — the same mail will fail identically on every future
     poll, so retrying it forever (every 5 minutes, via cron) accomplishes
     nothing. Unlike the URL/text-fallback branches (which retry on any
-    failure), the newsletter branch must mark such a mail \\Seen so it's
-    abandoned instead of retried forever."""
+    failure), such a mail is remembered as abandoned by Message-ID (#997 —
+    the \\Seen flag it used to use is no longer written at all)."""
     _configure_env(monkeypatch, allowed="newsletter@nl.faz.net")
     msg = _make_plain_message(
         "F.A.Z. Frühdenker", _NEWSLETTER_BODY, sender="newsletter@nl.faz.net",
     )
+    msg["Message-ID"] = "<faz-kurz@nl.faz.net>"
     fake = FakeImap({b"1": msg})
 
     monkeypatch.setattr(knowledge.ingest, "ingest_url", lambda url: (_ for _ in ()).throw(
@@ -322,10 +346,12 @@ def test_newsletter_permanent_ingest_error_marks_seen(monkeypatch):
 
     assert summary["failed"] == 1
     assert summary["processed"] == 0
-    assert fake.seen_flagged == [b"1"]  # marked seen — abandoned, not retried
+    # #997: 放弃是记进 Message-ID 名单，不是给他的邮件打已读
+    assert fake.seen_flagged == []
+    assert database.abandoned_mail_message_ids()
 
 
-def test_newsletter_transient_error_not_marked_seen(monkeypatch):
+def test_newsletter_transient_error_is_retried_next_round(monkeypatch):
     """A non-IngestError failure (network blip, DB hiccup, ...) is
     transient — the mail must stay unread so the next poll retries it,
     exactly like every other branch in this module."""
@@ -477,4 +503,4 @@ def test_minified_html_newsletter_keeps_real_content_end_to_end(monkeypatch):
     # alongside the "Abbestellen" line it used to share a physical line with.
     assert _KEY_SENTENCE in captured_text["text"]
     assert summary["processed"] == 1
-    assert fake.seen_flagged == [b"1"]
+    assert fake.seen_flagged == []  # #997：处理成功也不改任何标志位
