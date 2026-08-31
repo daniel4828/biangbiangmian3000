@@ -4,13 +4,14 @@
 对一台运行中的服务器发送一次 POST /api/pregen-today 请求。该端点在服务器端
 找到"最近一天（今天除外，最多回看14天）"真正生成过故事的所有 (deck_id,
 category, lang) 键——也就是 Daniel 昨天实际复习用到的牌组/类别/模式组合
-（包括 briefing/news 等聚合牌组模式），而不是像旧版那样遍历全部叶子牌组、
+（包括聚合牌组的各种模式），而不是像旧版那样遍历全部叶子牌组、
 一律用默认 mode="story" 生成——那样会生成大量没人看的故事，真正用到的
 聚合牌组反而漏掉。
 
 服务器对每个键：今天已有缓存故事则跳过；没有到期卡片则跳过；否则用该键
-上次的生成参数（mode/topic/grammar 等；news/briefing 的 articles 会被丢弃，
-让它们重新抓取当天新闻）同步生成故事并预热 TTS 音频缓存，这样 Daniel 早上
+上次的生成参数（mode/topic/grammar 等；articles 会被丢弃——需要人工挑素材的
+模式本来就不参与预生成，见 routes/story._PREGEN_MODES）同步生成故事并预热
+TTS 音频缓存，这样 Daniel 早上
 打开页面时故事和语音都已经就绪。
 
 只使用 Python 标准库（urllib.request 等），本地用 launchd、服务器用
@@ -38,7 +39,7 @@ AUTH_USERNAME = os.environ.get("AUTH_USERNAME")
 AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD")
 
 # /api/pregen-today 对每个键都可能同步生成故事——新闻/简报模式可能涉及多次
-# 串行 AI 调用（生成+核查+整篇重试+再核查，单个 briefing chunk 就要 2-3
+# 串行 AI 调用（生成+核查+整篇重试+再核查，单个 chunk 就要 2-3
 # 分钟），加上多个键顺序处理，实测可达 30 分钟以上，因此设置较长的超时
 # （issue #514：15 分钟曾在服务器仍在正常生成时就客户端超时，日志里看不到
 # 任何结果，误以为预生成坏了）。

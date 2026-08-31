@@ -258,7 +258,7 @@ const KEYMAP_ACTIONS = [
   { id: 'delete-card-alt',   label: 'Delete card (alt key)',      scope: 'review' },
   { id: 'leech',             label: 'Mark as leech',              scope: 'review' },
   { id: 'deck-options',      label: 'Deck options',               scope: 'review' },
-  { id: 'reasoning',         label: 'Background popup / news language', scope: 'review' },
+  { id: 'reasoning',         label: 'Background popup / context language', scope: 'review' },
   { id: 'restart-server',    label: 'Restart server',             scope: 'review' },
   { id: 'star-sentence',     label: 'Star this sentence',         scope: 'review' },
   { id: 'flag-sentence',     label: 'Flag this sentence',         scope: 'review' },
@@ -887,11 +887,11 @@ function _updateStoryInfoRow() {
   const row = document.getElementById('story-info-row');
   if (sentence && story?.sentences?.length) {
     const pos = `Sentence ${sentence.position + 1} / ${story.sentences.length}`;
-    // News flow / news / paste / kahneman: show the mode name + story date to the
+    // Kontextsummary / paste / kahneman / …: show the mode name + story date to the
     // right of the counter (issue #452). Plain stories keep the topic.
     // podcast kept alongside knowledge (issue #654 renamed the mode identifier
     // going forward, but historical mode='podcast' stories still display fine).
-    const modeName = { kahneman: 'Kahneman', news: 'News', briefing: 'News flow', paste: 'Paste', podcast: 'Podcast', knowledge: 'Knowledge', book: 'Book' }[_activeStoryMode()];
+    const modeName = { kahneman: 'Kahneman', news: 'News', briefing: 'News flow', contextsummary: 'Kontextsummary', paste: 'Paste', podcast: 'Podcast', knowledge: 'Knowledge', book: 'Book' }[_activeStoryMode()];
     const parts = [pos];
     if (modeName) {
       const date = String(story.date || story.generated_at || '').slice(0, 10);
@@ -1204,7 +1204,7 @@ function _startStoryProgressPoll(deckId, cat) {
         _startFakeProgress(5, 50, 30000);
         if (subEl) { subEl.textContent = p.msg; subEl.className = 'warn'; }
       } else if (p.msg) {
-        // News flow (issue #407): append the overall word counter and drive the
+        // Briefing pipeline (issue #407): append the overall word counter and drive the
         // bar with the backend's real percent (never move it backwards).
         let txt = p.msg;
         if (p.words_total) txt += ` · 生词 ${p.words_done ?? 0}/${p.words_total}`;
@@ -3661,8 +3661,8 @@ function renderSettings() {
       </div>
     </div>
     <div class="keymap-panel">
-      <h2 class="keymap-heading">News flow</h2>
-      <p class="keymap-hint">Language of the context and article titles on news-flow cards. Publisher names stay as-is. Toggle during review with <b>g</b>.</p>
+      <h2 class="keymap-heading">Kontextsummary</h2>
+      <p class="keymap-hint">Language of the context and source titles on Kontextsummary cards. Publisher names stay as-is. Toggle during review with <b>g</b>.</p>
       <div class="keymap-row">
         <span class="keymap-label">Context &amp; titles in Chinese</span>
         <label class="switch-wrap">
@@ -3701,7 +3701,6 @@ function renderSettings() {
 const PREGEN_MODE_OPTIONS = [
   ['', 'Off (repeat last manual)'],
   ['story', 'Story'],
-  ['briefing', 'News flow'],
   ['kahneman', 'Kahneman'],
 ];
 let _pregenDecks = [];
@@ -7408,7 +7407,7 @@ async function _startQuickFallback(reason) {
 // Paste mode with pasted texts goes through the regenerate POST body (texts are
 // too large for a GET query string). Everything else falls back to the normal
 // GET/poll flow: it returns today's cached story if one exists (e.g. resuming
-// a session); news mode auto-fetches today's news server-side (issue #387).
+// a session).
 async function _fetchStoryOrNewsRegen(storyDeckId, storyCategory, topic, maxHsk, model,
                                       grammarFocus, grammarPct, mode, chapterIds, articles, bgUrl,
                                       episodeIds, bookChapterId) {
@@ -7794,7 +7793,7 @@ function loadCard(c, counts) {
 
   // Story-mode badge: the mode name now lives in the story-info-row next to the
   // sentence counter + date (issue #452), so this separate badge stays hidden to
-  // avoid showing "News flow" twice.
+  // avoid showing the mode name twice.
   document.getElementById('card-mode-badge').style.display = 'none';
 
   // Deck path bar
@@ -7926,7 +7925,7 @@ function showFront() {
   sentFront.style.display = !isListening && !isCreating ? 'flex' : 'none';
   if (!isListening && !isCreating) sentFront.innerHTML = renderSentence();
 
-  // News flow (briefing): the Chinese sentence is clickable — open the sentence's
+  // Kontextsummary: the Chinese sentence is clickable — open the sentence's
   // source article in a new tab (issue #444). Context + source line are rendered
   // by _renderNewsFront (respects the news-flow display-language toggle, #452).
   const _sourceUrl = sentence?.source_url || '';
@@ -8172,7 +8171,7 @@ function revealAnswer() {
   _syncCardToggleBar();
 
   // Kahneman concept box (compact: part + chapter title only) + reasoning light
-  // bulb — Kahneman mode only. News flow shows context + clickable article
+  // bulb — Kahneman mode only. Kontextsummary shows context + clickable source
   // title/publisher above the target sentence instead (news-back-source, #452).
   const _conceptRow = document.getElementById('sentence-concept-row');
   const _conceptEl = document.getElementById('sentence-concept');
@@ -8184,7 +8183,7 @@ function revealAnswer() {
     && !!(sentence?.reasoning_zh || sentence?.context_de || sentence?.source_url
           || sentence?.concept_zh || sentence?.source_title);
 
-  // News flow: render the context + source block above the sentence; no light bulb.
+  // Kontextsummary: render the context + source block above the sentence; no light bulb.
   _renderNewsBackSource(_hasNewsSrc ? sentence : null);
 
   if (_isKahneman) {
@@ -8211,7 +8210,7 @@ function revealAnswer() {
     _reasonBtn.style.display = (_currentReasoning || _currentSourceUrl) ? '' : 'none';
     _currentReasoningIsKnowledge = false;
     _conceptRow.style.display = '';
-  } else if (_episodeIdFromSourceUrl(sentence?.source_url) !== null && sentence?.reasoning_zh) {
+  } else if (_hidesInlineContext(sentence) && sentence?.reasoning_zh) {
     // Knowledge mode (#931): same 💡 light bulb kahneman has, holding the
     // model's "Fakt: … Warum: …" note about why it picked this passage. No
     // concept box — knowledge sentences have no chapter, concept_zh is empty.
@@ -10562,7 +10561,7 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
   _setupSelectedEpisodes.clear();
   _renderSetupSelectedEpisodes();
   // In-session regenerate: prefill mode + HSK from the active story's gen_params
-  // so a quick regenerate keeps News flow / kahneman / … instead of silently
+  // so a quick regenerate keeps Kontextsummary / kahneman / … instead of silently
   // downgrading to mode=story (issue #468 — a briefing was overwritten exactly
   // this way). Other entry points (fresh session, unfinished mode) keep the
   // 'story' default so another deck's mode is never carried over by accident.
@@ -10581,8 +10580,8 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
   // Remembered mode (#972): Daniel almost always regenerates with the same mode
   // he used last time, so re-defaulting to 'story' on every open means picking
   // it again by hand each day. Stored per language because the zh-only modes
-  // (kahneman/briefing/paste) don't exist for fr/es — a fr deck must not
-  // inherit 'briefing' from the zh tab. gen_params still wins for regenerate.
+  // (kahneman/contextsummary/paste) don't exist for fr/es — a fr deck must not
+  // inherit 'contextsummary' from the zh tab. gen_params still wins for regenerate.
   _modeSel.value = _prefillGp?.mode || localStorage.getItem('setupMode:' + _setupLang) || 'story';
   if (_modeSel.selectedIndex < 0) _modeSel.value = 'story'; // unknown/stale mode
   updateHskLabel();
@@ -10594,7 +10593,7 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
   return new Promise(resolve => { _setupResolve = resolve; });
 }
 
-// Story setup modal: kahneman/news/briefing/paste and grammar-focus are
+// Story setup modal: kahneman/contextsummary/paste and grammar-focus are
 // Chinese-only server features (backend rejects those modes, and grammar
 // patterns like 把字句 don't apply to French) — hide them for non-zh decks.
 // Knowledge mode is deliberately NOT in this list (issue #806): it's
@@ -10637,11 +10636,9 @@ function updateSetupMode() {
   const topicInput = document.getElementById('setup-topic');
   const btn = document.getElementById('setup-generate-btn');
   const kahnemanSection = document.getElementById('setup-kahneman-section');
-  const newsSection = document.getElementById('setup-news-section');
   const pasteSection = document.getElementById('setup-paste-section');
   const podcastSection = document.getElementById('setup-podcast-section');
   const bookSection = document.getElementById('setup-book-section');
-  newsSection.style.display = 'none';
   pasteSection.style.display = 'none';
   if (podcastSection) podcastSection.style.display = 'none';
   if (bookSection) bookSection.style.display = 'none';
@@ -10695,12 +10692,15 @@ function updateSetupMode() {
     kahnemanSection.style.display = 'block';
     btn.textContent = 'Generate Kahneman';
     _loadKahnemanChapters();
-  } else if (mode === 'briefing') {
+  } else if (mode === 'contextsummary') {
+    // Kontextsummary (issue #1011): the renamed News flow, now sourced from the
+    // knowledge base — it reuses knowledge mode's item multi-select rather than
+    // getting a second copy of the same picker.
     topicLabel.style.display = 'none';
     kahnemanSection.style.display = 'none';
-    newsSection.style.display = 'block';
-    btn.textContent = 'Generate news flow';
-    _loadNewsStatus();
+    if (podcastSection) podcastSection.style.display = 'block';
+    btn.textContent = 'Generate Kontextsummary';
+    _loadPodcastEpisodesForSetup();
   } else if (mode === 'paste') {
     topicLabel.style.display = 'none';
     kahnemanSection.style.display = 'none';
@@ -10738,37 +10738,38 @@ function updateSetupMode() {
 // BRIEFING_MODEL and it is deliberately absent from ALLOWED_MODELS.
 const SERVER_MODEL_VALUE = 'briefing-server';
 
-// ── Briefing mode locks the model select; paste only defaults to it ─────────
-// Both share the server-side briefing pipeline, but only briefing is about
-// *news*: DeepSeek censors news content, so briefing always runs on
-// BRIEFING_MODEL and the dropdown is disabled to say so honestly instead of
-// showing a stale selection (issue #448). Paste (#910) sends whatever the user
-// picks — its material is whatever went into the box, so the censorship reason
-// doesn't apply — and merely *defaults* to the same server placeholder, which
-// is the only configuration this pipeline is verified on. knowledge mode made
-// the same move earlier (#561/#640) and picks its own model per-mode.
-let _modelBeforeNewsMode = null;
+// ── Modes that default to the server-resolved model ─────────────────────────
+// paste (#910) and contextsummary (#1011) share the server-side briefing
+// pipeline. Neither locks the dropdown: the OpenAI lock only ever existed
+// because DeepSeek censors *news*, and #1011 removed the news auto-fetch
+// entirely — pasted text and knowledge-base items are not news. Both merely
+// *default* to the server placeholder, the only configuration this pipeline is
+// verified on. knowledge mode made the same move earlier (#561/#640).
 
 // Per-mode remembered model (issue #561): knowledge mode has its own
 // first-time default, then remembers whatever the user picked last. Since
 // #640 that default is DeepSeek (like kahneman) rather than gpt-5-mini — must
 // stay in sync with ai.DEFAULT_MODEL, which is the backend-side default.
-// paste's default is the server placeholder itself (#910).
+// paste/contextsummary default to the server placeholder itself.
 const MODE_MODEL_DEFAULTS = {
   knowledge: 'deepseek-v4-flash',
   book: 'deepseek-v4-flash',
   paste: SERVER_MODEL_VALUE,
+  contextsummary: SERVER_MODEL_VALUE,
 };
 let _modelSelMode = 'story';   // mode the model dropdown's current value belongs to
+
+// Modes whose dropdown carries the "let the server decide" option.
+const SERVER_MODEL_MODES = ['paste', 'contextsummary'];
 
 function _autoSwitchModelForMode(mode) {
   const modelSel = document.getElementById('setup-model');
   if (!modelSel) return;
 
-  // The "let the server decide" option exists for the two modes the server may
-  // resolve on its own: briefing (always) and paste (its default). routes/story.py
-  // maps this value back to BRIEFING_MODEL (SERVER_MODEL_SENTINEL there).
-  const wantsServerOpt = mode === 'briefing' || mode === 'paste';
+  // The "let the server decide" option exists for the modes the server may
+  // resolve on its own. routes/story.py maps this value back to BRIEFING_MODEL
+  // (SERVER_MODEL_SENTINEL there).
+  const wantsServerOpt = SERVER_MODEL_MODES.includes(mode);
   let serverOpt = document.getElementById('setup-model-server-opt');
   if (wantsServerOpt && !serverOpt) {
     serverOpt = document.createElement('option');
@@ -10778,36 +10779,23 @@ function _autoSwitchModelForMode(mode) {
     modelSel.appendChild(serverOpt);
   }
 
-  if (mode === 'briefing') {
-    // Remember the outgoing mode's selection before overwriting it — but
-    // never persist the server placeholder itself as that mode's "model".
-    if (_modelSelMode && modelSel.value !== SERVER_MODEL_VALUE)
-      localStorage.setItem('setupModel:' + _modelSelMode, modelSel.value);
-    if (modelSel.value !== SERVER_MODEL_VALUE) {
-      if (_modelBeforeNewsMode === null) _modelBeforeNewsMode = modelSel.value;
-      modelSel.value = SERVER_MODEL_VALUE;
-    }
-    modelSel.disabled = true;
-    modelSel.title = 'News flow always uses BRIEFING_MODEL on the server (default gpt-5.6-luna)';
-    _modelSelMode = null;   // dropdown shows the server placeholder, not a real mode's model
-    return;
-  }
   modelSel.disabled = false;
-  modelSel.title = mode === 'paste'
+  modelSel.title = wantsServerOpt
     ? 'Server: BRIEFING_MODEL is the default — pick another model to override it'
     : '';
   if (serverOpt && !wantsServerOpt) {
-    if (modelSel.value === SERVER_MODEL_VALUE) {
-      modelSel.value = _modelBeforeNewsMode || 'gpt-5-mini';
-    }
+    // Leaving a server-placeholder mode: the placeholder is not a model, so it
+    // must never survive into a mode whose branch does not understand it.
+    if (modelSel.value === SERVER_MODEL_VALUE) modelSel.value = '';
     serverOpt.remove();
   }
-  // Every other mode remembers its own model selection (issue #561) — save
-  // the outgoing mode's value, then restore the incoming mode's last pick
-  // (or its hardcoded default, or just leave the current value untouched).
-  // paste may persist the server placeholder: for that mode it is a real
-  // choice ("let the server decide"), not a locked-in stand-in (#910).
-  if (_modelSelMode && (modelSel.value !== SERVER_MODEL_VALUE || _modelSelMode === 'paste'))
+  // Every mode remembers its own model selection (issue #561) — save the
+  // outgoing mode's value, then restore the incoming mode's last pick (or its
+  // hardcoded default, or just leave the current value untouched).
+  // paste/contextsummary may persist the server placeholder: for them it is a
+  // real choice ("let the server decide"), not a locked-in stand-in (#910).
+  if (_modelSelMode
+      && (modelSel.value !== SERVER_MODEL_VALUE || SERVER_MODEL_MODES.includes(_modelSelMode)))
     localStorage.setItem('setupModel:' + _modelSelMode, modelSel.value);
   const remembered = localStorage.getItem('setupModel:' + mode);
   modelSel.value = remembered || MODE_MODEL_DEFAULTS[mode] || modelSel.value;
@@ -10817,18 +10805,6 @@ function _autoSwitchModelForMode(mode) {
 
 // ── Paste mode: repeatable pasted-content blocks ────────────────────────────
 let _pasteBlockSeq = 0;
-
-// Show in the setup modal whether today's news is already fetched (auto mode
-// reuses the per-day cache, so a second generation today re-fetches nothing).
-async function _loadNewsStatus() {
-  const el = document.getElementById('setup-news-status');
-  if (!el) return;
-  el.textContent = '';
-  try {
-    const s = await api('GET', '/api/news/status');
-    if (s.cached) el.textContent = `✓ Today's news already fetched: ${s.count} items (cached)`;
-  } catch (_) {}
-}
 
 function addPasteBlock() {
   const container = document.getElementById('setup-paste-blocks');
@@ -10935,10 +10911,26 @@ let _currentReasoningIsKnowledge = false;
 // already carried per sentence — no gen_params lookup (which only knows the
 // story's FIRST source, wrong as soon as several were selected, #752/#776)
 // and no new column. Returns null for kahneman, briefing/news flow, book mode
-// and any external URL, which is exactly what keeps those paths untouched.
+// and any external URL. Kontextsummary (#1011) DOES match — its material comes
+// from the knowledge base — so ask _hidesInlineContext() below, not this
+// function, whenever the question is "does this mode use the light bulb".
 function _episodeIdFromSourceUrl(url) {
   const m = /^\/#(?:podcast|knowledge)-(\d+)$/.exec(url || '');
   return m ? parseInt(m[1], 10) : null;
+}
+
+// Whether this sentence's explanation belongs in the 💡 popup (knowledge/book,
+// #931) instead of an inline context block above the sentence.
+//
+// The episode id alone is NOT enough since #1011: Kontextsummary sources its
+// material from the knowledge base too, so its sentences carry the same in-app
+// source_url — but it IS the inline-context mode (context_de / reasoning_zh are
+// the whole point of it), so it must not be swept into the knowledge branch by
+// URL shape. Navigation stays URL-based (an in-app hash link must pop the modal
+// rather than open a tab) — only the context/light-bulb split is mode-based.
+function _hidesInlineContext(s) {
+  return _episodeIdFromSourceUrl(s?.source_url) !== null
+      && _activeStoryMode() !== 'contextsummary';
 }
 // Mode of the last story generation started from the setup modal ('' when the
 // session was resumed without it) — only used to pick the background-popup title.
@@ -10954,12 +10946,12 @@ function _activeStoryMode() {
   return _currentStoryMode || '';
 }
 
-// ── News flow display language (issue #452) ──────────────────────────────────
+// ── Kontextsummary display language (issue #452) ────────────────────────────
 // Toggle whether the context text and article titles show in the original
 // language (German, 'de') or Chinese ('zh'). Publisher (source_name) is a brand
 // name, always shown as-is. Persisted in localStorage; press g or use the
 // settings switch to flip. Chinese title falls back to the German source title
-// for briefing (which has no AI headline).
+// for the briefing pipeline (which has no AI headline).
 let _newsflowLang = (localStorage.getItem('newsflowLang') === 'zh') ? 'zh' : 'de';
 
 function _escHtml(t) {
@@ -11008,8 +11000,11 @@ function _newsSourceHtml(s) {
 // the review session. Clicking pops the item's summary in the shared modal
 // (#930) and closing it lands back on the card, mid-review.
 //
-// No-op for every other mode — briefing/news flow source titles are real
-// external article links and must keep opening in a new tab.
+// Applies to every sentence whose source_url is an in-app hash link, which
+// since #1011 includes Kontextsummary — that mode keeps its inline context but
+// its source title is an in-app page just the same, so it must pop the modal
+// rather than open a tab. Historical news/briefing stories carry real external
+// article links and keep opening in a new tab.
 function _wireKnowledgeSourceLink(container, s) {
   const epId = _episodeIdFromSourceUrl(s?.source_url);
   if (epId === null || !container) return;
@@ -11029,8 +11024,8 @@ function _renderNewsFront() {
   // Knowledge mode (#931): the reasoning lives in the 💡 popup now, not printed
   // above the sentence. On the front it was worse than clutter — reasoning_zh
   // starts with the very fact the sentence retells, so a reading card showed
-  // the answer before it was flipped. News flow keeps its context line (#452).
-  const ctxText = _episodeIdFromSourceUrl(url) !== null ? '' : _newsContextText(sentence);
+  // the answer before it was flipped. Kontextsummary keeps its context (#452).
+  const ctxText = _hidesInlineContext(sentence) ? '' : _newsContextText(sentence);
   ctxDe.textContent = ctxText;
   ctxDe.style.display = ctxText ? 'block' : 'none';
   const ctxClickable = !!(ctxText && url);
@@ -11049,7 +11044,7 @@ function _renderNewsFront() {
 }
 
 // Back side: context + source line, small, above the target sentence
-// (replaces the old light bulb for news flow). Kahneman keeps its light bulb.
+// (replaces the old light bulb for the briefing pipeline). Kahneman keeps its light bulb.
 function _renderNewsBackSource(s) {
   const el = document.getElementById('news-back-source');
   if (!el) return;
@@ -11061,9 +11056,9 @@ function _renderNewsBackSource(s) {
   // the card renderer) and the source title becomes the 📄 button below, so
   // the inline context block is NOT rendered here — Daniel asked for the two
   // clean kahneman-style buttons instead of a wall of text above the sentence.
-  // News flow keeps its inline context: that block is what #452/#454/#464
-  // deliberately built, and briefing cards have no light bulb to move it into.
-  const knowledgeEpId = _episodeIdFromSourceUrl(url);
+  // Kontextsummary keeps its inline context: that block is what #452/#454/#464
+  // deliberately built, and its cards have no light bulb to move it into.
+  const knowledgeEpId = _hidesInlineContext(s) ? _episodeIdFromSourceUrl(url) : null;
   // Title · publisher above the context (issue #454).
   let html = srcHtml;
   if (ctx && knowledgeEpId === null) html += `<div class="news-back-context${url ? ' clickable-sentence' : ''}">${_escHtml(ctx)}</div>`;
@@ -11244,6 +11239,9 @@ let _setupKnowledgeKind = localStorage.getItem('setupKnowledgeKind') || 'podcast
 // Map — not the checkbox DOM — is the single source of truth, because switching
 // Source type or podcast feed re-renders #setup-podcast-episodes from scratch and
 // would otherwise wipe out any selection made under a different kind/feed.
+// Modes that source their material from the knowledge base and therefore share
+// this multi-select: knowledge (#752) and contextsummary (#1011).
+const KNOWLEDGE_SOURCE_MODES = ['knowledge', 'contextsummary'];
 let _setupSelectedEpisodes = new Map();
 // Words per AI call (issue #563 podcast-only, #574 all modes): persisted per
 // mode like setupModel. null = the mode's default chunking. Read by
@@ -11528,16 +11526,17 @@ function confirmStorySetup() {
   const grammarPct  = parseInt(document.getElementById('setup-grammar-pct').value, 10) || 75;
   const mode        = document.getElementById('setup-mode').value;
   // Remember this mode's model choice (issue #561). The server placeholder is
-  // not a real model selection for briefing (which is locked to it), but it is
-  // one for paste — "let the server decide" is what that mode defaults to and
-  // the user may deliberately keep it (#910).
-  if (model && (model !== SERVER_MODEL_VALUE || mode === 'paste'))
+  // a real selection for paste/contextsummary — "let the server decide" is what
+  // those modes default to and the user may deliberately keep it (#910/#1011);
+  // for every other mode it is not a model and must not be persisted.
+  if (model && (model !== SERVER_MODEL_VALUE || SERVER_MODEL_MODES.includes(mode)))
     localStorage.setItem('setupModel:' + mode, model);
   // Remember the mode itself, per language (#972) — see openStorySetup().
   localStorage.setItem('setupMode:' + setupLang(), mode);
   const chapterIds  = mode === 'kahneman' ? _getSelectedChapterIds() : null;
   const articles    = mode === 'paste' ? _collectPastedContents() : null;
-  const episodeIds  = mode === 'knowledge' ? _getSelectedEpisodeIds() : null;
+  // Kontextsummary shares knowledge mode's item picker (issue #1011).
+  const episodeIds  = KNOWLEDGE_SOURCE_MODES.includes(mode) ? _getSelectedEpisodeIds() : null;
   // #929: snapshot the picked items (title + kind) for the loading screen's
   // source buttons. A snapshot, not a live read of _setupSelectedEpisodes —
   // that Map is cleared the next time the setup modal opens.
@@ -11545,7 +11544,7 @@ function confirmStorySetup() {
   // appear the instant the loading screen does; the server then reports the
   // chapters it actually used through /api/story-progress (authoritative — an
   // empty selection means "random 5", which only the server knows).
-  _storyLoadingSources = mode === 'knowledge'
+  _storyLoadingSources = KNOWLEDGE_SOURCE_MODES.includes(mode)
     ? Array.from(_setupSelectedEpisodes.values()).map(e => ({ id: e.id, title: e.title, kind: e.kind }))
     : mode === 'kahneman'
     ? (chapterIds || []).map(n => {
@@ -11554,15 +11553,15 @@ function confirmStorySetup() {
       })
     : [];
   const bookChapterId = mode === 'book' ? _getSelectedBookChapterId() : null;
-  // News mode never sends articles: today's news is auto-fetched server-side
-  // (issue #387). Paste mode requires at least one non-empty text (issue #396).
+  // Kontextsummary never sends articles: the server builds them from the picked
+  // knowledge items (#1011). Paste needs at least one non-empty text (#396).
   if (mode === 'paste' && !articles.length) {
     showError('Paste mode needs at least one text — paste some content first.');
     return;
   }
-  // Knowledge mode requires picking at least one source item (issue #482/#654/#752).
-  if (mode === 'knowledge' && !episodeIds.length) {
-    showError('Knowledge mode needs a source — select at least one first.');
+  // Knowledge and Kontextsummary require at least one source item (#482/#654/#752/#1011).
+  if (KNOWLEDGE_SOURCE_MODES.includes(mode) && !episodeIds.length) {
+    showError('This mode needs a source — select at least one knowledge item first.');
     return;
   }
   // Book mode requires picking a chapter (issue #865).
@@ -11659,13 +11658,13 @@ function openStoryModal() {
   for (const s of story.sentences) {
     const isCurrent = s.position === currentPos;
     const url = s.source_url || '';
-    // News flow: article section header, inserted once whenever a new source
+    // Kontextsummary: source section header, inserted once whenever a new source
     // article starts (issue #454; replaces the old per-sentence source line).
     if (url && url !== prevUrl) {
       parts.push(_articleHeaderHtml(s, escAttr));
       prevUrl = url;
     }
-    // News flow: context sentence(s) preceding this target — shown between the
+    // Kontextsummary: context sentence(s) preceding this target — shown between the
     // target sentences (Chinese + German), clickable to the source (issue #452).
     const ctxZh = s.reasoning_zh || '';
     const ctxDe = s.context_de || '';
