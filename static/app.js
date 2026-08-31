@@ -5987,10 +5987,23 @@ function _makeWordsTappable(root) {
                     _isLetter(text[match.index + match[0].length]))) continue;
       frag = frag || document.createDocumentFragment();
       frag.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+      const wordIdx = index.get(isZh ? match[0] : match[0].toLowerCase());
       const span = document.createElement('span');
       span.className = 'tap-word';
-      span.dataset.wordIdx = String(index.get(isZh ? match[0] : match[0].toLowerCase()));
-      span.textContent = match[0];
+      span.dataset.wordIdx = String(wordIdx);
+      span.appendChild(document.createTextNode(match[0]));
+      // The gloss rides along in the markup from the start (#996), hidden by
+      // CSS. Building it on demand would mean re-walking the whole text every
+      // time Cmd is pressed — and it must appear in the same frame as the
+      // key, not after a reflow the eye can follow.
+      const w = _wordTableWords[wordIdx];
+      const gloss = w && (w.definition_de || w.definition || '');
+      if (gloss) {
+        const g = document.createElement('span');
+        g.className = 'tap-word-gloss';
+        g.textContent = gloss;
+        span.appendChild(g);
+      }
       frag.appendChild(span);
       cursor = match.index + match[0].length;
     }
@@ -6005,6 +6018,72 @@ function _makeWordsTappable(root) {
     e.preventDefault();
     _openWordActions(Number(span.dataset.wordIdx), span);
   });
+  _initGlossReveal(root);
+}
+
+// ── Showing every gloss at once, under the hanzi (#996) ─────────────────────
+//
+// Tapping one word at a time (#967) answers "what is this word"; this answers
+// "what does this paragraph say" without leaving the text. The glosses are
+// already in the DOM, so both triggers are one class on <body> — no re-render,
+// no reflow beyond the line height growing.
+//
+// Desktop: hold Cmd (or Ctrl on a keyboard without one) and everything is
+// glossed; release and it is gone. A held key is the right shape for it —
+// it is a glance, not a mode to remember to turn off.
+// Phone: swipe left across the text toggles it, swipe left again clears it.
+// A phone has no modifier key, and a tap is already taken by the popup.
+function _setGlossMode(on) {
+  document.body.classList.toggle('gloss-on', !!on);
+}
+
+function _glossKeyIsModifier(e) {
+  return e.key === 'Meta' || e.key === 'Control';
+}
+
+let _glossKeysBound = false;
+
+function _bindGlossKeys() {
+  if (_glossKeysBound) return;
+  _glossKeysBound = true;
+  document.addEventListener('keydown', (e) => {
+    if (_glossKeyIsModifier(e)) _setGlossMode(true);
+  });
+  document.addEventListener('keyup', (e) => {
+    if (_glossKeyIsModifier(e)) _setGlossMode(false);
+  });
+  // Cmd+Tab away and the keyup lands in the other window: without this the
+  // page would still be fully glossed when Daniel comes back.
+  window.addEventListener('blur', () => _setGlossMode(false));
+}
+
+function _initGlossReveal(root) {
+  _bindGlossKeys();
+  if (root.dataset.glossSwipeBound) return;
+  root.dataset.glossSwipeBound = '1';
+  let g = null;
+  root.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { g = null; return; }
+    g = { x0: e.touches[0].clientX, y0: e.touches[0].clientY, axis: null };
+  }, { passive: true });
+  // Never preventDefault: the axis lock alone decides whether this was a
+  // swipe, and stealing the touch would stop the page scrolling (#940).
+  root.addEventListener('touchmove', (e) => {
+    if (!g || g.axis !== null) return;
+    const dx = e.touches[0].clientX - g.x0;
+    const dy = e.touches[0].clientY - g.y0;
+    if (Math.abs(dx) < _SWIPE_DECIDE && Math.abs(dy) < _SWIPE_DECIDE) return;
+    g.axis = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : 'y';
+    g.dx = dx;
+  }, { passive: true });
+  root.addEventListener('touchend', (e) => {
+    const swipe = g;
+    g = null;
+    if (!swipe || swipe.axis !== 'x') return;
+    const dx = (e.changedTouches[0]?.clientX ?? swipe.x0) - swipe.x0;
+    if (dx <= -_SWIPE_TRIGGER) _setGlossMode(!document.body.classList.contains('gloss-on'));
+  });
+  root.addEventListener('touchcancel', () => { g = null; });
 }
 
 function _isLetter(ch) {

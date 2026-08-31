@@ -5608,6 +5608,31 @@ table.fsrs-table td.ivl { font-weight: 700; }
 }
 .tap-word:active { background: var(--hover-bg); }
 
+/* Glosses under the hanzi (#996). Always in the markup, shown only while the
+   modifier key is held (desktop) or after a left swipe (phone) — see
+   _initGlossReveal(). The word becomes an inline-flex column only in that
+   state, so normal reading keeps the browser's own line breaking. */
+.tap-word-gloss { display: none; }
+body.gloss-on .tap-word {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: baseline;
+  line-height: 1.15;
+}
+body.gloss-on .tap-word-gloss {
+  display: block;
+  font-size: 0.6em;
+  font-weight: 400;
+  color: var(--muted);
+  /* A long German gloss must not stretch the line it sits in; the full text
+     is one tap away in the word panel. */
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .word-actions {
   position: fixed;
   z-index: 1200;
