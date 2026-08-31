@@ -1444,16 +1444,19 @@ def _annotate_summary(result: dict) -> dict:
     read path (database.podcast._hydrate), which also cleans up every summary
     stored before #979.
 
+    Since #1001 the Chinese summary is not annotated inline either: every new
+    word in the text is tappable (#967) and can show its gloss under the hanzi
+    on demand (#996), so the parentheses only broke up the prose. The word
+    SCAN below stays — it is what feeds both the word table and those taps.
+    Summaries written before #1001 are cleaned on the same read path.
+
     Also replaces result["words"] (#650) — the AI's own pick from the summary
     prompt, which regularly misses words and includes ones Daniel already
-    knows — with a deterministic scan of the just-annotated Chinese summary
-    using zh_annotate.extract_new_words(). That's the exact same "new word"
-    rule used for the inline annotations above, so the bottom word table and
-    the parenthetical annotations in the text are guaranteed to agree. An empty
+    knows — with a deterministic scan of the Chinese summary using
+    zh_annotate.extract_new_words(). The word table and the tappable words in
+    the text are the same list because they come from this one scan. An empty
     scan (extraction failed, or genuinely no new words) keeps the AI's list
     as a fallback rather than wiping the table."""
-    if result.get("summary_zh"):
-        result["summary_zh"] = zh_annotate.annotate_zh_summary(result["summary_zh"])
     try:
         scanned = zh_annotate.extract_new_words(result.get("summary_zh") or "")
         if scanned:

@@ -198,3 +198,25 @@ def test_extract_new_words_reads_chinese_embedded_in_html():
 def test_extract_new_words_segmentation_failure_returns_empty_list(monkeypatch):
     monkeypatch.setattr(zh_annotate, "_segment", lambda text: [])
     assert zh_annotate.extract_new_words("对就业的影响。") == []
+
+
+# ── #1001: inline glosses are stripped on the read path ─────────────────────
+
+def test_strip_inline_glosses_removes_our_own_annotations():
+    out = zh_annotate.strip_inline_glosses(
+        "而是在卖控制（kòngzhì - Kontrolle）感。用户（yònghù）赌的是焦虑（jiāolǜ/焦虑）。")
+    assert out == "而是在卖控制感。用户赌的是焦虑。"
+
+
+def test_strip_inline_glosses_keeps_the_authors_parentheses():
+    """A parenthetical that is part of the text must survive — only what this
+    module used to write into it goes."""
+    text = "预测市场（如Polymarket）在2024（2024）年，人工智能（AI）很热。"
+    assert zh_annotate.strip_inline_glosses(text) == text
+
+
+def test_strip_inline_glosses_is_idempotent_and_empty_safe():
+    once = zh_annotate.strip_inline_glosses("控制（kòngzhì - Kontrolle）感。")
+    assert zh_annotate.strip_inline_glosses(once) == once
+    assert zh_annotate.strip_inline_glosses("") == ""
+    assert zh_annotate.strip_inline_glosses(None) is None

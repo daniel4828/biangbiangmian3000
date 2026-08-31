@@ -953,6 +953,32 @@ def init_db() -> None:
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('backfilled_leeched_at', '1')")
         conn.commit()
 
+    # One-time cache flush (#1001): renditions, full texts and book pages
+    # generated before #1001 have the vocabulary glosses baked into their
+    # text ("mot (Bedeutung)", "词（pīnyīn - Gloss）"). Nothing writes those
+    # any more — the reader glosses words on demand instead (#967/#996) — but
+    # the stored copies would keep showing them forever.
+    #
+    # Dropped rather than rewritten: three storage formats and two languages
+    # families' annotation shapes would each need their own regex, and every
+    # one of these rows is a pure cache — Google Translate rebuilds it for
+    # free the next time the page is opened. Marker-guarded like every other
+    # destructive step in here (#688): production re-runs init_db() every two
+    # minutes, and without the marker this would wipe the caches forever.
+    already_flushed_glosses = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'flushed_inline_gloss_caches'"
+    ).fetchone()
+    if not already_flushed_glosses:
+        for table in ("knowledge_renditions", "knowledge_fulltexts", "book_renditions"):
+            try:
+                conn.execute(f"DELETE FROM {table}")
+            except sqlite3.OperationalError:
+                pass   # table not created yet on a database this old
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) "
+            "VALUES ('flushed_inline_gloss_caches', '1')")
+        conn.commit()
+
     # One-time transcript normalization (#500): NotebookLM ASR output stored
     # before the fix is Traditional Chinese with per-character spacing —
     # rewrite existing rows with the same cleanup podcast._normalize_transcript

@@ -300,6 +300,55 @@ def strip_chinese_annotations(text: str) -> str:
     return _CJK_PAREN_RE.sub(_drop, text)
 
 
+# An inline gloss this module wrote into a Chinese text: a bracket group right
+# after a Chinese character holding "pīnyīn - Gloss", bare pinyin, or the older
+# model-written "pīnyīn/汉字" form. Content is required to look like one of
+# those — a plain German or Latin parenthetical ("（如Polymarket）", "（AI）",
+# "（2024）") is ordinary content and must survive.
+_TONE_MARKS = "āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜüńňǹḿ"
+_INLINE_GLOSS_RE = re.compile(
+    rf"(?<=[一-鿿])\s*[（(]\s*(?P<body>[^()（）]{{1,120}}?)\s*[)）]"
+)
+_LOOKS_LIKE_GLOSS_RE = re.compile(
+    rf"^[A-Za-z{_TONE_MARKS}][^()（）]*?(?: - |/)"
+)
+# Pinyin with no gloss behind it (the word had no translation). Latin letters
+# only AND at least one tone mark — without that second condition "（AI）" and
+# "（GmbH）" would go too.
+_BARE_PINYIN_RE = re.compile(rf"^[A-Za-z{_TONE_MARKS}\s]+$")
+_HAS_TONE_RE = re.compile(rf"[{_TONE_MARKS}]")
+
+
+def strip_inline_glosses(text: str) -> str:
+    """Drop the inline "词（pīnyīn - Gloss）" annotations from a Chinese text
+    (#1001).
+
+    Until #1001 zh_annotate wrote the pinyin and the German gloss of every new
+    word into the summary itself. Every word in the reader is now tappable
+    (#967) and holding Cmd / swiping left glosses all of them at once (#996),
+    so the parentheses are noise that breaks up the prose. New summaries carry
+    none, but every summary already in the database does — hence the READ path
+    (database.podcast._hydrate), which cleans them all at once and, being
+    read-only, is reversible by deleting this call.
+
+    Deliberately narrow: only a group that follows a Chinese character AND
+    whose content reads like one of our annotations ("pīnyīn - Gloss",
+    "pīnyīn/汉字") is removed. Ordinary parentheses — "（如Polymarket）",
+    "（AI）", "（2024）" — are the author's, not ours."""
+    if not text:
+        return text
+
+    def _drop(m: re.Match) -> str:
+        body = m.group("body")
+        if _LOOKS_LIKE_GLOSS_RE.match(body):
+            return ""
+        if _BARE_PINYIN_RE.match(body) and _HAS_TONE_RE.search(body):
+            return ""
+        return m.group(0)
+
+    return _INLINE_GLOSS_RE.sub(_drop, text)
+
+
 # ---------------------------------------------------------------------------
 # Script detection (#904)
 # ---------------------------------------------------------------------------

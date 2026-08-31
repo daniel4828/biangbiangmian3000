@@ -25,11 +25,6 @@ from . import baseline
 
 logger = logging.getLogger(__name__)
 
-# Inline-annotate at most this many distinct new words per summary — past
-# that the parentheses would drown the text. Every new word still lands in
-# new_words (the bottom vocabulary table), just not inline.
-_MAX_INLINE = 40
-
 # French elision prefixes ("l'économie" -> "économie"). Spanish doesn't elide
 # this way, so this list is only ever consulted for lang == "fr"; it's a
 # no-op (never matches) for "es".
@@ -96,7 +91,8 @@ def _is_sentence_start(text: str, pos: int) -> bool:
 
 
 def annotate_summary(text: str, lang: str) -> tuple[str, list[dict]]:
-    """(annotated_text, new_words); new_words is
+    """(text, new_words) — the text is returned unchanged since #1001; see
+    annotate/__init__.py. new_words is
     [{word, lemma, definition_de}] in order of first appearance. Never
     raises."""
     if not text or not text.strip():
@@ -153,21 +149,11 @@ def _annotate(text: str, lang: str) -> tuple[str, list[dict]]:
         for w in new_cores
     ]
 
-    inline_set = set(new_cores[:_MAX_INLINE])
-    out: list[str] = []
-    last_end = 0
-    annotated_once: set[str] = set()
-    for m, key in tagged:
-        out.append(text[last_end:m.start()])
-        out.append(m.group(0))
-        last_end = m.end()
-        if key and key in inline_set and key not in annotated_once:
-            annotated_once.add(key)
-            gloss = glosses.get(key)
-            if gloss:
-                out.append(f" ({gloss})")
-    out.append(text[last_end:])
-    return "".join(out), new_words
+    # #1001: the text is returned untouched. The glosses used to be written
+    # into it after the first occurrence of each new word; they now live on
+    # the words themselves in the reader (tap for one, hold Cmd / swipe left
+    # for all — #967/#996), so the prose stays readable.
+    return text, new_words
 
 
 def _glosses(words: list[str], lang: str) -> dict[str, str]:
