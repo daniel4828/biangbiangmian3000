@@ -174,16 +174,16 @@
             <div class="news-source-line-wrap" id="news-source-front" style="display:none"></div>
             <!-- News flow: German context of the preceding summary sentences (always above the Chinese sentence) -->
             <div class="sentence-context-de" id="sentence-context-de" style="display:none"></div>
-            <!-- Listening: hint sentence with slider (shows % of non-target chars) -->
+            <!-- Listening: hint sentence with a three-stop slider (#1006):
+                 everything but the target word / only the words he does not
+                 know yet / nothing at all. -->
             <div id="listen-hint-wrap" style="display:none">
               <div class="listen-hint-sentence" id="listen-hint-sentence"></div>
               <div class="listen-hint-slider-row">
                 <span class="listen-hint-label">Hint</span>
-                <button class="hint-mode-btn" id="hint-mode-btn" onclick="toggleListenHintMode()"
-                        title="Switch blanking mode (saved-words union vs. plain HSK)">Saved+HSK</button>
-                <input type="range" id="listen-hint-slider" min="0" max="8" value="5"
+                <input type="range" id="listen-hint-slider" min="0" max="2" value="1"
                        oninput="onListenHintSlider(this.value)">
-                <span class="listen-hint-pct" id="listen-hint-pct">Saved + HSK≤4</span>
+                <span class="listen-hint-pct" id="listen-hint-pct">New words only</span>
                 <button class="hint-save-btn" id="hint-save-btn" onclick="saveListenHintDefault()" title="Save as default">☆</button>
               </div>
             </div>

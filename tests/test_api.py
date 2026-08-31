@@ -335,6 +335,45 @@ class TestUnleech:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/new-words (#1006)
+# ---------------------------------------------------------------------------
+
+class TestNewWords:
+    """The listening hint's middle stop asks this. It must be the SAME answer
+    the knowledge reader gets, which is why the route does nothing but call
+    annotate.annotate_summary — see routes/knowledge.new_words."""
+
+    def test_returns_the_annotators_new_words(self, populated_db):
+        with patch("annotate.annotate_summary",
+                   return_value=("t", [{"word": "生态", "pinyin": "shēngtài",
+                                        "definition_de": "Ökologie", "hsk": None}])) as m:
+            r = client.post("/api/new-words", json={"text": "生态很重要", "lang": "zh"})
+
+        assert r.status_code == 200
+        assert r.json()["words"][0]["word"] == "生态"
+        assert m.call_args[0] == ("生态很重要", "zh")
+
+    def test_lang_defaults_to_zh(self, populated_db):
+        with patch("annotate.annotate_summary", return_value=("t", [])) as m:
+            client.post("/api/new-words", json={"text": "你好"})
+        assert m.call_args[0][1] == "zh"
+
+    def test_passes_other_languages_through(self, populated_db):
+        with patch("annotate.annotate_summary", return_value=("t", [])) as m:
+            client.post("/api/new-words", json={"text": "un chat", "lang": "fr"})
+        assert m.call_args[0] == ("un chat", "fr")
+
+    def test_empty_text_is_not_an_error(self, populated_db):
+        """A card can be on screen before its sentence has loaded."""
+        with patch("annotate.annotate_summary") as m:
+            r = client.post("/api/new-words", json={"text": "   "})
+
+        assert r.status_code == 200
+        assert r.json() == {"words": []}
+        m.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # GET /api/vocab-index (#850)
 # ---------------------------------------------------------------------------
 

@@ -16,6 +16,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 import ai
+import annotate
 import database
 import knowledge.files
 import knowledge.ingest
@@ -173,7 +174,6 @@ def new_words(body: NewWordsRequest):
     text = (body.text or "").strip()
     if not text:
         return {"words": []}
-    import annotate
     _, words = annotate.annotate_summary(text, body.lang)
     return {"words": words}
 
