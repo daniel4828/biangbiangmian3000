@@ -4122,6 +4122,14 @@ select.opt-input {
   color: var(--text);
 }
 .word-table-btn:hover { border-color: var(--primary); }
+/* A finished ★ List / ✓ Known has to be unmistakable (#1003): the labels
+   before and after differ by one word, which on a phone reads as "nothing
+   happened". Colour and a filled background say it at a glance. */
+.word-table-btn.word-table-btn-done {
+  border-color: var(--good);
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+}
 .cost-model {
   font-family: monospace;
   font-size: 12px;

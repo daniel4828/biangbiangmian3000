@@ -5862,21 +5862,26 @@ function doWordTableAdd(idx, extraBtn) {
     // cancelled — nothing happened, so put the row's button back as if it
     // had never been clicked.
     if (state === 'idle') {
-      _setWordBtns(btns, '★ List', { disabled: false, error: false });
+      _setWordBtns(btns, '★ List', { disabled: false, error: false, done: false });
       return;
     }
     // Only a failure is worth retrying; a finished add is not repeatable.
-    _setWordBtns(btns, text, { disabled: state !== 'error', error: state === 'error' });
+    _setWordBtns(btns, text, { disabled: state !== 'error', error: state === 'error',
+                               done: state === 'done' });
   }, _wordTableLang);
 }
 
 // Same label and state on every button standing for one word — the table row's
 // and, when the word was tapped in the text, the popup's (#967).
-function _setWordBtns(btns, text, { disabled, error } = {}) {
+function _setWordBtns(btns, text, { disabled, error, done } = {}) {
   btns.forEach(b => {
     b.textContent = text;
     if (disabled !== undefined) b.disabled = disabled;
     if (error !== undefined) b.classList.toggle('podcast-add-error', error);
+    // #1003: "★ List" -> "★ added to your list" is one word apart at a
+    // glance, and a disabled button just looks greyed out — the green state
+    // is what actually says "that worked".
+    if (done !== undefined) b.classList.toggle('word-table-btn-done', done);
   });
 }
 
@@ -5929,11 +5934,11 @@ function doWordTableKnown(idx, extraBtn) {
   _setWordBtns(btns, '…', { disabled: true });
   // lang (#804): known_words is per-language — see markWordKnown's docstring.
   markWordKnown(wordZh, _wordTableLang).then(() => {
-    _setWordBtns(btns, '✓ known');
+    _setWordBtns(btns, '✓ marked known', { done: true });
     document.getElementById(`word-table-row-${idx}`)?.classList.add('podcast-word-known');
   }).catch(e => {
     // only a failure is worth retrying
-    _setWordBtns(btns, e.message || 'failed', { disabled: false, error: true });
+    _setWordBtns(btns, e.message || 'failed', { disabled: false, error: true, done: false });
   });
 }
 
