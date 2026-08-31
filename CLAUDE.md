@@ -656,6 +656,13 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - 文本经 `DOMParser` 解析后一律 `_escHtml` 再渲染——同 `_summaryZhHtml` 的规矩，AI 写的文本永远不许自带标记
   - 展开状态存 `localStorage.knowledgeTldrOpen`，**默认展开**（没人看见的 TL;DR 等于不存在）
 - **一键复制摘要 / 转录（#943）**：详情页两个 📋 按钮把纯文本放进剪贴板。摘要是 `<p>`/`<b>` 标记、转录是双语两栏，手动选中拖不准。`_htmlToPlainText()` 先把内容过一遍 `_summaryZhHtml()`（转义 → 白名单）再取 `textContent` —— **绝不把模型写的标记原样塞进 `innerHTML`**；语言分支与 `_knowledgeSummaryHtml()` 一致；`navigator.clipboard` 只在安全上下文可用（本地实例跑 http），保留 `textarea` + `execCommand` 兜底
+- **朗读摘要 / 全文（#993）**：详情页播放条 🔊 Listen，播放的是**当前屏幕上那一份**（阅读语言的摘要，或 Full text 视图的全文），速度 0.75–2×
+  - 🔴 **服务器绝不主动生成语音**（Daniel 2026-08-31 明确要求）：打开详情页零请求，只有按下 ▶ 才调 edge-tts。摘要动辄几千字，自动预生成等于每篇都白烧一次 TTS。唯一的提前量是**正在播的下一段**——没有它每个接缝都要静等几秒
+  - **速度走浏览器的 `audio.playbackRate`，不用 edge-tts 的 `rate`**：后者会让同一段文字按每个速度各存一份 mp3（缓存键是文本），而且改速度要重新生成。`playbackRate` 即时、零成本，存 `localStorage.knowledgeTtsRate`
+  - **切块在前端**（`_kTtsChunks`，约 180 字，切在句边界），逐块请求已有的 `GET /api/tts-file`——内容寻址 + 永久缓存，所以听第二遍不花钱。**不新增后端端点、不新增表、不新增记账**
+  - **行内标注必须先剥掉**：`生态（shēngtài - Ökologie）` 念出来是灾难，罗曼语的 ` (Gloss)` 是德语掉进法语句子里。两种都是括号，所以整组删——丢掉源文里真正的括注是可接受的代价
+  - **德语 `summary_de` 不在播放列表里**：`languages.py` 没有德语（它不是学习语言），拿中文声音念德语只会更糟。真要听德语得先给 TTS 加一个非学习语言的声库
+  - 播放复用 #606 那个手势解锁过的共享 `<audio>` 元素和 `_playSeq` 守卫，否则 iOS 上 onended 驱动的链式播放会被拒绝
 - **和 AI 聊这份素材（#945）**：详情页底部 💬 Chat 面板，模型下拉框可选，对话存库，重开素材还在。Daniel 2026-08-25 定的：上下文有转录用转录、没有才用摘要；面板长在详情页里（不做独立页）；**AI 用提问的语言回答**
   - **上下文每轮重建，绝不复制进对话表**：`routes.story._knowledge_material(episode)`（#661 那条规则，import 而不是抄一份），所以重新生成摘要之后 AI 立刻看到的是新的
   - **上下文和规则放在第一条 user 消息里，不用 system 角色**：`ai.py` 全文没有一处 system 消息，而 Anthropic 的 `messages.create()` 把 system 当独立参数——混进 `messages` 会让所有 `claude-*` 模型报错，却在 OpenAI 兼容的那些上照常工作，是最难发现的那类坑

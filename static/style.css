@@ -3369,6 +3369,23 @@ a.nav-btn { text-decoration: none; }
 .knowledge-tag-ai { background: transparent; border: 1px dashed var(--border); color: var(--muted); }
 .knowledge-row-archived { opacity: 0.55; }
 
+/* ── 摘要朗读播放条（#993）──────────────────────────────────────────────── */
+.knowledge-tts-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.knowledge-tts-rate {
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+}
+
 /* ── 列表 + 左右滑动（#940）─────────────────────────────────────────────── */
 .knowledge-lists-bar { margin-bottom: 10px; flex-wrap: wrap; }
 /* 行本身被拖动，两个动作面板露在它后面 */
