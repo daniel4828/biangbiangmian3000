@@ -5621,18 +5621,14 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .word-actions-buttons { display: flex; gap: 8px; margin-top: 12px; }
 .word-actions-buttons .word-table-btn { flex: 1; padding: 8px; font-size: 14px; }
 
-/* Narrow screens: a bottom sheet instead of a panel pinned to the word. It
-   needs no positioning and stays under the thumb, which is the whole reason
-   this feature exists — a phone cannot run the Chrome extension. */
+/* Phones get the same panel pinned to the word (#994), not a bottom sheet:
+   the translation belongs next to what it explains, and a sheet at the far
+   end of the screen covers the text being read. _placeWordActions() flips it
+   above the word when there is no room below. */
 @media (max-width: 600px) {
   .word-actions {
-    left: 0;
-    right: 0;
-    bottom: 0;
-    top: auto !important;
-    max-width: none;
-    border-radius: var(--radius) var(--radius) 0 0;
-    padding: 16px 18px calc(16px + env(safe-area-inset-bottom));
+    min-width: 0;
+    max-width: calc(100vw - 16px);
   }
 }
 /* A failed add stays clickable to retry, so it must not look like success */
