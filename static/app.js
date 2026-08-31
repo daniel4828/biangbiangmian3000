@@ -5111,6 +5111,10 @@ async function openKnowledgeItem(id) {
 
 function closeKnowledgeDetail() {
   _knowledgeDetailId = null;
+  // Leaving the item stops its audio — the player bar goes with the page, and
+  // a voice reading on from a screen he left is only confusing (#993).
+  _kTtsStopPlayback();
+  _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
   // Back to wherever this item was opened from. Note openKnowledge() is called
   // with NO argument: an argument would reset the filter bar, and coming back
   // from an item to a list that has forgotten your filters is the worst
@@ -5286,6 +5290,193 @@ async function doGenerateFulltext() {
   }
 }
 
+// ── 摘要朗读 (#993) ─────────────────────────────────────────────────────────
+// Listen to the summary (or the full text) in the reading language. Two rules
+// from Daniel: the server never generates audio on its own — only pressing ▶
+// does, so opening an item costs nothing — and the speed must be adjustable.
+//
+// Speed is the browser's playbackRate, not edge-tts's `rate`: the latter would
+// mint a separate mp3 per speed for the very same sentence (the cache is keyed
+// on the text) and changing speed would mean regenerating everything.
+const KNOWLEDGE_TTS_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+const _KTTS_CHUNK_MAX = 180;   // chars per request — one edge-tts round trip
+let _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
+let _kTtsRate = (() => {
+  const v = parseFloat(localStorage.getItem('knowledgeTtsRate'));
+  return KNOWLEDGE_TTS_RATES.includes(v) ? v : 1;
+})();
+
+// Inline annotations are for the eye, not the ear: "生态（shēngtài - Ökologie）"
+// read aloud by a Chinese voice is unlistenable, and the romance annotator's
+// " (Gloss)" is German dropped into a French sentence. Both are parenthesised,
+// so both go. Losing a genuine parenthetical from the source is a fair price.
+function _kTtsStripAnnotations(text, lang) {
+  let out = String(text || '').replace(/（[^（）]*）/g, '');
+  if (lang !== 'zh') out = out.replace(/\([^()]*\)/g, '');
+  return out.replace(/[ \t]{2,}/g, ' ');
+}
+
+// Sentence boundaries, scanned by hand rather than with a lookbehind regex —
+// the terminator set differs per script (。！？ vs. a period that is only a
+// terminator when whitespace follows, so "12.5" and "z. B." stay whole).
+function _kTtsSentences(para) {
+  const TERM = '。！？…；;!?';
+  const out = [];
+  let buf = '';
+  for (let i = 0; i < para.length; i++) {
+    buf += para[i];
+    const next = para[i + 1] || '';
+    // A period ends a sentence only with whitespace after it AND at least two
+    // letters/digits before it — "z. B." and "M. Dupont" would otherwise be
+    // torn into their own chunks.
+    const isTerm = TERM.includes(para[i]) ||
+      (para[i] === '.' && (!next || /\s/.test(next)) && /[\p{L}\p{N}]{2}$/u.test(buf.slice(0, -1)));
+    if (!isTerm || TERM.includes(next) || next === '.') continue;
+    // Pull in the closing quote/bracket and the space that belong to this sentence.
+    while (i + 1 < para.length && /["'\u201d\u2019)）\s]/.test(para[i + 1])) buf += para[++i];
+    out.push(buf);
+    buf = '';
+  }
+  if (buf) out.push(buf);
+  return out;
+}
+
+// Split into chunks of at most _KTTS_CHUNK_MAX chars, at sentence boundaries.
+// A single oversized sentence is cut at its last space — better a seam
+// mid-sentence than a minute-long edge-tts request waited out in silence.
+function _kTtsChunks(text, lang) {
+  const out = [];
+  for (const para of _kTtsStripAnnotations(text, lang).split(/\n+/)) {
+    let buf = '';
+    for (let s of _kTtsSentences(para)) {
+      while (s.length > _KTTS_CHUNK_MAX) {
+        if (buf) { out.push(buf); buf = ''; }
+        const head = s.slice(0, _KTTS_CHUNK_MAX);
+        const cut = head.lastIndexOf(' ') > _KTTS_CHUNK_MAX / 2 ? head.lastIndexOf(' ') : _KTTS_CHUNK_MAX;
+        out.push(s.slice(0, cut));
+        s = s.slice(cut);
+      }
+      if (buf && (buf + s).length > _KTTS_CHUNK_MAX) { out.push(buf); buf = ''; }
+      buf += s;
+    }
+    if (buf) out.push(buf);
+  }
+  return out.map(c => c.trim()).filter(c => /[\p{L}\p{N}]/u.test(c));
+}
+
+// What is on screen right now — the reading-language block, or the full text
+// when that tab is open. The German summary_de block is deliberately not in
+// here: there is no German voice in the language registry, and that block is
+// the gist Daniel reads to decide, not the material he studies.
+function _kTtsSourceText(ep, lang) {
+  if (_knowledgeView === 'fulltext') {
+    const ft = _knowledgeFulltextFor(ep, lang);
+    return ft ? _htmlToPlainText(_summaryZhHtml(ft.text || '')) : '';
+  }
+  if (lang === 'zh') return _htmlToPlainText(_summaryZhHtml(ep.summary_zh || ''));
+  return ep.rendition ? _htmlToPlainText(_summaryZhHtml(ep.rendition.summary || '')) : '';
+}
+
+// Episode + language + view identify the audio: switching any of them means
+// the bar is now pointing at different words, so playback resets.
+function _kTtsSync(ep, lang) {
+  const key = `${ep.id}|${lang}|${_knowledgeView}`;
+  if (_kTts.key === key) return _kTts.chunks;
+  if (_kTts.playing || _kTts.idx >= 0) _kTtsStopPlayback();
+  _kTts = { key, chunks: _kTtsChunks(_kTtsSourceText(ep, lang), lang), idx: -1, playing: false, src: '' };
+  return _kTts.chunks;
+}
+
+function _kTtsBarHtml(ep, lang) {
+  const chunks = _kTtsSync(ep, lang);
+  if (!chunks.length) return '';
+  const pos = _kTts.idx >= 0 ? `${_kTts.idx + 1} / ${chunks.length}` : `${chunks.length} parts`;
+  return `
+    <div class="knowledge-tts-bar">
+      <button class="btn-secondary" id="knowledge-tts-toggle" onclick="toggleKnowledgeTts()">${
+        _kTts.playing ? '⏸ Pause' : (_kTts.idx >= 0 ? '▶ Resume' : '🔊 Listen')}</button>
+      ${_kTts.idx >= 0 ? `<button class="btn-secondary" onclick="stopKnowledgeTts()">■</button>` : ''}
+      <span class="keymap-hint" id="knowledge-tts-pos">${pos}</span>
+      <select class="knowledge-tts-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed">
+        ${KNOWLEDGE_TTS_RATES.map(r =>
+          `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('')}
+      </select>
+    </div>`;
+}
+
+// Repaint the bar in place — a full _renderKnowledgeDetail() on every chunk
+// would rebuild the whole detail view (and scroll position) six times a minute.
+function _kTtsUpdateBar() {
+  const btn = document.getElementById('knowledge-tts-toggle');
+  const pos = document.getElementById('knowledge-tts-pos');
+  if (btn) btn.textContent = _kTts.playing ? '⏸ Pause' : (_kTts.idx >= 0 ? '▶ Resume' : '🔊 Listen');
+  if (pos) pos.textContent = _kTts.idx >= 0 ? `${_kTts.idx + 1} / ${_kTts.chunks.length}`
+                                            : `${_kTts.chunks.length} parts`;
+}
+
+function _kTtsPlayAt(idx) {
+  if (idx < 0 || idx >= _kTts.chunks.length) { stopKnowledgeTts(); return; }
+  const lang = activeLang();
+  _kTts.idx = idx;
+  _kTts.playing = true;
+  const seq = ++_playSeq;
+  const a = _getAudioEl();
+  a.onended = () => { if (seq === _playSeq) _kTtsPlayAt(idx + 1); };
+  a.onerror = () => { if (seq === _playSeq) _kTtsPlayAt(idx + 1); };
+  _kTts.src = _ttsUrl(_kTts.chunks[idx], lang);
+  a.src = _kTts.src;
+  a.playbackRate = _kTtsRate;
+  a.play().catch(() => { if (seq === _playSeq) _kTtsPlayAt(idx + 1); });
+  // The only audio generated ahead of time: the one chunk that plays next,
+  // fetched while this one sounds. Without it every seam is a silent wait for
+  // edge-tts. Nothing is warmed before ▶ is pressed.
+  if (idx + 1 < _kTts.chunks.length) _warmAudio(_ttsUrl(_kTts.chunks[idx + 1], lang));
+  _kTtsUpdateBar();
+}
+
+function _kTtsStopPlayback() {
+  _stopSharedPlayback();
+  _kTts.playing = false;
+}
+
+function toggleKnowledgeTts() {
+  if (!_kTts.chunks.length) return;
+  const a = _sharedAudio;
+  if (_kTts.playing) {
+    // A real pause, not a stop: the onended chain stays armed, so resuming
+    // continues the chunk where it stopped instead of replaying it.
+    _kTts.playing = false;
+    try { a && a.pause(); } catch (_) {}
+    _kTtsUpdateBar();
+    return;
+  }
+  // Resume only if the shared element is still holding our chunk — anything
+  // else (a word tapped in the review view) has taken it over since.
+  if (_kTts.idx >= 0 && a && _kTts.src && a.src === new URL(_kTts.src, location.href).href) {
+    _kTts.playing = true;
+    a.playbackRate = _kTtsRate;
+    a.play().catch(() => {});
+    _kTtsUpdateBar();
+    return;
+  }
+  _kTtsPlayAt(_kTts.idx >= 0 ? _kTts.idx : 0);
+  if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+function stopKnowledgeTts() {
+  _kTtsStopPlayback();
+  _kTts.idx = -1;
+  if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+function setKnowledgeTtsRate(value) {
+  const rate = parseFloat(value);
+  if (!KNOWLEDGE_TTS_RATES.includes(rate)) return;
+  _kTtsRate = rate;
+  try { localStorage.setItem('knowledgeTtsRate', String(rate)); } catch (_) {}
+  if (_sharedAudio) _sharedAudio.playbackRate = rate;   // takes effect mid-chunk
+}
+
 function _renderKnowledgeDetail(ep) {
   const el = document.getElementById('view-knowledge-content');
   if (!el) return;
@@ -5353,6 +5544,7 @@ function _renderKnowledgeDetail(ep) {
       ${_knowledgeEditOpen ? _knowledgeEditFormHtml(ep) : ''}
       <div style="margin:4px 0 10px">${links}</div>
       ${_knowledgeViewTabs(ep)}
+      ${_kTtsBarHtml(ep, lang)}
       ${_knowledgeView === 'fulltext' ? _knowledgeFulltextHtml(ep, lang) : summaryBlock}
     </div>
     <div class="keymap-panel">
