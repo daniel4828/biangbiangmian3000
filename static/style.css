@@ -4779,6 +4779,15 @@ details[open] .cat-override-summary::before { content: '▼ '; }
   font-style: italic;
 }
 
+.front-mascot.mascot-playable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.front-mascot.mascot-playable:active .mascot-art,
+.front-mascot.mascot-playable:active .mascot-caption {
+  color: var(--accent, #4a7dff);
+}
+
 /* ── Three-panel review layout ────────────────────────────── */
 .review-layout {
   display: flex;
