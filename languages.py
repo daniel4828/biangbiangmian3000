@@ -47,13 +47,13 @@ _SINITIC_BASE = {
         "characters": True,        # per-character breakdown (汉字)
         "measure_words": True,     # 量词
         "traditional": True,
-        # news/kahneman/paste/briefing story modes are zh-only for now
+        # kahneman/paste/contextsummary story modes are zh-only for now
         "extended_story_modes": True,
         # Knowledge mode (build cards from a saved podcast/video/article
         # source) is language-agnostic — the source material's language
         # doesn't matter, only the prompt's target language does (issue
         # #806). Kept as its own flag, separate from extended_story_modes,
-        # so it isn't accidentally hidden alongside kahneman/paste/briefing.
+        # so it isn't accidentally hidden alongside kahneman/paste/contextsummary.
         "knowledge_story_mode": True,
         # Morphology (issue #803): whether entry_forms rows apply.
         "conjugation": False,

@@ -3673,65 +3673,6 @@ def generate_podcast_sentences(
     return sentences, "\n\n".join(prompts_sent)
 
 
-def summarize_news_items(items: list[dict], model: str = "gpt-5-mini",
-                         max_items: int = 8, progress_key: str | None = None) -> list[dict]:
-    """News auto mode, step 1 of 2: pick the most important of today's fetched
-    news items and condense each into a short summary. The result feeds
-    generate_news_sentences exactly like pasted articles do.
-
-    items: news_fetcher.fetch_all() output [{url, title, text, source_name}]
-    Returns [{url, title, text}] — text is the AI's condensed summary.
-
-    Falls back to the first max_items raw items when the AI reply is unusable —
-    that is still real news content, only the selection/condensing is skipped
-    (a network failure upstream raises news_fetcher.NewsFetchError instead).
-    """
-    if not items:
-        return []
-
-    _set_progress(progress_key, phase="request", msg="Selecting today's top news…", percent=12)
-    listing = "\n\n".join(
-        f"[{i}] ({it.get('source_name', '')}) {it.get('title', '')}\n{(it.get('text') or '')[:400]}"
-        for i, it in enumerate(items)
-    )
-    prompt = f"""Below are today's news items fetched from German and international sources.
-
-{listing}
-
-Task: choose the {max_items} most important items for a daily world-news briefing.
-Balance the selection: German domestic news, international news, and China-related news (when available).
-Skip near-duplicates covering the same event.
-
-Return ONLY a JSON array, no other text:
-[
-  {{"idx": 0, "summary": "3-5 sentence factual English summary of the item"}}
-]
-idx is the item number in square brackets above."""
-
-    try:
-        raw = _call_api(model, [{"role": "user", "content": prompt}], 8192, purpose="news-select")
-        start, end = raw.find("["), raw.rfind("]") + 1
-        picked = json.loads(raw[start:end]) if start != -1 and end != 0 else []
-        articles = []
-        for p in picked:
-            idx = p.get("idx")
-            summary = (p.get("summary") or "").strip()
-            if isinstance(idx, int) and 0 <= idx < len(items) and summary:
-                it = items[idx]
-                articles.append({"url": it.get("url", ""), "title": it.get("title", ""),
-                                 "source_name": it.get("source_name", ""), "text": summary})
-        if articles:
-            logger.info("[%s] summarize_news_items: %d/%d items selected",
-                        model, len(articles), len(items))
-            return articles[:max_items]
-        logger.warning("summarize_news_items: empty/unusable selection, falling back to raw items")
-    except Exception as e:
-        logger.warning("summarize_news_items failed (%s), falling back to raw items", e)
-    return [{"url": it.get("url", ""), "title": it.get("title", ""),
-             "source_name": it.get("source_name", ""), "text": (it.get("text") or "")[:600]}
-            for it in items[:max_items]]
-
-
 _PODCAST_DETAIL_WORDS = {
     "short": "~150",
     "medium": "~300",

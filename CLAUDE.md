@@ -245,7 +245,6 @@
 │
 │   # ── AI、内容与语音 ──
 ├── ai.py                  # AI 提供商调用（每种提示词类型一个函数）
-├── news_fetcher.py        # 新闻抓取（Tagesschau API + RSS；按天缓存 data/news_cache/）
 ├── podcast.py             # 播客爬虫（#479）：播客 RSS 直链发现新单集（#497，退役 YouTube/yt-dlp）、每源 auto_process 开关+非自动源只入库元数据（#502，podcast_feeds 表）、转录链 NotebookLM 免费主力+听悟+Whisper 保底、单步异常不中止整链（#510 重排，链式降级，原 #498/#485/#486）、摘要 NotebookLM chat.ask 免费优先+DeepSeek/gpt API 链回退（api 路径内部 DeepSeek 优先省钱，#532；勾了 china-kritisch 的素材跳过 DeepSeek 直接用 OpenAI，#731）、邮件通知+Signal 通知（signal-cli 关联设备，发 Note to Self，#521，二者独立可选、互不影响；消息抬头播客名·星期·日期、链接在末尾，单集日期按 Europe/Berlin 显示，#532）、摘要 table.media 风格（`<p>` 段落+每段首句 `<b>` 加粗总结，#567）+详情页 Regenerate summary 按钮、邮件主题=`播客名 - 单集标题`（查不到播客名只用标题，不要退回死前缀）+ `summary_zh` 开头中文总结（#708 起是 `summary_de` 的**完整翻译**：同段落数、同顺序、同事实，同样 `<p>`+段首 `<b>`，HSK4-5 用词；提示词里德语先写、中文后译，JSON 里 `summary_de` 排在前面；渲染三处——邮件 `podcast._summary_zh_html`、详情页 `app.js._summaryZhHtml` 均"先全转义再放行 `<p>/<b>/<strong>/<em>/<i>/<br>`"，Signal 用 `_summary_to_plain_text` 剥标签；#708 之前的旧条目是纯文本，两处渲染都按空行补 `<p>`；**是增量不是必需**——成功判定只看 `summary_de`，模型漏掉中文总结不能让整集失败）+ **德语摘要就是纯德语**（#979，撤销 #631 的 `pinyin/汉字` 标注和中文公司名）；已泛化为知识库存储层，见 `knowledge/` 包
 ├── annotate/              # 知识库生词标注分派（#804）：__init__.py 按 languages 的 annotator 字段分派，zh 走 zh_annotate（原样不动），romance.py 是法语/西语实现（entry_forms 精确匹配，零词干还原）+ stopwords_fr/es.txt 功能词表
 ├── knowledge/             # 知识库摄取（#650–#655，播客功能泛化，见「知识库」节）：rendition.py（按语言渲染摘要，#804）、youtube.py（字幕摄取）、article.py（正文抽取）、instagram.py（Reel/Post 摄取，yt-dlp 元数据+音频下载，#750）、files.py（上传的 txt/md/pdf/docx 抽文本，#835）、ingest.py（唯一入库管线）、mailbox.py（IMAP 邮件收件）、newsletter.py（已知邮件通讯的发件人注册表+样板清洗，#925）、signal_inbox.py（Signal Note to Self 分享收件，含 text 前缀粘贴正文，#749/#834）
@@ -274,7 +273,6 @@
 └── data/
     ├── srs.db             # SQLite 数据库（生产版在服务器上！）
     ├── books/             # 上传的 EPUB/PDF 原件（#836，不进离线同步）
-    ├── news_sources.json  # 新闻来源配置（不在 git 里，服务器上已有）
     └── tts/               # TTS 音频缓存
 ```
 
@@ -371,7 +369,7 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 |------|--------|------|
 | `ANTHROPIC_API_KEY` | 必填 | Claude API 密钥 |
 | `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `QWEN_API_KEY` | 可选 | 其他 AI 提供商密钥 |
-| `OPENAI_API_KEY` | 可选 | 新闻/briefing 模式（DeepSeek 会审查新闻内容，故用 OpenAI），以及 china-kritisch 素材的摘要（#731）。模型由 `BRIEFING_MODEL` 决定，默认 `gpt-5.6-luna`，回退链 luna → terra → `gpt-5-mini`。**`gpt-5.1` 自 #731 起全应用停用**（同样的活贵六倍），价格表里保留它只为解析历史成本记录 |
+| `OPENAI_API_KEY` | 可选 | briefing 管线（`paste`/`contextsummary`）的默认模型，以及 china-kritisch 素材的摘要（#731）。模型由 `BRIEFING_MODEL` 决定，默认 `gpt-5.6-luna`，回退链 luna → terra → `gpt-5-mini`。**`gpt-5.1` 自 #731 起全应用停用**（同样的活贵六倍），价格表里保留它只为解析历史成本记录 |
 | `DB_PATH` | `data/srs.db` | 数据库路径（开发用 `data/dev.db`） |
 | `DISABLE_AI` | `0` | 设为 `1` 跳过 AI 故事生成 |
 | `OFFLINE_MODE` | `0` | 设为 `1` 进入硬离线模式（#612）：隐含 `DISABLE_AI`，TTS 只读缓存，零网络请求，连探测都不做 |
@@ -491,7 +489,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
   - **复习卡的行记录（`database/cards.py`）不 SELECT `etymology`**，所以复习中打开编辑框时该字段取自 `wordDetails`；两处都没有就整个字段隐藏、保存时也不发送——空文本框存回去会静默清空词源
 - **`known_words` 按语言（#803）：** 主键改为 `(word_zh, lang)`；`database` 里的四个函数都加了 `lang` 参数（默认 `zh`，中文调用点行为不变）
 - **总体设计见 `docs/multilang.md`** —— 为什么不分库、语言族模型、各阶段接口约定都在那里
-- **中文专属：** 汉字分解、量词、拼音、kahneman/paste/briefing 故事模式
+- **中文专属：** 汉字分解、量词、拼音、kahneman/paste/contextsummary 故事模式
 - **主页语言标签页**（#436）：`GET /api/langs` 返回使用中的语言；前端多于一种语言才显示标签栏，选择存 `localStorage`。所有主页/复习/故事/统计接口支持可选 `?lang=`（默认不过滤，向后兼容）；解析规则统一为 `lang 参数 或 get_deck_lang(deck_id)`
 - **故事按语言隔离：** `stories.lang`（NULL = 中文旧数据）；聚合牌组（如 All）在各语言标签下维护独立的活跃故事；后台生成的 progress_key 含 lang
 
@@ -574,15 +572,19 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 **模式（mode）：**
 - `story`（叙事）| `qa`（问答）| `expository`（说明文）
 - `kahneman` ——《思考，快与慢》认知偏误风格（`data/kahneman_chapters.json`）
-- `paste` ——用户在设置弹窗粘贴任意内容（#396）；自 #481 起复用 briefing 管线（`generate_briefing_sentences(generic=True)`，内容摘要框架措辞），因此同样有上下文句、Python 校验与事实核查；**模型下拉框可选（#910）**，默认仍是占位项「Server: BRIEFING_MODEL」——那是这条管线唯一验证过的配置，但锁死的理由（DeepSeek 审查**新闻**）对粘贴的任意素材不成立，同 `knowledge` 在 #561/#640 的解锁。占位值 `routes/story.SERVER_MODEL_SENTINEL`（前端 `SERVER_MODEL_VALUE`，两处拼写必须一致）不在 `ALLOWED_MODELS` 里，只有 paste/briefing 两个分支认得它，所以路由层的 `_requested_model()` 只为这两个模式放行它——别的模式收到它会当无效模型回落，绝不会被当成模型名发出去。`briefing` **仍然锁死**（那确实是新闻）；不做自动抓取回退
-- `briefing`（News flow，#399）——AI 写一篇**连贯的新闻总结**，目标词各恰好出现一次，但**不是每句都含目标词**——目标词句之间允许纯上下文句（承载数字/事实，不受 15 字限制）。含目标词的句子成为卡片；前面的上下文句用 Google Translate（非 AI）译成德语存 `story_sentences.context_de`（显示在卡片正面），中文原文存 `reasoning_zh`（背景弹窗）。briefing 卡片没有标题（concept_zh 为空）。自动抓取当日新闻（`news_fetcher.fetch_all()`：Tagesschau API + RSS，按天缓存）：两步 AI，`summarize_news_items` 挑最重要的 8 条（平衡德国/国际/中国相关）→ `generate_briefing_sentences` 生成连贯中文简报（模型固定服务器端 BRIEFING_MODEL，因 DeepSeek 会审查新闻内容）。抓取全部失败时报明确错误，不静默降级为普通故事
+- `paste` ——用户在设置弹窗粘贴任意内容（#396）；自 #481 起复用 briefing 管线（`generate_briefing_sentences(generic=True)`，内容摘要框架措辞），因此同样有上下文句、Python 校验与事实核查；**模型下拉框可选（#910）**，默认仍是占位项「Server: BRIEFING_MODEL」——那是这条管线唯一验证过的配置，但锁死的理由（DeepSeek 审查**新闻**）对粘贴的任意素材不成立，同 `knowledge` 在 #561/#640 的解锁。占位值 `routes/story.SERVER_MODEL_SENTINEL`（前端 `SERVER_MODEL_VALUE`，两处拼写必须一致）不在 `ALLOWED_MODELS` 里，只有 `paste`/`contextsummary` 两个分支认得它，所以路由层的 `_requested_model()` 只为这两个模式放行它——别的模式收到它会当无效模型回落，绝不会被当成模型名发出去。**#1011 起没有任何模式锁死模型**：唯一的理由是新闻，而新闻抓取已删除
+- `contextsummary`（Kontextsummary，#1011，原 `briefing` / News flow，#399/#444）——AI 写一篇**连贯的内容总结**，目标词各恰好出现一次，但**不是每句都含目标词**——目标词句之间允许纯上下文句（承载数字/事实，不受 15 字限制）。含目标词的句子成为卡片；前面的上下文句用 Google Translate（非 AI）译成德语存 `story_sentences.context_de`（显示在卡片正面），中文原文存 `reasoning_zh`（背景弹窗）。这类卡片没有标题（concept_zh 为空）。
+  - **素材来自知识库，不再抓新闻**（#1011）：设置弹窗复用 knowledge 模式那个素材多选器（`episode_ids`，`KNOWLEDGE_SOURCE_MODES` 前后端各一份），`_knowledge_sources()` 产出的 `{title, kind, url, material}` 适配成 briefing 管线要的 `{url, title, text}`。`url` 仍是应用内详情页（#790），所以卡片上的来源行点开是那条素材的摘要弹窗
+  - **整条新闻抓取已删除**：`news_fetcher.py`、`ai.summarize_news_items()`、`_auto_news_articles()`、`GET /api/news/status`、`database.get_today_used_article_urls()`、设置弹窗的新闻面板，以及 `init_db()` 里那段把 `mode='briefing'` 种进 `pregen_config` 的代码，全部不存在了
+  - **不在 `_PREGEN_MODES` 里**：选素材是一次性的人工动作，同 knowledge/book
+  - **前端的上下文块按模式判断，不能按 source_url 判断**（`_hidesInlineContext()`）：#931 用「source_url 是应用内链接」当作「knowledge 模式」的代号，而 contextsummary 的素材同样来自知识库、URL 形状一模一样——按 URL 判会把它的上下文块整块抹掉，而那正是这个模式存在的理由。**导航仍按 URL 判**（应用内链接必须弹窗而不是开新标签页），只有「上下文块 vs 💡 弹窗」这一处按模式判
 - **取消生成（#828）**：加载页的 Cancel 按钮 → `POST .../cancel` 把 progress_key 记进 `ai._cancelled_keys`。**检查点挂在 `ai._set_progress()` 里，不是在 `routes/story.py` 里散布几处显式检查**：每种生成模式本来就在每个阶段（重试、翻译开始、逐句翻译进度）调它，挂在那里等于所有模式的每一步都免费获得中断能力，以后新增的模式也自动继承。另外 `_generate_and_store` 在 `database.create_story()` **之前**再查一次——上面的活儿白干无所谓，写进库的故事不是。标志必须在生成线程的 `finally:` 里 `ai.clear_cancel()`，否则下一次同一牌组的生成一启动就被旧标志掐死。`_fill_translations` 的兜底 `except Exception` 要放行 `StoryCancelled`（取消不是翻译失败）。取消后 `_story_progress` 条目被删掉，所以 #821 任务指示器和「Story ready」横幅都不会再提这次生成
-- **旧 `news` 模式已移除**（#512，界面曾叫 "News briefing"）：新故事生成拒绝 `mode='news'`（`_generate_and_store` 直接抛 `ValueError`）；但历史 `news` 故事仍能正常展示，且 Again 单句重生成仍复用 `ai.generate_news_sentences`（`generate_sentence_for_word` 保留该分支）——不影响旧数据
-- briefing/paste 共同点：每句带 `source_url`（背景弹窗"打开原文"链接），复用 kahneman 的概念框/背景弹窗 UI；文章内容存 `stories.gen_params.articles` 供 Again 重生成复现同一批内容（paste 的文章通过 regenerate 的 POST body 传输）
-- **知识模式对所有语言可用（#806）**：素材是什么语言无所谓，决定输出语言的只有提示词。所以它有独立开关 `features.knowledge_story_mode`（所有语言 True），**不和 `extended_story_modes`（kahneman/paste/briefing，仍只有中文）捆在一起**。中文走可自定义的 `DEFAULT_PROMPT_TEMPLATES["knowledge"]`，其它语言走 `ai._KNOWLEDGE_PROMPT_NON_ZH`（同样的规则，目标语言输出）。`briefing`/`paste` 仍只有中文，所以 `generate_briefing_sentences()` 没加 `lang`——加了是死代码
+- **旧 `news`（#512）和 `briefing`（#1011）模式已移除**：新故事生成一律拒绝这两个标识符（`_generate_and_store` 抛 `ValueError`）；但历史故事仍能正常展示，且 Again 单句重生成仍复用 `ai.generate_news_sentences`（`generate_sentence_for_word` 保留该分支，历史 news/briefing 用 `generic=False` 的新闻措辞，`paste`/`contextsummary` 用 `generic=True`）——不影响旧数据
+- contextsummary/paste 共同点：每句带 `source_url`，复用 kahneman 的概念框/背景弹窗 UI；素材内容存 `stories.gen_params.articles` 供 Again 重生成复现同一批内容（paste 的文章通过 regenerate 的 POST body 传输；contextsummary 的由服务端按 `episode_ids` 现建，不走 body）
+- **知识模式对所有语言可用（#806）**：素材是什么语言无所谓，决定输出语言的只有提示词。所以它有独立开关 `features.knowledge_story_mode`（所有语言 True），**不和 `extended_story_modes`（kahneman/paste/contextsummary，仍只有中文）捆在一起**。中文走可自定义的 `DEFAULT_PROMPT_TEMPLATES["knowledge"]`，其它语言走 `ai._KNOWLEDGE_PROMPT_NON_ZH`（同样的规则，目标语言输出）。`contextsummary`/`paste` 仍只有中文，所以 `generate_briefing_sentences()` 没加 `lang`——加了是死代码
   - **匹配必须接受变位形**：提示词允许模型调整词形（`réduire` → `a réduit`），不允许法语句子根本写不通顺。`ai._card_surface_forms()` = 词典形 + `entry_forms` 里的全部变位/词形。**漏存变位的代价在这里第二次出现**：匹配不上 → 句子被丢弃 → 该词拿到兜底句。非中文的兜底句是词本身加句号，不是「我学了X这个词。」
 - **每种语言一套调度预设（#806）**：`_ensure_lang_preset()` 在某语言首次建牌组时复制默认预设，命名为牌组树根（`Français`/`Español`）。**中文仍然走 `_ensure_default_preset`，绑定一个字节都不许动**（preset id=2，见 #629 的教训）
-- `knowledge`（#482，原 `podcast` 模式，#654 改名以配合「知识库」泛化）——从已摘要的知识库素材（播客/视频/文章均可，`database.get_episode(episode_id)`）生成句子：素材文本优先取该条目的 `transcript_zh`（截断到 15000 字），无转录时才降级用 `summary_de`（#661；#561 曾改用摘要纯为省成本/延迟，实测一次约 $0.003 后确认没必要，副作用是输入变回中文全文更容易触发 DeepSeek 内容过滤，敏感话题走设置弹窗下拉框换 GPT 重新生成）。同样走 briefing 管线（`generate_briefing_sentences(generic=True, include_context=False)`），但**不允许上下文句**——每句都必须含一个目标词。`episode_id` 沿用 kahneman 的 `chapter_ids` 传参模式（GET 查询参数/regenerate POST body/gen_params），设置弹窗提供单选条目选择器（仅列 `status=summarized` 的条目）；不在早晨预生成 `_PREGEN_MODES` 里，因为选素材是一次性的。**历史 `mode='podcast'` 故事仍能展示和做 Again 单句重生成**——只在生成*新*故事时拒绝旧标识符（`ValueError`）
+- `knowledge`（#482，原 `podcast` 模式，#654 改名以配合「知识库」泛化）——从已摘要的知识库素材（播客/视频/文章均可，`database.get_episode(episode_id)`）生成句子：素材文本优先取该条目的 `transcript_zh`（截断到 15000 字），无转录时才降级用 `summary_de`（#661；#561 曾改用摘要纯为省成本/延迟，实测一次约 $0.003 后确认没必要，副作用是输入变回中文全文更容易触发 DeepSeek 内容过滤，敏感话题走设置弹窗下拉框换 GPT 重新生成）。走**自己那条精简管线**（`ai.generate_podcast_sentences`，#561）：无上下文句、无事实核查、无整批校验重试，每句都必须含一个目标词。要上下文句和事实核查的知识库素材走 `contextsummary`（#1011）。`episode_id` 沿用 kahneman 的 `chapter_ids` 传参模式（GET 查询参数/regenerate POST body/gen_params），设置弹窗提供单选条目选择器（仅列 `status=summarized` 的条目）；不在早晨预生成 `_PREGEN_MODES` 里，因为选素材是一次性的。**历史 `mode='podcast'` 故事仍能展示和做 Again 单句重生成**——只在生成*新*故事时拒绝旧标识符（`ValueError`）
 
 ---
 
@@ -908,7 +910,6 @@ POST /api/story/{deck_id}/{category}/cancel          → 中止正在跑的生�
 POST /api/speak ；POST /api/speak-multi ；GET /api/speak-status ；POST /api/speak-stop
 GET  /api/tts-file ；POST /api/preload ；POST /api/preload-session/{deck_id}/{category}
 GET  /api/tts-progress/{deck_id}/{category} ；GET /api/story-progress/{deck_id}/{category}
-GET  /api/news/status                                → 当日新闻缓存状态 {cached, count}（briefing 模式设置弹窗仍在用；旧 news 模式已移除，#512）
 POST /api/story-sentence/{id}/star                   → 给句子加星/取消，body {starred: bool}（#692）；句子不存在 404
 GET  /api/starred-sentences[?lang=&limit=]           → 全部加星句子，附生成模式/模型/episode_id/牌组/来源 + story_id/has_prompt（#692、#697）
 GET  /api/story-prompt/{story_id}                    → 生成该故事的完整提示词（#697）；故事不存在 404

@@ -92,9 +92,15 @@ def test_knowledge_does_not_set_the_popup_source_link():
 
 
 def test_other_modes_keep_their_inline_context():
-    """News flow's context line above the sentence (#452/#454/#464) and book
-    mode's chapter link (#865) must not be collateral damage — the knowledge
-    branch is guarded on the episode id, so those paths never enter it."""
-    assert "_episodeIdFromSourceUrl(url) !== null ? '' : _newsContextText(sentence)" in APP_JS
+    """Kontextsummary's context line above the sentence (#452/#454/#464) and
+    book mode's chapter link (#865) must not be collateral damage.
+
+    The guard is _hidesInlineContext(), not the episode id alone: since #1011
+    Kontextsummary draws its material from the knowledge base too, so its
+    sentences carry the same in-app source_url — guarding on the id would strip
+    exactly the context block that mode exists for."""
+    assert "function _hidesInlineContext(s)" in APP_JS
+    assert "_activeStoryMode() !== 'contextsummary'" in APP_JS
+    assert "const ctxText = _hidesInlineContext(sentence) ? '' : _newsContextText(sentence);" in APP_JS
     assert "openBookChapterSummary(" in APP_JS
     assert "book-(\\d+)-chapter-(\\d+)" in APP_JS

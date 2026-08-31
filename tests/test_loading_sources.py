@@ -43,7 +43,7 @@ def test_sources_are_snapshotted_not_read_live():
     so the loading screen has to hold its own copy of {id, title, kind}."""
     setup = APP_JS[APP_JS.index("function confirmStorySetup()"):]
     setup = setup[:setup.index("\n}\n")]
-    assert "_storyLoadingSources = mode === 'knowledge'" in setup
+    assert "_storyLoadingSources = KNOWLEDGE_SOURCE_MODES.includes(mode)" in setup
     assert "Array.from(_setupSelectedEpisodes.values())" in setup
     # Non-knowledge modes must end up with an empty list, never the previous run's.
     assert ": [];" in setup

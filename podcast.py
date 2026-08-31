@@ -2,7 +2,7 @@
 feeds, transcribe them, summarize into German + HSK5+ vocabulary via AI,
 find a Spotify link, and email a notification.
 
-Style follows news_fetcher.py: mostly-pure functions + logger, one module for
+Mostly-pure functions + logger, one module for
 the whole pipeline.
 
 Source (#497, feeds moved to the podcast_feeds table in #502): plain public

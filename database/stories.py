@@ -419,9 +419,10 @@ def get_story_sentences(story_id: int) -> list[dict]:
 def get_story_position_map(deck_id: int, category: str, date_str: str,
                             lang: str | None = None) -> dict[int, int]:
     """Map word_id → story_sentences.position for today's active News-flow-style
-    story (briefing/news/paste — issue #454), used to order the review queue to
+    story (contextsummary/paste, plus historical briefing/news — issue #454),
+    used to order the review queue to
     match the summary's reading order. Returns {} when there is no active story
-    or its gen_params.mode isn't one of those three (e.g. plain story/kahneman
+    or its gen_params.mode isn't one of those (e.g. plain story/kahneman
     modes, which don't have a meaningful "reading order" for review purposes).
     """
     story = get_active_story(date_str, category, deck_id, lang)
@@ -434,7 +435,7 @@ def get_story_position_map(deck_id: int, category: str, date_str: str,
         mode = json.loads(gen_params).get("mode")
     except (ValueError, TypeError):
         return {}
-    if mode not in ("briefing", "news", "paste"):
+    if mode not in ("contextsummary", "briefing", "news", "paste"):
         return {}
 
     conn = get_db()
@@ -565,44 +566,6 @@ def set_pregen_config(deck_id: int, entries: list[dict]) -> None:
              e["mode"], int(e.get("max_hsk") or 3)))
     conn.commit()
     conn.close()
-
-
-def get_today_used_article_urls(date_str: str, lang: str | None,
-                                exclude_deck_id: int, exclude_category: str) -> set:
-    """URLs of news articles already used by today's active news/briefing
-    stories of OTHER (deck, category) keys — so a second category generated the
-    same day picks different articles (issue #473). The excluded key is the one
-    about to generate: regenerating a category may reuse its own articles."""
-    conn = get_db()
-    rows = conn.execute(
-        """SELECT deck_id, category, lang, gen_params FROM stories
-           WHERE date = ? AND gen_params IS NOT NULL
-           ORDER BY generated_at DESC""",
-        (date_str,),
-    ).fetchall()
-    conn.close()
-
-    urls: set = set()
-    seen_keys: set = set()
-    for row in rows:
-        key = (row["deck_id"], row["category"], row["lang"])
-        if key in seen_keys:
-            continue  # only the active (latest) story per key counts
-        seen_keys.add(key)
-        if (row["deck_id"], row["category"]) == (exclude_deck_id, exclude_category):
-            continue
-        if lang and row["lang"] and row["lang"] != lang:
-            continue
-        try:
-            gp = json.loads(row["gen_params"])
-        except (ValueError, TypeError):
-            continue
-        if gp.get("mode") not in ("news", "briefing"):
-            continue
-        for art in gp.get("articles") or []:
-            if art.get("url"):
-                urls.add(art["url"])
-    return urls
 
 
 def get_due_cards_unified(deck_id: int, lang: str | None = None) -> list[dict]:

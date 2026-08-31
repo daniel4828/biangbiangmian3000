@@ -108,7 +108,7 @@
       <div id="loading-progress-bar"></div>
     </div>
     <div id="loading-sub"></div>
-    <!-- News flow: headlines currently being summarized (filled by the progress poll) -->
+    <!-- Kontextsummary: source titles currently being summarized (filled by the progress poll) -->
     <div id="loading-articles" style="display:none"></div>
     <!-- Generation log (issue #642): cumulative step-by-step lines from the
          backend, so a long run shows what it already did and where it is now -->
@@ -174,9 +174,9 @@
 
           <!-- Front side (content varies by category) -->
           <div id="side-front">
-            <!-- News flow: clickable article title · publisher, above the context/sentence (issue #454) -->
+            <!-- Kontextsummary: clickable source title · publisher, above the context/sentence (issue #454) -->
             <div class="news-source-line-wrap" id="news-source-front" style="display:none"></div>
-            <!-- News flow: German context of the preceding summary sentences (always above the Chinese sentence) -->
+            <!-- Kontextsummary: German context of the preceding summary sentences (always above the Chinese sentence) -->
             <div class="sentence-context-de" id="sentence-context-de" style="display:none"></div>
             <!-- Listening: hint sentence with a three-stop slider (#1006):
                  everything but the target word / only the words he does not
@@ -265,7 +265,7 @@
               </div>
             </div>
 
-            <!-- News flow: context + clickable article title · publisher, small,
+            <!-- Kontextsummary: context + clickable source title · publisher, small,
                  above the target sentence (replaces the old light bulb, issue #452) -->
             <div class="news-back-source" id="news-back-source" style="display:none"></div>
             <!-- 1. Sentence (listening/reading back; hidden for creating) -->
@@ -843,7 +843,7 @@
         <option value="qa">❓ Q&amp;A — answer a question</option>
         <option value="expository">📚 Expository — informative text</option>
         <option value="kahneman" class="setup-mode-zh-only">🧠 Kahneman — cognitive bias style</option>
-        <option value="briefing" class="setup-mode-zh-only">🗞️ News flow — summary with German context</option>
+        <option value="contextsummary" class="setup-mode-zh-only">🗞️ Kontextsummary — knowledge source, summary with German context</option>
         <option value="paste" class="setup-mode-zh-only">📋 Paste content — summarize anything</option>
         <option value="knowledge">🧠 Knowledge — build cards from a saved source</option>
         <option value="book">📖 Book — chapter review</option>
@@ -862,13 +862,6 @@
       </div>
       <div id="setup-kahneman-chapters" style="max-height:220px;overflow-y:auto;border:1px solid var(--border,#ddd);border-radius:6px;padding:4px 0"></div>
       <div id="setup-kahneman-loading" style="display:none;padding:12px;text-align:center;color:var(--muted,#888);font-size:13px">Loading chapters…</div>
-    </div>
-    <!-- News auto-fetch info (shown only in news mode) -->
-    <div id="setup-news-section" style="display:none">
-      <div style="font-size:12px;color:var(--muted,#888);margin:2px 0 6px">
-        Today's news is fetched automatically (Tagesschau + BBC World) and condensed into a briefing.
-        <span id="setup-news-status" style="display:block"></span>
-      </div>
     </div>
     <!-- Pasted content input (shown only in paste mode) -->
     <div id="setup-paste-section" style="display:none">
@@ -1294,7 +1287,7 @@
 </div>
 
 <!-- Per-sentence reasoning popup (kahneman: why this reveals the chapter's bias;
-     news: background info on the news item, with a link to the source article) -->
+     Kontextsummary: background info on the source item, with a link to it) -->
 <div id="reasoning-overlay" onclick="closeReasoning()" style="display:none"></div>
 <div id="reasoning-modal" style="display:none">
   <div class="edit-modal-header">
@@ -1384,7 +1377,7 @@
         <option value="qwen-turbo">Qwen Turbo — Alibaba, cheap</option>
         <option value="claude-haiku-4-5-20251001">Haiku — Anthropic fast</option>
         <option value="claude-sonnet-4-6">Sonnet — Anthropic balanced</option>
-        <option value="gpt-5-mini">GPT-5 Mini — OpenAI, news mode</option>
+        <option value="gpt-5-mini">GPT-5 Mini — OpenAI, cheap</option>
         <option value="gpt-5.6-luna">GPT-5.6 Luna — OpenAI, cheap + newest</option>
         <option value="gpt-5.6-terra">GPT-5.6 Terra — OpenAI, balanced</option>
         <option value="gpt-5.6-sol">GPT-5.6 Sol — OpenAI flagship</option>

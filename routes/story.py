@@ -12,7 +12,6 @@ import jieba
 import database
 import ai
 import languages
-import news_fetcher
 import tts
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -34,8 +33,11 @@ _AGAIN_ACTION_LABELS = {
     "knowledge": "Knowledge Again Sentences",
     "book": "Book Again Sentences",
     "kahneman": "Kahneman Again Sentences",
+    # "news"/"briefing" are historical identifiers (#512, #1011) whose stories
+    # still regenerate single sentences; "contextsummary" is the live mode.
     "news": "News Again Sentences",
     "briefing": "News Again Sentences",
+    "contextsummary": "Kontextsummary Again Sentences",
     "paste": "Paste Again Sentences",
 }
 
@@ -356,18 +358,21 @@ ALLOWED_MODELS = {
 DEFAULT_MODEL = ai.DEFAULT_MODEL
 
 
-# Frontend placeholder meaning "let the server pick" — the value the model
-# dropdown carries for briefing (always) and paste (as its default, #910). It
-# is deliberately NOT in ALLOWED_MODELS: it is not a model.
+# Frontend placeholder meaning "let the server pick" — the default the model
+# dropdown carries for paste (#910) and contextsummary (#1011). It is
+# deliberately NOT in ALLOWED_MODELS: it is not a model.
 SERVER_MODEL_SENTINEL = "briefing-server"
 
 
-def _paste_model(model: str | None) -> str:
-    """Model for paste mode (#910): the dropdown is no longer locked.
+def _pipeline_model(model: str | None) -> str:
+    """Model for the briefing-style pipeline modes — paste (#910) and
+    contextsummary (#1011): the dropdown is not locked.
 
-    Paste mode shares the briefing pipeline but not its reason for being
-    OpenAI-only — DeepSeek censors *news*, and pasted material is whatever
-    Daniel put in the box. Same call knowledge mode already made (#561/#640).
+    Both share the briefing pipeline but not its reason for having been
+    OpenAI-only — DeepSeek censors *news*, and neither pasted text nor a
+    knowledge-base item is news. Same call knowledge mode already made
+    (#561/#640). The news auto-fetch that made that lock necessary is gone
+    entirely since #1011.
 
     BRIEFING_MODEL stays the default, and is also where an unknown model falls
     back to: it is the configuration this pipeline is actually verified on.
@@ -378,13 +383,13 @@ def _paste_model(model: str | None) -> str:
         if model in ALLOWED_MODELS:
             return model
         # 同 _validated_model：静默用错模型是 #721 三个月没被发现的原因。
-        logger.warning("paste model %r not in ALLOWED_MODELS — using BRIEFING_MODEL", model)
+        logger.warning("pipeline model %r not in ALLOWED_MODELS — using BRIEFING_MODEL", model)
     return ai.resolve_briefing_model()
 
 
 def _requested_model(model: str | None, mode: str) -> str:
     """Validate the dropdown's pick, but keep SERVER_MODEL_SENTINEL intact for
-    the two modes that understand it (briefing/paste, #910).
+    the two modes that understand it (paste/contextsummary, #910/#1011).
 
     The routes validate before _generate_and_store, and _validated_model would
     turn the sentinel into DEFAULT_MODEL right here — paste's branch, which
@@ -392,7 +397,7 @@ def _requested_model(model: str | None, mode: str) -> str:
     DeepSeek instead. Every other mode falls through to normal validation, so
     the sentinel can never reach an API call as if it were a model name.
     """
-    if model == SERVER_MODEL_SENTINEL and mode in ("paste", "briefing"):
+    if model == SERVER_MODEL_SENTINEL and mode in ("paste", "contextsummary"):
         return model
     return _validated_model(model)
 
@@ -464,10 +469,8 @@ def _generate_and_store(deck_id: int, category: str, today: str, cards: list, *,
 
 def _action_label_for_story(mode: str, deck_id: int) -> str:
     """Cost-modal action label for a story generation run (issue #525)."""
-    if mode == "briefing":
-        return "Generate News Flash"
-    if mode == "news":
-        return "Generate News"
+    if mode == "contextsummary":
+        return "Generate Kontextsummary"
     if mode == "kahneman":
         return "Generate Kahneman Story"
     if mode == "paste":
@@ -496,7 +499,18 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
             # their per-word Again regeneration still works (see
             # generate_sentence_for_word below), only *new* full-story
             # generation with this mode is rejected.
-            raise ValueError("mode 'news' has been removed — use 'briefing' instead")
+            raise ValueError("mode 'news' has been removed — use 'contextsummary' instead")
+        if mode == "briefing":
+            # Issue #1011: "News flow" was renamed "contextsummary"
+            # (Kontextsummary) and repointed from auto-fetched news at the
+            # knowledge base — the news fetcher is gone, so this identifier has
+            # no source to draw from any more. Old mode='briefing' stories
+            # still display fine and their per-word Again regeneration still
+            # works (see generate_sentence_for_word below); only *new* full
+            # story generation with this identifier is rejected — same pattern
+            # as the #512 removal of mode='news' and the #654 rename of
+            # mode='podcast'.
+            raise ValueError("mode 'briefing' has been renamed — use 'contextsummary' instead")
         if mode == "podcast":
             # Issue #654: the podcast-only story mode was renamed "knowledge"
             # (episodes now cover podcast/video/article sources uniformly).
@@ -513,48 +527,41 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
             # modes, which stay gated by extended_story_modes.
             feats = languages.get_lang_config(lang)["features"]
             gate = "knowledge_story_mode" if mode in ("knowledge", "book") else "extended_story_modes"
-            if mode in ("kahneman", "paste", "briefing", "knowledge", "book") and not feats.get(gate):
+            if mode in ("kahneman", "paste", "contextsummary", "knowledge", "book") and not feats.get(gate):
                 raise ValueError(f"mode '{mode}' is only available for Chinese decks")
         if mode == "kahneman":
             parsed_chapter_ids = [int(x) for x in chapter_ids.split(",") if x.strip()] if chapter_ids else []
             sentences, prompt_text = _generate_kahneman_story_sentences(
                 cards, parsed_chapter_ids, model=model, progress_key=progress_key,
                 batch_size=batch_size)
-        elif mode in ("paste", "briefing"):
-            # Briefing (issue #444) and paste (issue #481) share the briefing
-            # pipeline. Briefing ignores the frontend's model selection — it
-            # always uses BRIEFING_MODEL (env, default gpt-5.6-luna,
-            # verified/cached via ai.resolve_briefing_model()), OpenAI only,
-            # because DeepSeek censors news content. Paste honours the
-            # dropdown since #910: that reason is about *news*, and pasted
-            # material is whatever the user put in the box (same call knowledge
-            # mode made in #561/#640). Either way the model is resolved before
-            # the article-selection call so summarize_news_items uses the same
-            # model as the sentence generation (issue #448).
-            model = _paste_model(model) if mode == "paste" else ai.resolve_briefing_model()
+        elif mode in ("paste", "contextsummary"):
+            # Paste (issue #481) and contextsummary (issue #1011, the renamed
+            # "News flow" of #399/#444) share the briefing pipeline: context
+            # sentences, Python validation, dedup, fact-check, topic-by-topic
+            # regrouping. The only difference is where the source texts come
+            # from — the setup modal's textareas for paste, the knowledge base
+            # for contextsummary. Both honour the model dropdown (see
+            # _pipeline_model): the OpenAI lock only ever existed because
+            # DeepSeek censors *news*, and #1011 removed the news fetcher.
+            model = _pipeline_model(model)
             logger.info("story  %s model in use: %s", mode, model)
-            if mode == "briefing" and not articles:
-                # Briefing always auto-fetches today's news and lets the AI
-                # condense it into briefing source articles (issue #387).
-                # Rebinding `articles` here also persists the fetched articles
-                # in gen_params below, so Again-regeneration reuses them.
-                # Paste mode never auto-fetches: no pasted content is an error
-                # (raised inside _generate_briefing_story_sentences).
-                # Articles already used by another category's story today are
-                # excluded so each category covers different news (issue #473).
-                used = database.get_today_used_article_urls(
-                    today, lang, exclude_deck_id=deck_id, exclude_category=category)
-                articles = _auto_news_articles(model=model, progress_key=progress_key,
-                                               exclude_urls=used)
-            # Paste (issue #481) reuses the briefing pipeline (Python
-            # validation, dedup, fact-check) with generic=True swapping the
-            # news-briefing prompt wording for plain content framing. It
-            # never auto-fetches, so a missing pasted article surfaces as a
-            # clear error inside _generate_briefing_story_sentences.
+            if mode == "contextsummary":
+                # Same multi-select source list as knowledge mode (#752/#776),
+                # adapted to the briefing pipeline's article shape. `url` stays
+                # the in-app knowledge detail page (#790), so the source line
+                # on a card opens the item with its summary and transcript.
+                # Rebinding `articles` also persists the material in gen_params
+                # below, so Again-regeneration reuses the same source text.
+                sources, kind = _knowledge_sources(episode_ids)
+                articles = [{"url": src["url"], "title": src["title"],
+                             "text": src["material"]} for src in sources]
+                logger.info("story  contextsummary kind=%s sources=%d", kind, len(sources))
+            # Neither mode auto-fetches anything, so an empty source list
+            # surfaces as a clear error inside _generate_briefing_story_sentences
+            # rather than silently degrading to a plain story.
             sentences, prompt_text = _generate_briefing_story_sentences(
                 cards, articles, model=model, progress_key=progress_key,
-                max_hsk=max_hsk, generic=(mode == "paste"),
-                include_context=True, batch_size=batch_size)
+                max_hsk=max_hsk, include_context=True, batch_size=batch_size)
         elif mode in ("knowledge", "book"):
             # Book mode (issue #865): shares this entire branch with knowledge
             # mode — the only difference is where `sources` comes from. Book
@@ -771,8 +778,10 @@ def _gen_params_dict(*, topic, max_hsk, model, grammar_focus, grammar_pct,
     """Bundle the story generation settings persisted on each story row, so the
     Again regeneration can reproduce the same style (see generate_sentence_for_word).
 
-    articles: news mode's pasted article list ({url, title, text}), stored so
-    single-word "Again" regenerations reuse the same news context.
+    articles: the briefing pipeline's source texts ({url, title, text}) —
+    pasted by the user (paste) or built from the selected knowledge items
+    (contextsummary, #1011), stored so single-word "Again" regenerations reuse
+    the same context.
     origin: "pregen" when the story was created by the morning pregen —
     get_recent_story_keys skips those rows so pregen only ever reproduces
     user-initiated generations instead of feeding on its own output (issue #468).
@@ -791,7 +800,7 @@ def _gen_params_dict(*, topic, max_hsk, model, grammar_focus, grammar_pct,
     batch_size: user-chosen words-per-AI-call (issue #563 podcast-only, #574 all
     modes); None/0 = each mode's default chunking (knowledge: all at once; story
     family: CHUNK_SIZE; kahneman: per-chapter split capped at MAX_KAHNEMAN_BATCH;
-    briefing/paste: MAX_NEWS_BATCH). Stored for handoff/reproducibility only —
+    paste/contextsummary: MAX_NEWS_BATCH). Stored for handoff/reproducibility only —
     Again-regen is single-card.
     book_chapter_id: book mode's selected chapter (issue #865, book_chapters.id)
     — Again-regen re-fetches the chapter (and re-derives its summary+text
@@ -935,24 +944,31 @@ def generate_sentence_for_word(card: dict, gen_params: dict | None) -> dict | No
                         max_hsk=gp.get("max_hsk", 3), lang=lang)
                 else:
                     sentences, _ = ai.generate_story([card], model=model, lang=lang)
-            elif mode in ("news", "paste", "briefing"):
-                # Briefing/paste Again-regen reuses the single-sentence news path:
-                # one word gets one fresh sentence from the same articles (no
-                # context chain). Same model resolution as the main generation:
-                # briefing always BRIEFING_MODEL (issue #444/#481), paste the
-                # model stored in gen_params (#910) — the main generation wrote
-                # its resolved pick there, so the regenerated sentence comes
-                # from the same model as the rest of the story.
+            elif mode in ("news", "paste", "briefing", "contextsummary"):
+                # Again-regen for every mode built on the briefing pipeline:
+                # one word gets one fresh sentence from the same source texts
+                # (no context chain). mode="news"/"briefing" here means a
+                # *historical* story — new stories use "contextsummary" (#1011
+                # rejects both identifiers at generation time), but old stories
+                # must keep regenerating.
+                #
+                # Model: the story's stored pick (#910) for the live modes, so
+                # the regenerated sentence comes from the same model as the rest
+                # of the story; historical briefing stories were generated on
+                # BRIEFING_MODEL, so they keep resolving it.
                 if mode == "briefing":
                     news_model = ai.resolve_briefing_model()
-                elif mode == "paste":
-                    news_model = _paste_model(gp.get("model"))
+                elif mode in ("paste", "contextsummary"):
+                    news_model = _pipeline_model(gp.get("model"))
                 else:
                     news_model = model
                 articles = gp.get("articles") or []
                 if articles:
+                    # generic=False only for the historical news/briefing
+                    # stories that really were about news.
                     sentences = ai.generate_news_sentences(
-                        [card], articles, model=news_model, generic=(mode == "paste"))
+                        [card], articles, model=news_model,
+                        generic=(mode in ("paste", "contextsummary")))
                 else:  # no articles context saved → fall back to a plain sentence
                     sentences, _ = ai.generate_story([card], model=news_model, lang=lang)
             else:
@@ -1030,10 +1046,6 @@ def get_story(deck_id: int, category: str,
 
     chosen_model = _requested_model(model, mode)
 
-    # News mode without pasted articles auto-fetches today's news inside
-    # _generate_and_store (issue #387), so it flows through the normal
-    # (possibly backgrounded) generation below like every other mode.
-
     # ── Background mode: don't block — start a thread and report progress ──────
     if background:
         # A finished-with-error background run is sticky so polling stops here
@@ -1096,15 +1108,16 @@ def regenerate_story(deck_id: int, category: str,
                      lang: str | None = None):
     """Regenerate today's story. body (optional JSON): {"articles": [{"url", "title", "text"}]}
     — pasted texts for mode="paste" (too long to fit in a query string).
-    mode="briefing" ignores pasted articles and auto-fetches today's news (issue #387);
-    mode="paste" with no articles is an error (issue #396); mode="knowledge" (renamed
-    from "podcast" in #654) uses the episode_id's transcript_zh directly (falling
-    back to summary_de for rows without one, issue #661), no articles involved
-    (lean pipeline since #561).
-    mode="news" (the old auto-fetch-only mode) has been removed (issue #512), and
-    mode="podcast" (renamed to "knowledge" in #654) has likewise been removed —
-    both are rejected for *new* generation, but stories already stored with either
-    identifier still display and still support per-word Again regeneration."""
+    mode="paste" with no articles is an error (issue #396);
+    mode="contextsummary" (issue #1011) builds its articles server-side from the
+    selected episode_ids, so it ignores the body;
+    mode="knowledge" (renamed from "podcast" in #654) uses the episode_id's
+    transcript_zh directly (falling back to summary_de for rows without one,
+    issue #661), no articles involved (lean pipeline since #561).
+    mode="news" (#512), mode="podcast" (#654) and mode="briefing" (#1011) have all
+    been retired — they are rejected for *new* generation, but stories already
+    stored with any of those identifiers still display and still support per-word
+    Again regeneration."""
     if ai_disabled():
         return None
     chosen_model = _requested_model(model, mode)
@@ -1438,29 +1451,30 @@ def _group_sentences_by_article(sentences: list[dict], articles: list[dict]) -> 
 
 def _generate_briefing_story_sentences(
     cards: list, articles: list[dict], model: str, progress_key: str | None,
-    max_hsk: int = 3, generic: bool = False, include_context: bool = True,
+    max_hsk: int = 3, include_context: bool = True,
     batch_size: int | None = None,
 ) -> tuple[list, str]:
-    """News flow mode (issue #399): split cards into batches of ai.MAX_NEWS_BATCH,
-    each batch produces its own flowing mini-summary (target-word sentences +
-    context sentences attached as context_de). Card order = batch order, and
-    within a batch = order of appearance in the summary.
+    """Briefing pipeline (issue #399): split cards into batches of
+    ai.MAX_NEWS_BATCH, each batch produces its own flowing mini-summary
+    (target-word sentences + context sentences attached as context_de). Card
+    order = batch order, and within a batch = order of appearance in the summary.
 
-    generic=True (issue #481): paste mode reusing this same pipeline — content-
-    summary framing instead of news-briefing framing, everything else (context
-    sentences, validation, dedup, fact-check) identical. Paste never auto-fetches,
-    so the no-articles error below is the only guard against an empty run.
+    Callers are paste (#481) and contextsummary (#1011) — both feed it source
+    texts they already hold, so `generic=True` (plain content-summary framing
+    rather than the news-briefing wording) is now the only framing this
+    function uses; the news-briefing wording survives in ai.py solely for
+    per-word Again regeneration of historical news/briefing stories.
 
-    include_context: kept as a parameter (default True) for callers, but only
-    briefing/paste call this function now — podcast moved to its own lean
-    pipeline (ai.generate_podcast_sentences, issue #561) and never calls it."""
+    Neither caller auto-fetches anything, so the no-articles error below is the
+    only guard against an empty run.
+
+    include_context: kept as a parameter (default True) for callers — knowledge
+    mode moved to its own lean pipeline (ai.generate_podcast_sentences, issue
+    #561) and never calls this one."""
     if not articles:
         raise RuntimeError(
-            "Paste mode requires at least one pasted text. "
-            "Please add content via the setup modal."
-            if generic else
-            "News flow mode found no articles. "
-            "Today's news fetch may have failed — please try again.")
+            "This mode requires at least one source text. "
+            "Please pick a knowledge item (or paste content) in the setup modal.")
 
     # batch_size (issue #574): user-chosen words-per-AI-call from the setup modal;
     # empty = the long-standing MAX_NEWS_BATCH default.
@@ -1468,18 +1482,18 @@ def _generate_briefing_story_sentences(
     chunks = [cards[i:i + chunk_size] for i in range(0, len(cards), chunk_size)]
 
     # Detailed loading-screen progress (issue #407): overall word counter and the
-    # news headlines being covered, carried through every progress update.
+    # source titles being covered, carried through every progress update.
     titles = [a.get("title") or a.get("url") or "" for a in articles]
     titles = [t for t in titles if t][:10]
 
     all_sentences: list[dict] = []
-    prompt_summary = f"{'paste' if generic else 'briefing'} mode — {len(articles)} articles"
+    prompt_summary = f"briefing pipeline — {len(articles)} source texts"
     words_done = 0
     for idx, chunk in enumerate(chunks):
         label = f" ({idx + 1}/{len(chunks)})"
         chunk_sentences = ai.generate_briefing_sentences(
             chunk, articles, model=model, progress_key=progress_key, attempt_label=label,
-            max_hsk=max_hsk, generic=generic, include_context=include_context,
+            max_hsk=max_hsk, generic=True, include_context=include_context,
             progress_extra={
                 "words_done": words_done,
                 "words_total": len(cards),
@@ -1490,40 +1504,6 @@ def _generate_briefing_story_sentences(
         words_done += len(chunk)
 
     return _group_sentences_by_article(all_sentences, articles), prompt_summary
-
-
-def _auto_news_articles(model: str, progress_key: str | None,
-                        exclude_urls: set | None = None) -> list[dict]:
-    """News auto mode: fetch today's news (sources per data/news_sources.json,
-    cached per day) and have the AI pick + condense the most important items
-    into briefing source articles ({url, title, text} — the pasted-articles shape).
-
-    exclude_urls: articles already used by another category's story today —
-    removed from the pool so the two categories cover different news (issue
-    #473). Skipped when filtering would leave an empty pool.
-
-    news_fetcher.NewsFetchError propagates when every source fails, so the
-    caller reports a clear error instead of silently using another mode."""
-    ai._set_progress(progress_key, phase="request", msg="Fetching today's news…", percent=8)
-    items = news_fetcher.fetch_all()
-    logger.info("news auto: fetched %d items from sources", len(items))
-    if exclude_urls:
-        remaining = [i for i in items if i.get("url") not in exclude_urls]
-        if remaining:
-            logger.info("news auto: excluded %d already-used articles, %d remain",
-                        len(items) - len(remaining), len(remaining))
-            items = remaining
-        else:
-            logger.warning("news auto: exclusion would empty the pool — keeping all items")
-    return ai.summarize_news_items(items, model=model, progress_key=progress_key)
-
-
-@router.get("/api/news/status")
-def news_status():
-    """Whether today's news has already been fetched (news auto mode) and how
-    many items the per-day cache holds — shown in the story-setup news panel."""
-    count = news_fetcher.cached_today_count()
-    return {"cached": count is not None, "count": count or 0}
 
 
 @router.get("/api/story/{deck_id}/{category}/count")
@@ -1640,8 +1620,8 @@ async def pregen_today():
     of which matched what Daniel actually reviews), reproduce the story keys
     (deck_id, category, lang) that were really used on the most recent day with
     real stories (database.get_recent_story_keys), each with its own gen_params
-    (mode/topic/grammar/…). `articles` is deliberately dropped so news/briefing
-    modes re-fetch today's news instead of replaying stale content.
+    (mode/topic/grammar/…). `articles` is deliberately dropped — no pregen-able
+    mode carries source texts (see _PREGEN_MODES).
 
     For each key: skip if today's story is already cached, skip if there are no
     due cards today, otherwise generate synchronously and warm the TTS cache.
@@ -1738,7 +1718,10 @@ async def pregen_today():
             "skipped_cached": skipped_cached, "skipped_no_due": skipped_no_due, "failed": failed}
 
 
-_PREGEN_MODES = {"story", "qa", "expository", "kahneman", "briefing"}
+# contextsummary/knowledge/book are deliberately absent: picking the source
+# material is a one-off act, there is nothing sensible to pre-generate at 06:00
+# (issue #1011 removed the news auto-fetch that made "briefing" pregen-able).
+_PREGEN_MODES = {"story", "qa", "expository", "kahneman"}
 _PREGEN_CATEGORIES = {"listening", "reading", "creating", "unified"}
 
 
