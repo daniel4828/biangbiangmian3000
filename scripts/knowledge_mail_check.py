@@ -12,6 +12,11 @@
 这类直接触库的脚本。SQLite 允许多进程并发读写（WAL），和同时运行的服务器
 进程不冲突。
 
+看门狗：整轮有硬上限（`_WATCHDOG_SECONDS`）。锁本身是靠进程退出释放的，
+所以一个永远不返回的进程等于永久停掉这个功能——2026-08-31 就这么发生过一次
+（IMAP 读死 6 小时 50 分，#991）。IMAP 那边已经加了 socket 超时，这里再兜一层：
+无论卡在哪，超时就打印明确日志并退出，锁一定能释放，下一轮照常重来。
+
 并发锁：用一个简单的 PID 锁文件（`data/.knowledge_mail_check.lock`）避免
 cron 每分钟触发时上一轮还没跑完就叠跑——处理邮件里的 URL 可能触发文章抓取
 /YouTube 字幕下载/AI 翻译标题，慢的话能到几十秒。
@@ -29,10 +34,15 @@ cron 每分钟触发时上一轮还没跑完就叠跑——处理邮件里的 UR
 """
 import fcntl
 import os
+import signal
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 整轮硬上限（秒）。一封通讯要跑转录/摘要/翻译，几分钟是正常的，所以给足；
+# 这不是性能上限，是「绝不无限期持有锁」的保险（#991）。
+_WATCHDOG_SECONDS = 30 * 60
 
 LOCK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", ".knowledge_mail_check.lock")
 
@@ -42,7 +52,18 @@ def _log(msg: str) -> None:
     print(f"[{ts}] {msg}", flush=True)
 
 
+class _Timeout(Exception):
+    pass
+
+
+def _watchdog(signum, frame):
+    raise _Timeout(f"整轮超过 {_WATCHDOG_SECONDS} 秒仍未完成，放弃本轮（锁已释放，下一轮重试）")
+
+
 def main() -> int:
+    signal.signal(signal.SIGALRM, _watchdog)
+    signal.alarm(_WATCHDOG_SECONDS)
+
     os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
     lock_file = open(LOCK_PATH, "w")
     try:
@@ -86,6 +107,7 @@ def main() -> int:
         _log(f"知识库邮件检查异常: {e}")
         return 1
     finally:
+        signal.alarm(0)
         try:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
         except OSError:

@@ -69,6 +69,14 @@ _TRAILING_PUNCT = '.,;:!?)]}\'"'
 # marked read, so it would be retried forever, every single poll.
 _MIN_BODY_CHARS = knowledge.ingest._MIN_TEXT_CHARS
 
+# IMAP socket 超时（秒）。没有超时的 imaplib 连接在对端静默断开时会在读上
+# 永远等下去：2026-08-31 生产实测，scripts/knowledge_mail_check.py 的一轮
+# 卡在 Gmail :993 上 6 小时 50 分不返回，而该脚本用 PID 锁防叠跑——于是
+# 之后每一轮都只打印「上一轮仍在进行」，邮件自动处理就此永久停摆，只有
+# Daniel 自己能发现（#991）。一轮读死不要紧，下一轮重试就是；无限期挂起
+# 才是致命的。
+_IMAP_TIMEOUT = 60
+
 
 def auto_process_senders() -> set:
     """Addresses the cron may process unattended — Daniel's per-sender
@@ -360,7 +368,7 @@ def _connection(imap_factory=None, readonly=True):
             "IMAP 凭据未配置（KNOWLEDGE_IMAP_HOST/KNOWLEDGE_IMAP_USER/KNOWLEDGE_IMAP_PASSWORD）")
     if imap_factory is None:
         def imap_factory():
-            return imaplib.IMAP4_SSL(host, port)
+            return imaplib.IMAP4_SSL(host, port, timeout=_IMAP_TIMEOUT)
     conn = imap_factory()
     try:
         conn.login(user, password)
@@ -805,7 +813,7 @@ def check_mailbox(imap_factory=None) -> dict:
 
     if imap_factory is None:
         def imap_factory():
-            return imaplib.IMAP4_SSL(host, port)
+            return imaplib.IMAP4_SSL(host, port, timeout=_IMAP_TIMEOUT)
 
     conn = imap_factory()
     try:
