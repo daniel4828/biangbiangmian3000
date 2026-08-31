@@ -147,6 +147,37 @@ def delete_known_word(word: str, lang: str = "zh"):
     return {"status": "ok", "word": word, "lang": lang}
 
 
+# ── New words of one text (#1006) ───────────────────────────────────────────
+
+
+class NewWordsRequest(BaseModel):
+    text: str
+    lang: str = "zh"
+
+
+@router.post("/api/new-words")
+def new_words(body: NewWordsRequest):
+    """Which words of `text` Daniel does not know yet, in order of first
+    appearance — the same answer the knowledge reader and the book reader get,
+    because it is the same call (annotate.annotate_summary, #804).
+
+    The listening-hint slider (#1006) is the caller: its middle state blanks
+    everything except these words. It used to decide that in the browser from
+    /api/vocab-index + static/hsk_levels.json, which knows nothing about
+    known_words (#710), the baseline lists (#922) or the transparent-compound
+    rule (#638) — so the same word could count as new while reading and as
+    known while reviewing. One judge, one answer.
+
+    Never fails: annotate_summary swallows its own errors and returns [], and
+    an empty text is not an error either (a card can have no sentence yet)."""
+    text = (body.text or "").strip()
+    if not text:
+        return {"words": []}
+    import annotate
+    _, words = annotate.annotate_summary(text, body.lang)
+    return {"words": words}
+
+
 # ── Chat about a knowledge item (#945) ──────────────────────────────────────
 # Follow-up questions about the material Daniel just read, saved so they are
 # still there next time he opens the item. The context is rebuilt from

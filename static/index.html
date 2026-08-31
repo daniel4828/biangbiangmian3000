@@ -346,7 +346,7 @@
       <!-- RIGHT: Notes / Examples / Word Analysis tile (hidden until card flip) -->
       <!-- RIGHT: Mascot (front) + Notes/Examples/Word Analysis (back) -->
       <div class="review-side-tile" id="review-vocab-panel">
-        <div id="front-mascot" class="front-mascot">
+        <div id="front-mascot" class="front-mascot" onclick="mascotClick()">
 <pre class="mascot-art">
   /\___/\
  (= ^.^ =)
@@ -354,7 +354,7 @@
  (       )
   \_____/
 </pre>
-          <div class="mascot-caption">专注 — 准备好了就翻牌</div>
+          <div class="mascot-caption" id="mascot-caption">专注 — 准备好了就翻牌</div>
         </div>
         <div id="vocab-content" style="display:none">
           <div id="notes-section"></div>

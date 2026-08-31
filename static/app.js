@@ -7879,7 +7879,13 @@ function showFront() {
   document.getElementById('side-front').style.gap = '16px';
   document.getElementById('side-back').style.display = 'none';
   const _mascot = document.getElementById('front-mascot');
-  if (_mascot) _mascot.style.display = 'flex';
+  if (_mascot) {
+    _mascot.style.display = 'flex';
+    // Listening: the cat is the big replay target (the header 🔊 is tiny on phones).
+    _mascot.classList.toggle('mascot-playable', isListening);
+    const _cap = document.getElementById('mascot-caption');
+    if (_cap) _cap.textContent = isListening ? '点我再听一遍' : '专注 — 准备好了就翻牌';
+  }
   const _vc = document.getElementById('vocab-content');
   if (_vc) _vc.style.display = 'none';
 
@@ -12161,6 +12167,12 @@ function _prefetchStoryAudio(sentences) {
   if (!Array.isArray(sentences)) return;
   const lang = currentCardLang();
   for (const s of sentences) _warmAudio(_ttsUrl(s?.sentence_zh, lang));
+}
+
+// Clicking the front-side mascot replays the sentence (listening only).
+function mascotClick() {
+  if (category !== 'listening') return;
+  playSentence();
 }
 
 function playSentence() {
