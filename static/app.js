@@ -6017,12 +6017,18 @@ function _makeWordsTappable(root) {
     node.parentNode.replaceChild(frag, node);
   });
 
-  root.addEventListener('click', (e) => {
-    const span = e.target.closest?.('.tap-word');
-    if (!span) return;
-    e.preventDefault();
-    _openWordActions(Number(span.dataset.wordIdx), span);
-  });
+  // Bound once per element (#1006): the listening hint re-renders into the
+  // same node on every slider move, and a second listener would mean two
+  // panels opening for one tap.
+  if (!root.dataset.tapBound) {
+    root.dataset.tapBound = '1';
+    root.addEventListener('click', (e) => {
+      const span = e.target.closest?.('.tap-word');
+      if (!span) return;
+      e.preventDefault();
+      _openWordActions(Number(span.dataset.wordIdx), span);
+    });
+  }
   _initGlossReveal(root);
 }
 
@@ -9309,187 +9315,96 @@ function submitAddWord() {
   }, _addWordLang);
 }
 
-// ── Listening hint slider (vocab-aware, #850) ───────────────────────────────
-let _hskLevels = null; // {word: hsk_level_number} — loaded once from static file
+// ── Listening hint slider (#1006) ───────────────────────────────────────────
+//
+// Three stops and nothing in between, replacing the 0..8 HSK scale and its two
+// blanking modes (#850/#862/#874/#983/#984):
+//
+//   0  Show all         — the whole sentence except the target word, which is
+//                         blanked at every stop: it is the answer.
+//   1  New words only   — everything he already knows is blanked; what stays
+//                         standing is what he would have to look up.
+//   2  Hide all         — nothing but blanks.
+//
+// Stop 1 asks the SAME judge the knowledge reader and the book reader ask
+// (POST /api/new-words -> annotate.annotate_summary), instead of the old
+// browser-side vocab-index + hsk_levels.json rule: that one knew nothing about
+// known_words (#710), the baseline lists (#922) or the transparent-compound
+// filter (#638), so the same word could count as new while reading and as
+// known while reviewing.
+const _HINT_MIN = 0;
+const _HINT_MAX = 2;
+const _HINT_LABELS = ['Show all', 'New words only', 'Hide all'];
 
-async function _loadHskLevels() {
-  if (_hskLevels) return;
+function _hintSavedDefault() {
+  const n = parseInt(localStorage.getItem('listenHintState') ?? '1', 10);
+  return Number.isFinite(n) ? Math.max(_HINT_MIN, Math.min(_HINT_MAX, n)) : 1;
+}
+
+// The new words of the sentence currently on screen, keyed by lang+sentence so
+// a stale response can never land on the next card. `words` stays null while
+// the request is in flight; `error` is set when it fails and the label says so
+// — the middle stop must never silently degrade into "hide all", which is
+// exactly what an empty list would look like.
+let _hintWords = { key: null, words: null, error: null };
+
+function _hintKey(text, lang) { return lang + '\n' + text; }
+
+async function _loadHintNewWords(text, lang) {
+  const key = _hintKey(text, lang);
+  if (_hintWords.key === key) return;
+  _hintWords = { key, words: null, error: null };
   try {
-    const r = await fetch('/static/hsk_levels.json');
-    _hskLevels = await r.json();
-  } catch {
-    _hskLevels = {};
+    const r = await api('POST', '/api/new-words', { text, lang });
+    if (_hintWords.key !== key) return;   // the card moved on while we waited
+    _hintWords.words = r.words || [];
+  } catch (e) {
+    if (_hintWords.key !== key) return;
+    _hintWords.words = [];
+    _hintWords.error = e.message || 'unavailable';
   }
-}
-
-// Set of word forms in the user's deck for a given language (#850). Loaded
-// once per language and cached — reloaded only when the reviewed card's
-// language changes (e.g. switching from a Chinese to a French deck).
-let _vocabIndex = null;
-let _vocabIndexLang = null;
-
-async function _loadVocabIndex(lang) {
-  if (_vocabIndex && _vocabIndexLang === lang) return;
-  try {
-    const r = await api('GET', `/api/vocab-index?lang=${encodeURIComponent(lang)}`);
-    _vocabIndex = new Set(r.words || []);
-  } catch {
-    // Degrade to "nothing in my deck" rather than erroring or blanking the
-    // whole sentence — only the target word stays hidden.
-    _vocabIndex = new Set();
-  }
-  _vocabIndexLang = lang;
-}
-
-// Returns the HSK level of a token (tries compound first, then max of chars).
-// Returns null if the token has no CJK chars or is completely unknown.
-function _hskLevelOf(token) {
-  if (_hskLevels[token]) return _hskLevels[token];
-  const isCjk = ch => ch >= '一' && ch <= '鿿';
-  let max = 0;
-  for (const ch of token) {
-    if (!isCjk(ch)) continue;
-    const l = _hskLevels[ch];
-    if (!l) return null; // unknown character → treat whole token as unknown
-    max = Math.max(max, l);
-  }
-  return max > 0 ? max : null;
-}
-
-function _getTargetPositions(zh) {
-  const targetWords = [];
-  if (card?.word_zh) targetWords.push(card.word_zh);
-  if (sentence?.words) {
-    for (const w of sentence.words) {
-      if (w.word_zh && !targetWords.includes(w.word_zh)) targetWords.push(w.word_zh);
-    }
-  }
-  const positions = new Set();
-  const markWord = (tw) => {
-    // Separable words like "由...组成" — search each part independently
-    const parts = tw.includes('...') ? tw.split('...').filter(p => p.length > 0) : [tw];
-    for (const part of parts) {
-      let start = 0;
-      while (true) {
-        const idx = zh.indexOf(part, start);
-        if (idx === -1) break;
-        for (let k = 0; k < part.length; k++) positions.add(idx + k);
-        start = idx + part.length;
-      }
-    }
-  };
-  for (const tw of targetWords) markWord(tw);
-  return positions;
-}
-
-// Two blanking rules, switchable from the review screen (#874). Which one reads
-// better is only decidable while actually reviewing, so both stay available
-// instead of one replacing the other:
-//
-//   union (default, #862) — hidden = (in my deck) ∪ (HSK <= N)
-//   hsk   (the original)  — hidden = HSK <= N, N=0 blanks nothing but the target
-//
-// N is the HSK level the slider position carries, not the position itself (#984).
-//
-// The target word is always blanked in both.
-const _HINT_MODES = {
-  union: { label: 'Saved+HSK', storeKey: 'listenHideLevel',      def: 5 },
-  hsk:   { label: 'HSK only',  storeKey: 'listenHintHskLevel',   def: 4 },
-};
-
-// The two ends of the slider (#983) sit outside the HSK scale on purpose:
-// they are not "HSK <= x" but two absolute rules, identical in both modes —
-// show the whole sentence, or blank every character of it. Everything between
-// them keeps the per-mode behaviour unchanged.
-//
-// The slider therefore runs 0..8 while the HSK scale it carries runs -1..6,
-// hence the offset (#984): the leftmost stop had to be 0, not -1, so every
-// value shifted right by one.
-const _HINT_MIN = 0;   // nothing hidden at all, target word included
-const _HINT_MAX = 8;   // every CJK character hidden, whatever its level
-const _HINT_OFFSET = 1;
-
-// Slider position -> the HSK level it means (0 = "Saved only" / "Off").
-function _hintHskOf(level) { return level - _HINT_OFFSET; }
-
-// One-time bump of the two saved defaults onto the shifted scale (#984).
-// Without it a saved 4 would silently start meaning what 3 used to mean.
-function _migrateHintScale() {
-  if (localStorage.getItem('listenHintScaleV2')) return;
-  for (const cfg of Object.values(_HINT_MODES)) {
-    const raw = localStorage.getItem(cfg.storeKey);
-    if (raw !== null && raw !== '') {
-      const n = parseInt(raw, 10);
-      if (Number.isFinite(n)) localStorage.setItem(cfg.storeKey, String(n + _HINT_OFFSET));
-    }
-  }
-  localStorage.setItem('listenHintScaleV2', '1');
-}
-
-function _hintMode() {
-  const m = localStorage.getItem('listenHintMode');
-  return _HINT_MODES[m] ? m : 'union';
-}
-
-// Each mode keeps its own slider value: the same number means different things
-// per mode, so sharing one would make a switch land on a setting nobody chose
-// (the reason #855 introduced a new localStorage key rather than reusing the old).
-function _hintSavedDefault(mode = _hintMode()) {
-  const cfg = _HINT_MODES[mode];
-  return parseInt(localStorage.getItem(cfg.storeKey) ?? String(cfg.def), 10);
-}
-
-function _hintLabelFor(level, mode = _hintMode()) {
-  if (level <= _HINT_MIN) return 'Show all';
-  if (level >= _HINT_MAX) return 'Hide all';
-  const hsk = _hintHskOf(level);
-  if (mode === 'hsk') return hsk === 0 ? 'Off' : `HSK≤${hsk}`;
-  return hsk === 0 ? 'Saved only' : `Saved + HSK≤${hsk}`;
-}
-
-function toggleListenHintMode() {
-  const next = _hintMode() === 'union' ? 'hsk' : 'union';
-  localStorage.setItem('listenHintMode', next);
-  const level = _hintSavedDefault(next);
   const slider = document.getElementById('listen-hint-slider');
-  if (slider) slider.value = level;
-  _syncHintModeButton();
-  document.getElementById('listen-hint-pct').textContent = _hintLabelFor(level, next);
-  _updateHintStar(level);
-  // Re-blank the sentence on the spot — comparing the two modes is the whole
-  // point, and having to flip a card to see the effect defeats it.
-  _renderListenHint(level);
+  if (slider) onListenHintSlider(slider.value);
 }
 
-function _syncHintModeButton() {
-  const btn = document.getElementById('hint-mode-btn');
-  if (btn) btn.textContent = _HINT_MODES[_hintMode()].label;
+function _hintLabelFor(level) {
+  const label = _HINT_LABELS[level] ?? _HINT_LABELS[1];
+  if (level === 1 && _hintWords.error) return `${label} — unavailable`;
+  return label;
 }
 
 function _updateHintStar(currentVal) {
   const btn = document.getElementById('hint-save-btn');
   if (!btn) return;
-  const isSaved = currentVal === _hintSavedDefault();  // per-mode, see _hintSavedDefault
+  const isSaved = currentVal === _hintSavedDefault();
   btn.textContent = isSaved ? '★' : '☆';
   btn.classList.toggle('saved', isSaved);
 }
 
+// The sentence this card's hint is about: story sentence, or the card itself
+// for sentence notes (they are excluded from stories).
+function _hintSentenceText() {
+  const isSentenceNote = card?.note_type === 'sentence';
+  return sentence?.sentence_zh || (isSentenceNote ? card?.word_zh : null) || '';
+}
+
 async function _initListenHint() {
   const slider = document.getElementById('listen-hint-slider');
-  _migrateHintScale();
+  if (!slider) return;
   const saved = _hintSavedDefault();
   slider.value = saved;
-  _syncHintModeButton();
   document.getElementById('listen-hint-pct').textContent = _hintLabelFor(saved);
   _updateHintStar(saved);
-  const lang = currentCardLang();
-  await Promise.all([_loadVocabIndex(lang), _loadHskLevels()]);
   _renderListenHint(saved);
+  const zh = _hintSentenceText();
+  // Fetched at every stop, not just at stop 1: the words that stay visible are
+  // tappable (★ List / ✓ Known), which needs the list either way.
+  if (zh) await _loadHintNewWords(zh, currentCardLang());
 }
 
 function saveListenHintDefault() {
   const val = parseInt(document.getElementById('listen-hint-slider').value, 10);
-  localStorage.setItem(_HINT_MODES[_hintMode()].storeKey, val);
+  localStorage.setItem('listenHintState', val);
   _updateHintStar(val);
 }
 
@@ -9528,70 +9443,108 @@ function saveWordBankDefault() {
   _updateWordBankStar(val);
 }
 
-function _renderListenHint(level) {
-  // Sentence notes are excluded from stories; fall back to card.word_zh (the sentence itself).
-  const isSentenceNote = card?.note_type === 'sentence';
-  const zh = sentence?.sentence_zh || (isSentenceNote ? card?.word_zh : null);
-  const el = document.getElementById('listen-hint-sentence');
-  if (!zh) { el.textContent = ''; return; }
-
-  // Leftmost stop (#983): the target word is blanked in every other setting,
-  // so "show all" has to short-circuit before any of the rules below.
-  if (level <= _HINT_MIN) { el.textContent = zh; return; }
-  const hideEverything = level >= _HINT_MAX;
-
-  const isCjk = ch => ch >= '一' && ch <= '鿿';
-  // Sentence notes have no single "target word" to blank — reveal based on vocab only.
-  const targetPositions = isSentenceNote && !sentence ? new Set() : _getTargetPositions(zh);
-
-  // union mode (#862): hidden = (in my deck) ∪ (HSK <= level). The deck half
-  // catches what he is actively learning; the HSK half catches the everyday
-  // words he has known for years but that never entered the deck — leaving
-  // those visible hands him the sentence for free. What stays visible is words
-  // outside the deck that are HSK 5/6 or missing from the table entirely.
-  //
-  // hsk mode (#874, the original rule): hidden = HSK <= level, the deck plays no
-  // part. HSK level 0 therefore blanks nothing but the target word.
-  const mode = _hintMode();
-  const vocabSet = mode === 'hsk' ? new Set() : (_vocabIndex || new Set());
-  const hidePositions = new Set();
-  {
-    // Use story tokens when available; fall back to char-by-char for sentence notes.
-    const tokens = sentence?.tokens?.length
-      ? sentence.tokens
-      : [...zh].map(ch => [ch, null]);
-    let pos = 0;
-    for (const [tok] of tokens) {
-      const tokStart = zh.indexOf(tok, pos);
-      if (tokStart === -1) { pos += tok.length; continue; }
-      const tokEnd = tokStart + tok.length;
-      const overlapsTarget = [...Array(tok.length).keys()].some(k => targetPositions.has(tokStart + k));
-      if (!overlapsTarget) {
-        const hskLevel = _hskLevels ? _hskLevelOf(tok) : null;
-        const shouldHide = vocabSet.has(tok) || (hskLevel !== null && hskLevel <= _hintHskOf(level));
-        if (shouldHide) {
-          for (let k = tokStart; k < tokEnd; k++) hidePositions.add(k);
-        }
-      }
-      pos = tokEnd;
+// Every position of the target word (and any co-occurring vocab word) in the
+// sentence — always blanked, at every stop: it is what the card is asking for.
+function _getTargetPositions(zh) {
+  const targetWords = [];
+  if (card?.word_zh) targetWords.push(card.word_zh);
+  if (sentence?.words) {
+    for (const w of sentence.words) {
+      if (w.word_zh && !targetWords.includes(w.word_zh)) targetWords.push(w.word_zh);
     }
   }
+  const positions = new Set();
+  for (const tw of targetWords) {
+    // Separable words like "由...组成" — search each part independently
+    const parts = tw.includes('...') ? tw.split('...').filter(p => p.length > 0) : [tw];
+    for (const part of parts) {
+      let start = 0;
+      while (true) {
+        const idx = zh.indexOf(part, start);
+        if (idx === -1) break;
+        for (let k = 0; k < part.length; k++) positions.add(idx + k);
+        start = idx + part.length;
+      }
+    }
+  }
+  return positions;
+}
 
-  // Build HTML char by char
+// Every position covered by any of `words` in `text`. Chinese matches
+// literally; for the Romance languages the annotator hands back lowercased,
+// elision-stripped cores, so match case-insensitively and only on whole words
+// ("an" must not light up inside "manger").
+function _markWordPositions(text, words, isZh) {
+  const positions = new Set();
+  const isLetter = ch => !!ch && /[\p{L}\p{M}]/u.test(ch);
+  const hay = isZh ? text : text.toLowerCase();
+  for (const raw of words) {
+    const w = isZh ? raw : (raw || '').toLowerCase();
+    if (!w) continue;
+    let start = 0;
+    while (true) {
+      const idx = hay.indexOf(w, start);
+      if (idx === -1) break;
+      if (isZh || (!isLetter(text[idx - 1]) && !isLetter(text[idx + w.length]))) {
+        for (let k = 0; k < w.length; k++) positions.add(idx + k);
+      }
+      start = idx + w.length;
+    }
+  }
+  return positions;
+}
+
+function _renderListenHint(level) {
+  const el = document.getElementById('listen-hint-sentence');
+  if (!el) return;
+  const zh = _hintSentenceText();
+  if (!zh) { el.textContent = ''; return; }
+
+  const lang = currentCardLang();
+  const isZh = lang === 'zh';
+  // What a blank can stand for: a hanzi in Chinese, a letter run elsewhere.
+  const isMaskable = isZh ? (ch => ch >= '一' && ch <= '鿿')
+                          : (ch => /[\p{L}\p{M}]/u.test(ch));
+
+  // Sentence notes have no single target word to blank when there is no story.
+  const isSentenceNote = card?.note_type === 'sentence';
+  const targetPositions = isSentenceNote && !sentence ? new Set() : _getTargetPositions(zh);
+
+  const loaded = _hintWords.key === _hintKey(zh, lang) ? _hintWords.words : null;
+  // Positions to leave visible. null = leave everything visible.
+  let keep = null;
+  if (level >= _HINT_MAX) {
+    keep = new Set();
+  } else if (level >= 1) {
+    // While the words are still loading, blank everything rather than flash
+    // the sentence he is supposed to be recalling. On a failure the label says
+    // "unavailable" and the sentence stays readable — the honest degradation,
+    // since a blanked sentence would look like a deliberate setting.
+    keep = _hintWords.error ? null
+         : loaded === null ? new Set()
+         : _markWordPositions(zh, loaded.map(w => w.word || w.word_zh || ''), isZh);
+  }
+
   let html = '';
   for (let i = 0; i < zh.length; i++) {
     const ch = zh[i];
-    if (!isCjk(ch)) {
-      html += ch;
-    } else if (targetPositions.has(i)) {
+    if (targetPositions.has(i)) {
       html += `<span class="hint-blank hint-blank-target">_</span>`;
-    } else if (hideEverything || hidePositions.has(i)) {
-      html += `<span class="hint-blank">_</span>`;
+    } else if (!isMaskable(ch) || keep === null || keep.has(i)) {
+      html += _escHtml(ch);
     } else {
-      html += ch;
+      html += `<span class="hint-blank">_</span>`;
     }
   }
   el.innerHTML = html;
+
+  // The words left standing are the ones he does not know — tapping one opens
+  // the reader's own panel (★ List / ✓ Known, #967). Same table, same
+  // handlers, no second add path (#643/#710).
+  if (level < _HINT_MAX && loaded && loaded.length) {
+    setWordTable(loaded, lang);
+    _makeWordsTappable(el);
+  }
 }
 
 function onListenHintSlider(val) {

@@ -342,10 +342,15 @@ def browse_words(lang: str | None = None):
 @router.get("/api/vocab-index")
 def vocab_index(lang: str = "zh"):
     """Lightweight word list for `lang` — just the forms, no definitions or card
-    state (#850). Used by the listening-hint slider to test "is this word in my
-    deck", which needs nothing else. Deliberately not a wrapper around
-    /api/browse-words: that payload is several MB and would defeat the point.
-    """
+    state (#850): "which words are in my deck", for callers that need nothing
+    else. Deliberately not a wrapper around /api/browse-words: that payload is
+    several MB and would defeat the point.
+
+    The listening-hint slider, which this was written for, stopped using it in
+    #1006 — it asks POST /api/new-words now, so that reviewing and reading
+    agree on what counts as a new word. The endpoint stays because it answers a
+    different, narrower question (deck membership, not "does he know it"), and
+    the browser extension is outside this repo."""
     return {"words": database.get_vocab_index(lang)}
 
 
