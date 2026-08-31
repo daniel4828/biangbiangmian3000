@@ -71,7 +71,8 @@ header {
    <img> 引用的 SVG 不继承外部文字颜色。 */
    尺寸不能再小：这个字 58 画，26px 及以下会糊成一团墨点（实测），32px 才
    看得出字形结构。 */
-#header-logo { flex: 0 0 auto; width: 32px; height: 32px; }
+/* The logo is the way home (#1009) — the ← next to it goes back one screen. */
+#header-logo { flex: 0 0 auto; width: 32px; height: 32px; cursor: pointer; }
 /* min-width:0 + 省略号：应用名 19 个字符，复习时还会被换成任意长度的牌组名。
    .header-left 在 #679 的窄屏布局里已是 min-width:0 的 grid 项，但 h1 自身
    不收缩就仍会把顶栏撑开。 */
