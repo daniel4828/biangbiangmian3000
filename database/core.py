@@ -774,6 +774,13 @@ def init_db() -> None:
             conn.execute("ALTER TABLE mail_senders ADD COLUMN "
                          "blocked INTEGER NOT NULL DEFAULT 0")
             conn.commit()
+        # #997: when the switch was turned on. Left NULL on existing rows —
+        # there is no honest value to backfill, and NULL already means
+        # "no lower bound from the subscription itself", which is what the
+        # already-subscribed senders were effectively running under.
+        if "auto_since" not in ms_cols:
+            conn.execute("ALTER TABLE mail_senders ADD COLUMN auto_since TEXT")
+            conn.commit()
 
     # #960: seed the sender switch table from knowledge/newsletter.py's
     # registry, so retiring KNOWLEDGE_MAIL_ALLOWED_SENDERS doesn't silently

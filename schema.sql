@@ -1078,5 +1078,10 @@ CREATE TABLE IF NOT EXISTS mail_senders (
     -- contradiction, and letting it be representable means someone eventually has
     -- to explain which one wins.
     blocked      INTEGER NOT NULL DEFAULT 0,
+    -- When the automatic switch was last turned ON (#997). The cron only
+    -- looks at mail that arrived after this: subscribing is a promise about
+    -- future mail, not an order to summarise (and pay for) the archive.
+    -- NULL on rows that predate the column and on never-subscribed senders.
+    auto_since   TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );

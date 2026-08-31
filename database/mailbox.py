@@ -39,6 +39,69 @@ def auto_mail_senders() -> set:
     return {r["address"] for r in rows}
 
 
+def auto_mail_sender_windows() -> dict:
+    """address -> the moment its automatic switch was turned on (#997), or
+    None for rows that predate the column.
+
+    The cron uses it as the lower bound of its IMAP SINCE: a fresh
+    subscription must not reach back and summarise (at one paid AI call
+    each) everything that sender already sent. The UI says as much.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT address, auto_since FROM mail_senders "
+            "WHERE auto_process = 1 AND blocked = 0"
+        ).fetchall()
+    return {r["address"]: r["auto_since"] for r in rows}
+
+
+_ABANDONED_KEY = "mail_abandoned_message_ids"
+_ABANDONED_MAX = 200
+
+
+def abandoned_mail_message_ids() -> set:
+    """Message-IDs the cron gave up on permanently (#997).
+
+    Bookkeeping used to be the \\Seen flag; since the cron no longer looks
+    at read state (that is what made a mail Daniel had opened in Gmail
+    invisible to it forever), a mail that can never succeed — a body too
+    short to be an article — needs somewhere else to be remembered. Without
+    it the same doomed mail is re-downloaded and re-attempted every five
+    minutes for as long as it stays inside the window.
+    """
+    import json
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (_ABANDONED_KEY,)
+        ).fetchone()
+    if not row or not row["value"]:
+        return set()
+    try:
+        return set(json.loads(row["value"]))
+    except (ValueError, TypeError):
+        return set()
+
+
+def abandon_mail_message_id(message_id: str) -> None:
+    """Remember one permanently-failed mail. Keeps only the most recent
+    _ABANDONED_MAX: this is a "don't retry" hint, not an archive, and an
+    unbounded JSON blob in app_settings would be read on every cron run."""
+    import json
+    message_id = (message_id or "").strip()
+    if not message_id:
+        return
+    ids = [m for m in abandoned_mail_message_ids() if m != message_id]
+    ids.append(message_id)
+    ids = ids[-_ABANDONED_MAX:]
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_ABANDONED_KEY, json.dumps(ids)),
+        )
+        conn.commit()
+
+
 def blocked_mail_senders() -> set:
     """Addresses hidden from the mail list entirely (#968)."""
     with get_db() as conn:
@@ -93,14 +156,20 @@ def set_mail_sender_auto(address: str, auto: bool, name: str = None) -> dict:
         raise ValueError("address is required")
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO mail_senders (address, name, auto_process) VALUES (?, ?, ?) "
+            "INSERT INTO mail_senders (address, name, auto_process, auto_since) "
+            "VALUES (?, ?, ?, CASE WHEN ? = 1 THEN datetime('now') END) "
             "ON CONFLICT(address) DO UPDATE SET "
             "  auto_process = excluded.auto_process, "
             # Subscribing to a blocked sender unblocks them — that is what
             # the click means, and the two states must not coexist.
             "  blocked = CASE WHEN excluded.auto_process = 1 THEN 0 ELSE mail_senders.blocked END, "
+            # Stamped only on the off -> on transition (#997): re-clicking a
+            # switch that is already on must not move the window forward and
+            # skip mail that arrived in between.
+            "  auto_since = CASE WHEN excluded.auto_process = 1 AND mail_senders.auto_process = 0 "
+            "                    THEN datetime('now') ELSE mail_senders.auto_since END, "
             "  name = COALESCE(excluded.name, mail_senders.name)",
-            (address, name, 1 if auto else 0),
+            (address, name, 1 if auto else 0, 1 if auto else 0),
         )
         conn.commit()
     return {"address": address, "auto_process": 1 if auto else 0, "name": name}

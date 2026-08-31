@@ -12,8 +12,19 @@ from email.message import EmailMessage
 
 import pytest
 
+import database
 import knowledge.ingest
 import knowledge.mailbox as mailbox
+
+
+@pytest.fixture(autouse=True)
+def _db(tmp_path, monkeypatch):
+    """A real (empty) schema per test: since #997 the poller asks the
+    database what it has already processed instead of reading \\Seen
+    flags, so these tests need the tables to exist. Patched on
+    database.core.DB_PATH — database.DB_PATH is only a name copy (#615)."""
+    monkeypatch.setattr(database.core, "DB_PATH", str(tmp_path / "test.db"))
+    database.init_db()
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +131,8 @@ class FakeImap:
         self.logged_in = True
         return "OK", [b"logged in"]
 
-    def select(self, mailbox_name):
+    def select(self, mailbox_name, readonly=False):
+        self.readonly = readonly
         return "OK", [b"1"]
 
     def search(self, charset, *criteria):
@@ -138,9 +150,21 @@ class FakeImap:
         if msg is None:
             return "NO", [None]
         raw = msg.as_bytes() if hasattr(msg, "as_bytes") else msg
-        return "OK", [(b"1 (RFC822 {123})", raw)]
+        if parts == mailbox._ENVELOPE_PARTS:
+            # Header-only, like a real server: the poller decides whether a
+            # mail is worth downloading from the envelope alone (#997), so
+            # a fake that hands back the body here would hide a regression.
+            parsed = email.message_from_bytes(raw)
+            head = email.message.Message()
+            for key in ("From", "Subject", "Date", "Message-ID"):
+                if parsed.get(key):
+                    head[key] = parsed.get(key)
+            raw = head.as_bytes()
+        return "OK", [(b"1 (BODY[HEADER] {123})", raw)]
 
     def store(self, msg_id, flag_set, flags):
+        # Since #997 nothing in the poller writes a flag; recorded so the
+        # tests below can assert exactly that.
         self.seen_flagged.append(msg_id)
         return "OK", [b"done"]
 
@@ -227,7 +251,8 @@ def test_url_in_subject_is_ingested(monkeypatch):
     assert calls == ["https://example.com/subject-link"]
     assert summary["processed"] == 1
     assert summary["ingested"] == 1
-    assert fake.seen_flagged == [b"1"]
+    # #997：处理成功也不再改任何标志位，记账靠 Message-ID
+    assert fake.seen_flagged == []
 
 
 def test_url_in_plain_body_is_ingested(monkeypatch):
@@ -277,7 +302,8 @@ def test_multiple_urls_in_one_mail_all_processed(monkeypatch):
     assert calls == ["https://example.com/one", "https://example.com/two"]
     assert summary["ingested"] == 2
     assert summary["processed"] == 1
-    assert fake.seen_flagged == [b"1"]
+    # #997：处理成功也不再改任何标志位，记账靠 Message-ID
+    assert fake.seen_flagged == []
 
 
 def test_non_whitelisted_sender_is_skipped(monkeypatch):
@@ -310,7 +336,8 @@ def test_whitelist_matches_display_name_format_case_insensitive(monkeypatch):
     summary = mailbox.check_mailbox(imap_factory=lambda: fake)
 
     assert summary["processed"] == 1
-    assert fake.seen_flagged == [b"1"]
+    # #997：处理成功也不再改任何标志位，记账靠 Message-ID
+    assert fake.seen_flagged == []
 
 
 def test_ingest_failure_does_not_mark_seen(monkeypatch):
@@ -437,7 +464,8 @@ def test_mail_without_url_but_long_body_ingested_as_text(monkeypatch):
     assert calls == [("付费墙文章标题", _LONG_BODY)]
     assert summary["ingested"] == 1
     assert summary["processed"] == 1
-    assert fake.seen_flagged == [b"1"]
+    # #997：处理成功也不再改任何标志位，记账靠 Message-ID
+    assert fake.seen_flagged == []
 
 
 def test_url_present_takes_priority_over_text_fallback(monkeypatch):
@@ -463,7 +491,8 @@ def test_url_present_takes_priority_over_text_fallback(monkeypatch):
     assert url_calls == ["https://example.com/article"]
     assert text_calls == []
     assert summary["processed"] == 1
-    assert fake.seen_flagged == [b"1"]
+    # #997：处理成功也不再改任何标志位，记账靠 Message-ID
+    assert fake.seen_flagged == []
 
 
 def test_text_fallback_ingest_failure_does_not_mark_seen(monkeypatch):
@@ -519,9 +548,9 @@ def test_html_only_body_used_for_text_fallback_after_stripping(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_fetch_uses_body_peek_not_rfc822(monkeypatch):
-    """RFC822 implicitly sets \\Seen, and the whitelist check runs *after*
-    the fetch — with a personal inbox that would mark every unread private
-    mail read on the first poll."""
+    """RFC822 implicitly sets \\Seen. Nothing here may ever change a flag on
+    Daniel's personal inbox, so both fetches — the envelope one that decides
+    whether the mail is worth reading, and the body one — must use PEEK."""
     _configure_env(monkeypatch, allowed="daniel@example.com")
     msg = _make_plain_message("Geteilt", "https://example.com/x")
     fake = FakeImap({b"1": msg})
@@ -529,7 +558,8 @@ def test_fetch_uses_body_peek_not_rfc822(monkeypatch):
 
     mailbox.check_mailbox(imap_factory=lambda: fake)
 
-    assert fake.fetch_parts == ["(BODY.PEEK[])"]
+    assert fake.fetch_parts == [mailbox._ENVELOPE_PARTS, "(BODY.PEEK[])"]
+    assert fake.readonly is True
     assert all("RFC822" not in part for part in fake.fetch_parts)
 
 
@@ -547,17 +577,22 @@ def test_non_whitelisted_mail_is_never_marked_seen(monkeypatch):
 
 
 def test_search_is_scoped_to_each_auto_sender(monkeypatch):
-    """One `UNSEEN FROM <addr>` search per whitelisted address — a bare
-    UNSEEN would pull every private mail's body through this process."""
+    """One `FROM <addr> SINCE <date>` search per subscribed address — an
+    unscoped search would pull every private mail through this process.
+
+    UNSEEN is gone since #997: reading the mail in Gmail must not hide it
+    from the poller. The date bound replaces it as the thing that keeps the
+    search small."""
     _configure_env(monkeypatch, allowed="daniel@example.com, newsletter@nl.faz.net")
     fake = FakeImap({})
 
     mailbox.check_mailbox(imap_factory=lambda: fake)
 
-    assert fake.searches == [
-        ("UNSEEN", "FROM", "daniel@example.com"),
-        ("UNSEEN", "FROM", "newsletter@nl.faz.net"),
+    assert [c[:2] for c in fake.searches] == [
+        ("FROM", "daniel@example.com"),
+        ("FROM", "newsletter@nl.faz.net"),
     ]
+    assert all(c[2] == "SINCE" for c in fake.searches)
 
 
 def test_search_failure_aborts_without_processing(monkeypatch):
@@ -575,3 +610,101 @@ def test_search_failure_aborts_without_processing(monkeypatch):
     assert summary["reason"] == "search_failed"
     assert called["n"] == 0
     assert fake.seen_flagged == []
+
+
+# ---------------------------------------------------------------------------
+# #997 — 记账靠 Message-ID，不靠已读标志
+# ---------------------------------------------------------------------------
+
+def _with_message_id(msg, message_id):
+    msg["Message-ID"] = message_id
+    return msg
+
+
+def test_read_mail_is_still_processed(monkeypatch):
+    """这个 Issue 本身：Daniel 早上在手机上打开了通讯，它照样要被处理。
+
+    旧写法用 UNSEEN 做记账，于是他扫一眼就等于永久取消了这封邮件的自动
+    处理——界面上开关写着 Auto，却什么都不会发生。搜索条件里不许再出现
+    UNSEEN。
+    """
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    fake = FakeImap({b"1": _make_plain_message("Gelesen", "https://example.com/x")})
+    monkeypatch.setattr(knowledge.ingest, "ingest_url", lambda url: {"episode_id": 1})
+
+    summary = mailbox.check_mailbox(imap_factory=lambda: fake)
+
+    assert summary["processed"] == 1
+    assert all("UNSEEN" not in c for c in fake.searches)
+
+
+def test_already_processed_mail_is_not_downloaded_again(monkeypatch):
+    """已入库的邮件连正文都不该再下载：每五分钟重下一遍整封通讯是纯浪费，
+    而重新入库则是每轮一次付费 AI 调用。"""
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    msg = _with_message_id(
+        _make_plain_message("Schon erledigt", "https://example.com/x"), "<abc@mail>")
+    fake = FakeImap({b"1": msg})
+    episode_id = database.create_pending_episode("v-abc", None, "已处理", None, "https://example.com/x")
+    database.set_mail_message_id(episode_id, "<abc@mail>")
+
+    calls = []
+    monkeypatch.setattr(knowledge.ingest, "ingest_url",
+                        lambda url: calls.append(url) or {"episode_id": 1})
+
+    summary = mailbox.check_mailbox(imap_factory=lambda: fake)
+
+    assert calls == []
+    assert summary["processed"] == 0
+    assert summary["skipped"] == 1
+    assert fake.fetch_parts == [mailbox._ENVELOPE_PARTS]
+
+
+def test_successful_ingest_stamps_message_id(monkeypatch):
+    """不打标记就等于「没处理过」——下一轮会把同一封再摘要一遍。"""
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    msg = _with_message_id(
+        _make_plain_message("Neu", "https://example.com/x"), "<neu@mail>")
+    episode_id = database.create_pending_episode("v-neu", None, "新", None, "https://example.com/x")
+    monkeypatch.setattr(knowledge.ingest, "ingest_url",
+                        lambda url: {"episode_id": episode_id})
+
+    mailbox.check_mailbox(imap_factory=lambda: FakeImap({b"1": msg}))
+
+    assert database.processed_mail_message_ids(["<neu@mail>"]) == {"<neu@mail>": episode_id}
+
+
+def test_unprocessable_mail_is_abandoned_not_retried_forever(monkeypatch):
+    """正文太短又没有 URL：重试一百次结果一样。放弃名单取代了原来那句
+    「标已读」——已读标志已经不再是记账方式了。"""
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    msg = _with_message_id(_make_plain_message("nix", "kein link, zu kurz"), "<kurz@mail>")
+
+    summary = mailbox.check_mailbox(imap_factory=lambda: FakeImap({b"1": msg}))
+    assert summary["skipped"] == 1
+    assert "<kurz@mail>" in database.abandoned_mail_message_ids()
+
+    fake2 = FakeImap({b"1": msg})
+    mailbox.check_mailbox(imap_factory=lambda: fake2)
+    assert fake2.fetch_parts == [mailbox._ENVELOPE_PARTS]
+
+
+def test_search_window_starts_at_subscription_time(monkeypatch):
+    """订阅只对以后的邮件生效（界面上就是这么写的）：一次订阅不该反过来把
+    这个发件人的历史邮件全部摘要一遍，每封一次付费 AI 调用。"""
+    _configure_env(monkeypatch, allowed="daniel@example.com")
+    fake = FakeImap({})
+
+    # 很久以前订阅的：下界回落到最近几天，而不是回溯到订阅那天
+    monkeypatch.setattr(mailbox, "_AUTO_LOOKBACK_DAYS", 3)
+    old = mailbox._auto_since_criteria("2020-01-05 08:00:00")
+    recent = mailbox._auto_since_criteria(None)
+    assert old == recent
+
+    # 今天刚订阅的：下界是订阅那天（宽一天，防时区/内部日期差）
+    # datetime.now().date()，不是 date.today()：这里是 IMAP 的 SINCE 日期，
+    # 和 Anki 日（凌晨 4 点为界）毫无关系，#810 那条守卫认的是后一种拼法。
+    from datetime import datetime, timedelta
+    today = datetime.now().date()
+    since = mailbox._auto_since_criteria(today.isoformat())
+    assert since[1].startswith(f"{(today - timedelta(days=1)).day:02d}-")

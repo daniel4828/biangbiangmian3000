@@ -531,3 +531,29 @@ def test_mailbox_frontend_talks_only_to_the_mailbox_api():
 
     assert "/api/knowledge/add" not in section
     assert "/api/podcast/episodes" not in section
+
+
+def test_auto_since_stamped_on_subscribe_and_stable_on_reclick():
+    """auto_since 是 cron 时间窗的下界（#997）：只在「关 → 开」那一下写入。
+
+    再点一次已经打开的开关就刷新它的话，等于把窗口往前推，中间到的邮件
+    就此永远处理不到——而用户看到的只是「我点了一下，什么都没变」。
+    """
+    database.set_mail_sender_auto("news@example.com", True)
+    first = database.auto_mail_sender_windows()["news@example.com"]
+    assert first
+
+    database.set_mail_sender_auto("news@example.com", True)
+    assert database.auto_mail_sender_windows()["news@example.com"] == first
+
+    # 关掉再打开是一次真正的重新订阅，窗口应该重置到现在
+    database.set_mail_sender_auto("news@example.com", False)
+    assert "news@example.com" not in database.auto_mail_sender_windows()
+
+
+def test_blocked_sender_has_no_window():
+    """屏蔽会清掉自动开关，所以它也不该出现在 cron 的时间窗表里——两处判断
+    只改一处，就等于屏蔽了还在每天花钱。"""
+    database.set_mail_sender_auto("news@example.com", True)
+    database.set_mail_sender_blocked("news@example.com", True)
+    assert "news@example.com" not in database.auto_mail_sender_windows()
