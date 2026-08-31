@@ -47,6 +47,7 @@ let story       = null;   // story dict with sentences[]
 let sentence    = null;   // current sentence from story (may be null)
 let wordDetails = null;   // full word data: examples + characters
 let _currentWordId = null; // word ID open in word-detail view
+let _currentHanziId = null;   // #1009: nav snapshots need the hanzi-detail id
 
 let _prevView = null;      // view we came from before opening word-detail
 let _sessionReviewedCount = 0; // cards rated this session (for clap animation)
@@ -1025,7 +1026,7 @@ function showView(name) {
   // Re-render rather than just unhiding — some paths reach these views without
   // going through renderDecks() (error fallbacks), and the tabs must still show.
   _renderHeaderLangTabs(name === 'review');
-  document.getElementById('back-btn').style.display = name === 'decks' ? 'none' : 'block';
+  _updateBackBtn();
   document.getElementById('header-title').textContent =
     name === 'review'       ? deckName :
     name === 'browse'       ? 'Browse' :
@@ -2519,6 +2520,7 @@ async function openBrowseForDeck(deckId) {
 }
 
 async function openBrowse() {
+  navPush('browse');
   setLoading('Loading…');
   try {
     const [words, hanzi, deckTree] = await Promise.all([
@@ -3117,6 +3119,7 @@ async function openWordByZh(zh) {
 }
 
 async function openWordDetail(wordId) {
+  navPush(`word:${wordId}`);
   // Capture which view we're coming from so we can go back to it
   const views = ['review', 'browse', 'hanzi-detail', 'word-detail', 'stats', 'done', 'decks'];
   _prevView = views.find(v => document.getElementById(`view-${v}`)?.style.display !== 'none') || null;
@@ -3439,6 +3442,8 @@ async function confirmHanziRegen() {
 
 // ── Hanzi Detail ─────────────────────────────────────────────────────────────
 async function openHanziDetail(charId) {
+  navPush(`hanzi:${charId}`);
+  _currentHanziId = charId;
   setLoading('Loading hanzi…');
   try {
     const hanzi = await api('GET', `/api/hanzi/${charId}`);
@@ -3535,6 +3540,7 @@ function applyFilters() {}
 
 // ── Stats ────────────────────────────────────────────────────────────────────
 async function openStats() {
+  navPush('stats');
   setLoading('Loading stats…');
   try {
     const data = await api('GET', '/api/stats');
@@ -3551,6 +3557,7 @@ let _capturingAction = null;
 let _settingsMsg = '';
 let _dayCutoffHour = 5;
 function openSettings() {
+  navPush('settings');
   _capturingAction = null; _settingsMsg = '';
   showView('settings');
   renderSettings();
@@ -3954,6 +3961,7 @@ function _knowledgeQuery() {
 // platform=instagram (it was always a frontend-only split of kind=video,
 // #764), everything else is a kind.
 async function openKnowledge(tab) {
+  navPush('knowledge:list');
   if (tab) {
     _kFilters.kind = [];
     _kFilters.platform = [];
@@ -4725,6 +4733,7 @@ async function _submitKnowledgeAdd(payload, msg) {
 let _knowledgeTags = [];
 
 async function openKnowledgeTags() {
+  navPush('knowledge:tags');
   _clearPodcastPoll();
   _podcastCurrentFeedId = null;
   _knowledgeScreen = 'tags';
@@ -4754,7 +4763,6 @@ function _renderKnowledgeTags() {
       </span>
     </div>`).join('') || '<div class="keymap-hint">No tags yet — they appear once material is summarized.</div>';
   el.innerHTML = `
-    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Tags</h2>
       <p class="keymap-hint">Rename a tag onto an existing name to <b>merge</b> the two — that is how near-duplicates from the auto-tagger get cleaned up. Deleting a tag removes it from every item.</p>
@@ -4798,6 +4806,7 @@ async function deleteKnowledgeTag(tagId) {
 let _subsTab = 'newsletters';        // 'newsletters' | 'feeds'
 
 async function openKnowledgeSubs(tab) {
+  navPush('knowledge:subs');
   _clearPodcastPoll();
   _podcastCurrentFeedId = null;
   _knowledgeScreen = 'subs';
@@ -4833,7 +4842,6 @@ function openKnowledgeFeeds() { return openKnowledgeSubs('feeds'); }
 
 function _subsTabsHtml() {
   return `
-    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
     <div class="knowledge-header">
       <h2 class="keymap-heading" style="margin:0">Subscriptions</h2>
     </div>
@@ -4952,6 +4960,7 @@ async function _savePodcastDetailLevel(value) {
 // per-feed action with no meaning in a mixed list.
 
 async function openPodcastFeed(feedId) {
+  navPush(`knowledge:feed:${feedId}`);
   _clearPodcastPoll();
   _podcastCurrentFeedId = feedId;
   _knowledgeScreen = 'feed';
@@ -5090,6 +5099,7 @@ function _schedulePodcastPollIfNeeded() {
 let _knowledgeDetailId = null;
 
 async function openKnowledgeItem(id) {
+  navPush(`knowledge:item:${id}`);
   setLoading('Loading…');
   _knowledgeEditOpen = false;   // #937: a fresh item opens read-only
   _knowledgeView = 'summary';   // #972: and on the summary, not whichever
@@ -5115,15 +5125,11 @@ function closeKnowledgeDetail() {
   // a voice reading on from a screen he left is only confusing (#993).
   _kTtsStopPlayback();
   _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
-  // Back to wherever this item was opened from. Note openKnowledge() is called
-  // with NO argument: an argument would reset the filter bar, and coming back
-  // from an item to a list that has forgotten your filters is the worst
-  // possible moment to lose them.
-  if (_podcastCurrentFeedId != null) {
-    openPodcastFeed(_podcastCurrentFeedId);
-  } else {
-    openKnowledge();
-  }
+  // Back to wherever this item was opened from — through goBack(), so that
+  // this ✕ and the browser's own back button end up on the same screen
+  // (#1009). goBack() falls back to the deck list when there is no history
+  // (an item opened straight from an email link into a fresh tab).
+  goBack();
 }
 
 // A very short German TL;DR, derived from summary_de at render time (#971).
@@ -7076,6 +7082,7 @@ function _startAllDeckCategory(cat) {
 
 // ── Start review session ────────────────────────────────────────────────────
 async function startReview(id, cat, name, noStory = false, quick = false) {
+  navPush('review');
   quickMode = quick;
   deckId   = id;
   category = cat;
@@ -7442,6 +7449,7 @@ function _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chap
 
 // ── Start mixed (all-category) review session ────────────────────────────────
 async function startReviewMixed(id, name, noStory = false, quick = false) {
+  navPush('review');
   quickMode  = quick;
   rootDeckId = id;
   deckId     = id;
@@ -7562,6 +7570,7 @@ function confirmUnfinishedStart() {
 
 // ── Start "Unfinished Cards" review session ───────────────────────────────────
 async function startReviewUnfinished() {
+  navPush('review');
   deckName = 'Unfinished Cards';
   story    = null;
   _sessionReviewedCount = 0;
@@ -12361,19 +12370,147 @@ async function _doRegenStoryForDeckList(deckId, topic, maxHsk, model, grammarFoc
   }
 }
 
-// ── Back to decks ────────────────────────────────────────────────────────────
+// ── Navigation history (#1009) ───────────────────────────────────────────────
+// The header's ← used to be a hard-wired "back to the deck list", and the
+// browser's own back button left the site entirely (the app never wrote a
+// single history entry). Both now walk the same in-app stack: ← goes to the
+// LAST screen, the 邁 logo goes home.
+//
+// History entries carry only an index (`{navIdx}`); the restore closures live
+// in `_navEntries`, parallel to the browser's stack. They cannot be
+// serialised, so a page reload loses them — an entry we can't restore falls
+// back to the deck list rather than pretending to navigate.
+//
+// The one rule that makes both directions work: **before leaving the current
+// screen** (a push OR a popstate), snapshot where we are into
+// `_navEntries[_navIdx]`. Backwards then finds the previous screen and
+// forwards finds the one we just left.
+let _navEntries = [];      // index -> {key, restore}
+let _navIdx = 0;
+let _navSuppress = false;  // true while a restore closure replays a screen
+
+// A snapshot of the screen currently on display. Returns null for screens
+// that are not a place you can come back to (loading, done).
+function _navHere() {
+  const view = _currentView;
+  if (view === 'knowledge') {
+    if (_knowledgeDetailId != null) {
+      const id = _knowledgeDetailId;
+      return { key: `knowledge:item:${id}`, restore: () => openKnowledgeItem(id) };
+    }
+    if (_knowledgeScreen === 'feed') {
+      const f = _podcastCurrentFeedId;
+      return { key: `knowledge:feed:${f}`, restore: () => openPodcastFeed(f) };
+    }
+    // The subs screen's two tabs are one location: flipping between them must
+    // not pile up history entries.
+    if (_knowledgeScreen === 'subs') {
+      const t = _subsTab;
+      return { key: 'knowledge:subs', restore: () => openKnowledgeSubs(t) };
+    }
+    if (_knowledgeScreen === 'tags')    return { key: 'knowledge:tags', restore: () => openKnowledgeTags() };
+    if (_knowledgeScreen === 'mailbox') return { key: 'knowledge:mailbox', restore: () => openMailbox() };
+    // No argument: an argument would reset the filter bar (see
+    // closeKnowledgeDetail).
+    return { key: 'knowledge:list', restore: () => openKnowledge() };
+  }
+  if (view === 'books') {
+    const id = _bookState.bookId, page = _bookState.pageNo, lang = _bookState.lang;
+    if (id) return { key: `books:${id}`, restore: () => openBook(id, page, lang) };
+    return { key: 'books', restore: () => openBooks() };
+  }
+  // browse and review are restored by simply showing the view again: their
+  // state is still in memory, so the scroll position, filters and the current
+  // card survive — reloading them would throw all of that away. Both guard on
+  // that state, because going home clears it and the browser's Forward button
+  // can still land here afterwards.
+  if (view === 'browse') {
+    return { key: 'browse', restore: () => browseWords.length ? showView('browse') : openBrowse() };
+  }
+  if (view === 'review') {
+    return { key: 'review', restore: () => card ? showView('review') : _goHomeNow() };
+  }
+  // The detail pages re-fetch instead: they are a single rendered page, so
+  // reloading costs one request and can never show a stale or empty shell.
+  if (view === 'word-detail') {
+    const id = _currentWordId;
+    return { key: `word:${id}`, restore: () => openWordDetail(id) };
+  }
+  if (view === 'hanzi-detail') {
+    const id = _currentHanziId;
+    return { key: `hanzi:${id}`, restore: () => openHanziDetail(id) };
+  }
+  if (view === 'stats')         return { key: 'stats', restore: () => openStats() };
+  if (view === 'settings')      return { key: 'settings', restore: () => openSettings() };
+  if (view === 'decks')         return { key: 'decks', restore: () => _goHomeNow() };
+  return null;
+}
+
+// Called at the top of every screen-opening function, BEFORE it changes any
+// state: it records the screen being left, not the one being opened. Pass the
+// key of the screen being opened so that re-entering the screen you are
+// already on (a tab flip, a re-render after an edit) doesn't pile up history
+// entries that all lead back to the same place.
+function navPush(destKey) {
+  if (_navSuppress) return;
+  const here = _navHere();
+  if (!here) return;
+  _navEntries[_navIdx] = here;
+  if (destKey && here.key === destKey) return;
+  _navIdx += 1;
+  _navEntries.length = _navIdx;   // a new branch drops any forward entries
+  history.pushState({ navIdx: _navIdx }, '');
+  _updateBackBtn();
+}
+
+function _navReplay(entry) {
+  _navSuppress = true;
+  try { entry.restore(); }
+  // The restore closures push nothing before their first await, so clearing
+  // the flag on the next macrotask is enough to cover their synchronous part.
+  finally { setTimeout(() => { _navSuppress = false; }, 0); }
+}
+
+function _updateBackBtn() {
+  const b = document.getElementById('back-btn');
+  if (b) b.style.display = _navIdx > 0 ? 'block' : 'none';
+}
+
+window.addEventListener('popstate', e => {
+  const target = (e.state && typeof e.state.navIdx === 'number') ? e.state.navIdx : 0;
+  const here = _navHere();
+  if (here) _navEntries[_navIdx] = here;   // so Forward can come back here
+  _navIdx = target;
+  const entry = _navEntries[target];
+  _updateBackBtn();
+  // No entry means the page was reloaded since that entry was written — the
+  // closure is gone. Home is the honest answer; silently staying put would
+  // look like a dead back button.
+  if (entry) _navReplay(entry);
+  else _goHomeNow();
+});
+
+// ── Back / home ──────────────────────────────────────────────────────────────
+// ← walks the history so that the browser's own back button (and iOS's
+// swipe-back) stay in step with it.
 function goBack() {
-  if (document.getElementById('view-word-detail').style.display !== 'none') {
-    showView(_prevView === 'review' ? 'review' : 'browse');
-    return;
-  }
-  if (document.getElementById('view-hanzi-detail').style.display !== 'none') {
-    showView('browse');
-    return;
-  }
+  if (_navIdx > 0) { history.back(); return; }
+  _goHomeNow();
+}
+
+// The 邁 logo: all the way home, unwinding the browser history with it so
+// that "back" afterwards doesn't walk into screens we already left.
+function goHome() {
+  if (_navIdx > 0) { history.go(-_navIdx); return; }
+  _goHomeNow();
+}
+
+function _goHomeNow() {
   card = null; story = null; sentence = null; wordDetails = null; userInput = '';
   rootDeckId = null; unfinishedMode = false; _sessionReviewedCount = 0;
   browseWords = []; browseAll = []; _browseSelected.clear();
+  _knowledgeDetailId = null;
+  _bookState.bookId = null;
   loadDecks();
 }
 
@@ -14327,6 +14464,12 @@ async function _loadVersionBadge() {
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
+// Index 0 of the nav history (#1009). Without a state object on the entry the
+// app starts from, the first popstate would arrive with `null` and we could
+// not tell "back to the start" from "some other page's entry".
+history.replaceState({ navIdx: 0 }, '');
+_updateBackBtn();
+
 // Hash direct-link (#480, feed layer #502, generalized to video/article #653):
 // if the URL already points at a knowledge item (link from an email/Signal
 // message) or feed, open it straight away instead of the deck list. The
@@ -14341,7 +14484,7 @@ if (/^#(?:podcast|knowledge)-feed-\d+$/.test(location.hash)
   // thing, not a sticky location. Leaving it in the address bar made every
   // later reload land back in the knowledge base instead of the home screen
   // (#792) — the whole reason nothing in the app writes a hash any more.
-  history.replaceState(null, '', location.pathname + location.search);
+  history.replaceState(history.state, '', location.pathname + location.search);
 } else {
   loadDecks();
 }
@@ -14947,6 +15090,7 @@ async function _loadBookLangs() {
 }
 
 async function openBooks() {
+  navPush('books');
   _bookState.bookId = null;
   showView('books');
   document.getElementById('view-books-content').innerHTML =
@@ -15118,6 +15262,7 @@ async function deleteBook(id) {
 // ── Reader ─────────────────────────────────────────────────────────────────
 
 async function openBook(id, pageNo, lang) {
+  navPush(`books:${id}`);
   _bookState.bookId = id;
   const langs = await _loadBookLangs();
   const wanted = lang || _bookState.lang || activeLang();
@@ -15660,6 +15805,7 @@ function _mailboxNotice(text, error) {
 }
 
 async function openMailbox() {
+  navPush('knowledge:mailbox');
   _mailboxState.offset = 0;
   _mailboxState.query = '';
   _mailboxState.notice = null;
@@ -15674,8 +15820,8 @@ async function _loadMailbox() {
   _mailboxState.notice = null;
   const el = document.getElementById('view-knowledge-content');
   if (!el) return;
-  // Keep the chrome around the placeholder: without ← Knowledge a slow or
-  // failing mailbox is a dead end.
+  // Keep the chrome around the placeholder: a slow or failing mailbox must
+  // still say which screen it is.
   el.innerHTML = `${_mailboxTabs()}<p class="keymap-hint">Loading inbox…</p>`;
   try {
     const params = new URLSearchParams({
@@ -15728,7 +15874,6 @@ function setMailboxRange(range) {
 // "where do I manage what I get" has exactly one answer.
 function _mailboxTabs() {
   return `
-    <button class="keymap-reset-all" onclick="openKnowledge()">← Knowledge</button>
     <div class="knowledge-header">
       <h2 class="keymap-heading" style="margin:0">Inbox</h2>
       <span style="flex:1"></span>

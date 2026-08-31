@@ -12,10 +12,14 @@
 
 <header>
   <div class="header-left">
-    <button id="back-btn" onclick="goBack()">←</button>
+    <!-- ← goes to the LAST screen, not home (#1009). Hidden until there is
+         something to go back to — on a fresh load that is the deck list, and
+         an arrow that appears for a moment and then vanishes is just noise. -->
+    <button id="back-btn" onclick="goBack()" style="display:none">←</button>
     <!-- 𰻞 标志（#780）。必须是 <img> 引用 SVG，不能写这个字符本身：
          U+30EDE 在 Unicode 扩展 G 区，没有任何常见字体包含它。 -->
-    <img id="header-logo" src="/static/logo.svg" alt="" width="32" height="32">
+    <img id="header-logo" src="/static/logo.svg" alt="Home" width="32" height="32"
+         onclick="goHome()" title="Home">
     <h1 id="header-title">biangbiangmian3000</h1>
     <!-- Language tabs (#436, moved into the header #816). Filled by
          _renderHeaderLangTabs(); only visible on the deck list, since switching
@@ -404,7 +408,7 @@
     <div style="display:flex;flex-direction:column;gap:12px;align-items:center">
       <button id="done-story-btn" class="btn-primary" onclick="openStoryModal()">View Full Story</button>
       <button class="btn-secondary" onclick="openSessionSummary()">📈 Session Graph</button>
-      <button class="btn-secondary" onclick="goBack()">Back to Decks</button>
+      <button class="btn-secondary" onclick="goHome()">Back to Decks</button>
     </div>
   </div>
 
