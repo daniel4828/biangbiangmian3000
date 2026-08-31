@@ -9511,8 +9511,12 @@ function _renderListenHint(level) {
 
   const lang = currentCardLang();
   const isZh = lang === 'zh';
-  // What a blank can stand for: a hanzi in Chinese, a letter run elsewhere.
-  const isMaskable = isZh ? (ch => ch >= '一' && ch <= '鿿')
+  // What a blank can stand for: any letter or digit — a hanzi, but also the
+  // Latin runs and numerals a Chinese sentence still carries ("Musk", "20").
+  // #1012: those used to be unmaskable, so they stayed legible even at "Hide
+  // all". They are ordinary words now — the prompt writes proper nouns in
+  // Chinese, and whatever Latin is left behaves like the rest of the sentence.
+  const isMaskable = isZh ? (ch => /[\p{L}\p{M}\p{Nd}]/u.test(ch))
                           : (ch => /[\p{L}\p{M}]/u.test(ch));
 
   // Sentence notes have no single target word to blank when there is no story.
