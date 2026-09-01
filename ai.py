@@ -2378,12 +2378,16 @@ reasoning_zh 的规则：
         logger.warning("kahneman: using fallback sentence for %s", card["word_zh"])
         sentences.append({
             "word_ids": [card["word_id"]],
-            # The Chinese filler sentence would be nonsense in a French deck;
-            # for other languages fall back to the word itself, which is at
-            # least honest about being a fallback (issue #806).
+            # kahneman / news / briefing (paste, contextsummary) are
+            # Chinese-only modes — extended_story_modes gates them in
+            # _generate_and_store_body — so the filler is always Chinese.
+            # #806 pasted its `if lang == "zh"` branch into all four
+            # generators' fallback loops, but only generate_podcast_sentences
+            # takes a `lang` argument; in these three it was a NameError that
+            # killed the whole generation the moment a single word needed a
+            # fallback — i.e. routinely (#1023). Keep it unconditional here.
             "sentence_zh": (card.get("source_sentence")
-                            or (f"我学了{card['word_zh']}这个词。" if lang == "zh"
-                                else f"{card['word_zh']}.")),
+                            or f"我学了{card['word_zh']}这个词。"),
             "sentence_en": "",
             "concept_en": concept_en,
             "concept_zh": concept_zh,
@@ -2567,12 +2571,16 @@ def generate_news_sentences(
         logger.warning("news: using fallback sentence for %s", card["word_zh"])
         sentences.append({
             "word_ids": [card["word_id"]],
-            # The Chinese filler sentence would be nonsense in a French deck;
-            # for other languages fall back to the word itself, which is at
-            # least honest about being a fallback (issue #806).
+            # kahneman / news / briefing (paste, contextsummary) are
+            # Chinese-only modes — extended_story_modes gates them in
+            # _generate_and_store_body — so the filler is always Chinese.
+            # #806 pasted its `if lang == "zh"` branch into all four
+            # generators' fallback loops, but only generate_podcast_sentences
+            # takes a `lang` argument; in these three it was a NameError that
+            # killed the whole generation the moment a single word needed a
+            # fallback — i.e. routinely (#1023). Keep it unconditional here.
             "sentence_zh": (card.get("source_sentence")
-                            or (f"我学了{card['word_zh']}这个词。" if lang == "zh"
-                                else f"{card['word_zh']}.")),
+                            or f"我学了{card['word_zh']}这个词。"),
             "sentence_en": "",
             "concept_en": "",
             "concept_zh": "",
@@ -3226,12 +3234,16 @@ def generate_briefing_sentences(
         logger.warning("briefing: using fallback sentence for %s", card["word_zh"])
         sentences.append({
             "word_ids": [card["word_id"]],
-            # The Chinese filler sentence would be nonsense in a French deck;
-            # for other languages fall back to the word itself, which is at
-            # least honest about being a fallback (issue #806).
+            # kahneman / news / briefing (paste, contextsummary) are
+            # Chinese-only modes — extended_story_modes gates them in
+            # _generate_and_store_body — so the filler is always Chinese.
+            # #806 pasted its `if lang == "zh"` branch into all four
+            # generators' fallback loops, but only generate_podcast_sentences
+            # takes a `lang` argument; in these three it was a NameError that
+            # killed the whole generation the moment a single word needed a
+            # fallback — i.e. routinely (#1023). Keep it unconditional here.
             "sentence_zh": (card.get("source_sentence")
-                            or (f"我学了{card['word_zh']}这个词。" if lang == "zh"
-                                else f"{card['word_zh']}.")),
+                            or f"我学了{card['word_zh']}这个词。"),
             "sentence_en": "",
             "concept_en": "",
             "concept_zh": "",
