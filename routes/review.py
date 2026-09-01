@@ -631,6 +631,17 @@ def due_notify_check(force: bool = False):
     return review_notify.check_and_notify(force=force)
 
 
+@router.get("/api/sessions")
+def list_sessions(lang: str | None = None, limit: int = 60):
+    """Recent study sessions, newest first (#1023).
+
+    Derived from review_log by splitting on pauses (database.SESSION_GAP_MINUTES) —
+    there is no session table, and inventing one would mean a second bookkeeping
+    that drifts from the log the stats already read.
+    """
+    return {"sessions": database.get_study_sessions(lang=lang, limit=limit)}
+
+
 @router.post("/api/session-timelines")
 def session_timelines(body: dict):
     """Interval timelines for the cards reviewed in one session (summary graph)."""

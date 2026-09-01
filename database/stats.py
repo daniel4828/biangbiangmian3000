@@ -789,3 +789,106 @@ def _calc_streak(conn: sqlite3.Connection, deck_id: int | None) -> int:
         else:
             break
     return streak
+
+
+# ---------------------------------------------------------------------------
+# Study sessions (#1023)
+# ---------------------------------------------------------------------------
+
+# A "session" is a run of reviews with no long pause in it. Anki has no such
+# entity, so it is derived here from review_log alone: consecutive rows more
+# than this many minutes apart start a new session. 30 min is long enough that
+# a slow card or a short interruption stays inside one session, and short
+# enough that morning and evening never merge into one.
+SESSION_GAP_MINUTES = 30
+
+
+def get_study_sessions(lang: str | None = None, limit: int = 60,
+                       max_rows: int = 20000) -> list[dict]:
+    """Recent study sessions, newest first.
+
+    Grouping happens in Python, not SQL: SQLite has no window functions we can
+    rely on across the versions this runs on, and the row count here is small.
+    `max_rows` bounds how far back we look — a session older than that is not
+    something anyone scrolls to.
+    """
+    conn = get_db()
+    where = ""
+    params: list = []
+    if lang is not None:
+        where = "WHERE c.deck_id IN (SELECT id FROM decks WHERE lang = ?)"
+        params.append(lang)
+    rows = conn.execute(
+        f"""SELECT rl.reviewed_at, rl.rating, rl.duration_ms, rl.state, rl.card_id,
+                   c.category, c.word_id, e.word_zh
+            FROM review_log rl
+            JOIN cards c ON c.id = rl.card_id
+            LEFT JOIN entries e ON e.id = c.word_id
+            {where}
+            ORDER BY rl.reviewed_at DESC
+            LIMIT ?""",
+        params + [max_rows],
+    ).fetchall()
+    conn.close()
+
+    gap = _dt.timedelta(minutes=SESSION_GAP_MINUTES)
+    sessions: list[dict] = []
+    cur: dict | None = None
+    prev_ts: _dt.datetime | None = None
+
+    for r in rows:  # newest → oldest
+        ts = _parse_log_time(r["reviewed_at"])
+        if ts is None:
+            continue
+        if cur is None or prev_ts is None or (prev_ts - ts) > gap:
+            if cur is not None:
+                sessions.append(cur)
+                if len(sessions) >= limit:
+                    return [_finish_session(s) for s in sessions]
+            cur = {
+                "ended_at": r["reviewed_at"],
+                "started_at": r["reviewed_at"],
+                "count": 0,
+                "ratings": {1: 0, 2: 0, 3: 0, 4: 0},
+                "duration_ms": 0,
+                "cards": set(),
+                "categories": {},
+                "review_total": 0,
+                "review_again": 0,
+                "words": [],
+            }
+        cur["started_at"] = r["reviewed_at"]
+        cur["count"] += 1
+        cur["ratings"][r["rating"]] = cur["ratings"].get(r["rating"], 0) + 1
+        cur["duration_ms"] += r["duration_ms"] or 0
+        cur["cards"].add(r["card_id"])
+        if r["category"]:
+            cur["categories"][r["category"]] = cur["categories"].get(r["category"], 0) + 1
+        # Retention is only meaningful on cards that were actually due for
+        # review — a failed learning step is not a lapse.
+        if r["state"] == "review":
+            cur["review_total"] += 1
+            if r["rating"] == 1:
+                cur["review_again"] += 1
+        if r["word_zh"] and len(cur["words"]) < 400:
+            cur["words"].append({"word_id": r["word_id"], "word_zh": r["word_zh"],
+                                 "rating": r["rating"]})
+        prev_ts = ts
+
+    if cur is not None:
+        sessions.append(cur)
+    return [_finish_session(s) for s in sessions[:limit]]
+
+
+def _finish_session(s: dict) -> dict:
+    s["unique_cards"] = len(s.pop("cards"))
+    s["words"] = list(reversed(s["words"]))  # oldest → newest, i.e. review order
+    s["retention"] = (
+        round(100 * (s["review_total"] - s["review_again"]) / s["review_total"])
+        if s["review_total"] else None
+    )
+    start = _parse_log_time(s["started_at"])
+    end = _parse_log_time(s["ended_at"])
+    s["elapsed_ms"] = int((end - start).total_seconds() * 1000) if start and end else 0
+    s["ratings"] = {str(k): v for k, v in s["ratings"].items()}
+    return s

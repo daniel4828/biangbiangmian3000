@@ -414,29 +414,6 @@
 
   <!-- Browse (full-width, sidebar layout) -->
   <div id="view-browse" class="browse-layout">
-    <!-- Phone only (#827): the 200px sidebar left ~190px for the list on a
-         390px screen, which the un-shrinkable row buttons blew straight
-         through. Below 700px it collapses behind this toggle instead. -->
-    <button class="browse-filter-toggle" id="browse-filter-toggle"
-            onclick="toggleBrowseSidebar()" aria-expanded="false">☰ Filters</button>
-    <aside class="browse-sidebar" id="browse-sidebar">
-      <div class="bs-section">
-        <div class="bs-section-head">Type</div>
-        <button class="bs-item" id="bsf-all"     onclick="setBrowseFilter('notes','all')">Everything</button>
-        <button class="bs-item" id="bsf-vocabulary" onclick="setBrowseFilter('notes','vocabulary')">Words</button>
-        <button class="bs-item" id="bsf-sentence"   onclick="setBrowseFilter('notes','sentence')">Sentences</button>
-        <button class="bs-item" id="bsf-chengyu"    onclick="setBrowseFilter('notes','chengyu')">Chengyu</button>
-      </div>
-      <!-- Chinese-only: hidden under a non-zh language tab (#815) -->
-      <div class="bs-section" id="bs-hanzi-section">
-        <div class="bs-section-head">Hanzi</div>
-        <button class="bs-item" id="bsf-hanzi" onclick="setBrowseFilter('hanzi','all')">All Hanzi</button>
-      </div>
-      <div class="bs-section">
-        <div class="bs-section-head">Decks</div>
-        <div id="browse-deck-tree"></div>
-      </div>
-    </aside>
     <div class="browse-main">
       <!-- The treasure chest (#1015): "Wortschatz" is what this screen actually
            is — everything he owns — and the status chips below are how he digs
@@ -458,6 +435,16 @@
            which list a different kind of thing and are fenced off visually. -->
       <div class="browse-chips" id="browse-chips"></div>
       <div class="browse-search-row">
+        <!-- #1023: the 200px sidebar became two dropdowns. Type and deck are
+             narrowing filters you set once, not a permanent column — the chips
+             above are the axis he actually switches on. -->
+        <select id="browse-type" onchange="onBrowseTypeSelect(this.value)" title="Entry type">
+          <option value="all">All types</option>
+          <option value="vocabulary">Words</option>
+          <option value="sentence">Sentences</option>
+          <option value="chengyu">Chengyu</option>
+        </select>
+        <select id="browse-deck" onchange="onBrowseDeckSelect(this.value)" title="Deck"></select>
         <input id="browse-search" type="text" placeholder="Search…"
                oninput="onBrowseSearch(this.value)" autocomplete="off"
                autocorrect="off" autocapitalize="off" spellcheck="false">
@@ -563,6 +550,12 @@
   </div>
 
   <!-- Book reader: uploaded EPUB/PDF read page by page in the target language (#836) -->
+  <!-- Archive (#1023): the two things the app produced but never let him read
+       back — every generated story, and every study session. -->
+  <div id="view-archive" style="display:none">
+    <div id="view-archive-content" style="max-width:860px;margin:0 auto;padding:16px"></div>
+  </div>
+
   <div id="view-books" style="display:none">
     <div id="view-books-content" style="max-width:720px;margin:0 auto;padding:16px"></div>
   </div>

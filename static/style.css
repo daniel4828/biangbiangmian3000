@@ -2454,10 +2454,12 @@ a.nav-btn { text-decoration: none; }
 #view-word-detail  { display: none; }
 #view-hanzi-detail { display: none; }
 
-/* Browse overrides the narrow main max-width */
+/* Browse overrides the narrow main max-width. Since #1023 there is no sidebar:
+   the type and deck filters are dropdowns in the search row, so the screen is
+   one centred column like every other view. */
 #view-browse.browse-layout {
   display: none; /* hidden by default; JS sets display:flex */
-  flex-direction: row;
+  flex-direction: column;
   align-items: stretch;
   width: 100%;
   max-width: 100%;
@@ -2466,51 +2468,13 @@ a.nav-btn { text-decoration: none; }
   padding: 0;
 }
 
-/* ── Sidebar ─────────────────────────────────────────── */
-.browse-sidebar {
-  width: 200px;
-  flex-shrink: 0;
-  border-right: 1.5px solid var(--border);
-  padding: 16px 0;
-  background: var(--card);
-  overflow-y: auto;
-}
-.bs-section { margin-bottom: 8px; }
-.bs-section-head {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--muted);
-  padding: 8px 16px 4px;
-}
-.bs-item, .bs-deck-item {
-  display: block;
-  width: 100%;
-  background: none;
-  border: none;
-  text-align: left;
-  padding: 6px 16px;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-  border-radius: 0;
-}
-.bs-item:hover, .bs-deck-item:hover { background: var(--bg); }
-.bs-item.bs-active, .bs-deck-item.bs-active {
-  background: #dbeafe;
-  color: var(--primary);
-  font-weight: 600;
-}
-
-/* Phone-only drawer toggle (#827); hidden on desktop, where the sidebar is
-   a permanent column. */
-.browse-filter-toggle { display: none; }
-
 /* ── Browse main panel ───────────────────────────────── */
 .browse-main {
   flex: 1;
   min-width: 0;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
   padding: 16px;
   overflow-y: auto;
 }
@@ -2601,6 +2565,10 @@ a.nav-btn { text-decoration: none; }
 .browse-chip.bc-on.bc-reference  { background: var(--st-reference); }
 .browse-chip.bc-on.bc-starred    { background: #e0a300; }
 .browse-chip.bc-on.bc-flagged    { background: #be123c; }
+/* Hanzi (#1023): ink-black, the one chip that lists characters rather than
+   words or sentences. */
+.browse-chip.bc-on.bc-hanzi      { background: #1f2937; }
+.bc-hanzi .bc-icon { font-family: var(--font-zh, inherit); font-weight: 700; }
 /* The two sentence views list a different kind of thing (#692/#854): a gap and
    a divider keep them from reading as a sixth word bucket. */
 .browse-chip.bc-sep { margin-left: 16px; position: relative; }
@@ -3233,13 +3201,6 @@ a.nav-btn { text-decoration: none; }
 .wd-menu-item.wd-menu-item-active { color: var(--primary); font-weight: 600; }
 .wd-menu-item.wd-menu-item-danger { color: #dc2626; }
 .wd-menu-item.wd-menu-item-danger:hover { background: #fef2f2; }
-.bs-deck-arrow {
-  display: inline-block;
-  width: 14px;
-  font-size: 10px;
-  color: var(--text-muted, #888);
-}
-.bs-deck-arrow-leaf { opacity: 0; }
 .wd-cards-head { display: flex; align-items: center; justify-content: space-between; }
 .wd-cat-circles { display: inline-flex; gap: 6px; margin-left: 10px; vertical-align: middle; }
 .wd-move-all-btn {
@@ -6238,30 +6199,6 @@ body.gloss-on .gloss-word {
     flex-direction: column;
     align-items: stretch;
   }
-  .browse-filter-toggle {
-    display: block;
-    width: 100%;
-    min-height: 44px;
-    padding: 10px 14px;
-    background: var(--card);
-    border: none;
-    border-bottom: 1.5px solid var(--border);
-    color: var(--text);
-    font-size: 14px;
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-  }
-  .browse-sidebar {
-    width: 100%;
-    border-right: none;
-    border-bottom: 1.5px solid var(--border);
-    padding: 8px 0 12px;
-    /* The deck tree can be long; cap it so the list stays reachable. */
-    max-height: 55vh;
-  }
-  .browse-sidebar:not(.bs-open) { display: none; }
-  .bs-item, .bs-deck-item { padding: 10px 16px; font-size: 15px; }
   .browse-main { padding: 12px; }
   /* Nine chips wrap into four rows on a 390px screen and push the list off the
      fold — one scrollable strip keeps them one thumb-swipe away instead (#1015). */
@@ -6554,3 +6491,83 @@ body.gloss-on .gloss-word {
 .mailbox-range { flex: 0 0 auto; width: auto; }
 /* A blocked sender is still listed (so it can be unblocked) but recedes. */
 .mailbox-row-blocked { opacity: 0.55; }
+
+/* ── Archive (#1023) ──────────────────────────────────────────────────────
+   Two reading views over things the app already produced: the stories it wrote
+   and the sessions he sat through. Styled off the browse rows on purpose —
+   the same list vocabulary, so nothing has to be re-learned. */
+#view-archive { display: none; }
+.arch-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.arch-title h2 { margin: 0; font-size: 22px; }
+.arch-sub { font-size: 12px; color: var(--muted); }
+.arch-tabs { display: flex; gap: 6px; }
+.arch-tab {
+  padding: 7px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.arch-tab:hover { border-color: var(--muted); }
+.arch-tab-on { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+
+.arch-row { cursor: pointer; align-items: center; gap: 10px; }
+.arch-cat { font-size: 18px; width: 26px; text-align: center; flex-shrink: 0; }
+.arch-row-title { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+.arch-chev { color: var(--muted); font-size: 12px; margin-left: auto; padding-left: 8px; }
+
+/* Rating split of one session as a single bar — the shape of how it went. */
+.arch-bar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; margin-top: 6px; max-width: 360px; }
+.arch-bar-seg { display: block; }
+.arch-r1 { background: #dc2626; }
+.arch-r2 { background: #f59e0b; }
+.arch-r3 { background: #16a34a; }
+.arch-r4 { background: #0284c7; }
+
+.arch-session-words { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; }
+.arch-word {
+  border: 1.5px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 3px 9px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.arch-word:hover { border-color: var(--primary); color: var(--primary); }
+/* A word's rating, as a left edge — legible next to red-green colour blindness
+   because the colours differ in lightness too, and the tooltip names them. */
+.arch-r1-tint { border-left: 4px solid #dc2626; }
+.arch-r2-tint { border-left: 4px solid #f59e0b; }
+.arch-r3-tint { border-left: 4px solid #16a34a; }
+.arch-r4-tint { border-left: 4px solid #0284c7; }
+
+.arch-back { margin-bottom: 12px; }
+.arch-story-head { margin-bottom: 16px; }
+.arch-story-head h2 { margin: 0 0 6px; font-size: 20px; }
+.arch-story-actions { margin-top: 10px; }
+.arch-sentences { display: flex; flex-direction: column; gap: 10px; }
+.arch-sent {
+  background: var(--card);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.arch-sent-zh { font-size: 17px; line-height: 1.6; }
+.arch-sent-tr { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.arch-sent-words { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+@media (max-width: 700px) {
+  .arch-head { align-items: flex-start; }
+  .arch-tabs { width: 100%; }
+  .arch-tab { flex: 1; text-align: center; }
+}
