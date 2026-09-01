@@ -154,6 +154,7 @@ def delete_known_word(word: str, lang: str = "zh"):
 class NewWordsRequest(BaseModel):
     text: str
     lang: str = "zh"
+    mode: str = "new"   # "new" | "all" (#1018)
 
 
 @router.post("/api/new-words")
@@ -170,10 +171,17 @@ def new_words(body: NewWordsRequest):
     known while reviewing. One judge, one answer.
 
     Never fails: annotate_summary swallows its own errors and returns [], and
-    an empty text is not an error either (a card can have no sentence yet)."""
+    an empty text is not an error either (a card can have no sentence yet).
+
+    mode="all" (#1018): every word of the text gets a gloss, not just the
+    ones Daniel doesn't know yet — the "show every gloss" gesture (#996)
+    extended past the new-word table. Same never-raises contract via
+    annotate.all_words()."""
     text = (body.text or "").strip()
     if not text:
         return {"words": []}
+    if body.mode == "all":
+        return {"words": annotate.all_words(text, body.lang)}
     _, words = annotate.annotate_summary(text, body.lang)
     return {"words": words}
 

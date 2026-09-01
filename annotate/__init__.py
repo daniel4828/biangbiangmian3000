@@ -53,3 +53,24 @@ def annotate_summary(text: str, lang: str) -> tuple[str, list[dict]]:
     except Exception as e:
         logger.warning("annotate: dispatch failed for lang=%s — %s", lang, e)
     return text, []
+
+
+def all_words(text: str, lang: str) -> list[dict]:
+    """Every annotatable word of `text` in `lang`, not filtered to the new
+    ones — counterpart to annotate_summary() for the "show every gloss"
+    gesture (#996) extended past the new-word table (#1018). Same
+    never-raises contract."""
+    if not text or not text.strip():
+        return []
+    annotator = languages.get_lang_config(lang).get("annotator")
+    try:
+        if annotator == "zh":
+            import zh_annotate
+            return zh_annotate.extract_all_words(text)
+        if annotator == "romance":
+            from . import romance
+            return romance.all_words(text, lang)
+        logger.warning("annotate: unknown annotator %r for lang=%s", annotator, lang)
+    except Exception as e:
+        logger.warning("annotate: all_words dispatch failed for lang=%s — %s", lang, e)
+    return []

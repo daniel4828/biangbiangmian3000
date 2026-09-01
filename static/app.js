@@ -6168,19 +6168,144 @@ function doWordTableKnown(idx, extraBtn) {
 // _knowledgeSummaryHtml() but never sets the word table, so it would wrap
 // against whatever list the previous screen left behind.
 function _makeWordsTappable(root) {
-  if (!root || !_wordTableWords.length) return;
+  if (!root) return;
+  // Captured before any DOM mutation below — the #1018 all-words fetch at
+  // the bottom needs the ORIGINAL text (mutating first would fold the
+  // hidden .tap-word-gloss text, already in the DOM per #996, into what
+  // gets sent for segmentation and double-count those words).
+  const originalText = root.textContent;
+
+  if (_wordTableWords.length) {
+    const isZh = _wordTableLang === 'zh';
+    // First index wins: the table is in order of first appearance, and a word
+    // repeated in the list would otherwise point the text at the later row.
+    const index = new Map();
+    _wordTableWords.forEach((w, i) => {
+      const key = (w.word || w.word_zh || '').trim();
+      if (key && !index.has(isZh ? key : key.toLowerCase())) {
+        index.set(isZh ? key : key.toLowerCase(), i);
+      }
+    });
+    // A bare `return` here would also skip the gloss-reveal binding and the
+    // #1018 all-words fetch below — this only needs to skip the new-word
+    // wrapping itself.
+    if (index.size) {
+    // Longest first, so "大语言模型" wins over "模型" at the same position.
+    const alternation = [...index.keys()]
+      .sort((a, b) => b.length - a.length)
+      .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('|');
+    const re = new RegExp(`(${alternation})`, isZh ? 'g' : 'gi');
+
+    const nodes = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+
+    nodes.forEach(node => {
+      const text = node.nodeValue;
+      if (!text || !text.trim()) return;
+      re.lastIndex = 0;
+      let match, cursor = 0, frag = null;
+      while ((match = re.exec(text)) !== null) {
+        // Letter boundaries are checked here rather than with a lookbehind in
+        // the pattern: Safari only learned lookbehind in 16.4, and a phone is
+        // exactly where this feature matters. Chinese needs no check — it has
+        // no letter boundaries to respect.
+        if (!isZh && (_isLetter(text[match.index - 1]) ||
+                      _isLetter(text[match.index + match[0].length]))) continue;
+        frag = frag || document.createDocumentFragment();
+        frag.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+        const wordIdx = index.get(isZh ? match[0] : match[0].toLowerCase());
+        const span = document.createElement('span');
+        span.className = 'tap-word';
+        span.dataset.wordIdx = String(wordIdx);
+        span.appendChild(document.createTextNode(match[0]));
+        // The gloss rides along in the markup from the start (#996), hidden by
+        // CSS. Building it on demand would mean re-walking the whole text every
+        // time Cmd is pressed — and it must appear in the same frame as the
+        // key, not after a reflow the eye can follow.
+        const w = _wordTableWords[wordIdx];
+        const gloss = w && (w.definition_de || w.definition || '');
+        if (gloss) {
+          const g = document.createElement('span');
+          g.className = 'tap-word-gloss';
+          g.textContent = gloss;
+          span.appendChild(g);
+        }
+        frag.appendChild(span);
+        cursor = match.index + match[0].length;
+      }
+      if (!frag) return;
+      frag.appendChild(document.createTextNode(text.slice(cursor)));
+      node.parentNode.replaceChild(frag, node);
+    });
+
+    // Bound once per element (#1006): the listening hint re-renders into the
+    // same node on every slider move, and a second listener would mean two
+    // panels opening for one tap.
+    if (!root.dataset.tapBound) {
+      root.dataset.tapBound = '1';
+      root.addEventListener('click', (e) => {
+        const span = e.target.closest?.('.tap-word');
+        if (!span) return;
+        e.preventDefault();
+        _openWordActions(Number(span.dataset.wordIdx), span);
+      });
+    }
+    }
+  }
+
+  _initGlossReveal(root);
+
+  // #1018: everything else in the text gets glossed too, not just the new
+  // words above — fetched live (once per unique text+lang, cached both here
+  // and per-word on the server) and layered in as a second, non-interactive
+  // pass once it lands. Never blocks the first pass above.
+  if (originalText && originalText.trim()) {
+    _fetchAllWords(originalText, _wordTableLang).then(words => {
+      if (!root.isConnected) return;   // page moved on while this was in flight
+      _wrapAllWordGlosses(root, words);
+    });
+  }
+}
+
+// ── Glossing every word, not just the new ones (#1018) ─────────────────────
+//
+// #996 only ever glossed the new-word table. This fetches the live
+// "everything" list once per unique (lang, text) and caches the in-flight
+// promise so re-renders of the same sentence (the listening-hint slider
+// moves, a card reappears) never refetch. Server-side, the words are cached
+// per-process too (zh_annotate._translation_cache / annotate.romance's
+// batch), so a repeat visit after the page cache is gone is still fast.
+let _allWordsCache = new Map();
+
+function _fetchAllWords(text, lang) {
+  const key = (lang || 'zh') + '\n' + text;
+  if (_allWordsCache.has(key)) return _allWordsCache.get(key);
+  const promise = api('POST', '/api/new-words', { text, lang, mode: 'all' })
+    .then(r => r.words || [])
+    .catch(() => []);
+  _allWordsCache.set(key, promise);
+  return promise;
+}
+
+// Second, non-interactive pass: wraps whatever text in `root` is NOT already
+// inside a .tap-word span (the new-word pass above already claimed those —
+// re-matching them would double the translation into the hidden gloss text
+// it left behind). No click handler and no dataset.wordIdx here — only new
+// words get the ★ List / ✓ Known panel (#967); this is display-only.
+function _wrapAllWordGlosses(root, words) {
+  if (!root || !words || !words.length) return;
   const isZh = _wordTableLang === 'zh';
-  // First index wins: the table is in order of first appearance, and a word
-  // repeated in the list would otherwise point the text at the later row.
   const index = new Map();
-  _wordTableWords.forEach((w, i) => {
-    const key = (w.word || w.word_zh || '').trim();
-    if (key && !index.has(isZh ? key : key.toLowerCase())) {
-      index.set(isZh ? key : key.toLowerCase(), i);
+  words.forEach(w => {
+    const key = (w.word || '').trim();
+    const gloss = (w.definition_de || '').trim();
+    if (key && gloss && !index.has(isZh ? key : key.toLowerCase())) {
+      index.set(isZh ? key : key.toLowerCase(), gloss);
     }
   });
   if (!index.size) return;
-  // Longest first, so "大语言模型" wins over "模型" at the same position.
   const alternation = [...index.keys()]
     .sort((a, b) => b.length - a.length)
     .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -6188,7 +6313,12 @@ function _makeWordsTappable(root) {
   const re = new RegExp(`(${alternation})`, isZh ? 'g' : 'gi');
 
   const nodes = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.parentElement && node.parentElement.closest('.tap-word')
+        ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    }
+  });
   while (walker.nextNode()) nodes.push(walker.currentNode);
 
   nodes.forEach(node => {
@@ -6197,31 +6327,17 @@ function _makeWordsTappable(root) {
     re.lastIndex = 0;
     let match, cursor = 0, frag = null;
     while ((match = re.exec(text)) !== null) {
-      // Letter boundaries are checked here rather than with a lookbehind in
-      // the pattern: Safari only learned lookbehind in 16.4, and a phone is
-      // exactly where this feature matters. Chinese needs no check — it has
-      // no letter boundaries to respect.
       if (!isZh && (_isLetter(text[match.index - 1]) ||
                     _isLetter(text[match.index + match[0].length]))) continue;
       frag = frag || document.createDocumentFragment();
       frag.appendChild(document.createTextNode(text.slice(cursor, match.index)));
-      const wordIdx = index.get(isZh ? match[0] : match[0].toLowerCase());
       const span = document.createElement('span');
-      span.className = 'tap-word';
-      span.dataset.wordIdx = String(wordIdx);
+      span.className = 'gloss-word';
       span.appendChild(document.createTextNode(match[0]));
-      // The gloss rides along in the markup from the start (#996), hidden by
-      // CSS. Building it on demand would mean re-walking the whole text every
-      // time Cmd is pressed — and it must appear in the same frame as the
-      // key, not after a reflow the eye can follow.
-      const w = _wordTableWords[wordIdx];
-      const gloss = w && (w.definition_de || w.definition || '');
-      if (gloss) {
-        const g = document.createElement('span');
-        g.className = 'tap-word-gloss';
-        g.textContent = gloss;
-        span.appendChild(g);
-      }
+      const g = document.createElement('span');
+      g.className = 'tap-word-gloss';
+      g.textContent = index.get(isZh ? match[0] : match[0].toLowerCase());
+      span.appendChild(g);
       frag.appendChild(span);
       cursor = match.index + match[0].length;
     }
@@ -6229,20 +6345,6 @@ function _makeWordsTappable(root) {
     frag.appendChild(document.createTextNode(text.slice(cursor)));
     node.parentNode.replaceChild(frag, node);
   });
-
-  // Bound once per element (#1006): the listening hint re-renders into the
-  // same node on every slider move, and a second listener would mean two
-  // panels opening for one tap.
-  if (!root.dataset.tapBound) {
-    root.dataset.tapBound = '1';
-    root.addEventListener('click', (e) => {
-      const span = e.target.closest?.('.tap-word');
-      if (!span) return;
-      e.preventDefault();
-      _openWordActions(Number(span.dataset.wordIdx), span);
-    });
-  }
-  _initGlossReveal(root);
 }
 
 // ── Showing every gloss at once, under the hanzi (#996) ─────────────────────

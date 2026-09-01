@@ -928,9 +928,10 @@ POST /api/knowledge/add-file                          → multipart：file（.tx
 GET    /api/knowledge/{episode_id}/chat               → 该素材的对话（#945）：{model, messages[{id,role,content,model,created_at}]}；没聊过是空数组不是 404；素材不存在 404
 POST   /api/knowledge/{episode_id}/chat               → body {message, model?} → 追加一轮，返回刚存的两条消息；AI 失败 500 且**库里什么都不写**（半截对话比报错更糟）；没转录也没摘要 400；AI 关闭 400
 DELETE /api/knowledge/{episode_id}/chat               → 清空该素材的对话；没有对话返回 404（不假装成功）
-POST /api/new-words                                   → body {text, lang?='zh'} → {words:[{word,pinyin,definition_de,hsk}]}（#1006）
-                                                       只调 `annotate.annotate_summary()`，不写第二套生词判定；空文本返回空表不算错误
-                                                       调用方：复习听力提示滑块的中间档（只显示生词），与阅读模式同一个判定
+POST /api/new-words                                   → body {text, lang?='zh', mode?='new'|'all'} → {words:[{word,pinyin,definition_de,hsk}]}（#1006）
+                                                       只调 `annotate.annotate_summary()`（mode='new'，只调用方：复习听力提示滑块的中间档、与阅读模式同一个判定）不写第二套生词判定；空文本返回空表不算错误
+                                                       mode='all'（#1018）→ `annotate.all_words()`：不按"是否生词"过滤，返回文本里**全部**切分出来的词（含已认识的），零 AI，翻译走 `translator.translate_batch()`
+                                                       调用方：`static/app.js` 的 `_makeWordsTappable()`——Cmd/左滑显示全部释义（#996）第二遍渲染，用它给生词表以外的词也套上（不可点击的）释义 span；生词仍走第一遍，保留 ★List/✓Known 点词面板
 GET/POST /api/known-words ；DELETE /api/known-words/{word} → 已认识词库（#710）：标记后 zh_annotate 不再当生词；不建卡不排程；DELETE 词不在表里返回 404（不假装成功）
 POST /api/podcast/check                              → 跑一轮抓取，返回汇总 {new, summarized, emailed, failed}
 GET  /api/podcast/episodes                            → 统一素材列表（不含转录全文；手动处理中的单集 status 显示为 processing）
