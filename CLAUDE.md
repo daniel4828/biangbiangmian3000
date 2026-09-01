@@ -590,6 +590,19 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 ---
 
+## Archive：故事与学习会话的回看（#1023）
+
+应用生成的两样东西一直没有回看入口：**每一篇故事**和**每一次学习会话**，数据早在库里（`stories` / `review_log`），界面上够不着。主页导航行 `📜 Archive`，两个标签。
+
+- **不是 Browse 的一部分**：Browse 是「他拥有的词」这个箱子，Archive 是「发生过什么」的记录，两种东西
+- **Stories**：`GET /api/stories`（元数据，不带句子——一篇 knowledge 模式的故事句子很大）+ `GET /api/stories/{id}`（单篇带全部句子）。`database.list_stories()` **排除 `category='again'`**：那些是 Again 单句重生成的哨兵行，不是给人读的故事。每句的目标词可点进词条，📝 Prompt 复用 #697 的 `GET /api/story-prompt/{id}`
+- **Sessions**：`GET /api/sessions` → `database.get_study_sessions()`，**从 `review_log` 按停顿切分**（`database.SESSION_GAP_MINUTES = 30`），**不建表、不写第二套记账** —— 同 #821 的道理，平行的会话表迟早和统计读的那份日志漂移
+  - 切分在 Python 里做，不在 SQL 里：跨版本可靠的窗口函数不能指望，而行数很小；`max_rows` 兜住往回看的深度
+  - **留存率只算 `state='review'` 的行**：学习步骤里按 Again 不是 lapse，混进去会让每个有新卡的早晨看起来像灾难
+  - 评分分布画成**一条**分段条：一次会话过得怎么样是个形状，不是四个数字
+
+---
+
 ## 加星句子：改进提示词的正例样本（#692）
 
 复习时读到写得好的句子，就地按 **Shift+F** 或点卡背工具条的 ☆ 加星；之后在 Browse 的 **⭐ Sentences** 视图集中回看。判断一句话好不好只有读到它的那一秒才可能，事后翻故事历史回忆不起来 —— 这是这个功能存在的全部理由。
@@ -919,6 +932,9 @@ POST /api/speak ；POST /api/speak-multi ；GET /api/speak-status ；POST /api/s
 GET  /api/tts-file ；POST /api/preload ；POST /api/preload-session/{deck_id}/{category}
 GET  /api/tts-progress/{deck_id}/{category} ；GET /api/story-progress/{deck_id}/{category}
 POST /api/story-sentence/{id}/star                   → 给句子加星/取消，body {starred: bool}（#692）；句子不存在 404
+GET  /api/stories[?lang=&limit=]                     → 所有生成过的故事，倒序（#1023）；不含句子；排除 category='again'
+GET  /api/stories/{id}                               → 单篇故事 + 全部句子；不存在 404
+GET  /api/sessions[?lang=&limit=]                    → 学习会话（#1023）：从 review_log 按 30 分钟停顿切分，不建表
 GET  /api/starred-sentences[?lang=&limit=]           → 全部加星句子，附生成模式/模型/episode_id/牌组/来源 + story_id/has_prompt（#692、#697）
 GET  /api/story-prompt/{story_id}                    → 生成该故事的完整提示词（#697）；故事不存在 404
                                                        **不能**写成 /api/story/{id}/prompt——GET /api/story/{deck_id}/{category} 注册在前会把它当 category='prompt' 吃掉

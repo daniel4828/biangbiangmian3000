@@ -65,7 +65,6 @@ let _browseSort  = DEFAULT_BROWSE_SORT;
 let _browseSelected = new Set();  // selected word IDs (multiselect)
 let _browseDecks = [];            // flat deck list for move dropdown
 let _browseDeckTree = [];         // top-level user decks (children of All) for sidebar tree
-let _browseDeckExpanded = new Set(); // deck IDs expanded in sidebar tree
 let optDeckId    = null; // deck whose options modal is open
 const collapsed  = new Set(JSON.parse(localStorage.getItem('collapsedDecks') || '[]'));  // parent deck IDs that are collapsed
 let _retentionData = null;  // cached result from GET /api/retention
@@ -1009,7 +1008,7 @@ function showView(name) {
   // loading screen ends that run, so they must not survive into the next
   // unrelated setLoading() ("Loading audio…", opening a knowledge item, …).
   if (name !== 'loading') _storyLoadingSources = [];
-  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books'].forEach(v => {
+  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books', 'archive'].forEach(v => {
     document.getElementById(`view-${v}`).style.display = 'none';
   });
   document.getElementById(`view-${name}`).style.display =
@@ -1035,7 +1034,8 @@ function showView(name) {
     name === 'stats'        ? 'Stats' :
     name === 'settings'     ? 'Settings' :
     name === 'knowledge'    ? 'Knowledge' :
-    name === 'books'        ? 'Books' : 'biangbiangmian3000';
+    name === 'books'        ? 'Books' :
+    name === 'archive'      ? 'Archive' : 'biangbiangmian3000';
   if (name === 'decks') quickMode = false;
   // ＋ in every view (#829 review-only, widened in #958). Hidden offline for
   // the same reason as ↺: the whole entry generation is an AI call, so it can
@@ -1950,6 +1950,7 @@ function renderDecks(decks) {
       <button class="nav-btn" onclick="openRandomWords()" title="10 random words for today">🎲 Random</button>
       <button class="nav-btn" onclick="openBrowse()" title="Shortcut: B">Browse Cards</button>
       <button class="nav-btn" onclick="openStats()">Stats</button>
+      <button class="nav-btn" onclick="openArchive()" title="Every generated story and every study session">📜 Archive</button>
       <button class="nav-btn" onclick="openKnowledge()">🧠 Knowledge</button>
       <button class="nav-btn" onclick="openBooks()" title="Read an uploaded book">📚 Books</button>
       <button class="nav-btn" onclick="openSettings()" title="Customize shortcuts">⚙ Settings</button>
@@ -2476,8 +2477,9 @@ function renderBrowseChips() {
     counts[st] = (counts[st] || 0) + 1;
   }
   counts.all = base.length;
+  const inHanzi = _browseMode === 'hanzi';
   box.innerHTML = BROWSE_STATUSES.map(st => {
-    const on = _browseCardStatus === st.key ? ' bc-on' : '';
+    const on = (!inHanzi && _browseCardStatus === st.key) ? ' bc-on' : '';
     const sep = st.sep ? ' bc-sep' : '';
     const count = st.word
       ? `<span class="bc-count">${counts[st.key] || 0}</span>`
@@ -2487,9 +2489,19 @@ function renderBrowseChips() {
       title="${_escHtml(st.title)}" onclick="setBrowseStatusFilter('${st.key}')"
       ><span class="bc-icon">${st.icon}</span><span class="bc-label">${st.label}</span>${count}</button>`;
   }).join('');
+  // Hanzi last, behind the same separator as the sentence views: it is the third
+  // kind of thing in the chest (characters, not words or sentences) and the one
+  // piece of the old sidebar worth keeping (#1023). Chinese-only (#815).
+  if (activeLang() === 'zh') {
+    box.innerHTML += `<button class="browse-chip bc-hanzi bc-sep${inHanzi ? ' bc-on' : ''}"
+      title="Every character in the database, grouped by pinyin"
+      onclick="setBrowseHanzi()"><span class="bc-icon">\u{5B57}</span><span class="bc-label">Hanzi</span>` +
+      `<span class="bc-count">${_allHanzi.length}</span></button>`;
+  }
   const sub = document.getElementById('wortschatz-sub');
   if (sub) {
     const NOUN = { all: 'entries', vocabulary: 'words', sentence: 'sentences', chengyu: 'chengyu' };
+    if (inHanzi) { sub.textContent = `${_allHanzi.length} characters`; return; }
     let text = `${base.length} ${NOUN[_browseFilter] || 'entries'}`;
     if (_browseDeckId !== null) {
       const deck = _browseDecks.find(d => d.id === _browseDeckId);
@@ -2499,49 +2511,13 @@ function renderBrowseChips() {
   }
 }
 
-// ── Phone filter drawer (#827) ───────────────────────────────────────────────
-// Below 700px the sidebar is a collapsible drawer instead of a fixed column,
-// otherwise it eats half of a 390px screen and the word list gets sliced off.
-// The CSS breakpoint is the single source of truth for "is this a phone" —
-// matchMedia reads the same 700px so the two can't drift apart.
-const _BROWSE_DRAWER_MQ = '(max-width: 700px)';
-
-function _browseDrawerActive() {
-  return window.matchMedia(_BROWSE_DRAWER_MQ).matches;
-}
-
-function toggleBrowseSidebar() {
-  const bar = document.getElementById('browse-sidebar');
-  const btn = document.getElementById('browse-filter-toggle');
-  if (!bar) return;
-  const open = bar.classList.toggle('bs-open');
-  if (btn) {
-    btn.setAttribute('aria-expanded', String(open));
-    btn.textContent = open ? '✕ Filters' : '☰ Filters';
-  }
-}
-
-// Picking a filter on a phone means "show me that list" — leaving the drawer
-// open would hide the very rows the tap asked for. Expanding a deck node in
-// the tree is not a pick, so this is called from the filter setters only.
-function _closeBrowseDrawer() {
-  if (!_browseDrawerActive()) return;
-  const bar = document.getElementById('browse-sidebar');
-  if (bar && bar.classList.contains('bs-open')) toggleBrowseSidebar();
-}
-
 function setBrowseFilter(mode, filter) {
-  _closeBrowseDrawer();
   _browseMode   = mode;
   _browseFilter = filter;
   _browseDeckId = null;
   _leaveSentenceView();
   _syncSortOptions();
-  // Update sidebar active state
-  document.querySelectorAll('.bs-item').forEach(el => el.classList.remove('bs-active'));
-  const btnId = mode === 'hanzi' ? 'bsf-hanzi' : `bsf-${filter}`;
-  const btn = document.getElementById(btnId);
-  if (btn) btn.classList.add('bs-active');
+  _syncBrowseSelects();
   document.getElementById('browse-search').value = '';
   _browseSelected.clear();
   _updateBrowseActionBar();
@@ -2550,10 +2526,26 @@ function setBrowseFilter(mode, filter) {
   else renderBrowseWords(_filteredBrowseWords());
 }
 
+// The Hanzi chip (#1023) is the one sidebar entry worth keeping, so it sits in
+// the chip row like everything else — but it lists characters, not words, so
+// entering it leaves every word-level filter behind.
+function setBrowseHanzi() { setBrowseFilter('hanzi', 'all'); }
+
+// Type and deck are two independent narrowing axes now that both are dropdowns
+// (#1023): setting one must not silently reset the other, which is what the
+// sidebar's setBrowseFilter() did (there, picking a type meant leaving the deck).
+function onBrowseTypeSelect(val) {
+  const deckId = _browseDeckId;
+  setBrowseFilter('notes', val);
+  if (deckId !== null) setBrowseDeckFilter(deckId);
+}
+
 function setBrowseStatusFilter(status) {
-  _closeBrowseDrawer();
+  // Chips are word-level; clicking one from the hanzi list means "back to words".
+  _browseMode = 'notes';
   _browseCardStatus = status;
   _syncSortOptions();
+  _syncBrowseSelects();
   document.getElementById('browse-search').value = '';
   _browseSelected.clear();
   _updateBrowseActionBar();
@@ -2563,7 +2555,7 @@ function setBrowseStatusFilter(status) {
   // branch (#692, generalized to flagged in #854).
   if (status === 'starred') { renderStarredSentences(); return; }
   if (status === 'flagged') { renderFlaggedSentences(); return; }
-  if (_browseMode === 'notes') renderBrowseWords(_filteredBrowseWords());
+  renderBrowseWords(_filteredBrowseWords());
 }
 
 // Any word-level filter action leaves the current sentence view (starred or
@@ -2578,23 +2570,25 @@ function _leaveSentenceView() {
   renderBrowseChips();
 }
 
+// The two dropdowns and the mode must always say the same thing as the state —
+// they are set from code (openBrowseForDeck, a chip click) as often as by hand.
+function _syncBrowseSelects() {
+  const type = document.getElementById('browse-type');
+  const deck = document.getElementById('browse-deck');
+  const hanzi = _browseMode === 'hanzi';
+  if (type) { type.value = _browseFilter; type.disabled = hanzi; }
+  if (deck) { deck.value = _browseDeckId === null ? '' : String(_browseDeckId); deck.disabled = hanzi; }
+}
+
+function onBrowseDeckSelect(val) {
+  setBrowseDeckFilter(val === '' ? null : Number(val));
+}
+
 function setBrowseDeckFilter(deckId) {
-  _closeBrowseDrawer();
   _leaveSentenceView();
-  if (_browseDeckId === deckId) {
-    _browseDeckId = null;
-    document.querySelectorAll('.bs-deck-item').forEach(el => el.classList.remove('bs-active'));
-    _browseSelected.clear();
-    _updateBrowseActionBar();
-    renderBrowseChips();
-    renderBrowseWords(_filteredBrowseWords());
-    return;
-  }
   _browseMode   = 'notes';
-  _browseFilter = 'all';
   _browseDeckId = deckId;
-  document.querySelectorAll('.bs-item, .bs-deck-item').forEach(el => el.classList.remove('bs-active'));
-  document.querySelectorAll(`.bs-deck-item[data-id="${deckId}"]`).forEach(el => el.classList.add('bs-active'));
+  _syncBrowseSelects();
   document.getElementById('browse-search').value = '';
   _browseSelected.clear();
   _updateBrowseActionBar();
@@ -2613,7 +2607,7 @@ async function openBrowse() {
   try {
     const [words, hanzi, deckTree] = await Promise.all([
       // Browse is language-scoped like every other view (#815): the word
-      // list, the deck sidebar and the search all take the active tab's lang,
+      // list, the deck picker and the search all take the active tab's lang,
       // so French words can never show up under the Chinese tab.
       api('GET', `/api/browse-words${_langQP('?')}`),
       api('GET', '/api/hanzi'),
@@ -2625,26 +2619,14 @@ async function openBrowse() {
     // Top-level user decks: children of the "All" virtual root
     const _allRoot = deckTree.find(d => d.virtual && d.id !== 'unfinished');
     _browseDeckTree = _allRoot ? (_allRoot.children || []) : deckTree.filter(d => !d.virtual);
-    _browseDeckExpanded = new Set();
     _browseSelected.clear();
     _browseCardStatus = 'all';
     _starredSentencesCache = null;  // fresh browse open — re-fetch, don't reuse a stale list (#773)
     _flaggedSentencesCache = null;
     _syncSortOptions();
     showView('browse');
-    // Always land on the list, not on the filter drawer (#827).
-    const _sidebar = document.getElementById('browse-sidebar');
-    if (_sidebar) _sidebar.classList.remove('bs-open');
-    const _drawerBtn = document.getElementById('browse-filter-toggle');
-    if (_drawerBtn) {
-      _drawerBtn.setAttribute('aria-expanded', 'false');
-      _drawerBtn.textContent = '☰ Filters';
-    }
     document.getElementById('browse-search').value = '';
-    // Hanzi are Chinese-only; under fr/es that section lists nothing relevant (#815).
-    const hanziSec = document.getElementById('bs-hanzi-section');
-    if (hanziSec) hanziSec.style.display = activeLang() === 'zh' ? '' : 'none';
-    _renderBrowseSidebar();
+    _renderBrowseDeckSelect();
     _updateBrowseActionBar();
     setBrowseFilter('notes', 'all');
   } catch (e) {
@@ -2665,51 +2647,24 @@ function _flattenDecks(tree) {
   return result;
 }
 
-function _hasExpandableChildren(deck) {
-  return (deck.children || []).some(c => !c.category && !c.virtual);
-}
-
-function _renderDeckTreeNode(deck, depth) {
-  const isExpanded = _browseDeckExpanded.has(deck.id);
-  const hasKids = _hasExpandableChildren(deck);
-  const isActive = _browseDeckId === deck.id;
-  const indent = 16 + depth * 14;
-
-  const arrow = hasKids
-    ? `<span class="bs-deck-arrow">${isExpanded ? '▾' : '▸'}</span>`
-    : `<span class="bs-deck-arrow bs-deck-arrow-leaf"></span>`;
-
-  const onclick = hasKids
-    ? `toggleBrowseDeckExpand(${deck.id})`
-    : `setBrowseDeckFilter(${deck.id})`;
-
-  let html = `<button class="bs-deck-item${isActive ? ' bs-active' : ''}" data-id="${deck.id}"
-    style="padding-left:${indent}px" onclick="${onclick}">${arrow}${deck.name}</button>`;
-
-  if (isExpanded && hasKids) {
-    const kids = (deck.children || [])
-      .filter(c => !c.category && !c.virtual)
-      .sort((a, b) => a.name.localeCompare(b.name));
-    html += kids.map(c => _renderDeckTreeNode(c, depth + 1)).join('');
+// Deck picker (#1023). The tree became a flat option list: an indented select
+// says the same thing in one line, and "which deck" is a narrowing filter, not
+// a place to browse around in. Parents stay selectable — picking one includes
+// its whole subtree, exactly as the tree did.
+function _browseDeckOptions(nodes, depth, out) {
+  for (const d of [...nodes].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (d.category || d.virtual) continue;
+    out.push(`<option value="${d.id}">${'\u00a0'.repeat(depth * 3)}${_escHtml(d.name)}</option>`);
+    if (d.children?.length) _browseDeckOptions(d.children, depth + 1, out);
   }
-  return html;
+  return out;
 }
 
-function _renderBrowseSidebar() {
-  const container = document.getElementById('browse-deck-tree');
-  const topLevel = _browseDeckTree
-    .filter(d => !d.category && !d.virtual)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  container.innerHTML = topLevel.map(d => _renderDeckTreeNode(d, 0)).join('');
-}
-
-function toggleBrowseDeckExpand(deckId) {
-  if (_browseDeckExpanded.has(deckId)) {
-    _browseDeckExpanded.delete(deckId);
-  } else {
-    _browseDeckExpanded.add(deckId);
-  }
-  _renderBrowseSidebar();
+function _renderBrowseDeckSelect() {
+  const sel = document.getElementById('browse-deck');
+  if (!sel) return;
+  const opts = _browseDeckOptions(_browseDeckTree, 0, []);
+  sel.innerHTML = '<option value="">All decks</option>' + opts.join('');
 }
 
 function onBrowseSearch(val) {
@@ -2924,7 +2879,6 @@ async function _browseReload() {
   browseWords = await api('GET', `/api/browse-words${_langQP('?')}`);
   _browseSelected.clear();
   _updateBrowseActionBar();
-  _renderBrowseSidebar();
   renderBrowseChips();   // unleeching / promoting a word moves it between buckets
   if (q) onBrowseSearch(q);
   else renderBrowseWords(_filteredBrowseWords());
@@ -12753,6 +12707,12 @@ function _navHere() {
     const id = _currentHanziId;
     return { key: `hanzi:${id}`, restore: () => openHanziDetail(id) };
   }
+  if (view === 'archive') {
+    const id = _archiveState.storyId;
+    if (id != null) return { key: `archive:story:${id}`, restore: () => openArchiveStory(id) };
+    const t = _archiveState.tab;
+    return { key: `archive:${t}`, restore: () => openArchive(t) };
+  }
   if (view === 'stats')         return { key: 'stats', restore: () => openStats() };
   if (view === 'settings')      return { key: 'settings', restore: () => openSettings() };
   if (view === 'decks')         return { key: 'decks', restore: () => _goHomeNow() };
@@ -16429,4 +16389,191 @@ async function blockMailSender(address, blocked, name) {
   } catch (e) {
     _mailboxNotice(`Could not change the setting: ${e.message || 'error'}`, true);
   }
+}
+
+// ── Archive (#1023) ──────────────────────────────────────────────────────────
+// The app produced two things it never let him read back: every story it wrote,
+// and every session he sat through. Both are already in the database (stories /
+// review_log) — this view is the reader. It is deliberately NOT part of Browse:
+// Browse is the chest of words he owns, this is the record of what happened.
+const _ARCHIVE_TABS = [
+  { key: 'stories',  icon: '\u{1F4D6}', label: 'Stories'  },
+  { key: 'sessions', icon: '\u{1F551}', label: 'Sessions' },
+];
+const _CAT_ICON = { listening: '\u{1F3A7}', reading: '\u{1F4D6}', creating: '✍️', unified: '\u{1F500}' };
+const _RATING_LABEL = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
+
+let _archiveState = { tab: 'stories', stories: null, sessions: null, storyId: null, openSession: null };
+
+function _fmtDur(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+function _fmtClock(ts) { return (ts || '').slice(11, 16); }
+function _fmtDay(ts)   { return (ts || '').slice(0, 10); }
+
+async function openArchive(tab = 'stories') {
+  navPush(`archive:${tab}`);
+  _archiveState.tab = tab;
+  _archiveState.storyId = null;
+  showView('archive');
+  _renderArchive();
+  // Each tab loads once per visit to this view; switching back is instant.
+  try {
+    if (tab === 'stories' && !_archiveState.stories) {
+      const r = await api('GET', `/api/stories${_langQP('?')}`);
+      _archiveState.stories = r.stories;
+    } else if (tab === 'sessions' && !_archiveState.sessions) {
+      const r = await api('GET', `/api/sessions${_langQP('?')}`);
+      _archiveState.sessions = r.sessions;
+    }
+  } catch (e) {
+    _archiveState.error = e.message;
+  }
+  if (_currentView === 'archive') _renderArchive();
+}
+
+function _archiveShell(body) {
+  const tabs = _ARCHIVE_TABS.map(t =>
+    `<button class="arch-tab${_archiveState.tab === t.key ? ' arch-tab-on' : ''}"
+             onclick="openArchive('${t.key}')">${t.icon} ${t.label}</button>`).join('');
+  return `<div class="arch-head">
+      <div class="arch-title"><h2>\u{1F4DC} Archive</h2>
+        <span class="arch-sub">Everything the app wrote, and every session you sat through</span></div>
+      <div class="arch-tabs">${tabs}</div>
+    </div>${body}`;
+}
+
+function _renderArchive() {
+  const box = document.getElementById('view-archive-content');
+  if (!box) return;
+  if (_archiveState.error) {
+    box.innerHTML = _archiveShell(`<div class="browse-empty">Could not load: ${_escHtml(_archiveState.error)}</div>`);
+    _archiveState.error = null;
+    return;
+  }
+  if (_archiveState.storyId != null) { box.innerHTML = _archiveStoryHtml(); return; }
+  const data = _archiveState.tab === 'stories' ? _archiveState.stories : _archiveState.sessions;
+  if (!data) { box.innerHTML = _archiveShell('<div class="browse-empty">Loading…</div>'); return; }
+  box.innerHTML = _archiveShell(
+    _archiveState.tab === 'stories' ? _archiveStoriesHtml(data) : _archiveSessionsHtml(data));
+}
+
+// ── Stories tab ──────────────────────────────────────────────────────────────
+function _archiveStoriesHtml(stories) {
+  if (!stories.length) return '<div class="browse-empty">No stories generated yet.</div>';
+  let html = '', lastDay = null;
+  for (const s of stories) {
+    if (s.date !== lastDay) { html += `<div class="browse-section-label">${_escHtml(s.date)}</div>`; lastDay = s.date; }
+    const meta = [
+      s.deck_name, `${s.sentence_count} sentences`, s.mode,
+      s.model, _fmtClock(s.generated_at),
+    ].filter(Boolean).map(x => `<span>${_escHtml(String(x))}</span>`).join('<span class="ss-dot">·</span>');
+    html += `<div class="bw-row arch-row" onclick="openArchiveStory(${s.id})">
+      <div class="arch-cat" title="${_escHtml(s.category)}">${_CAT_ICON[s.category] || '\u{1F4C4}'}</div>
+      <div class="ss-main">
+        <div class="arch-row-title">${_escHtml(s.topic || s.category)}</div>
+        <div class="ss-meta">${meta}</div>
+      </div>
+    </div>`;
+  }
+  return `<div class="bw-list">${html}</div>`;
+}
+
+async function openArchiveStory(storyId) {
+  navPush(`archive:story:${storyId}`);
+  _archiveState.storyId = storyId;
+  _archiveState.story = null;
+  showView('archive');
+  _renderArchive();
+  try {
+    _archiveState.story = await api('GET', `/api/stories/${storyId}`);
+  } catch (e) {
+    _archiveState.storyId = null;
+    _archiveState.error = e.message;
+  }
+  if (_currentView === 'archive') _renderArchive();
+}
+
+function closeArchiveStory() {
+  _archiveState.storyId = null;
+  _archiveState.story = null;
+  _renderArchive();
+}
+
+function _archiveStoryHtml() {
+  const st = _archiveState.story;
+  const back = `<button class="btn-secondary arch-back" onclick="closeArchiveStory()">← Stories</button>`;
+  if (!st) return `${back}<div class="browse-empty">Loading…</div>`;
+  const meta = [st.date, st.deck_name, st.category, st.mode, st.model, st.topic]
+    .filter(Boolean).map(x => `<span>${_escHtml(String(x))}</span>`).join('<span class="ss-dot">·</span>');
+  const prompt = st.has_prompt
+    ? `<button class="ss-prompt-btn" onclick="showStoryPrompt(${st.id})">\u{1F4DD} Prompt</button>`
+    : `<button class="ss-prompt-btn" disabled title="No prompt stored for this story">\u{1F4DD} Prompt</button>`;
+  const rows = (st.sentences || []).map(s => {
+    const trans = s.sentence_de || s.sentence_fr || s.sentence_en || '';
+    // The target words are what makes an archived story worth reading back:
+    // each one opens its entry.
+    const words = (s.words || []).map(w =>
+      `<button class="arch-word" onclick="openWordDetail(${w.word_id})">${_escHtml(w.word_zh)}</button>`).join('');
+    return `<div class="arch-sent">
+      <div class="arch-sent-zh">${_escHtml(s.sentence_zh)}</div>
+      ${trans ? `<div class="arch-sent-tr">${_escHtml(trans)}</div>` : ''}
+      ${words ? `<div class="arch-sent-words">${words}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `${back}
+    <div class="arch-story-head">
+      <h2>${_escHtml(st.topic || st.category)}</h2>
+      <div class="ss-meta">${meta}</div>
+      <div class="arch-story-actions">${prompt}</div>
+    </div>
+    <div class="arch-sentences">${rows || '<div class="browse-empty">This story has no sentences.</div>'}</div>`;
+}
+
+// ── Sessions tab ─────────────────────────────────────────────────────────────
+function _archiveSessionsHtml(sessions) {
+  if (!sessions.length) return '<div class="browse-empty">No reviews logged yet.</div>';
+  let html = '', lastDay = null;
+  for (const s of sessions) {
+    const day = _fmtDay(s.started_at);
+    if (day !== lastDay) { html += `<div class="browse-section-label">${_escHtml(day)}</div>`; lastDay = day; }
+    const open = _archiveState.openSession === s.started_at;
+    // The rating split as one bar: how a session went is a shape, not four numbers.
+    const bar = [1, 2, 3, 4].map(r => {
+      const n = s.ratings[String(r)] || 0;
+      if (!n) return '';
+      return `<span class="arch-bar-seg arch-r${r}" style="flex:${n}" title="${_RATING_LABEL[r]}: ${n}"></span>`;
+    }).join('');
+    const meta = [
+      `${_fmtClock(s.started_at)}–${_fmtClock(s.ended_at)}`,
+      `${s.count} reviews`,
+      `${s.unique_cards} cards`,
+      _fmtDur(s.duration_ms || s.elapsed_ms),
+      s.retention != null ? `${s.retention}% retention` : null,
+      Object.keys(s.categories || {}).map(c => _CAT_ICON[c] || c).join(' '),
+    ].filter(Boolean).map(x => `<span>${_escHtml(String(x))}</span>`).join('<span class="ss-dot">·</span>');
+    html += `<div class="bw-row arch-row" onclick="toggleArchiveSession('${s.started_at}')">
+      <div class="ss-main">
+        <div class="ss-meta">${meta}</div>
+        <div class="arch-bar">${bar}</div>
+      </div>
+      <div class="arch-chev">${open ? '▾' : '▸'}</div>
+    </div>`;
+    if (open) {
+      const words = (s.words || []).map(w =>
+        `<button class="arch-word arch-r${w.rating}-tint" title="${_RATING_LABEL[w.rating]}"
+                 onclick="event.stopPropagation();openWordDetail(${w.word_id})">${_escHtml(w.word_zh)}</button>`).join('');
+      html += `<div class="arch-session-words">${words || '<span class="arch-sub">No words recorded.</span>'}</div>`;
+    }
+  }
+  return `<div class="bw-list">${html}</div>`;
+}
+
+function toggleArchiveSession(startedAt) {
+  _archiveState.openSession = _archiveState.openSession === startedAt ? null : startedAt;
+  _renderArchive();
 }

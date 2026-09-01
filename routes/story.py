@@ -1309,6 +1309,26 @@ def reset_prompt_template(mode: str):
     return {"mode": mode, "is_active": False}
 
 
+@router.get("/api/stories")
+def list_stories(lang: str | None = None, limit: int = 300):
+    """Every story ever generated, newest first — the Archive view (#1023).
+
+    Metadata only (no sentences): the list shows a few hundred rows, and a
+    knowledge-mode story's sentences are large. The reader fetches one story.
+    """
+    return {"stories": database.list_stories(lang=lang, limit=limit)}
+
+
+@router.get("/api/stories/{story_id}")
+def get_one_story(story_id: int):
+    """One archived story with all its sentences (#1023). 404 when it's gone."""
+    story = database.get_story_detail(story_id)
+    if story is None:
+        raise HTTPException(404, "story not found")
+    story["sentences"] = _add_tokens(story["sentences"], lang=story["lang"])
+    return story
+
+
 @router.get("/api/story/{deck_id}/{category}/history")
 def get_history_story(deck_id: int, category: str, lang: str | None = None):
     """Return the most recent story for this deck+category, regardless of date."""

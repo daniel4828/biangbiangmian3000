@@ -638,3 +638,88 @@ def get_due_cards_unified(deck_id: int, lang: str | None = None) -> list[dict]:
             result = _interleave_cards(lr_cards, new_cards)
 
     return result
+
+
+def list_stories(lang: str | None = None, limit: int = 300) -> list[dict]:
+    """Every story ever generated, newest first — the archive view (#1023).
+
+    The 'again' sentinel category is excluded: those rows are single-sentence
+    regenerations, not stories anyone reads back. A NULL lang column is a legacy
+    row and counts as 'zh', same rule as get_active_story().
+    """
+    conn = get_db()
+    where = "s.category != 'again'"
+    params: list = []
+    if lang is not None:
+        if lang == "zh":
+            where += " AND (s.lang IS NULL OR s.lang = 'zh')"
+        else:
+            where += " AND s.lang = ?"
+            params.append(lang)
+    rows = conn.execute(
+        f"""SELECT s.id, s.date, s.category, s.deck_id, s.generated_at, s.topic,
+                   s.gen_params, s.lang,
+                   d.name AS deck_name,
+                   (s.prompt_text IS NOT NULL AND s.prompt_text != '') AS has_prompt,
+                   (SELECT COUNT(*) FROM story_sentences ss WHERE ss.story_id = s.id) AS sentence_count
+            FROM stories s
+            LEFT JOIN decks d ON d.id = s.deck_id
+            WHERE {where}
+            ORDER BY s.generated_at DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    conn.close()
+
+    out = []
+    for r in rows:
+        try:
+            gp = json.loads(r["gen_params"]) if r["gen_params"] else {}
+        except (ValueError, TypeError):
+            gp = {}
+        out.append({
+            "id": r["id"],
+            "date": r["date"],
+            "category": r["category"],
+            "deck_id": r["deck_id"],
+            "deck_name": r["deck_name"],
+            "generated_at": r["generated_at"],
+            "topic": r["topic"],
+            "mode": gp.get("mode") or "story",
+            "model": gp.get("model"),
+            "lang": r["lang"] or "zh",
+            "has_prompt": bool(r["has_prompt"]),
+            "sentence_count": r["sentence_count"],
+        })
+    return out
+
+
+def get_story_detail(story_id: int) -> dict | None:
+    """One story's metadata + all its sentences (#1023). None when it doesn't exist."""
+    conn = get_db()
+    row = conn.execute(
+        """SELECT s.*, d.name AS deck_name FROM stories s
+           LEFT JOIN decks d ON d.id = s.deck_id WHERE s.id = ?""",
+        (story_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    try:
+        gp = json.loads(row["gen_params"]) if row["gen_params"] else {}
+    except (ValueError, TypeError):
+        gp = {}
+    return {
+        "id": row["id"],
+        "date": row["date"],
+        "category": row["category"],
+        "deck_id": row["deck_id"],
+        "deck_name": row["deck_name"],
+        "generated_at": row["generated_at"],
+        "topic": row["topic"],
+        "mode": gp.get("mode") or "story",
+        "model": gp.get("model"),
+        "lang": row["lang"] or "zh",
+        "has_prompt": bool(row["prompt_text"]),
+        "sentences": get_story_sentences(story_id),
+    }
