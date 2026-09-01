@@ -61,10 +61,12 @@ class TestValidateBriefingItems:
         issues = ai.validate_briefing_items(items, CARDS)
         assert any("重复" in i and "担心" in i for i in issues)
 
-    def test_consecutive_context_sentences_detected(self):
-        items = [
-            {"sentence_zh": "今天天气很好。", "target_word": None},
-            {"sentence_zh": "很多人出门散步。", "target_word": None},
+    def test_overlong_context_run_detected(self):
+        """#1027: a run longer than BRIEFING_MAX_CONTEXT_RUN is still a
+        violation — the budget was widened, not removed."""
+        run = [{"sentence_de": f"Kontextsatz {i}.", "target_word": None}
+               for i in range(ai.BRIEFING_MAX_CONTEXT_RUN + 1)]
+        items = run + [
             {"sentence_zh": "她很担心考试。", "target_word": "担心"},
             {"sentence_zh": "他每天努力学习。", "target_word": "努力"},
             {"sentence_zh": "她看到了他的进步。", "target_word": "进步"},
@@ -72,15 +74,42 @@ class TestValidateBriefingItems:
         issues = ai.validate_briefing_items(items, CARDS)
         assert any("连续" in i for i in issues)
 
-    def test_single_context_sentence_before_target_is_fine(self):
-        items = [
-            {"sentence_zh": "今天天气很好。", "target_word": None},
+    def test_context_run_up_to_the_limit_is_fine(self):
+        """#1027: several German context sentences in a row are the normal
+        case now — that is how a topic without a matching target word gets
+        told in full."""
+        run = [{"sentence_de": f"Kontextsatz {i}.", "target_word": None}
+               for i in range(ai.BRIEFING_MAX_CONTEXT_RUN)]
+        items = run + [
             {"sentence_zh": "她很担心考试。", "target_word": "担心"},
             {"sentence_zh": "他每天努力学习。", "target_word": "努力"},
             {"sentence_zh": "她看到了他的进步。", "target_word": "进步"},
         ]
         issues = ai.validate_briefing_items(items, CARDS)
         assert not any("连续" in i for i in issues)
+
+    def test_context_item_without_any_text_detected(self):
+        """A context item carrying neither sentence_zh nor sentence_de is a
+        hole in the summary, not something to skip silently (#1027)."""
+        items = [
+            {"target_word": None},
+            {"sentence_zh": "她很担心考试。", "target_word": "担心"},
+            {"sentence_zh": "他每天努力学习。", "target_word": "努力"},
+            {"sentence_zh": "她看到了他的进步。", "target_word": "进步"},
+        ]
+        issues = ai.validate_briefing_items(items, CARDS)
+        assert any("空句子" in i for i in issues)
+
+    def test_overlong_german_context_sentence_detected(self):
+        items = [
+            {"sentence_de": "Wort " * (ai.BRIEFING_MAX_CONTEXT_CHARS // 2),
+             "target_word": None},
+            {"sentence_zh": "她很担心考试。", "target_word": "担心"},
+            {"sentence_zh": "他每天努力学习。", "target_word": "努力"},
+            {"sentence_zh": "她看到了他的进步。", "target_word": "进步"},
+        ]
+        issues = ai.validate_briefing_items(items, CARDS)
+        assert any("德语上下文句子过长" in i for i in issues)
 
     def test_overlong_target_sentence_detected(self):
         long_sentence = "她" * 20 + "担心考试的结果会很不理想"
@@ -140,17 +169,19 @@ class TestValidateBriefingItems:
 
 class TestDedupeConsecutiveContext:
 
-    def test_collapses_run_to_last_sentence(self):
-        items = [
-            {"sentence_zh": "上下文一。", "target_word": None},
-            {"sentence_zh": "上下文二。", "target_word": None},
-            {"sentence_zh": "上下文三。", "target_word": None},
-            {"sentence_zh": "她很担心考试。", "target_word": "担心"},
-        ]
+    def test_trims_run_back_to_the_limit(self):
+        """#1027: the repair keeps the last BRIEFING_MAX_CONTEXT_RUN sentences
+        of an over-long run instead of collapsing it to a single one — it drops
+        content, and this mode now has to tell every topic in full."""
+        n = ai.BRIEFING_MAX_CONTEXT_RUN
+        items = [{"sentence_zh": f"上下文{i}。", "target_word": None}
+                 for i in range(n + 2)]
+        items.append({"sentence_zh": "她很担心考试。", "target_word": "担心"})
         fixed = ai._dedupe_consecutive_briefing_context(items, CARDS)
-        context_sentences = [it["sentence_zh"] for it in fixed if it["sentence_zh"] != "她很担心考试。"]
-        assert context_sentences == ["上下文三。"]
-        assert len(fixed) == 2
+        context_sentences = [it["sentence_zh"] for it in fixed
+                             if it["sentence_zh"] != "她很担心考试。"]
+        assert context_sentences == [f"上下文{i}。" for i in range(2, n + 2)]
+        assert len(fixed) == n + 1
 
     def test_no_op_when_already_valid(self):
         items = [
@@ -161,14 +192,14 @@ class TestDedupeConsecutiveContext:
         fixed = ai._dedupe_consecutive_briefing_context(items, CARDS)
         assert fixed == items
 
-    def test_trailing_context_run_is_kept_as_last_sentence(self):
-        items = [
-            {"sentence_zh": "她很担心考试。", "target_word": "担心"},
-            {"sentence_zh": "尾部上下文一。", "target_word": None},
-            {"sentence_zh": "尾部上下文二。", "target_word": None},
-        ]
+    def test_trailing_context_run_is_trimmed_to_the_limit(self):
+        n = ai.BRIEFING_MAX_CONTEXT_RUN
+        items = [{"sentence_zh": "她很担心考试。", "target_word": "担心"}]
+        items += [{"sentence_zh": f"尾部上下文{i}。", "target_word": None}
+                  for i in range(n + 1)]
         fixed = ai._dedupe_consecutive_briefing_context(items, CARDS)
-        assert [it["sentence_zh"] for it in fixed] == ["她很担心考试。", "尾部上下文二。"]
+        assert [it["sentence_zh"] for it in fixed] == (
+            ["她很担心考试。"] + [f"尾部上下文{i}。" for i in range(1, n + 1)])
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +213,10 @@ VALID_ITEMS = [
     {"sentence_zh": "她看到了他的进步。", "target_word": "进步", "article_idx": 0},
 ]
 
+# One more context sentence in a row than BRIEFING_MAX_CONTEXT_RUN allows (#1027).
 INVALID_ITEMS_CONSECUTIVE_CONTEXT = [
-    {"sentence_zh": "今天天气很好。", "target_word": None, "article_idx": 0},
-    {"sentence_zh": "很多人出门散步。", "target_word": None, "article_idx": 0},
+    *({"sentence_de": f"Kontextsatz {i}.", "target_word": None, "article_idx": 0}
+      for i in range(ai.BRIEFING_MAX_CONTEXT_RUN + 1)),
     {"sentence_zh": "她很担心考试。", "target_word": "担心", "article_idx": 0},
     {"sentence_zh": "他每天努力学习。", "target_word": "努力", "article_idx": 0},
     {"sentence_zh": "她看到了他的进步。", "target_word": "进步", "article_idx": 0},
@@ -475,3 +507,78 @@ class TestGroupSentencesByArticle:
         assert _group_sentences_by_article([], self.ARTS) == []
         sents = [{"sentence_zh": "a1", "source_url": "https://ex.com/a"}]
         assert _group_sentences_by_article(sents, []) == sents
+
+
+# ---------------------------------------------------------------------------
+# German context sentences (issue #1027)
+# ---------------------------------------------------------------------------
+
+GERMAN_CONTEXT_ITEMS = [
+    {"sentence_de": "Die Koalition verhandelt seit drei Wochen.",
+     "target_word": None, "article_idx": 0},
+    {"sentence_zh": "她很担心考试。", "target_word": "担心", "article_idx": 0},
+    {"sentence_zh": "他每天努力学习。", "target_word": "努力", "article_idx": 0},
+    {"sentence_zh": "她看到了他的进步。", "target_word": "进步", "article_idx": 0},
+]
+
+
+def _fake_translate(texts, target="en", source="zh-CN", **kw):
+    return [f"[{source}->{target}] {t}" for t in texts]
+
+
+class TestGermanContextSentences:
+    """#1027: the model writes the context in German (it is the half Daniel
+    reads as his morning briefing), so German is the original and the Chinese
+    in reasoning_zh is the derived translation — the reverse of #444."""
+
+    def test_german_context_is_stored_verbatim_and_chinese_is_derived(self):
+        with patch("ai._call_api", return_value=json.dumps(GERMAN_CONTEXT_ITEMS)), \
+             patch("ai.fact_check_briefing", return_value=[]), \
+             patch("ai._fill_translations", lambda sentences, **kw: None), \
+             patch("translator.translate_batch", side_effect=_fake_translate):
+            result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        card = next(s for s in result if s["word_ids"] == [1])
+        assert card["context_de"] == "Die Koalition verhandelt seit drei Wochen."
+        assert card["reasoning_zh"] == (
+            "[de->zh-CN] Die Koalition verhandelt seit drei Wochen.")
+
+    def test_chinese_context_is_still_translated_the_old_way(self):
+        """A reply that ignores the contract and writes Chinese context must
+        not be filed as German — text in the wrong language slot is silent
+        (#904), Google hands German→German back unchanged."""
+        items = [dict(GERMAN_CONTEXT_ITEMS[0]) | {"sentence_de": None,
+                                                  "sentence_zh": "联盟已经谈判了三周。"},
+                 *GERMAN_CONTEXT_ITEMS[1:]]
+        with patch("ai._call_api", return_value=json.dumps(items)), \
+             patch("ai.fact_check_briefing", return_value=[]), \
+             patch("ai._fill_translations", lambda sentences, **kw: None), \
+             patch("translator.translate_batch", side_effect=_fake_translate):
+            result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        card = next(s for s in result if s["word_ids"] == [1])
+        assert card["reasoning_zh"] == "联盟已经谈判了三周。"
+        assert card["context_de"] == "[zh-CN->de] 联盟已经谈判了三周。"
+
+    def test_context_translation_failure_never_costs_the_story(self):
+        with patch("ai._call_api", return_value=json.dumps(GERMAN_CONTEXT_ITEMS)), \
+             patch("ai.fact_check_briefing", return_value=[]), \
+             patch("ai._fill_translations", lambda sentences, **kw: None), \
+             patch("translator.translate_batch", side_effect=RuntimeError("boom")):
+            result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        assert len(result) == len(CARDS)
+        card = next(s for s in result if s["word_ids"] == [1])
+        assert card["context_de"] == "Die Koalition verhandelt seit drei Wochen."
+        assert card["reasoning_zh"] == ""
+
+    def test_prompt_asks_for_german_context_and_full_coverage(self):
+        with patch("ai._call_api", return_value=json.dumps(GERMAN_CONTEXT_ITEMS)) as mock_call, \
+             patch("ai.fact_check_briefing", return_value=[]), \
+             patch("ai._fill_translations", lambda sentences, **kw: None), \
+             patch("translator.translate_batch", side_effect=_fake_translate):
+            ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        prompt = mock_call.call_args[0][1][0]["content"]
+        assert "sentence_de" in prompt
+        assert "覆盖面" in prompt

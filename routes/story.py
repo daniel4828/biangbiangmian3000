@@ -69,7 +69,36 @@ def _knowledge_material(episode: dict) -> str:
     return (episode.get("summary_de") or "").strip()[:_KNOWLEDGE_MATERIAL_MAX_CHARS]
 
 
-def _knowledge_sources(episode_ids: list[int] | None) -> tuple[list[dict], str]:
+def _contextsummary_material(episode: dict) -> str:
+    """Return the text Kontextsummary summarizes for `episode` (issue #1027).
+
+    Unlike knowledge mode (_knowledge_material above), this reads the AI
+    summary, not the raw transcript. Two reasons:
+
+    * Daniel's goal for this mode is "read my briefing in the morning while
+      reviewing the day's words", and the rule that makes that work is "every
+      point of the source has to show up". That is only satisfiable against a
+      text that is already condensed — summary_de of an F.A.Z. Frühdenker is
+      ~3.5k chars with ~10 topics, one per due word.
+    * transcript_zh is truncated at _KNOWLEDGE_MATERIAL_MAX_CHARS, and a
+      newsletter body routinely exceeds it. Demanding full coverage of a text
+      we already cut off is a rule that cannot be met.
+
+    summary_de is <p>/<b> HTML (#567), so tags are flattened first — the model
+    would otherwise spend attention on markup, and stray tags leak into
+    sentences. Rows without a summary (never processed, or synced down before
+    the summary existed) fall back to the transcript rather than failing:
+    knowledge mode's material is still usable material, just less ideal.
+    """
+    import podcast
+    summary = podcast._summary_to_plain_text(episode.get("summary_de"))
+    if summary:
+        return summary[:_KNOWLEDGE_MATERIAL_MAX_CHARS]
+    return _knowledge_material(episode)
+
+
+def _knowledge_sources(episode_ids: list[int] | None,
+                       material_of=_knowledge_material) -> tuple[list[dict], str]:
     """Build the knowledge-mode `sources` list (+ overall `kind`) from selected
     episode ids. Extracted from the knowledge branch of _generate_and_store_body
     (issue #865) so book mode's single-chapter source (_book_source below) can
@@ -93,7 +122,7 @@ def _knowledge_sources(episode_ids: list[int] | None) -> tuple[list[dict], str]:
         episodes.append(episode)
     sources: list[dict] = []
     for eid, episode in zip(episode_ids, episodes):
-        material = _knowledge_material(episode)
+        material = material_of(episode)
         if not material:
             logger.warning("story  knowledge item %d has no transcript/summary — skipped", eid)
             continue
@@ -552,7 +581,11 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
                 # on a card opens the item with its summary and transcript.
                 # Rebinding `articles` also persists the material in gen_params
                 # below, so Again-regeneration reuses the same source text.
-                sources, kind = _knowledge_sources(episode_ids)
+                # #1027: the AI summary, not the transcript — see
+                # _contextsummary_material for why this mode reads a different
+                # text than knowledge mode does.
+                sources, kind = _knowledge_sources(
+                    episode_ids, material_of=_contextsummary_material)
                 articles = [{"url": src["url"], "title": src["title"],
                              "text": src["material"]} for src in sources]
                 logger.info("story  contextsummary kind=%s sources=%d", kind, len(sources))
