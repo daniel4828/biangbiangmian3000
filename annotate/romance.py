@@ -156,6 +156,52 @@ def _annotate(text: str, lang: str) -> tuple[str, list[dict]]:
     return text, new_words
 
 
+def _annotate_all(text: str, lang: str) -> list[dict]:
+    """Every annotatable word token of `text` (not filtered to "new") with a
+    German gloss — counterpart to _annotate()'s new_cores for the "gloss
+    every word" gesture (#996) extended past the new-word table (#1018).
+    Still skips stopwords and proper nouns — those either have no useful
+    gloss or aren't "a word" in the sense this reader cares about — so the
+    result matches the reader's tap-word mechanism 1:1."""
+    stop = stopwords(lang)
+    tag_spans = [(m.start(), m.end()) for m in _TAG_RE.finditer(text)]
+
+    def _in_tag(pos: int) -> bool:
+        return any(start <= pos < end for start, end in tag_spans)
+
+    matches = [m for m in _WORD_RE.finditer(text) if not _in_tag(m.start())]
+    if not matches:
+        return []
+
+    order: list[str] = []
+    seen: set[str] = set()
+    for m in matches:
+        raw = m.group(0)
+        core = _strip_elision(raw)
+        low = core.lower()
+        is_proper = core[:1].isupper() and not _is_sentence_start(text, m.start())
+        if len(low) >= 2 and low not in stop and not is_proper and low not in seen:
+            seen.add(low)
+            order.append(low)
+    if not order:
+        return []
+
+    glosses = _glosses(order, lang)
+    return [{"word": w, "lemma": w, "definition_de": glosses.get(w) or None} for w in order]
+
+
+def all_words(text: str, lang: str) -> list[dict]:
+    """Public entry point for annotate/__init__.py's all_words() dispatch
+    (#1018). Never raises — same contract as annotate_summary()."""
+    if not text or not text.strip():
+        return []
+    try:
+        return _annotate_all(text, lang)
+    except Exception as e:
+        logger.warning("annotate.romance: all_words failed for lang=%s — %s", lang, e)
+        return []
+
+
 def _glosses(words: list[str], lang: str) -> dict[str, str]:
     """German glosses for `words` via Google Translate, one batched request.
     A failed batch degrades to no glosses at all — the words are still

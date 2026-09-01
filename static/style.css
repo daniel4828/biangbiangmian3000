@@ -5756,6 +5756,18 @@ body.gloss-on .tap-word-gloss {
   white-space: nowrap;
 }
 
+/* Every other word's gloss (#1018) — layered in after the new-word pass
+   once the full-text word list arrives async, same reveal mechanism as
+   .tap-word (#996) but not clickable: only new words get the tap panel
+   (★ List / ✓ Known), everything else is a glance-only translation. */
+body.gloss-on .gloss-word {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: baseline;
+  line-height: 1.15;
+}
+
 .word-actions {
   position: fixed;
   z-index: 1200;

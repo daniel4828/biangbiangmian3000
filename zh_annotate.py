@@ -230,6 +230,48 @@ def extract_new_words(text: str) -> list[dict]:
         return []
 
 
+def extract_all_words(text: str) -> list[dict]:
+    """Every CJK word segment of `text` (not filtered to "new" — the new-word
+    criterion doesn't apply here), each carrying pinyin + a German gloss.
+    Counterpart to extract_new_words() for the "show every gloss" gesture
+    (#996) extended past the new-word table (#1018): Daniel wants the
+    translation of every word, not just the ones he doesn't know yet.
+
+    Same segmentation as extract_new_words (jieba via _segment), and shares
+    _translation_cache with _gloss_de — a word already glossed as "new"
+    elsewhere in the process is free here, and vice versa. Cache misses go
+    through one batched translator.translate_batch() call rather than one
+    Google request per word.
+
+    Best-effort like the rest of this module: any failure returns []."""
+    if not text or not text.strip():
+        return []
+    try:
+        pairs = _segment(text)
+        if not pairs:
+            return []
+        words: list[str] = []
+        for w, _pos in pairs:
+            if _ALL_CJK.match(w) and w not in words:
+                words.append(w)
+        if not words:
+            return []
+        missing = [w for w in words if w not in _translation_cache]
+        if missing:
+            import translator
+            translated = translator.translate_batch(missing, target="de", source="zh-CN")
+            for w, t in zip(missing, translated):
+                t = (t or "").strip()
+                _translation_cache[w] = t if t and t != w else ""
+        return [
+            {"word": w, "pinyin": pinyin_of(w), "definition_de": _translation_cache.get(w, "")}
+            for w in words
+        ]
+    except Exception as e:
+        logger.warning("zh_annotate: extract_all_words failed — %s", e)
+        return []
+
+
 def annotate_zh_summary(text: str) -> str:
     """Annotate the first occurrence of every new word inline:
     "对就业的影响" -> "对就业（jiùyè - Beschäftigung）的影响".
