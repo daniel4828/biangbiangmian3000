@@ -2312,9 +2312,57 @@ async function openQuickAddCard() {
 let _browseSearchTimer = null;
 let _browseMode       = 'notes';   // 'notes' | 'hanzi'
 let _browseFilter     = 'all';     // note_type or 'all'; for hanzi mode: 'all'
-let _browseCardStatus = 'all';     // 'all' | 'learning' | 'leech' | 'reference' | 'saved'
+let _browseCardStatus = 'all';     // one of BROWSE_STATUSES, or 'all'/'starred'/'flagged'
 let _browseDeckId     = null;      // deck filter (notes mode only)
 let _allHanzi         = [];        // cache
+
+// ── Word status model (#1015) ────────────────────────────────────────────────
+// Daniel's own vocabulary is one chest with five compartments, and "which one
+// is this word in" must have exactly ONE answer: the chip counts are only
+// trustworthy — and only add up to the total — while every word lands in
+// precisely one bucket. So this is a priority chain, not a set of overlapping
+// predicates, and it is the single place that decides a word's status.
+//
+// 'mature' = learned well enough that it barely comes back: every card still in
+// rotation is in review state with an interval of at least three weeks (the
+// Anki convention). It is deliberately not "suspended": a mature word is still
+// scheduled, it just sits far out in the future.
+const BROWSE_MATURE_DAYS = 21;
+
+function _wordStatus(w) {
+  const cards = w.cards || [];
+  if (!cards.length) return 'reference';
+  if (cards.some(c => c.is_leech)) return 'leech';
+  if (cards.some(c => c.deck_name === 'Saved')) return 'saved';
+  const live = cards.filter(c => c.state !== 'suspended');
+  if (!live.length) return 'suspended';
+  if (live.every(c => c.state === 'review' && (c.interval || 0) >= BROWSE_MATURE_DAYS)) return 'mature';
+  return 'active';
+}
+
+// Order here is the order of the chips. `word` = counted from the word list;
+// the two sentence views at the end are a different kind of entity and carry
+// no count (they are fetched separately, #692/#854).
+const BROWSE_STATUSES = [
+  { key: 'all',       icon: '\u{1F5C3}\uFE0F', label: 'All',        word: true,
+    title: 'Every entry in the chest' },
+  { key: 'active',    icon: '\u{1F525}',        label: 'Active',     word: true,
+    title: 'In rotation right now — these are the words the stories are built from' },
+  { key: 'mature',    icon: '\u{1F331}',        label: 'Learned',    word: true,
+    title: 'Every card in review with an interval of ' + BROWSE_MATURE_DAYS + '+ days — learned, so it barely comes up' },
+  { key: 'saved',     icon: '\u2605',           label: 'Star List',  word: true,
+    title: 'Parked in the Saved deck, not scheduled yet' },
+  { key: 'suspended', icon: '\u23F8\uFE0F',    label: 'Suspended',  word: true,
+    title: 'All cards suspended — taken out of the rotation by hand' },
+  { key: 'leech',     icon: '\u{1F41B}',        label: 'Leeches',    word: true,
+    title: 'Forgotten too often — flagged as a leech and suspended' },
+  { key: 'reference', icon: '\u{1F4C4}',        label: 'Reference',  word: true,
+    title: 'Entry without any cards — looked up, never scheduled' },
+  { key: 'starred',   icon: '\u2B50',           label: 'Sentences',  word: false, sep: true,
+    title: 'Sentences you starred while reviewing — good examples for prompt tuning' },
+  { key: 'flagged',   icon: '\u2691',           label: 'Sentences',  word: false,
+    title: 'Sentences you flagged while reviewing — bad examples for prompt tuning' },
+];
 
 function _sortWords(words) {
   const sorted = [...words];
@@ -2397,18 +2445,58 @@ function _leafDeckIds(deckId) {
   return ids;
 }
 
-function _filteredBrowseWords() {
+// Type + deck only. The status chips count against THIS set, so their numbers
+// answer "within what I'm looking at", not "in the whole database" — a count
+// that ignores the active deck would send him to an empty list (#1015).
+function _baseBrowseWords() {
   let words = browseWords;
   if (_browseFilter !== 'all') words = words.filter(w => w.note_type === _browseFilter);
   if (_browseDeckId !== null) {
     const leafIds = _leafDeckIds(_browseDeckId);
     words = words.filter(w => w.cards.some(c => leafIds.has(c.deck_id)));
   }
-  if (_browseCardStatus === 'learning')   words = words.filter(w => w.cards.length > 0);
-  if (_browseCardStatus === 'leech')      words = words.filter(w => w.cards.some(c => c.is_leech));
-  if (_browseCardStatus === 'reference')  words = words.filter(w => w.cards.length === 0);
-  if (_browseCardStatus === 'saved')      words = words.filter(w => w.cards.some(c => c.deck_name === 'Saved'));
   return words;
+}
+
+function _filteredBrowseWords() {
+  const words = _baseBrowseWords();
+  if (_browseCardStatus === 'all') return words;
+  return words.filter(w => _wordStatus(w) === _browseCardStatus);
+}
+
+// Chips carry live counts — without them "Leeches" is a button you have to
+// press to find out it is empty.
+function renderBrowseChips() {
+  const box = document.getElementById('browse-chips');
+  if (!box) return;
+  const base = _baseBrowseWords();
+  const counts = {};
+  for (const w of base) {
+    const st = _wordStatus(w);
+    counts[st] = (counts[st] || 0) + 1;
+  }
+  counts.all = base.length;
+  box.innerHTML = BROWSE_STATUSES.map(st => {
+    const on = _browseCardStatus === st.key ? ' bc-on' : '';
+    const sep = st.sep ? ' bc-sep' : '';
+    const count = st.word
+      ? `<span class="bc-count">${counts[st.key] || 0}</span>`
+      : '';
+    const empty = st.word && !(counts[st.key] || 0) ? ' bc-empty' : '';
+    return `<button class="browse-chip bc-${st.key}${on}${sep}${empty}"
+      title="${_escHtml(st.title)}" onclick="setBrowseStatusFilter('${st.key}')"
+      ><span class="bc-icon">${st.icon}</span><span class="bc-label">${st.label}</span>${count}</button>`;
+  }).join('');
+  const sub = document.getElementById('wortschatz-sub');
+  if (sub) {
+    const NOUN = { all: 'entries', vocabulary: 'words', sentence: 'sentences', chengyu: 'chengyu' };
+    let text = `${base.length} ${NOUN[_browseFilter] || 'entries'}`;
+    if (_browseDeckId !== null) {
+      const deck = _browseDecks.find(d => d.id === _browseDeckId);
+      if (deck) text += ` in ${deck.name}`;
+    }
+    sub.textContent = text;
+  }
 }
 
 // ── Phone filter drawer (#827) ───────────────────────────────────────────────
@@ -2457,6 +2545,7 @@ function setBrowseFilter(mode, filter) {
   document.getElementById('browse-search').value = '';
   _browseSelected.clear();
   _updateBrowseActionBar();
+  renderBrowseChips();
   if (mode === 'hanzi') renderHanziList(_allHanzi);
   else renderBrowseWords(_filteredBrowseWords());
 }
@@ -2465,12 +2554,10 @@ function setBrowseStatusFilter(status) {
   _closeBrowseDrawer();
   _browseCardStatus = status;
   _syncSortOptions();
-  document.querySelectorAll('.bs-status-item').forEach(el => el.classList.remove('bs-active'));
-  const btn = document.getElementById(`bss-${status}`);
-  if (btn) btn.classList.add('bs-active');
   document.getElementById('browse-search').value = '';
   _browseSelected.clear();
   _updateBrowseActionBar();
+  renderBrowseChips();
   // 'starred'/'flagged' list sentences, not words, so they can't go through the
   // word filter chain in _filteredBrowseWords() — they're their own rendering
   // branch (#692, generalized to flagged in #854).
@@ -2488,8 +2575,7 @@ function _leaveSentenceView() {
   _starredSentencesCache = null;  // stale on next entry — re-fetch (#773)
   _flaggedSentencesCache = null;
   _syncSortOptions();
-  document.querySelectorAll('.bs-status-item').forEach(el => el.classList.remove('bs-active'));
-  document.getElementById('bss-all')?.classList.add('bs-active');
+  renderBrowseChips();
 }
 
 function setBrowseDeckFilter(deckId) {
@@ -2500,6 +2586,7 @@ function setBrowseDeckFilter(deckId) {
     document.querySelectorAll('.bs-deck-item').forEach(el => el.classList.remove('bs-active'));
     _browseSelected.clear();
     _updateBrowseActionBar();
+    renderBrowseChips();
     renderBrowseWords(_filteredBrowseWords());
     return;
   }
@@ -2511,6 +2598,7 @@ function setBrowseDeckFilter(deckId) {
   document.getElementById('browse-search').value = '';
   _browseSelected.clear();
   _updateBrowseActionBar();
+  renderBrowseChips();
   renderBrowseWords(_filteredBrowseWords());
 }
 
@@ -2558,9 +2646,6 @@ async function openBrowse() {
     if (hanziSec) hanziSec.style.display = activeLang() === 'zh' ? '' : 'none';
     _renderBrowseSidebar();
     _updateBrowseActionBar();
-    document.querySelectorAll('.bs-status-item').forEach(el => el.classList.remove('bs-active'));
-    const bssAll = document.getElementById('bss-all');
-    if (bssAll) bssAll.classList.add('bs-active');
     setBrowseFilter('notes', 'all');
   } catch (e) {
     showError('Browse failed: ' + e.message);
@@ -2649,6 +2734,10 @@ function onBrowseSearch(val) {
 function _wordRow(w) {
   const def = (w.definition || '').slice(0, 60) + ((w.definition || '').length > 60 ? '…' : '');
   const sel = _browseSelected.has(w.id) ? ' bw-row-selected' : '';
+  // The same status the chips count by, as a coloured stripe down the row: in
+  // the unfiltered list that is the only thing telling a leech apart from a
+  // word he has long since learned (#1015).
+  const status = _wordStatus(w);
   let rightHtml;
   if (_browseCardStatus === 'saved') {
     // Words parked via ★ List (#677) already carry a full entry — offering
@@ -2680,7 +2769,7 @@ function _wordRow(w) {
   const delBtn = `<button class="bw-del-btn" title="Delete this word and all its cards"
           onclick="browseDeleteWord(event,${w.id})">🗑</button>`;
   return `
-    <div class="bw-row${sel}" data-word-id="${w.id}" onclick="onBrowseRowClick(event,${w.id})">
+    <div class="bw-row bw-st-${status}${sel}" data-word-id="${w.id}" onclick="onBrowseRowClick(event,${w.id})">
       <div class="bw-left">
         <span class="bw-hanzi">${w.word_zh}</span>
         <span class="bw-pinyin">${w.pinyin || ''}</span>
@@ -2836,6 +2925,7 @@ async function _browseReload() {
   _browseSelected.clear();
   _updateBrowseActionBar();
   _renderBrowseSidebar();
+  renderBrowseChips();   // unleeching / promoting a word moves it between buckets
   if (q) onBrowseSearch(q);
   else renderBrowseWords(_filteredBrowseWords());
 }

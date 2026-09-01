@@ -421,25 +421,11 @@
             onclick="toggleBrowseSidebar()" aria-expanded="false">☰ Filters</button>
     <aside class="browse-sidebar" id="browse-sidebar">
       <div class="bs-section">
-        <div class="bs-section-head">Notes</div>
-        <button class="bs-item" id="bsf-all"     onclick="setBrowseFilter('notes','all')">All Notes</button>
+        <div class="bs-section-head">Type</div>
+        <button class="bs-item" id="bsf-all"     onclick="setBrowseFilter('notes','all')">Everything</button>
         <button class="bs-item" id="bsf-vocabulary" onclick="setBrowseFilter('notes','vocabulary')">Words</button>
         <button class="bs-item" id="bsf-sentence"   onclick="setBrowseFilter('notes','sentence')">Sentences</button>
         <button class="bs-item" id="bsf-chengyu"    onclick="setBrowseFilter('notes','chengyu')">Chengyu</button>
-      </div>
-      <div class="bs-section">
-        <div class="bs-section-head">Status</div>
-        <button class="bs-status-item bs-active" id="bss-all"       onclick="setBrowseStatusFilter('all')">All Entries</button>
-        <button class="bs-status-item" id="bss-learning"  onclick="setBrowseStatusFilter('learning')">Learning</button>
-        <button class="bs-status-item" id="bss-leech"     onclick="setBrowseStatusFilter('leech')">Leeched</button>
-        <button class="bs-status-item" id="bss-reference" onclick="setBrowseStatusFilter('reference')">Reference</button>
-        <button class="bs-status-item" id="bss-saved"     onclick="setBrowseStatusFilter('saved')">★ Saved</button>
-        <!-- Sentence-level view, not a word filter (#692) -->
-        <button class="bs-status-item" id="bss-starred"   onclick="setBrowseStatusFilter('starred')"
-                title="Sentences you starred while reviewing — good examples for prompt tuning">⭐ Sentences</button>
-        <!-- Sentence-level view, mirror of starred (#854) -->
-        <button class="bs-status-item" id="bss-flagged"   onclick="setBrowseStatusFilter('flagged')"
-                title="Sentences you flagged while reviewing — bad examples for prompt tuning">⚑ Sentences</button>
       </div>
       <!-- Chinese-only: hidden under a non-zh language tab (#815) -->
       <div class="bs-section" id="bs-hanzi-section">
@@ -452,6 +438,25 @@
       </div>
     </aside>
     <div class="browse-main">
+      <!-- The treasure chest (#1015): "Wortschatz" is what this screen actually
+           is — everything he owns — and the status chips below are how he digs
+           through it. -->
+      <div class="wortschatz-head">
+        <svg class="wortschatz-chest" viewBox="0 0 32 26" aria-hidden="true">
+          <path class="wc-lid" d="M2 11 A14 10 0 0 1 30 11 Z"/>
+          <rect class="wc-body" x="2" y="11" width="28" height="13" rx="2"/>
+          <rect class="wc-band" x="13" y="6" width="6" height="18" rx="1"/>
+          <circle class="wc-lock" cx="16" cy="14.5" r="2.2"/>
+        </svg>
+        <div class="wortschatz-title">
+          <h2>Wortschatz</h2>
+          <span id="wortschatz-sub" class="wortschatz-sub"></span>
+        </div>
+      </div>
+      <!-- Status chips: word-level states (mutually exclusive, so the counts
+           add up to the total), then the two sentence-level views (#692/#854),
+           which list a different kind of thing and are fenced off visually. -->
+      <div class="browse-chips" id="browse-chips"></div>
       <div class="browse-search-row">
         <input id="browse-search" type="text" placeholder="Search…"
                oninput="onBrowseSearch(this.value)" autocomplete="off"
