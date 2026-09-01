@@ -11,6 +11,14 @@
   --hard:      #d97706;
   --good:      #16a34a;
   --easy:      #0891b2;
+  /* Word-status colours (#1015): shared by the Wortschatz chips and the
+     status stripe on each Browse row, so the two can never disagree. */
+  --st-active:    #2563eb;
+  --st-mature:    #16a34a;
+  --st-saved:     #d97706;
+  --st-suspended: #94a3b8;
+  --st-leech:     #dc2626;
+  --st-reference: #7c3aed;
   --radius:    14px;
   --shadow:    0 2px 16px rgba(0,0,0,0.07);
 }
@@ -2476,7 +2484,7 @@ a.nav-btn { text-decoration: none; }
   color: var(--muted);
   padding: 8px 16px 4px;
 }
-.bs-item, .bs-deck-item, .bs-status-item {
+.bs-item, .bs-deck-item {
   display: block;
   width: 100%;
   background: none;
@@ -2488,8 +2496,8 @@ a.nav-btn { text-decoration: none; }
   cursor: pointer;
   border-radius: 0;
 }
-.bs-item:hover, .bs-deck-item:hover, .bs-status-item:hover { background: var(--bg); }
-.bs-item.bs-active, .bs-deck-item.bs-active, .bs-status-item.bs-active {
+.bs-item:hover, .bs-deck-item:hover { background: var(--bg); }
+.bs-item.bs-active, .bs-deck-item.bs-active {
   background: #dbeafe;
   color: var(--primary);
   font-weight: 600;
@@ -2505,6 +2513,106 @@ a.nav-btn { text-decoration: none; }
   min-width: 0;
   padding: 16px;
   overflow-y: auto;
+}
+
+/* ── Wortschatz header + status chips (#1015) ─────────
+   Browse used to open on a wall of identical sidebar buttons with no counts.
+   The screen is the vocabulary he owns, so it says so, and the five states he
+   actually thinks in are the first thing on it — each with its size. */
+.wortschatz-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.wortschatz-chest {
+  width: 40px;
+  height: 33px;
+  flex-shrink: 0;
+}
+.wortschatz-chest .wc-lid  { fill: #b45309; }
+.wortschatz-chest .wc-body { fill: #d97706; }
+.wortschatz-chest .wc-band { fill: #78350f; }
+.wortschatz-chest .wc-lock { fill: #fbbf24; }
+.wortschatz-title h2 {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  line-height: 1.1;
+}
+.wortschatz-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.browse-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.browse-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.browse-chip:hover { border-color: var(--muted); }
+.bc-icon  { font-size: 13px; line-height: 1; }
+.bc-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 1px 6px;
+  min-width: 20px;
+  text-align: center;
+}
+/* A zero-count bucket stays clickable (its count is the answer) but recedes,
+   so the eye lands on the compartments that hold something. */
+.bc-empty { opacity: 0.45; }
+/* Selected chip. `bc-on` deliberately does not reuse `bc-active`: that name is
+   already the *status* class of the Active bucket, so one chip would have looked
+   permanently selected. */
+.browse-chip.bc-on {
+  color: #fff;
+  border-color: transparent;
+  background: var(--text);
+  opacity: 1;
+}
+.browse-chip.bc-on .bc-count { background: rgba(255,255,255,0.22); color: #fff; }
+/* The selected chip wears the same colour as that status' row stripe, so chip
+   and list can't drift into telling two stories. */
+.browse-chip.bc-on.bc-active     { background: var(--st-active); }
+.browse-chip.bc-on.bc-mature     { background: var(--st-mature); }
+.browse-chip.bc-on.bc-saved      { background: var(--st-saved); }
+.browse-chip.bc-on.bc-suspended  { background: var(--st-suspended); }
+.browse-chip.bc-on.bc-leech      { background: var(--st-leech); }
+.browse-chip.bc-on.bc-reference  { background: var(--st-reference); }
+.browse-chip.bc-on.bc-starred    { background: #e0a300; }
+.browse-chip.bc-on.bc-flagged    { background: #be123c; }
+/* The two sentence views list a different kind of thing (#692/#854): a gap and
+   a divider keep them from reading as a sixth word bucket. */
+.browse-chip.bc-sep { margin-left: 16px; position: relative; }
+.browse-chip.bc-sep::before {
+  content: '';
+  position: absolute;
+  left: -9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 20px;
+  background: var(--border);
 }
 
 .browse-search-row {
@@ -2669,6 +2777,16 @@ a.nav-btn { text-decoration: none; }
   user-select: none;
 }
 .bw-row:last-child { border-bottom: none; }
+
+/* Status stripe (#1015) — same colours as the chips. In the unfiltered list
+   this is the only thing telling a leech apart from a word long since learned. */
+.bw-row { border-left: 3px solid transparent; }
+.bw-st-active    { border-left-color: var(--st-active); }
+.bw-st-mature    { border-left-color: var(--st-mature); }
+.bw-st-saved     { border-left-color: var(--st-saved); }
+.bw-st-suspended { border-left-color: var(--st-suspended); }
+.bw-st-leech     { border-left-color: var(--st-leech); }
+.bw-st-reference { border-left-color: var(--st-reference); }
 
 /* Starred sentences view (#692) — one starred sentence per row, with the
    generation context (mode / date / deck / target words / source) beneath it. */
@@ -6131,8 +6249,20 @@ body.gloss-on .tap-word-gloss {
     max-height: 55vh;
   }
   .browse-sidebar:not(.bs-open) { display: none; }
-  .bs-item, .bs-deck-item, .bs-status-item { padding: 10px 16px; font-size: 15px; }
+  .bs-item, .bs-deck-item { padding: 10px 16px; font-size: 15px; }
   .browse-main { padding: 12px; }
+  /* Nine chips wrap into four rows on a 390px screen and push the list off the
+     fold — one scrollable strip keeps them one thumb-swipe away instead (#1015). */
+  .browse-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .browse-chips::-webkit-scrollbar { display: none; }
+  .browse-chip { flex: 0 0 auto; }
+  .wortschatz-title h2 { font-size: 20px; }
   /* Let the action buttons drop to their own line instead of forcing the row
      wider than the viewport. */
   .bw-row { flex-wrap: wrap; }
