@@ -2636,15 +2636,46 @@ def _word_match(word_zh: str, sentence_zh: str, lang: str = "zh") -> bool:
     return re.search(rf"(?<!\w){re.escape(w)}(?:s|es)?(?!\w)", s) is not None
 
 
+# ── Kontextsummary / paste briefing pipeline limits (#444, widened in #1027) ──
+# Daniel reads this mode as a morning briefing, so the summary has to cover
+# every topic of the source; the original "at most one context sentence, at
+# most 2x as many sentences as words" pair was written when the goal was still
+# "don't pad" and is exactly what stopped a topic from being told in full.
+# These stay bounded — the reply still has to fit the 8192-token budget.
+BRIEFING_MAX_CONTEXT_RUN = 3
+BRIEFING_MAX_SENTENCE_FACTOR = 3
+# Context sentences are German prose now, not a 25-character Chinese clause.
+BRIEFING_MAX_CONTEXT_CHARS = 220
+
+
+def _briefing_item_texts(item: dict) -> tuple[str, str]:
+    """(chinese, german) text of one raw briefing item (#1027).
+
+    Target sentences come back in sentence_zh, context sentences in
+    sentence_de. Replies that ignore the contract and write Chinese context
+    into sentence_zh still work: everything downstream classifies an item by
+    whether a target word is *in* it, never by which field it arrived in.
+    """
+    return ((item.get("sentence_zh") or "").strip(),
+            (item.get("sentence_de") or "").strip())
+
+
 def validate_briefing_items(items: list[dict], cards: list[dict],
                             include_context: bool = True) -> list[str]:
     """Python-only validation (no AI) of a raw briefing sentence array (issue #444).
 
     Checks:
       a) every target word appears exactly once across all sentences
-      b) no two consecutive context sentences (sentences with no target word)
+      b) at most BRIEFING_MAX_CONTEXT_RUN consecutive context sentences
+         (sentences with no target word)
       c) target-word sentences are at most 18 characters
+      d) context sentences carry text at all, and stay one sentence long
     Returns a list of human-readable violation descriptions — empty means valid.
+
+    #1027: context sentences are German (sentence_de) and there may be a run of
+    them, because this mode now has to tell every topic of the source in full.
+    An item that is neither — no Chinese target word and no German text — is a
+    hole in the summary, so it is reported rather than silently skipped.
 
     include_context=False (podcast mode, issue #482): context sentences are not
     allowed at all — rule b) is replaced by a flat "no context sentences" check
@@ -2657,13 +2688,15 @@ def validate_briefing_items(items: list[dict], cards: list[dict],
     word_counts = {c["word_id"]: 0 for c in cards}
     is_context: list[bool] = []
     for item in items:
-        s_zh = (item.get("sentence_zh") or "").strip()
+        s_zh, s_de = _briefing_item_texts(item)
         matched_any = False
         for c in cards:
             if _briefing_word_match(c["word_zh"], s_zh):
                 word_counts[c["word_id"]] += 1
                 matched_any = True
         is_context.append(not matched_any)
+        if not matched_any and not s_zh and not s_de:
+            issues.append("存在既没有目标词、也没有正文的空句子")
 
     missing = [c["word_zh"] for c in cards if word_counts[c["word_id"]] == 0]
     duplicated = [c["word_zh"] for c in cards if word_counts[c["word_id"]] > 1]
@@ -2679,12 +2712,14 @@ def validate_briefing_items(items: list[dict], cards: list[dict],
         run = 0
         for ctx in is_context:
             run = run + 1 if ctx else 0
-            if run >= 2:
-                issues.append("存在连续两个以上不含目标词的上下文句子（每个目标句前最多只能有一个上下文句）")
+            if run > BRIEFING_MAX_CONTEXT_RUN:
+                issues.append(
+                    f"连续的上下文句子超过 {BRIEFING_MAX_CONTEXT_RUN} 句")
                 break
 
-    if len(items) > 2 * len(cards):
-        issues.append(f"句子总数（{len(items)}）超过目标词数量两倍的上限（{2 * len(cards)}）")
+    max_items = BRIEFING_MAX_SENTENCE_FACTOR * len(cards)
+    if len(items) > max_items:
+        issues.append(f"句子总数（{len(items)}）超过上限（{max_items}）")
 
     # article_idx must be non-decreasing across the sequence (issue #454) —
     # the AI is told to process articles one at a time, in order. None/missing
@@ -2711,27 +2746,41 @@ def validate_briefing_items(items: list[dict], cards: list[dict],
     # Only checked when context sentences are allowed at all.
     if include_context:
         for item in items:
-            s_zh = (item.get("sentence_zh") or "").strip()
-            if not s_zh or any(_briefing_word_match(c["word_zh"], s_zh) for c in cards):
+            s_zh, s_de = _briefing_item_texts(item)
+            if s_zh and any(_briefing_word_match(c["word_zh"], s_zh) for c in cards):
                 continue
-            pause_count = sum(s_zh.count(p) for p in "，、；")
-            if len(s_zh) > 25 or pause_count >= 2:
-                issues.append(
-                    f"上下文句子过长或分句过多，必须是单独一个短句（≤25字，最多一个逗号）："
-                    f"{s_zh}")
+            # German context (the contract since #1027) gets a character
+            # budget; a Chinese one written against the old contract keeps the
+            # old single-short-clause rule (#511).
+            if s_de:
+                if len(s_de) > BRIEFING_MAX_CONTEXT_CHARS:
+                    issues.append(
+                        f"德语上下文句子过长（必须是一句话，≤{BRIEFING_MAX_CONTEXT_CHARS} 个字符）："
+                        f"{s_de}")
+            elif s_zh:
+                pause_count = sum(s_zh.count(p) for p in "，、；")
+                if len(s_zh) > 25 or pause_count >= 2:
+                    issues.append(
+                        f"上下文句子过长或分句过多，必须是单独一个短句（≤25字，最多一个逗号）："
+                        f"{s_zh}")
 
     return issues
 
 
 def _dedupe_consecutive_briefing_context(items: list[dict], cards: list[dict],
                                          include_context: bool = True) -> list[dict]:
-    """Fallback repair when consecutive context-only sentences survive the
-    validation retry: keep only the LAST sentence of each consecutive
-    context-only run, dropping the extras (issue #444 acceptance criteria).
+    """Fallback repair when an over-long context-only run survives the
+    validation retry: keep the LAST BRIEFING_MAX_CONTEXT_RUN sentences of each
+    run, dropping the extras (issue #444 acceptance criteria).
+
+    #1027 raised the kept count from 1 to BRIEFING_MAX_CONTEXT_RUN. This is a
+    repair of last resort and it drops content, which now works against the
+    mode's whole point ("every topic of the source has to be told"), so it
+    trims a run back to the limit instead of collapsing it to a single line.
 
     include_context=False (podcast mode, issue #482): context sentences are
     never allowed, so every one of them is simply dropped instead of being
-    collapsed one-per-run."""
+    trimmed."""
     if not include_context:
         return [item for item in items
                 if (item.get("sentence_zh") or "").strip()
@@ -2739,17 +2788,17 @@ def _dedupe_consecutive_briefing_context(items: list[dict], cards: list[dict],
     fixed: list[dict] = []
     buf: list[dict] = []
     for item in items:
-        s_zh = (item.get("sentence_zh") or "").strip()
+        s_zh, _ = _briefing_item_texts(item)
         is_ctx = not (s_zh and any(_briefing_word_match(c["word_zh"], s_zh) for c in cards))
         if is_ctx:
             buf.append(item)
         else:
             if buf:
-                fixed.append(buf[-1])
+                fixed.extend(buf[-BRIEFING_MAX_CONTEXT_RUN:])
                 buf = []
             fixed.append(item)
     if buf:
-        fixed.append(buf[-1])
+        fixed.extend(buf[-BRIEFING_MAX_CONTEXT_RUN:])
     return fixed
 
 
@@ -2775,11 +2824,16 @@ def fact_check_briefing(articles: list[dict], items: list[dict], model: str,
         f"{noun}{i}（标题：{a.get('title') or '（无标题）'}）：\n{a.get('text', '').strip()}"
         for i, a in enumerate(articles)
     )
+    # #1027: context sentences are German (sentence_de) — listing only
+    # sentence_zh would hand the fact-checker a numbering that no longer lines
+    # up with `items`, and _repair_briefing_sentences parses "句子N" out of its
+    # verdicts to find the sentence to rewrite.
     sentences_block = "\n".join(
-        f"{i}. {item.get('sentence_zh', '')}" for i, item in enumerate(items)
+        f"{i}. {(item.get('sentence_zh') or item.get('sentence_de') or '').strip()}"
+        for i, item in enumerate(items)
     )
     source_desc = "原始内容" if generic else "原始新闻文章"
-    prompt = f"""任务：核对下面每一句中文摘要句子是否符合{source_desc}的事实。
+    prompt = f"""任务：核对下面每一句摘要句子是否符合{source_desc}的事实（中文句和德语句都要核对）。
 
 {noun}（按 0 开始编号）：
 {articles_block}
@@ -2848,7 +2902,8 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
         if isinstance(article_idx, int) and 0 <= article_idx < len(articles):
             source_text = articles[article_idx].get("text", "").strip()
         problems_block_parts.append(
-            f"句子{idx}（原句）：{item.get('sentence_zh', '')}\n"
+            f"句子{idx}（原句）："
+            f"{(item.get('sentence_zh') or item.get('sentence_de') or '').strip()}\n"
             f"核查意见：{flagged[idx]}\n"
             f"来源{noun}原文：{source_text}"
         )
@@ -2862,13 +2917,15 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
 重写要求：
 - 如果原句包含目标词汇（见下方"原句"是否明显在描述一个词），重写后的句子必须保持8到18个字，
   只使用来源原文明确陈述的事实，原来的目标词必须【原样、恰好出现一次】保留在句子中
-- 如果原句不含目标词汇（上下文句子），重写后必须是单独一个短句，不超过25个字，最多一个逗号
+- 如果原句是【德语】的上下文句子，重写后仍然用德语、仍然是一句话，
+  放进 sentence_de 字段（不要翻译成中文）
 - 只允许使用来源原文明确陈述的事实，禁止主观评论、情绪、气氛或场景描写
-- 所有输出只用简体中文，不要使用markdown格式
+- 不要使用markdown格式
 
 仅返回如下JSON数组（顺序不限，用 idx 标明对应哪一句），不加任何其他文字：
 [
-  {{"idx": {sorted(flagged)[0]}, "sentence_zh": "重写后的句子"}}
+  {{"idx": {sorted(flagged)[0]}, "sentence_zh": "重写后的中文句子"}},
+  {{"idx": {sorted(flagged)[0]}, "sentence_de": "Umgeschriebener deutscher Satz."}}
 ]"""
 
     try:
@@ -2888,11 +2945,19 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
         if not isinstance(entry, dict):
             continue
         idx = entry.get("idx")
-        new_sentence = (entry.get("sentence_zh") or "").strip()
-        if not isinstance(idx, int) or idx not in flagged or not new_sentence:
+        # #1027: a rewritten context sentence comes back as sentence_de. Write
+        # it into the field it belongs to — putting German into sentence_zh
+        # would make the scan loop treat it as a target sentence that happens
+        # to contain no target word, i.e. silently move it into the context.
+        zh_new = (entry.get("sentence_zh") or "").strip()
+        de_new = (entry.get("sentence_de") or "").strip()
+        if not isinstance(idx, int) or idx not in flagged or not (zh_new or de_new):
             continue
         replaced = dict(new_items[idx])
-        replaced["sentence_zh"] = new_sentence
+        if zh_new:
+            replaced["sentence_zh"] = zh_new
+        if de_new:
+            replaced["sentence_de"] = de_new
         new_items[idx] = replaced
         applied += 1
 
@@ -2923,15 +2988,27 @@ def generate_briefing_sentences(
 
     The AI writes a coherent summary in which each target word appears exactly
     once — in whatever order produces the most natural summary (word order is
-    free, issue #444) — but plain context sentences (facts, numbers — no target
-    word) are allowed in between, so nothing has to be padded artificially. At
-    most ONE context sentence may precede a target sentence; two consecutive
-    context sentences are never allowed. We then scan the sentences in order:
-    a sentence containing a target word becomes a card sentence; the context
-    sentence before it (since the previous card) is attached to it — Chinese
-    into reasoning_zh (background popup), German (Google Translate, no extra AI
-    cost) into context_de (shown on the card). Target-word order = order of
-    appearance in the summary (arbitrary, chosen by the AI).
+    free, issue #444) — with context sentences (facts, numbers, names — no
+    target word) in between. We then scan the sentences in order: a sentence
+    containing a target word becomes a card sentence; the context sentences
+    before it (since the previous card) are attached to it and shown on the
+    card front.
+
+    Reshaped in #1027 around what Daniel actually does with this mode — read it
+    as a morning briefing while reviewing the day's words:
+
+      * Context sentences are written **in German** (sentence_de) rather than
+        in Chinese and machine-translated afterwards. That half is the briefing
+        he reads; a Google translation of Chinese does not read like one. The
+        Chinese side (reasoning_zh, the background popup) is now the derived
+        one — see _fill_briefing_context.
+      * The summary must cover **every** topic of the source. The old pair of
+        limits (at most one context sentence in a row, at most 2x as many
+        sentences as words) existed to stop padding and pulled directly against
+        that; they are now BRIEFING_MAX_CONTEXT_RUN / BRIEFING_MAX_SENTENCE_FACTOR.
+      * Kontextsummary feeds this function the item's **summary**, not its
+        transcript (routes/story._contextsummary_material) — "cover everything"
+        is not a satisfiable rule against a transcript we truncate.
 
     After generation, `validate_briefing_items` checks the raw output in Python
     (no AI): every target word exactly once, no consecutive context sentences,
@@ -2991,24 +3068,44 @@ def generate_briefing_sentences(
 
     # include_context=False (podcast mode, issue #482): every sentence must
     # contain a target word — no context sentences at all.
+    #
+    # #1027 rewrote the include_context=True half around Daniel's actual use of
+    # this mode: he reads it as a morning briefing while reviewing the day's
+    # words. So the summary must cover every topic of the source (the old "only
+    # add context when the next target sentence needs it, skip it where you
+    # can" rule pulled in exactly the wrong direction), and the context
+    # sentences are written in German — that is the half he reads, and a
+    # machine translation of Chinese was never going to read like a briefing.
     context_rule = (
-        "- 不是每句话都要包含目标词汇：目标词句子之间【最多插入一个】不含目标词的上下文句子，\n"
-        "  用来交代事实、数字和背景，让摘要自然连贯——绝对不允许连续出现两个或以上不含目标词的上下文句子\n"
-        "- 只有当下一个目标句确实需要这段背景才能读懂时才插入上下文句子——能省则省，\n"
-        "  不要为了凑数或过渡而硬加\n"
-        "- 因此句子总数不能超过目标词数量的两倍"
+        f"- 不是每句话都要包含目标词汇：目标句之间可以插入不含目标词的【德语】上下文句子，\n"
+        f"  用来把素材里的事实、数字、人名讲清楚；连续的上下文句最多 {BRIEFING_MAX_CONTEXT_RUN} 句\n"
+        f"- 【覆盖面，最重要的一条】整组句子必须覆盖素材里的每一个话题和每一条重要信息——\n"
+        f"  读完这组句子就等于读完了素材本身。绝不允许因为目标词不够用就丢掉某个话题：\n"
+        f"  某个话题配不上合适的目标词时，就用德语上下文句把它讲完\n"
+        f"- 句子总数不能超过目标词数量的 {BRIEFING_MAX_SENTENCE_FACTOR} 倍"
         if include_context else
         "- 【重要】每一句话都必须恰好包含一个目标词汇——不允许出现任何不含目标词的句子，\n"
         "  因此句子总数必须恰好等于目标词数量"
     )
     context_hsk_rule = (
-        "\n- 上下文句子【不受 HSK 词汇限制】——它最终会被翻译成德文显示在卡片正面，可以自由\n"
-        "  使用专有名词、数字和任何词汇来准确传达事实；但【必须是单独的一个短句】，\n"
-        "  不超过25个字，最多包含一个逗号——绝不能是多个分句拼接而成的长句"
+        f"\n- 上下文句子【用德语写】，放进 sentence_de 字段，sentence_zh 留空。\n"
+        f"  这部分是给德语母语者当简报读的：要写成通顺自然的德语，人名、机构名、数字、\n"
+        f"  日期一律照素材原文写，不受任何词汇等级限制。每条是【一句话】，\n"
+        f"  不超过 {BRIEFING_MAX_CONTEXT_CHARS} 个字符"
         if include_context else ""
     )
     context_target_word_note = (
-        "；不含目标词的上下文句子填 null" if include_context else "（本模式没有上下文句子）"
+        "；不含目标词的上下文句子填 null，正文写进 sentence_de" if include_context
+        else "（本模式没有上下文句子）"
+    )
+    mix_line = (
+        "\n摘要由两种句子交替组成：含目标词的中文短句（每句会变成一张复习卡片），"
+        "以及德语的上下文句（把事实、数字、人名讲全）。"
+        if include_context else "")
+    script_rule = (
+        "- 含目标词的句子只用简体中文，绝对不要出现繁体字；上下文句子只用德语"
+        if include_context else
+        "- 所有输出只用简体中文，绝对不要出现繁体字"
     )
     hsk_overflow_rule = (
         "\n  如果某个事实需要更难的词才能表达，把它放进上下文句子里，目标句只保留简单的部分"
@@ -3017,7 +3114,8 @@ def generate_briefing_sentences(
     )
     example_block = (
         '[\n'
-        '  {"sentence_zh": "上下文句子", "target_word": null, "article_idx": 0},\n'
+        '  {"sentence_de": "Deutscher Kontextsatz mit Zahlen und Namen.", '
+        '"target_word": null, "article_idx": 0},\n'
         '  {"sentence_zh": "含目标词的句子", "target_word": "词汇", "article_idx": 0}\n'
         ']'
     ) if include_context else (
@@ -3052,7 +3150,7 @@ def generate_briefing_sentences(
             f"{i + 1}. {c['word_zh']}（{c.get('pinyin', '')}）— {c.get('definition', '')}"
             for i, c in enumerate(batch)
         )
-        return f"""{task_line}
+        return f"""{task_line}{mix_line}
 
 {noun}（按 0 开始编号）：
 {articles_block}
@@ -3070,7 +3168,7 @@ def generate_briefing_sentences(
 - 【难度控制，严格遵守】含目标词汇的句子长度为8到18个字，其中除目标词外只允许
   HSK 1-{max_hsk} 的词汇——这是学习者自己选择的难度上限，超纲词会让句子无法学习。{hsk_overflow_rule}
 {fact_rule}{context_hsk_rule}
-- 所有输出只用简体中文，绝对不要出现繁体字
+{script_rule}
 - 不要使用markdown格式
 - article_idx 是该句子所涉及的{noun}编号（上面的 0 开始编号）
 - target_word 是该句包含的目标词汇原文{context_target_word_note}
@@ -3187,16 +3285,19 @@ def generate_briefing_sentences(
         # not trusted (it can lie), only the actual sentence content counts.
         context_buf: list[str] = []
         for item in items:
-            s_zh = item.get("sentence_zh", "").strip()
-            if not s_zh:
-                continue
+            s_zh, s_de = _briefing_item_texts(item)
             matched = None
             for card in remaining:
-                if _briefing_word_match(card["word_zh"], s_zh):
+                if s_zh and _briefing_word_match(card["word_zh"], s_zh):
                     matched = card
                     break
             if matched is None:
-                context_buf.append(s_zh)
+                # #1027: context sentences arrive in sentence_de (German). A
+                # reply that still writes them in Chinese is kept rather than
+                # dropped — the language is sorted out in _fill_briefing_context.
+                ctx = s_de or s_zh
+                if ctx:
+                    context_buf.append(ctx)
                 continue
             remaining.remove(matched)
             article_idx = item.get("article_idx")
@@ -3206,7 +3307,7 @@ def generate_briefing_sentences(
                 source_url = _art.get("url") or None
                 source_title = _art.get("title") or None
                 source_name = _art.get("source_name") or None
-            context_zh = " ".join(context_buf)
+            context_raw = " ".join(context_buf)
             context_buf = []
             sentences.append({
                 "word_ids": [matched["word_id"]],
@@ -3214,8 +3315,10 @@ def generate_briefing_sentences(
                 "sentence_en": "",
                 "concept_en": "",
                 "concept_zh": "",
-                "reasoning_zh": context_zh,
-                "context_zh": context_zh,
+                # Both filled by _fill_briefing_context below, once the
+                # context's language is known.
+                "reasoning_zh": "",
+                "_context_raw": context_raw,
                 "source_url": source_url,
                 "source_title": source_title,
                 "source_name": source_name,
@@ -3248,30 +3351,73 @@ def generate_briefing_sentences(
             "concept_en": "",
             "concept_zh": "",
             "reasoning_zh": "",
-            "context_zh": "",
+            "_context_raw": "",
             "source_url": None,
             "tokens": [],
         })
 
     _fill_translations(sentences, progress_key=progress_key)
-
-    # Context → German via Google Translate (translator.py), per Daniel's design:
-    # keep the AI's job small, translation is mechanical. Only non-empty contexts
-    # go into the batch — empty lines break translate_batch's newline splitting.
-    ctx_texts = [s.pop("context_zh", "") or "" for s in sentences]
-    for s in sentences:
-        s["context_de"] = None
-    nonempty = [(i, t) for i, t in enumerate(ctx_texts) if t]
-    if nonempty:
-        try:
-            import translator as _t
-            de_list = _t.translate_batch([t for _, t in nonempty], target="de")
-            for (i, _), de in zip(nonempty, de_list):
-                sentences[i]["context_de"] = de.strip() or None
-        except Exception as e:
-            logger.warning("briefing: context translation failed — %s", e)
+    _fill_briefing_context(sentences)
 
     return sentences
+
+
+def _fill_briefing_context(sentences: list[dict]) -> None:
+    """Turn each sentence's raw context text into context_de + reasoning_zh.
+
+    #1027 flipped which side is the original. The context sentences are now
+    written by the model in German — that half IS Daniel's morning briefing, and
+    a Google translation of Chinese was never going to read like one — so German
+    is the source and the Chinese in reasoning_zh (the background popup behind
+    the zh toggle) is the machine translation. It used to be the other way
+    round; the translation stays mechanical either way, which was the point of
+    keeping it out of the AI call in the first place.
+
+    A reply that ignores the contract and writes Chinese context anyway is
+    translated the old direction instead of being filed as German: text sitting
+    in the wrong language slot is the #904 failure mode, and it is silent —
+    Google Translate hands German→German back unchanged, so nothing downstream
+    would ever notice.
+
+    Translation failure leaves the slot it could not fill empty and logs; a
+    missing background popup must never cost the story.
+    """
+    import zh_annotate
+    raw = [(s.pop("_context_raw", "") or "").strip() for s in sentences]
+    for s in sentences:
+        s["context_de"] = None
+        s["reasoning_zh"] = ""
+
+    # NON_CHINESE_TEXT_MAX_CJK is tuned for "is this German prose or is it
+    # Chinese" on exactly this kind of text (#904); a German sentence quoting a
+    # Chinese name stays well under it.
+    german = [i for i, t in enumerate(raw)
+              if t and zh_annotate.cjk_ratio(t) < zh_annotate.NON_CHINESE_TEXT_MAX_CJK]
+    chinese = [i for i, t in enumerate(raw) if t and i not in set(german)]
+
+    for idx, target, source, slot, other in (
+            (german, "zh-CN", "de", "context_de", "reasoning_zh"),
+            (chinese, "de", "zh-CN", "reasoning_zh", "context_de")):
+        if not idx:
+            continue
+        for i in idx:
+            sentences[i][slot] = raw[i]
+        try:
+            import translator as _t
+            translated = _t.translate_batch([raw[i] for i in idx],
+                                            target=target, source=source)
+            for i, out in zip(idx, translated):
+                sentences[i][other] = (out or "").strip() or None
+        except Exception as e:
+            logger.warning("briefing: context %s→%s translation failed — %s",
+                           source, target, e)
+
+    # context_de is a TEXT column read as "is there context"; normalise the
+    # empty string the Chinese branch may have left behind.
+    for s in sentences:
+        if not (s.get("context_de") or "").strip():
+            s["context_de"] = None
+        s["reasoning_zh"] = (s.get("reasoning_zh") or "").strip()
 
 
 def _parse_json_array_salvage(raw: str) -> tuple[list, bool]:

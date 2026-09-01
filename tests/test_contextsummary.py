@@ -95,12 +95,13 @@ def test_contextsummary_feeds_knowledge_material_into_the_briefing_pipeline(
     assert len(body["sentences"]) == 1
     mock_gen.assert_called_once()
 
-    # 素材适配成 briefing 要的 {url, title, text}，text 是转录（#661），
+    # 素材适配成 briefing 要的 {url, title, text}；#1027 起 text 是**德语摘要**
+    # 而不是转录（转录被截断在 15000 字，「覆盖全部信息」在残缺素材上不成立），
     # url 是应用内详情页（#790）而不是外部链接。
     articles = mock_gen.call_args[0][1]
     assert len(articles) == 1
     assert articles[0]["title"] == "Ein Artikel"
-    assert articles[0]["text"] == "这是一篇文章的中文全文。"
+    assert articles[0]["text"] == "Eine deutsche Zusammenfassung."
     assert articles[0]["url"] == f"/#knowledge-{article_episode}"
 
     story = database.get_active_story(database.anki_today().isoformat(), "listening", deck_id)
@@ -108,7 +109,45 @@ def test_contextsummary_feeds_knowledge_material_into_the_briefing_pipeline(
     assert gen_params["mode"] == "contextsummary"
     assert gen_params["episode_ids"] == [article_episode]
     # articles 存进 gen_params，Again 单句重生成才能复现同一份素材。
-    assert gen_params["articles"][0]["text"] == "这是一篇文章的中文全文。"
+    assert gen_params["articles"][0]["text"] == "Eine deutsche Zusammenfassung."
+
+def test_contextsummary_reads_the_summary_and_strips_its_html(
+        populated_db, article_episode):
+    """#1027: Kontextsummary summarizes the AI summary, not the transcript —
+    "every topic of the source has to appear" is not satisfiable against a
+    transcript we truncate at 15000 chars. summary_de is <p>/<b> HTML (#567),
+    which must not reach the prompt."""
+    database.update_episode(
+        article_episode,
+        summary_de="<p><b>Erster Punkt.</b> Mehr dazu.</p><p>Zweiter Punkt.</p>")
+    deck_id = populated_db
+    with patch("ai.generate_briefing_sentences",
+               side_effect=_fake_briefing_sentences) as mock_gen:
+        r = client.get(f"/api/story/{deck_id}/listening",
+                       params={"mode": "contextsummary",
+                               "episode_ids": str(article_episode)})
+
+    assert r.status_code == 200
+    text = mock_gen.call_args[0][1][0]["text"]
+    assert "<p>" not in text and "<b>" not in text
+    assert "Erster Punkt." in text and "Zweiter Punkt." in text
+
+
+def test_contextsummary_falls_back_to_the_transcript_without_a_summary(
+        populated_db, article_episode):
+    """A row that was never summarized still has to produce a story — the
+    transcript is less ideal material, not unusable material (#1027)."""
+    database.update_episode(article_episode, summary_de="")
+    deck_id = populated_db
+    with patch("ai.generate_briefing_sentences",
+               side_effect=_fake_briefing_sentences) as mock_gen:
+        r = client.get(f"/api/story/{deck_id}/listening",
+                       params={"mode": "contextsummary",
+                               "episode_ids": str(article_episode)})
+
+    assert r.status_code == 200
+    assert mock_gen.call_args[0][1][0]["text"] == "这是一篇文章的中文全文。"
+
 
 
 def test_contextsummary_without_a_source_errors_instead_of_degrading(populated_db):
