@@ -5395,10 +5395,20 @@ async function doGenerateFulltext() {
 // on the text) and changing speed would mean regenerating everything.
 const KNOWLEDGE_TTS_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const _KTTS_CHUNK_MAX = 180;   // chars per request — one edge-tts round trip
+// Two reading modes (#1017). 'plain' is the original behaviour; 'gloss' reads
+// the German definition of every word Daniel does not know yet, immediately
+// followed by the word itself, and then carries on with the sentence.
+const KNOWLEDGE_TTS_MODES = { plain: 'Plain', gloss: '+ Vokabeln' };
+// A chunk is now {text, lang}: the gloss parts are German, everything else is
+// the reading language. Plain mode simply tags every chunk with that language.
 let _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
 let _kTtsRate = (() => {
   const v = parseFloat(localStorage.getItem('knowledgeTtsRate'));
   return KNOWLEDGE_TTS_RATES.includes(v) ? v : 1;
+})();
+let _kTtsMode = (() => {
+  const v = localStorage.getItem('knowledgeTtsMode');
+  return KNOWLEDGE_TTS_MODES[v] ? v : 'plain';
 })();
 
 // Inline annotations are for the eye, not the ear: "生态（shēngtài - Ökologie）"
@@ -5459,6 +5469,89 @@ function _kTtsChunks(text, lang) {
   return out.map(c => c.trim()).filter(c => /[\p{L}\p{N}]/u.test(c));
 }
 
+// Every occurrence of `word` in `text`, as start offsets. Chinese has no word
+// boundaries so a plain substring match is right; for the romance languages it
+// would match "chat" inside "château", so the neighbouring characters must not
+// be letters or digits. Matching is case-insensitive there (a word at the start
+// of a sentence is capitalised, the vocabulary list is not).
+function _kTtsIsWordChar(ch) {
+  return !!ch && /[\p{L}\p{N}]/u.test(ch);
+}
+
+function _kTtsWordHits(text, word, lang) {
+  const hits = [];
+  const cjk = lang === 'zh';
+  const hay = cjk ? text : text.toLowerCase();
+  const needle = cjk ? word : word.toLowerCase();
+  if (!needle) return hits;
+  let i = 0;
+  while ((i = hay.indexOf(needle, i)) !== -1) {
+    if (cjk || (!_kTtsIsWordChar(hay[i - 1]) && !_kTtsIsWordChar(hay[i + needle.length])))
+      hits.push(i);
+    i += needle.length;
+  }
+  return hits;
+}
+
+// The definition column is written for the eye: "der Fluss; Strom (geogr.)".
+// Read aloud, the semicolon list and the abbreviated register note are noise,
+// so only the first sense is spoken and parentheticals are dropped.
+function _kTtsGlossText(gloss) {
+  return String(gloss || '')
+    .replace(/[(（][^()（）]*[)）]/g, ' ')
+    .split(/[;；]/)[0]
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
+// Split one chunk around the words Daniel does not know yet: everything up to
+// the word in the reading language, the German gloss, then the word itself,
+// then on with the rest. `used` is shared across the whole text, so a word is
+// glossed at its first occurrence only — hearing it on every repetition would
+// be unbearable.
+function _kTtsGlossParts(text, lang, words, used) {
+  const marks = [];
+  for (const w of words) {
+    const word = String(w.word || w.word_zh || '').trim();
+    const gloss = _kTtsGlossText(w.definition_de || w.definition || '');
+    if (!word || !gloss || used.has(word)) continue;
+    const hits = _kTtsWordHits(text, word, lang);
+    if (hits.length) marks.push({ pos: hits[0], word, gloss });
+  }
+  marks.sort((a, b) => a.pos - b.pos || b.word.length - a.word.length);
+  const parts = [];
+  let cursor = 0;
+  for (const m of marks) {
+    // A shorter word starting inside one already glossed ("模型" inside
+    // "大语言模型") would tear the longer one apart — skip it, and leave it
+    // unmarked in `used` so it can still be glossed where it stands alone.
+    if (m.pos < cursor) continue;
+    used.add(m.word);
+    const head = text.slice(cursor, m.pos);
+    if (head.trim()) parts.push({ text: head, lang });
+    parts.push({ text: m.gloss, lang: 'de' });
+    parts.push({ text: text.substr(m.pos, m.word.length), lang });
+    cursor = m.pos + m.word.length;
+  }
+  const tail = text.slice(cursor);
+  if (tail.trim()) parts.push({ text: tail, lang });
+  return parts;
+}
+
+// The vocabulary of whatever is on screen — the same list the word table
+// below the text is built from (the full text and the summary have different
+// vocabulary, and offering one while reading the other would be two texts'
+// words side by side).
+function _kTtsNewWords(ep, lang) {
+  if (_knowledgeView === 'fulltext') {
+    const ft = _knowledgeFulltextFor(ep, lang);
+    return (ft && ft.new_words) || [];
+  }
+  if (lang === 'zh') return ep.hsk_words || [];
+  return (ep.rendition && ep.rendition.new_words) || [];
+}
+
 // What is on screen right now — the reading-language block, or the full text
 // when that tab is open. The German summary_de block is deliberately not in
 // here: there is no German voice in the language registry, and that block is
@@ -5475,10 +5568,19 @@ function _kTtsSourceText(ep, lang) {
 // Episode + language + view identify the audio: switching any of them means
 // the bar is now pointing at different words, so playback resets.
 function _kTtsSync(ep, lang) {
-  const key = `${ep.id}|${lang}|${_knowledgeView}`;
+  const key = `${ep.id}|${lang}|${_knowledgeView}|${_kTtsMode}`;
   if (_kTts.key === key) return _kTts.chunks;
   if (_kTts.playing || _kTts.idx >= 0) _kTtsStopPlayback();
-  _kTts = { key, chunks: _kTtsChunks(_kTtsSourceText(ep, lang), lang), idx: -1, playing: false, src: '' };
+  const texts = _kTtsChunks(_kTtsSourceText(ep, lang), lang);
+  let chunks;
+  if (_kTtsMode === 'gloss') {
+    const words = _kTtsNewWords(ep, lang);
+    const used = new Set();
+    chunks = texts.flatMap(t => _kTtsGlossParts(t, lang, words, used));
+  } else {
+    chunks = texts.map(text => ({ text, lang }));
+  }
+  _kTts = { key, chunks, idx: -1, playing: false, src: '' };
   return _kTts.chunks;
 }
 
@@ -5492,6 +5594,10 @@ function _kTtsBarHtml(ep, lang) {
         _kTts.playing ? '⏸ Pause' : (_kTts.idx >= 0 ? '▶ Resume' : '🔊 Listen')}</button>
       ${_kTts.idx >= 0 ? `<button class="btn-secondary" onclick="stopKnowledgeTts()">■</button>` : ''}
       <span class="keymap-hint" id="knowledge-tts-pos">${pos}</span>
+      <select class="knowledge-tts-rate" onchange="setKnowledgeTtsMode(this.value)" title="Reading mode">
+        ${Object.entries(KNOWLEDGE_TTS_MODES).map(([v, label]) =>
+          `<option value="${v}"${v === _kTtsMode ? ' selected' : ''}>${label}</option>`).join('')}
+      </select>
       <select class="knowledge-tts-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed">
         ${KNOWLEDGE_TTS_RATES.map(r =>
           `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('')}
@@ -5511,21 +5617,21 @@ function _kTtsUpdateBar() {
 
 function _kTtsPlayAt(idx) {
   if (idx < 0 || idx >= _kTts.chunks.length) { stopKnowledgeTts(); return; }
-  const lang = activeLang();
   _kTts.idx = idx;
   _kTts.playing = true;
   const seq = ++_playSeq;
   const a = _getAudioEl();
   a.onended = () => { if (seq === _playSeq) _kTtsPlayAt(idx + 1); };
   a.onerror = () => { if (seq === _playSeq) _kTtsPlayAt(idx + 1); };
-  _kTts.src = _ttsUrl(_kTts.chunks[idx], lang);
+  _kTts.src = _ttsUrl(_kTts.chunks[idx].text, _kTts.chunks[idx].lang);
   a.src = _kTts.src;
   a.playbackRate = _kTtsRate;
   a.play().catch(() => { if (seq === _playSeq) _kTtsPlayAt(idx + 1); });
   // The only audio generated ahead of time: the one chunk that plays next,
   // fetched while this one sounds. Without it every seam is a silent wait for
   // edge-tts. Nothing is warmed before ▶ is pressed.
-  if (idx + 1 < _kTts.chunks.length) _warmAudio(_ttsUrl(_kTts.chunks[idx + 1], lang));
+  if (idx + 1 < _kTts.chunks.length)
+    _warmAudio(_ttsUrl(_kTts.chunks[idx + 1].text, _kTts.chunks[idx + 1].lang));
   _kTtsUpdateBar();
 }
 
@@ -5561,6 +5667,18 @@ function toggleKnowledgeTts() {
 function stopKnowledgeTts() {
   _kTtsStopPlayback();
   _kTts.idx = -1;
+  if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+// Switching mode changes what the parts are, so playback resets — resuming at
+// part 12 of a list that no longer exists would land in the middle of a
+// different sentence.
+function setKnowledgeTtsMode(value) {
+  if (!KNOWLEDGE_TTS_MODES[value] || value === _kTtsMode) return;
+  _kTtsStopPlayback();
+  _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
+  _kTtsMode = value;
+  try { localStorage.setItem('knowledgeTtsMode', value); } catch (_) {}
   if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
 }
 

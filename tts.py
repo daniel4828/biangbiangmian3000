@@ -183,9 +183,16 @@ _current_play_idx: int = -1
 _is_multi_playing: bool = False
 
 
+# Voices for languages that are NOT learning languages (issue #1017). German
+# belongs here and not in `languages.py`: that registry drives /api/langs, the
+# deck trees and the home tab bar, so adding de there would make a German deck
+# tree appear. The gloss-reading mode needs a German voice and nothing else.
+GLOSS_VOICES = {"de": "de-DE-KatjaNeural"}
+
+
 async def get_cached_path(text: str, lang: str = "zh") -> str:
     """Return local mp3 path for text, generating via edge-tts if not cached."""
-    voice = languages.get_lang_config(lang)["tts_voice"]
+    voice = GLOSS_VOICES.get(lang) or languages.get_lang_config(lang)["tts_voice"]
     return await _ensure_cached(text, voice)
 
 
