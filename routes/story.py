@@ -1502,6 +1502,133 @@ def _group_sentences_by_article(sentences: list[dict], articles: list[dict]) -> 
     return sorted(sentences, key=lambda s: order.get(s.get("source_url"), len(articles)))
 
 
+def _split_text_into_parts(text: str, n: int) -> list[str]:
+    """Cut `text` into n contiguous parts of roughly equal length (issue #1029).
+
+    Cuts only at paragraph boundaries; a text with too few paragraphs is cut at
+    sentence boundaries instead (both Chinese and Western punctuation — the
+    material is a German summary as often as a Chinese transcript). Returns
+    FEWER than n parts when the text cannot be cut that many times — the caller
+    must check, since silently returning one huge part would put every word of
+    a chunk into a single call.
+    """
+    if n <= 1:
+        return [text]
+    blocks = [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+    sep = "\n\n"
+    if len(blocks) < n:
+        # Split *after* the delimiter and keep it, so joining with "" gives the
+        # original text back, punctuation and spacing included.
+        blocks = [b for b in re.split(r"(?<=[。！？!?\n])|(?<=\.\s)", text) if b.strip()]
+        sep = ""
+    if len(blocks) < n:
+        return [text]
+
+    # Cut at the block boundaries closest to the ideal 1/n, 2/n … positions.
+    # Growing a part until it passes a running target instead drifts: one part
+    # that overshoots by a block pushes the error into every later part.
+    cum: list[int] = []
+    running = 0
+    for b in blocks:
+        running += len(b)
+        cum.append(running)
+    total = running
+    cuts: set[int] = set()
+    for k in range(1, n):
+        ideal = total * k / n
+        best = min((i for i in range(len(blocks) - 1) if i not in cuts),
+                   key=lambda i: abs(cum[i] - ideal))
+        cuts.add(best)
+
+    parts: list[str] = []
+    cur: list[str] = []
+    for i, block in enumerate(blocks):
+        cur.append(block)
+        if i in cuts:
+            parts.append(sep.join(cur))
+            cur = []
+    if cur:
+        parts.append(sep.join(cur))
+    return parts
+
+
+def _proportional_call_counts(weights: list[int], n: int) -> list[int]:
+    """Hand out n AI calls across sources weighted by length (issue #1029).
+
+    Every source with text gets at least one call — a source that got zero
+    would be dropped from the story entirely. Only called when n is larger than
+    the number of sources, so there are always enough to go round.
+    """
+    counts = [1 if w > 0 else 0 for w in weights]
+    left = n - sum(counts)
+    total = sum(w for w in weights if w > 0)
+    if left <= 0 or not total:
+        return counts
+    # Largest remainder, so the leftovers land on the longest sources.
+    exact = [(w / total) * left if w > 0 else 0.0 for w in weights]
+    for i, e in enumerate(exact):
+        counts[i] += int(e)
+    left -= sum(int(e) for e in exact)
+    for i in sorted(range(len(exact)), key=lambda i: exact[i] - int(exact[i]),
+                    reverse=True):
+        if left <= 0:
+            break
+        if weights[i] > 0:
+            counts[i] += 1
+            left -= 1
+    return counts
+
+
+def _split_material(articles: list[dict], n: int) -> list[list[dict]]:
+    """Divide the source material into n contiguous slices (issue #1029).
+
+    Each slice is shaped like `articles` itself, so url/title — and with them
+    the card's source line and _group_sentences_by_article's ordering — survive
+    unchanged. Returns fewer than n slices when the material cannot be divided
+    that far; the caller falls back rather than merging chunks.
+
+    Why this exists: every call used to receive the *whole* source and was told
+    to cover every topic in it, so 76 due words produced eight summaries of the
+    same newsletter instead of one briefing (#1027 made that mismatch matter).
+    """
+    if n <= 1 or not articles:
+        return [articles]
+    texts = [(a.get("text") or "").strip() for a in articles]
+    if not any(texts):
+        return [articles]
+
+    if n <= len(articles):
+        # Fewer calls than sources: keep every source whole and group them,
+        # balancing the groups by length. Splitting a source's text here would
+        # gain nothing — there is already more material than calls.
+        target = sum(len(t) for t in texts) / n
+        groups: list[list[dict]] = []
+        cur: list[dict] = []
+        cur_len = 0
+        for i, (article, text) in enumerate(zip(articles, texts)):
+            cur.append(article)
+            cur_len += len(text)
+            left = len(articles) - i - 1
+            groups_left = n - len(groups) - 1
+            if groups_left > 0 and cur_len >= target and left >= groups_left:
+                groups.append(cur)
+                cur, cur_len = [], 0
+        if cur:
+            groups.append(cur)
+        return groups
+
+    slices: list[list[dict]] = []
+    for article, text, k in zip(articles, texts,
+                                _proportional_call_counts([len(t) for t in texts], n)):
+        if not k:
+            continue
+        parts = _split_text_into_parts(text, k)
+        for j, part in enumerate(parts):
+            label = f"·第{j + 1}/{len(parts)}段" if len(parts) > 1 else ""
+            slices.append([{**article, "text": part, "section_label": label}])
+    return slices
+
+
 def _generate_briefing_story_sentences(
     cards: list, articles: list[dict], model: str, progress_key: str | None,
     max_hsk: int = 3, include_context: bool = True,
@@ -1534,6 +1661,20 @@ def _generate_briefing_story_sentences(
     chunk_size = batch_size if batch_size and batch_size > 0 else ai.MAX_NEWS_BATCH
     chunks = [cards[i:i + chunk_size] for i in range(0, len(cards), chunk_size)]
 
+    # #1029: divide the source between the calls instead of handing all of it
+    # to each. Since #1027 every call is told to cover every topic of the
+    # material it is given, so with the whole source in each one, 76 due words
+    # produced eight summaries of the same newsletter rather than one briefing.
+    # Material that cannot be cut into as many pieces as there are calls (a
+    # short source, or one unbroken paragraph) keeps the old shape: repeating
+    # the source is a worse briefing, but merging the chunks to match would
+    # risk a single call that overruns the reply budget.
+    slices = _split_material(articles, len(chunks))
+    if len(slices) != len(chunks):
+        logger.info("story  briefing: material not divisible into %d parts — "
+                    "every call gets the full source", len(chunks))
+        slices = [articles] * len(chunks)
+
     # Detailed loading-screen progress (issue #407): overall word counter and the
     # source titles being covered, carried through every progress update.
     titles = [a.get("title") or a.get("url") or "" for a in articles]
@@ -1542,10 +1683,10 @@ def _generate_briefing_story_sentences(
     all_sentences: list[dict] = []
     prompt_summary = f"briefing pipeline — {len(articles)} source texts"
     words_done = 0
-    for idx, chunk in enumerate(chunks):
+    for idx, (chunk, chunk_articles) in enumerate(zip(chunks, slices)):
         label = f" ({idx + 1}/{len(chunks)})"
         chunk_sentences = ai.generate_briefing_sentences(
-            chunk, articles, model=model, progress_key=progress_key, attempt_label=label,
+            chunk, chunk_articles, model=model, progress_key=progress_key, attempt_label=label,
             max_hsk=max_hsk, generic=True, include_context=include_context,
             progress_extra={
                 "words_done": words_done,

@@ -2821,7 +2821,8 @@ def fact_check_briefing(articles: list[dict], items: list[dict], model: str,
 
     noun = "内容" if generic else "文章"
     articles_block = "\n\n".join(
-        f"{noun}{i}（标题：{a.get('title') or '（无标题）'}）：\n{a.get('text', '').strip()}"
+        f"{noun}{i}（标题：{a.get('title') or '（无标题）'}"
+        f"{a.get('section_label') or ''}）：\n{a.get('text', '').strip()}"
         for i, a in enumerate(articles)
     )
     # #1027: context sentences are German (sentence_de) — listing only
@@ -3141,8 +3142,18 @@ def generate_briefing_sentences(
         _set_progress(progress_key, phase="request", msg=msg, **fields)
 
     articles_block = "\n\n".join(
-        f"{noun}{i}（标题：{a.get('title') or '（无标题）'}）：\n{a.get('text', '').strip()}"
+        f"{noun}{i}（标题：{a.get('title') or '（无标题）'}"
+        f"{a.get('section_label') or ''}）：\n{a.get('text', '').strip()}"
         for i, a in enumerate(articles)
+    )
+    # section_label (#1029): the chunker hands each call one slice of the
+    # source, not the whole thing. Saying which slice this is keeps the model
+    # from writing an intro to material it cannot see, or from reaching for a
+    # topic that lives in another call's slice.
+    section_rule = (
+        "\n- 【这是整篇素材的一段】上面给出的只是原素材的其中一段，"
+        "只总结这一段的内容，不要提及、概括或预告其它段落"
+        if any(a.get("section_label") for a in articles) else ""
     )
 
     def _build_prompt(batch: list[dict], extra_hint: str = "") -> str:
@@ -3167,7 +3178,7 @@ def generate_briefing_sentences(
 - 一句话最多包含一个目标词汇
 - 【难度控制，严格遵守】含目标词汇的句子长度为8到18个字，其中除目标词外只允许
   HSK 1-{max_hsk} 的词汇——这是学习者自己选择的难度上限，超纲词会让句子无法学习。{hsk_overflow_rule}
-{fact_rule}{context_hsk_rule}
+{fact_rule}{context_hsk_rule}{section_rule}
 {script_rule}
 - 不要使用markdown格式
 - article_idx 是该句子所涉及的{noun}编号（上面的 0 开始编号）
