@@ -183,13 +183,6 @@
                  know yet / nothing at all. -->
             <div id="listen-hint-wrap" style="display:none">
               <div class="listen-hint-sentence" id="listen-hint-sentence"></div>
-              <div class="listen-hint-slider-row">
-                <span class="listen-hint-label">Hint</span>
-                <input type="range" id="listen-hint-slider" min="0" max="2" value="1"
-                       oninput="onListenHintSlider(this.value)">
-                <span class="listen-hint-pct" id="listen-hint-pct">New words only</span>
-                <button class="hint-save-btn" id="hint-save-btn" onclick="saveListenHintDefault()" title="Save as default">☆</button>
-              </div>
             </div>
             <!-- Creating: English/German context sentence (shown above Chinese for cloze).
                  Hidden by default (no space reserved); press t to toggle, or tap the
@@ -243,6 +236,17 @@
               <button class="reveal-btn" id="reveal-btn" onclick="revealAnswer()">Show Answer</button>
               <button class="front-newsentence-btn" id="new-sentence-btn" onclick="requeueNewSentence()"
                       title="New sentence (5) — show this card again in ~1 min with a freshly generated sentence (not a rating, no scheduling change)">🔄</button>
+            </div>
+            <!-- Listening: hint slider lives below Show Answer so it doesn't
+                 push the sentence/button down as its width changes (Daniel 2026-09-03). -->
+            <div id="listen-hint-slider-wrap" style="display:none">
+              <div class="listen-hint-slider-row">
+                <span class="listen-hint-label">Hint</span>
+                <input type="range" id="listen-hint-slider" min="0" max="2" value="1"
+                       oninput="onListenHintSlider(this.value)">
+                <span class="listen-hint-pct" id="listen-hint-pct">New words only</span>
+                <button class="hint-save-btn" id="hint-save-btn" onclick="saveListenHintDefault()" title="Save as default">☆</button>
+              </div>
             </div>
           </div>
 

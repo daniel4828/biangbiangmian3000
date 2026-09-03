@@ -1869,8 +1869,20 @@ function lrnCount(c) {
   return (c?.learning || 0) + (c?.learning_soon || 0);
 }
 
+// ...but on the deck list the two are not interchangeable: a card still sitting
+// in a 1m/10m step cannot be reviewed *now*, so a deck whose whole learning
+// number is `learning_soon` opens straight into the "nothing to do" screen
+// (Daniel 2026-09-03). They therefore get their own ⏳ badge instead of being
+// added into the orange number. Nothing disappears — #844's point stands, the
+// count is still on screen, just marked as pending rather than as work waiting.
+function lrnHtml(c) {
+  const soon = (c?.learning_soon || 0);
+  return `<span class="n-lrn">${c?.learning || 0}</span>`
+       + (soon > 0 ? `<span class="n-soon" title="${soon} in a learning step, not due yet">⏳${soon}</span>` : '');
+}
+
 function countHtml(c) {
-  return `<span class="n-new">${c.new}</span> <span class="n-lrn">${lrnCount(c)}</span> <span class="n-rev">${c.review}</span>`;
+  return `<span class="n-new">${c.new}</span> ${lrnHtml(c)} <span class="n-rev">${c.review}</span>`;
 }
 
 
@@ -2002,7 +2014,7 @@ function renderDecks(decks) {
           <span class="tree-name" onclick="startReviewMixed(${allDeck.id},'${safeName}')" style="cursor:pointer">All</span>
           ${!allDeck.no_story && !_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${allDeck.id})" title="Regenerate story">↺</button>` : ''}
         </span>
-        <span class="deck-counts">${_mixNewBtn(allDeck.id, allDeck.new_review_order_override)}<span class="n-new">${(allDeck.counts||{}).new||0}</span><span class="n-lrn">${lrnCount(allDeck.counts)}</span><span class="n-rev">${(allDeck.counts||{}).review||0}</span></span>
+        <span class="deck-counts">${_mixNewBtn(allDeck.id, allDeck.new_review_order_override)}<span class="n-new">${(allDeck.counts||{}).new||0}</span>${lrnHtml(allDeck.counts)}<span class="n-rev">${(allDeck.counts||{}).review||0}</span></span>
         ${allRRBadge}
         <button class="${allBuryClass}" onclick="event.stopPropagation();toggleBury(${allDeck.id})" title="${allBuryTitle}">${allBuryIcon}</button>
         <div class="deck-menu-wrap">
@@ -2067,7 +2079,7 @@ function renderDeckRows(decks, depth, sortMode) {
     const toggleIcon = hasStructChildren ? (isCollapsed ? '▶' : '▼') : '';
     const safeName  = deck.name.replace(/'/g, "\\'");
     const c = deck.counts || { new: 0, learning: 0, review: 0 };
-    const deckCounts = `<span class="deck-counts">${_mixNewBtn(deck.id, deck.new_review_order_override)}<span class="n-new">${c.new}</span><span class="n-lrn">${lrnCount(c)}</span><span class="n-rev">${c.review}</span></span>`;
+    const deckCounts = `<span class="deck-counts">${_mixNewBtn(deck.id, deck.new_review_order_override)}<span class="n-new">${c.new}</span>${lrnHtml(c)}<span class="n-rev">${c.review}</span></span>`;
 
     // Future-dated daily decks are locked until their date: greyed, not reviewable.
     if (deck.locked) {
@@ -8172,13 +8184,17 @@ function showFront() {
   _listenCount = 0;
   _updateListenCounters();
 
-  // Listening hint slider
+  // Listening hint slider (sentence lives above the sentence area; the slider
+  // row itself is docked below Show Answer, #1029)
   const hintWrap = document.getElementById('listen-hint-wrap');
+  const hintSliderWrap = document.getElementById('listen-hint-slider-wrap');
   if (isListening) {
     hintWrap.style.display = 'flex';
+    hintSliderWrap.style.display = 'block';
     _initListenHint();
   } else {
     hintWrap.style.display = 'none';
+    hintSliderWrap.style.display = 'none';
   }
 
   // Word bank mode: creating category for non-sentence notes (disabled in quick mode)
@@ -9832,7 +9848,7 @@ function onListenHintSlider(val) {
 
 function _adjustListenHintSlider(delta) {
   const slider = document.getElementById('listen-hint-slider');
-  if (!slider || slider.closest('#listen-hint-wrap')?.style.display === 'none') return;
+  if (!slider || document.getElementById('listen-hint-slider-wrap')?.style.display === 'none') return;
   const next = Math.max(_HINT_MIN, Math.min(_HINT_MAX, parseInt(slider.value, 10) + delta));
   slider.value = next;
   onListenHintSlider(next);
