@@ -431,6 +431,12 @@ def search_words(q: str, lang: str | None = None):
     return database.search_words(q, lang)
 
 
+@router.get("/api/quick-search")
+def quick_search(q: str, lang: str | None = None, limit: int = 20):
+    """Renderable word search for the home page quick-search bar (#1031)."""
+    return database.quick_search_words(q, lang, limit)
+
+
 @router.get("/api/words/{word_id}/cards")
 def get_word_cards(word_id: int):
     return database.get_cards_for_word(word_id)
