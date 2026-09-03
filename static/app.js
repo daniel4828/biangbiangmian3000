@@ -1861,16 +1861,36 @@ function aggregateCounts(deck, category) {
 
 // Cards you just rated Again sit in the 1m/10m steps and are not due *right
 // now*, so the backend keeps them out of `learning` (which several server-side
-// checks read as "due this second") and reports them separately. For display
-// they belong in the learning number — Anki counts them too, and a counter that
-// stays at 0 right after pressing Again reads like the card was lost (#844).
-// The 1d/3d steps are deliberately not in `learning_soon`: they are tomorrow.
-function lrnCount(c) {
-  return (c?.learning || 0) + (c?.learning_soon || 0);
+// checks read as "due this second") and reports them separately as
+// `learning_soon`. The 1d/3d steps are deliberately not in it: they are tomorrow.
+//
+// They used to be summed into the orange learning number (#844: a counter that
+// drops to 0 right after pressing Again reads like the card was lost), but that
+// number then claims work that isn't available — the deck says 6 and opens
+// straight into the "nothing to do, wait" screen (#1032). So they get their own
+// ⏳ badge: still on screen, just marked as pending instead of reviewable.
+function lrnHtml(c) {
+  const soon = (c?.learning_soon || 0);
+  return `<span class="n-lrn">${c?.learning || 0}</span>`
+       + (soon > 0 ? `<span class="n-soon" title="${soon} in a learning step, not due yet">⏳${soon}</span>` : '');
+}
+
+// Same split for the review-screen counters (fixed elements, so the ⏳ badge is
+// its own sibling span rather than markup): the orange number is what's
+// reviewable now, the ⏳ is what's still waiting in a learning step.
+function setLrnCounter(numId, soonId, c) {
+  const num = document.getElementById(numId);
+  const soonEl = document.getElementById(soonId);
+  if (num) num.textContent = c?.learning || 0;
+  if (soonEl) {
+    const soon = c?.learning_soon || 0;
+    soonEl.textContent = soon > 0 ? `⏳${soon}` : '';
+    soonEl.title = soon > 0 ? `${soon} in a learning step, not due yet` : '';
+  }
 }
 
 function countHtml(c) {
-  return `<span class="n-new">${c.new}</span> <span class="n-lrn">${lrnCount(c)}</span> <span class="n-rev">${c.review}</span>`;
+  return `<span class="n-new">${c.new}</span> ${lrnHtml(c)} <span class="n-rev">${c.review}</span>`;
 }
 
 
@@ -2002,7 +2022,7 @@ function renderDecks(decks) {
           <span class="tree-name" onclick="startReviewMixed(${allDeck.id},'${safeName}')" style="cursor:pointer">All</span>
           ${!allDeck.no_story && !_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${allDeck.id})" title="Regenerate story">↺</button>` : ''}
         </span>
-        <span class="deck-counts">${_mixNewBtn(allDeck.id, allDeck.new_review_order_override)}<span class="n-new">${(allDeck.counts||{}).new||0}</span><span class="n-lrn">${lrnCount(allDeck.counts)}</span><span class="n-rev">${(allDeck.counts||{}).review||0}</span></span>
+        <span class="deck-counts">${_mixNewBtn(allDeck.id, allDeck.new_review_order_override)}<span class="n-new">${(allDeck.counts||{}).new||0}</span>${lrnHtml(allDeck.counts)}<span class="n-rev">${(allDeck.counts||{}).review||0}</span></span>
         ${allRRBadge}
         <button class="${allBuryClass}" onclick="event.stopPropagation();toggleBury(${allDeck.id})" title="${allBuryTitle}">${allBuryIcon}</button>
         <div class="deck-menu-wrap">
@@ -2067,7 +2087,7 @@ function renderDeckRows(decks, depth, sortMode) {
     const toggleIcon = hasStructChildren ? (isCollapsed ? '▶' : '▼') : '';
     const safeName  = deck.name.replace(/'/g, "\\'");
     const c = deck.counts || { new: 0, learning: 0, review: 0 };
-    const deckCounts = `<span class="deck-counts">${_mixNewBtn(deck.id, deck.new_review_order_override)}<span class="n-new">${c.new}</span><span class="n-lrn">${lrnCount(c)}</span><span class="n-rev">${c.review}</span></span>`;
+    const deckCounts = `<span class="deck-counts">${_mixNewBtn(deck.id, deck.new_review_order_override)}<span class="n-new">${c.new}</span>${lrnHtml(c)}<span class="n-rev">${c.review}</span></span>`;
 
     // Future-dated daily decks are locked until their date: greyed, not reviewable.
     if (deck.locked) {
@@ -7906,7 +7926,7 @@ function loadCard(c, counts) {
   // Update progress counts
   _lastCounts = counts;
   document.getElementById('cnt-new').textContent = counts.new;
-  document.getElementById('cnt-lrn').textContent = lrnCount(counts);
+  setLrnCounter('cnt-lrn', 'cnt-lrn-soon', counts);
   document.getElementById('cnt-rev').textContent = counts.review;
 
   // Highlight the active state item — same classification as the backend
@@ -7925,7 +7945,7 @@ function loadCard(c, counts) {
     for (const [prefix, cat] of Object.entries(catMap)) {
       const cc = counts.by_cat[cat] || {new: 0, learning: 0, review: 0};
       document.getElementById(`cnt-${prefix}-new`).textContent = cc.new;
-      document.getElementById(`cnt-${prefix}-lrn`).textContent = lrnCount(cc);
+      setLrnCounter(`cnt-${prefix}-lrn`, `cnt-${prefix}-lrn-soon`, cc);
       document.getElementById(`cnt-${prefix}-rev`).textContent = cc.review;
     }
     // A category disabled via preset is absent from by_cat → hide its tile.
@@ -8172,13 +8192,17 @@ function showFront() {
   _listenCount = 0;
   _updateListenCounters();
 
-  // Listening hint slider
+  // Listening hint slider (sentence lives above the sentence area; the slider
+  // row itself is docked below Show Answer, #1033)
   const hintWrap = document.getElementById('listen-hint-wrap');
+  const hintSliderWrap = document.getElementById('listen-hint-slider-wrap');
   if (isListening) {
     hintWrap.style.display = 'flex';
+    hintSliderWrap.style.display = 'block';
     _initListenHint();
   } else {
     hintWrap.style.display = 'none';
+    hintSliderWrap.style.display = 'none';
   }
 
   // Word bank mode: creating category for non-sentence notes (disabled in quick mode)
@@ -9832,7 +9856,7 @@ function onListenHintSlider(val) {
 
 function _adjustListenHintSlider(delta) {
   const slider = document.getElementById('listen-hint-slider');
-  if (!slider || slider.closest('#listen-hint-wrap')?.style.display === 'none') return;
+  if (!slider || document.getElementById('listen-hint-slider-wrap')?.style.display === 'none') return;
   const next = Math.max(_HINT_MIN, Math.min(_HINT_MAX, parseInt(slider.value, 10) + delta));
   slider.value = next;
   onListenHintSlider(next);

@@ -342,6 +342,8 @@ main.browse-open {
 .n-lrn  { color: var(--hard); }
 .n-rev  { color: var(--good); }
 .n-zero { color: var(--border); }
+/* Learning cards whose step isn't due yet — pending, not reviewable now (#1032) */
+.n-soon { color: var(--muted); font-weight: 600; margin-left: 2px; }
 
 /* ── Review ──────────────────────────────────────────── */
 #view-review { display: none; }
@@ -1831,11 +1833,11 @@ main.browse-open {
 }
 /* News flow: German context of the preceding summary sentences (readable at a glance) */
 .sentence-context-de {
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.5;
   text-align: center;
-  color: var(--muted);
-  font-style: italic;
+  color: var(--text);
+  font-style: normal;
   margin: 0 12px 10px;
 }
 /* News flow (briefing): sentence/context clickable to open the source article */
@@ -1851,7 +1853,7 @@ main.browse-open {
   margin: 4px 12px 0;
 }
 .news-source-line {
-  font-size: 14px;
+  font-size: 11px;
   color: var(--muted);
   text-decoration: none;
   opacity: 0.85;

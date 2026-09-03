@@ -33,7 +33,7 @@
       <span class="cnt-label">new</span>
     </div>
     <div class="cnt-item" id="cnt-item-lrn">
-      <b id="cnt-lrn" class="n-lrn">0</b>
+      <b id="cnt-lrn" class="n-lrn">0</b><span id="cnt-lrn-soon" class="n-soon"></span>
       <span class="cnt-label">learning</span>
     </div>
     <div class="cnt-item" id="cnt-item-rev">
@@ -43,17 +43,17 @@
     <div id="cnt-by-cat" style="display:none">
       <div class="cnt-cat-item" id="cnt-cat-reading">
         <span class="cnt-cat-zh">读</span>
-        <span class="cnt-cat-nums"><b id="cnt-r-new" class="n-new">0</b>·<b id="cnt-r-lrn" class="n-lrn">0</b>·<b id="cnt-r-rev" class="n-rev">0</b></span>
+        <span class="cnt-cat-nums"><b id="cnt-r-new" class="n-new">0</b>·<b id="cnt-r-lrn" class="n-lrn">0</b><span id="cnt-r-lrn-soon" class="n-soon"></span>·<b id="cnt-r-rev" class="n-rev">0</b></span>
         <span id="cnt-r-rr" class="cnt-cat-rr"></span>
       </div>
       <div class="cnt-cat-item" id="cnt-cat-listening">
         <span class="cnt-cat-zh">听</span>
-        <span class="cnt-cat-nums"><b id="cnt-l-new" class="n-new">0</b>·<b id="cnt-l-lrn" class="n-lrn">0</b>·<b id="cnt-l-rev" class="n-rev">0</b></span>
+        <span class="cnt-cat-nums"><b id="cnt-l-new" class="n-new">0</b>·<b id="cnt-l-lrn" class="n-lrn">0</b><span id="cnt-l-lrn-soon" class="n-soon"></span>·<b id="cnt-l-rev" class="n-rev">0</b></span>
         <span id="cnt-l-rr" class="cnt-cat-rr"></span>
       </div>
       <div class="cnt-cat-item" id="cnt-cat-creating">
         <span class="cnt-cat-zh">创</span>
-        <span class="cnt-cat-nums"><b id="cnt-c-new" class="n-new">0</b>·<b id="cnt-c-lrn" class="n-lrn">0</b>·<b id="cnt-c-rev" class="n-rev">0</b></span>
+        <span class="cnt-cat-nums"><b id="cnt-c-new" class="n-new">0</b>·<b id="cnt-c-lrn" class="n-lrn">0</b><span id="cnt-c-lrn-soon" class="n-soon"></span>·<b id="cnt-c-rev" class="n-rev">0</b></span>
         <span id="cnt-c-rr" class="cnt-cat-rr"></span>
       </div>
     </div>
@@ -183,13 +183,6 @@
                  know yet / nothing at all. -->
             <div id="listen-hint-wrap" style="display:none">
               <div class="listen-hint-sentence" id="listen-hint-sentence"></div>
-              <div class="listen-hint-slider-row">
-                <span class="listen-hint-label">Hint</span>
-                <input type="range" id="listen-hint-slider" min="0" max="2" value="1"
-                       oninput="onListenHintSlider(this.value)">
-                <span class="listen-hint-pct" id="listen-hint-pct">New words only</span>
-                <button class="hint-save-btn" id="hint-save-btn" onclick="saveListenHintDefault()" title="Save as default">☆</button>
-              </div>
             </div>
             <!-- Creating: English/German context sentence (shown above Chinese for cloze).
                  Hidden by default (no space reserved); press t to toggle, or tap the
@@ -243,6 +236,17 @@
               <button class="reveal-btn" id="reveal-btn" onclick="revealAnswer()">Show Answer</button>
               <button class="front-newsentence-btn" id="new-sentence-btn" onclick="requeueNewSentence()"
                       title="New sentence (5) — show this card again in ~1 min with a freshly generated sentence (not a rating, no scheduling change)">🔄</button>
+            </div>
+            <!-- Listening: hint slider lives below Show Answer so it doesn't
+                 push the sentence/button down as its width changes (#1033). -->
+            <div id="listen-hint-slider-wrap" style="display:none">
+              <div class="listen-hint-slider-row">
+                <span class="listen-hint-label">Hint</span>
+                <input type="range" id="listen-hint-slider" min="0" max="2" value="1"
+                       oninput="onListenHintSlider(this.value)">
+                <span class="listen-hint-pct" id="listen-hint-pct">New words only</span>
+                <button class="hint-save-btn" id="hint-save-btn" onclick="saveListenHintDefault()" title="Save as default">☆</button>
+              </div>
             </div>
           </div>
 
