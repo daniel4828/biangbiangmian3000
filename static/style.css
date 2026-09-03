@@ -2314,6 +2314,89 @@ a.news-source-line:hover {
 .deck-susp-btn.deck-all-suspended { opacity: 1; color: #f59e0b; }
 .deck-susp-btn.deck-all-suspended:hover { color: #10b981; background: #d1fae5; }
 
+/* ── Home search (#1031) ──────────────────────────────── */
+.home-search {
+  position: relative;
+  margin-bottom: 12px;
+}
+#home-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 34px 11px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  font-size: 15px;
+  color: var(--text);
+}
+#home-search-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.home-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px;
+}
+.home-search-results {
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  margin-bottom: 18px;
+  overflow-y: auto;
+  max-height: 420px;
+}
+.home-search-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.home-search-row:last-child { border-bottom: none; }
+.home-search-row:hover { background: var(--bg); }
+.home-search-row-word { font-size: 16px; font-weight: 600; color: var(--text); }
+.home-search-row-pinyin { font-size: 13px; color: var(--muted); }
+.home-search-row-def {
+  font-size: 13px;
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-search-row-badge { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.home-search-action {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--primary);
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+}
+.home-search-action:hover { background: var(--bg); }
+.home-search-hint {
+  padding: 8px 12px 2px;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+/* No hits above it → no rule to separate it from (there is nothing there). */
+.home-search-hint:first-child { border-top: none; }
+
 /* ── Nav row (deck list top) ─────────────────────────── */
 .nav-row {
   display: flex;

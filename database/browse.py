@@ -91,6 +91,55 @@ def search_words(q: str, lang: str | None = None) -> dict:
     return {"primary": list(primary_ids), "secondary": list(secondary_ids)}
 
 
+def quick_search_words(q: str, lang: str | None = None, limit: int = 20) -> list[dict]:
+    """Renderable word search for the home page quick-search bar (#1031).
+
+    Unlike search_words() above (which returns bare ids, on the assumption
+    Browse already has the whole word table loaded client-side), this returns
+    rows the home page can render directly — it has no such table to look up
+    into.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    limit = max(1, min(limit, 100))
+    like = f"%{q}%"
+    # Same rule as search_words/get_words_for_browse: filter on the entry's
+    # own language (#815), not the deck's.
+    lang_clause = " AND w.lang = ?" if lang else ""
+    lang_param = [lang] if lang else []
+    sql = f"""
+        SELECT w.id, w.word_zh, w.pinyin, w.definition, w.definition_de, w.note_type, w.lang,
+               EXISTS(SELECT 1 FROM cards c WHERE c.word_id = w.id AND c.deleted_at IS NULL) AS has_cards
+        FROM entries w
+        WHERE (w.word_zh LIKE ? OR w.pinyin LIKE ? OR w.definition LIKE ?
+               OR w.definition_zh LIKE ? OR w.definition_de LIKE ?){lang_clause}
+        ORDER BY
+            CASE WHEN w.word_zh = ? THEN 0
+                 WHEN w.word_zh LIKE ? THEN 1
+                 ELSE 2 END,
+            w.word_zh
+        LIMIT ?
+    """
+    params = [like, like, like, like, like, *lang_param, q, f"{q}%", limit]
+    conn = get_db()
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "word_zh": r["word_zh"],
+            "pinyin": r["pinyin"],
+            "definition": r["definition"],
+            "definition_de": r["definition_de"],
+            "note_type": r["note_type"],
+            "lang": r["lang"],
+            "has_cards": bool(r["has_cards"]),
+        }
+        for r in rows
+    ]
+
+
 def get_vocab_index(lang: str = "zh") -> list[str]:
     """Return the deduplicated list of word forms in the user's vocabulary for `lang`.
 

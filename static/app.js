@@ -1962,7 +1962,104 @@ function buildCategoryButtons(deck) {
   }).join('');
 }
 
+// ── Home page quick search (#1031) ──────────────────────────────────────────
+let _homeSearchQuery = '';
+let _homeSearchTimer = null;
+let _homeSearchSeq = 0;
+
+function onHomeSearch(val) {
+  _homeSearchQuery = val;
+  const clearBtn = document.getElementById('home-search-clear');
+  if (clearBtn) clearBtn.style.display = val ? '' : 'none';
+
+  clearTimeout(_homeSearchTimer);
+  const q = val.trim();
+  const results = document.getElementById('home-search-results');
+  if (!q) {
+    if (results) { results.style.display = 'none'; results.innerHTML = ''; }
+    return;
+  }
+  _homeSearchTimer = setTimeout(() => _runHomeSearch(q), 250);
+}
+
+async function _runHomeSearch(q) {
+  const seq = ++_homeSearchSeq;
+  try {
+    const rows = await api('GET', `/api/quick-search?q=${encodeURIComponent(q)}&limit=20${_langQP('&')}`);
+    if (seq !== _homeSearchSeq) return;  // a newer query already landed
+    _renderHomeSearchResults(q, rows);
+  } catch (e) {
+    if (seq !== _homeSearchSeq) return;
+    const results = document.getElementById('home-search-results');
+    if (results) {
+      results.style.display = 'block';
+      results.innerHTML = `<div class="home-search-hint">Search failed: ${_escHtml(e.message)}</div>`;
+    }
+  }
+}
+
+function _renderHomeSearchResults(q, rows) {
+  const results = document.getElementById('home-search-results');
+  if (!results) return;
+  let html = '';
+  for (const w of rows) {
+    const def = w.definition_de || w.definition || '';
+    const defShort = def.length > 80 ? def.slice(0, 80) + '…' : def;
+    const badge = w.has_cards ? (w.note_type || '') : 'no cards';
+    html += `
+      <div class="home-search-row" onclick="openWordDetail(${w.id})">
+        <span class="home-search-row-word">${_escHtml(w.word_zh)}</span>
+        <span class="home-search-row-pinyin">${_escHtml(w.pinyin || '')}</span>
+        <span class="home-search-row-def">${_escHtml(defShort)}</span>
+        <span class="home-search-row-badge">${_escHtml(badge)}</span>
+      </div>`;
+  }
+  const hint = rows.length
+    ? 'Not what you meant?'
+    : 'No match in your words.';
+  html += `
+    <div class="home-search-hint">${hint}</div>
+    <a class="home-search-action" href="/dict?q=${encodeURIComponent(q)}">📖 Look up "${_escHtml(q)}"</a>
+    <button class="home-search-action" onclick="homeSearchAddWord()">＋ Add "${_escHtml(q)}"</button>`;
+  results.innerHTML = html;
+  results.style.display = 'block';
+}
+
+function homeSearchAddWord() {
+  const q = _homeSearchQuery.trim();
+  if (!q) return;
+  openAddWordModal();  // language follows the home page's active tab
+  const input = document.getElementById('add-word-input');
+  // openAddWordModal() clears + focuses the input, so the prefill has to
+  // happen after it, not before.
+  input.value = q;
+  input.focus();
+  input.select();
+}
+
+function clearHomeSearch() {
+  _homeSearchQuery = '';
+  clearTimeout(_homeSearchTimer);
+  const input = document.getElementById('home-search-input');
+  if (input) { input.value = ''; input.focus(); }
+  const clearBtn = document.getElementById('home-search-clear');
+  if (clearBtn) clearBtn.style.display = 'none';
+  const results = document.getElementById('home-search-results');
+  if (results) { results.style.display = 'none'; results.innerHTML = ''; }
+}
+
 function renderDecks(decks) {
+  const searchBar = `
+    <div class="home-search">
+      <input id="home-search-input" type="search" autocomplete="off" spellcheck="false"
+             placeholder="Search your words — 中文 / English / Deutsch"
+             oninput="onHomeSearch(this.value)"
+             onkeydown="if (event.key === 'Escape') clearHomeSearch()">
+      <button class="home-search-clear" id="home-search-clear" style="display:none"
+              onclick="clearHomeSearch()" title="Clear">✕</button>
+    </div>
+    <div id="home-search-results" class="home-search-results" style="display:none"></div>`;
+
   const navRow = `
     <div class="nav-row">
       <button class="nav-btn" onclick="openAddWordModal()" title="Add a new word (⌘A)">＋ Add Word</button>
@@ -2048,12 +2145,20 @@ function renderDecks(decks) {
   }
 
   document.getElementById('view-decks').innerHTML =
-    navRow + filteredSection +
+    searchBar + navRow + filteredSection +
     '<div id="home-calendar" class="hcal-card"></div>' +
     '<div id="home-evolution" class="hcal-card"></div>' + regularSection;
   _renderHeaderLangTabs();
   if (typeof initHomeCalendar === 'function') initHomeCalendar();
   if (typeof initHomeEvolution === 'function') initHomeEvolution();
+  // renderDecks() redraws the whole view (collapse/suspend/etc. all trigger
+  // it), so an in-progress search must be restored — but not refocused, this
+  // isn't the user typing.
+  if (_homeSearchQuery) {
+    const input = document.getElementById('home-search-input');
+    if (input) input.value = _homeSearchQuery;
+    onHomeSearch(_homeSearchQuery);
+  }
 }
 
 function toggleDeckSort() {
