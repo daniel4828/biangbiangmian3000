@@ -238,6 +238,7 @@ class TestGenerateBriefingSentencesRetry:
             json.dumps(VALID_ITEMS),
         ]
         with patch("ai._call_api", side_effect=responses) as mock_call, \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", return_value=[]), \
              patch("ai._fill_translations", lambda sentences, **kw: None):
             result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
@@ -252,6 +253,7 @@ class TestGenerateBriefingSentencesRetry:
         API call — only the (separate) missing-word retry loop may still run,
         and here there are no missing words so the loop exits after attempt 1."""
         with patch("ai._call_api", return_value=json.dumps(VALID_ITEMS)) as mock_call, \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", return_value=[]), \
              patch("ai._fill_translations", lambda sentences, **kw: None):
             result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
@@ -268,6 +270,7 @@ class TestGenerateBriefingSentencesRetry:
             json.dumps(INVALID_ITEMS_CONSECUTIVE_CONTEXT),
         ]
         with patch("ai._call_api", side_effect=responses) as mock_call, \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", return_value=[]), \
              patch("ai._fill_translations", lambda sentences, **kw: None):
             result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
@@ -282,6 +285,7 @@ class TestGenerateBriefingSentencesRetry:
         sentences are regenerated once more; a second fact-check pass (if any)
         is logged only and never triggers a further retry."""
         with patch("ai._call_api", return_value=json.dumps(VALID_ITEMS)) as mock_call, \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", side_effect=[["句子1：数字不符"], []]) as mock_fc, \
              patch("ai._fill_translations", lambda sentences, **kw: None):
             result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
@@ -533,6 +537,7 @@ class TestGermanContextSentences:
 
     def test_german_context_is_stored_verbatim_and_chinese_is_derived(self):
         with patch("ai._call_api", return_value=json.dumps(GERMAN_CONTEXT_ITEMS)), \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", return_value=[]), \
              patch("ai._fill_translations", lambda sentences, **kw: None), \
              patch("translator.translate_batch", side_effect=_fake_translate):
@@ -551,6 +556,7 @@ class TestGermanContextSentences:
                                                   "sentence_zh": "联盟已经谈判了三周。"},
                  *GERMAN_CONTEXT_ITEMS[1:]]
         with patch("ai._call_api", return_value=json.dumps(items)), \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", return_value=[]), \
              patch("ai._fill_translations", lambda sentences, **kw: None), \
              patch("translator.translate_batch", side_effect=_fake_translate):
@@ -562,6 +568,7 @@ class TestGermanContextSentences:
 
     def test_context_translation_failure_never_costs_the_story(self):
         with patch("ai._call_api", return_value=json.dumps(GERMAN_CONTEXT_ITEMS)), \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", return_value=[]), \
              patch("ai._fill_translations", lambda sentences, **kw: None), \
              patch("translator.translate_batch", side_effect=RuntimeError("boom")):
@@ -574,11 +581,145 @@ class TestGermanContextSentences:
 
     def test_prompt_asks_for_german_context_and_full_coverage(self):
         with patch("ai._call_api", return_value=json.dumps(GERMAN_CONTEXT_ITEMS)) as mock_call, \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
              patch("ai.fact_check_briefing", return_value=[]), \
              patch("ai._fill_translations", lambda sentences, **kw: None), \
              patch("translator.translate_batch", side_effect=_fake_translate):
             ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
 
-        prompt = mock_call.call_args[0][1][0]["content"]
+        prompt = mock_call.call_args_list[0][0][1][0]["content"]
         assert "sentence_de" in prompt
         assert "覆盖面" in prompt
+
+
+# ---------------------------------------------------------------------------
+# #1036 — natural Chinese: off-topic escape hatch, per-round checks,
+# naturalness pass
+# ---------------------------------------------------------------------------
+
+OFF_TOPIC_ITEMS = [
+    {"sentence_de": "Die Koalition verhandelt seit drei Wochen.",
+     "target_word": None, "article_idx": 0},
+    {"sentence_zh": "她很担心考试。", "target_word": "担心", "article_idx": 0},
+    {"sentence_zh": "他每天努力学习。", "target_word": "努力", "article_idx": 0},
+    {"sentence_zh": "她看到了他的进步。", "target_word": "进步",
+     "article_idx": None, "off_topic": True},
+]
+
+
+class TestOffTopicSentences:
+    """A due word with no place in the material gets an honest everyday
+    sentence instead of being forced into the news (#1036)."""
+
+    def test_prompt_offers_the_escape_hatch(self):
+        with patch("ai._call_api", return_value=json.dumps(VALID_ITEMS)) as mock_call, \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
+             patch("ai.fact_check_briefing", return_value=[]), \
+             patch("ai._fill_translations", lambda sentences, **kw: None):
+            ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        prompt = mock_call.call_args_list[0][0][1][0]["content"]
+        assert "off_topic" in prompt
+        assert "地道优先于一切" in prompt
+
+    def test_off_topic_sentence_gets_no_source_and_no_context(self):
+        with patch("ai._call_api", return_value=json.dumps(OFF_TOPIC_ITEMS)), \
+             patch("ai.check_briefing_naturalness", return_value=[]), \
+             patch("ai.fact_check_briefing", return_value=[]), \
+             patch("ai._fill_translations", lambda sentences, **kw: None), \
+             patch("translator.translate_batch", side_effect=_fake_translate):
+            result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        off = next(s for s in result if s["word_ids"] == [3])
+        assert off["source_url"] is None
+        assert off["context_de"] is None
+        # And the German context still reached the real target sentence.
+        on = next(s for s in result if s["word_ids"] == [1])
+        assert on["context_de"] == "Die Koalition verhandelt seit drei Wochen."
+
+    def test_fact_check_does_not_see_the_off_topic_sentence(self):
+        with patch("ai._call_api", return_value='{"ok": true}') as mock_call:
+            ai.fact_check_briefing(ARTICLES, OFF_TOPIC_ITEMS, "gpt-5.6-luna")
+
+        prompt = mock_call.call_args[0][1][0]["content"]
+        assert "她看到了他的进步。" not in prompt
+        assert "不用核对" in prompt
+
+
+class TestBriefingNaturalness:
+
+    def test_only_chinese_target_sentences_are_checked(self):
+        with patch("ai._call_api", return_value='{"ok": true}') as mock_call:
+            issues = ai.check_briefing_naturalness(OFF_TOPIC_ITEMS, CARDS, "gpt-5.6-luna")
+
+        assert issues == []
+        prompt = mock_call.call_args[0][1][0]["content"]
+        assert "Die Koalition" not in prompt
+        assert "她很担心考试。" in prompt
+
+    def test_issues_are_returned_in_the_repairable_shape(self):
+        raw = '{"ok": false, "issues": ["句子1：搭配不成立"]}'
+        with patch("ai._call_api", return_value=raw):
+            assert ai.check_briefing_naturalness(
+                OFF_TOPIC_ITEMS, CARDS, "gpt-5.6-luna") == ["句子1：搭配不成立"]
+
+    def test_failure_never_blocks_generation(self):
+        with patch("ai._call_api", side_effect=RuntimeError("boom")):
+            assert ai.check_briefing_naturalness(
+                OFF_TOPIC_ITEMS, CARDS, "gpt-5.6-luna") == []
+
+    def test_flagged_sentence_is_repaired_not_regenerated(self):
+        """A naturalness issue goes through the targeted rewrite — the rest of
+        the summary is fine and regenerating it would just roll the dice."""
+        with patch("ai._call_api", return_value=json.dumps(VALID_ITEMS)), \
+             patch("ai.fact_check_briefing", return_value=[]), \
+             patch("ai.check_briefing_naturalness",
+                   side_effect=[["句子1：搭配不成立"]]) as mock_nat, \
+             patch("ai._repair_briefing_sentences",
+                   return_value=VALID_ITEMS) as mock_repair, \
+             patch("ai._fill_translations", lambda sentences, **kw: None):
+            ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        assert mock_nat.call_count == 1
+        assert mock_repair.call_count == 1
+        assert mock_repair.call_args.kwargs["naturalness"] is True
+
+    def test_repair_may_hand_back_an_off_topic_sentence(self):
+        items = [{"sentence_zh": "工作人员给受损设备消毒。", "target_word": "担心",
+                  "article_idx": 0}]
+        raw = '[{"idx": 0, "sentence_zh": "她很担心考试。", "off_topic": true}]'
+        with patch("ai._call_api", return_value=raw):
+            fixed = ai._repair_briefing_sentences(
+                ARTICLES, items, ["句子0：中文不这么说"], "gpt-5.6-luna",
+                naturalness=True)
+
+        assert fixed[0]["sentence_zh"] == "她很担心考试。"
+        assert fixed[0]["off_topic"] is True
+        assert fixed[0]["article_idx"] is None
+
+
+class TestChecksRunEveryRound:
+    """The 补漏 rounds used to reach the database unexamined (#1036)."""
+
+    def test_second_round_output_is_validated_and_fact_checked(self):
+        # Round 1 covers only 担心; round 2 is asked for the two missing words.
+        round1 = [{"sentence_zh": "她很担心考试。", "target_word": "担心",
+                   "article_idx": 0}]
+        round2 = [
+            {"sentence_zh": "他每天努力学习。", "target_word": "努力", "article_idx": 0},
+            {"sentence_zh": "她看到了他的进步。", "target_word": "进步", "article_idx": 0},
+        ]
+        # Round 1 is short two words, so it also burns its own validation retry.
+        with patch("ai._call_api",
+                   side_effect=[json.dumps(round1), json.dumps(round1),
+                                json.dumps(round2)]), \
+             patch("ai.fact_check_briefing", return_value=[]) as mock_fc, \
+             patch("ai.check_briefing_naturalness", return_value=[]) as mock_nat, \
+             patch("ai._fill_translations", lambda sentences, **kw: None):
+            result = ai.generate_briefing_sentences(CARDS, ARTICLES, model="gpt-5.6-luna")
+
+        assert len(result) == len(CARDS)
+        assert mock_fc.call_count == 2
+        assert mock_nat.call_count == 2
+        # The second round was checked against the words it was asked for.
+        assert [c["word_zh"] for c in mock_nat.call_args_list[1][0][1]] == ["努力", "进步"]
