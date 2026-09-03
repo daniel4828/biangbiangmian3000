@@ -2660,6 +2660,19 @@ def _briefing_item_texts(item: dict) -> tuple[str, str]:
             (item.get("sentence_de") or "").strip())
 
 
+def _briefing_item_off_topic(item: dict) -> bool:
+    """True when the model marked this sentence as unrelated to the source.
+
+    #1036: the target words are whatever FSRS made due today, so a handful of
+    them (弹钢琴, 调情, 青春期) have no possible place in the day's news. The
+    prompt now lets the model write those an honest everyday sentence instead
+    of forcing them into the material — forcing produced Chinese nobody says
+    ("欧盟新名单将诅咒俄罗斯的行为"). Such a sentence still becomes a card, but
+    it carries no source link and no context, and the fact-check skips it.
+    """
+    return bool(item.get("off_topic"))
+
+
 def validate_briefing_items(items: list[dict], cards: list[dict],
                             include_context: bool = True) -> list[str]:
     """Python-only validation (no AI) of a raw briefing sentence array (issue #444).
@@ -2829,7 +2842,11 @@ def fact_check_briefing(articles: list[dict], items: list[dict], model: str,
     # sentence_zh would hand the fact-checker a numbering that no longer lines
     # up with `items`, and _repair_briefing_sentences parses "句子N" out of its
     # verdicts to find the sentence to rewrite.
+    # #1036: an off-topic sentence is deliberately not about the source, so
+    # fact-checking it would flag it every single time. The line is kept (the
+    # issue strings address sentences by index) but blanked out.
     sentences_block = "\n".join(
+        f"{i}. （与素材无关的日常例句，不用核对）" if _briefing_item_off_topic(item) else
         f"{i}. {(item.get('sentence_zh') or item.get('sentence_de') or '').strip()}"
         for i, item in enumerate(items)
     )
@@ -2866,8 +2883,81 @@ def fact_check_briefing(articles: list[dict], items: list[dict], model: str,
         return []
 
 
+def check_briefing_naturalness(items: list[dict], cards: list[dict], model: str) -> list[str]:
+    """One AI call (issue #1036) asking a native-speaker question the other two
+    checks never ask: *is this how Chinese is actually said?*
+
+    `validate_briefing_items` counts words and characters; `fact_check_briefing`
+    compares against the source. Neither has anything to say about
+    「德国要封闭波恩的俄领馆」(关闭, not 封闭), 「他命令摘下乌方能源目标」or
+    「贵族和外来力量都被警方考虑」— sentences that are the right length, carry a
+    real fact, and are not Chinese. They come from squeezing a due word into
+    material it has nothing to do with, which is also what the off_topic escape
+    hatch in the prompt exists to prevent.
+
+    Only Chinese target sentences are checked; German context lines are the
+    briefing half and are not the learner's model sentences.
+
+    Returns "句子N：问题描述" strings, the same shape `_repair_briefing_sentences`
+    parses. An empty list means everything read fine *or* the check itself
+    failed — like the fact-check, this is best-effort and must never block a
+    story.
+    """
+    if not items or not cards:
+        return []
+
+    numbered = []
+    for i, item in enumerate(items):
+        s_zh = (item.get("sentence_zh") or "").strip()
+        if not s_zh:
+            continue
+        if not any(_briefing_word_match(c["word_zh"], s_zh) for c in cards):
+            continue
+        target = next((c["word_zh"] for c in cards
+                       if _briefing_word_match(c["word_zh"], s_zh)), "")
+        numbered.append(f"{i}. {s_zh}　（目标词：{target}）")
+    if not numbered:
+        return []
+
+    prompt = """任务：你是中文母语者。下面每一句都是给中文学习者当例句用的，每句包含一个目标词。
+请只判断一件事：这句话是不是自然、地道的中文。
+
+句子（按 0 开始编号）：
+""" + "\n".join(numbered) + """
+
+判定标准：
+- 搭配是否真实存在（例如「关闭领事馆」成立，「封闭领事馆」不成立；
+  「打击目标」成立，「摘下目标」不成立）
+- 目标词的意思用对了吗（例如把「调情」「贵族」「消毒」硬用在政治新闻里就是用错了）
+- 有没有为了塞进这个词而写出中文里根本不这么说的句子
+- 有没有元句或自我指涉的句子（「我学了X这个词」「X没有出现在这段报道中」）
+
+只报真正读起来不像中文的句子。句子平实、朴素、信息量小都【不算】问题，不要报。
+
+只返回如下 JSON，不加任何其他文字：
+- 全部自然：{"ok": true}
+- 存在问题：{"ok": false, "issues": ["句子N：问题描述", ...]}"""
+
+    try:
+        raw = _call_api(model, [{"role": "user", "content": prompt}], 2048,
+                        purpose="briefing_naturalness")
+        json_start = raw.find("{")
+        json_end = raw.rfind("}") + 1
+        if json_start == -1 or json_end == 0:
+            logger.warning("briefing naturalness: no JSON object found in response")
+            return []
+        result = json.loads(raw[json_start:json_end])
+        if result.get("ok"):
+            return []
+        return [str(i) for i in (result.get("issues") or [])]
+    except Exception as e:
+        logger.warning("briefing naturalness: call failed (%s) — skipping", e)
+        return []
+
+
 def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: list[str],
-                               model: str, generic: bool = False) -> list[dict]:
+                               model: str, generic: bool = False,
+                               naturalness: bool = False) -> list[dict]:
     """Targeted repair (issue #511) for sentences flagged by the second
     fact-check pass, instead of accepting hallucinated sentences wholesale.
 
@@ -2879,6 +2969,11 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
     in at their original positions; on any failure (unparseable issues, bad
     JSON, missing indices) returns `items` unchanged so the caller can fall
     back to its existing accept-with-warning behavior.
+
+    naturalness=True (issue #1036): the same splice, driven by
+    `check_briefing_naturalness` instead of the fact-check — only the framing
+    and the rewrite requirements swap. Index parsing, the source-article block
+    and the splice are shared on purpose; two copies of this would drift.
     """
     idx_pattern = re.compile(r"句子\s*(\d+)")
     flagged: dict[int, str] = {}
@@ -2895,6 +2990,29 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
         return items
 
     noun = "内容" if generic else "文章"
+    verdict_label = "母语者意见" if naturalness else "核查意见"
+    task_intro = (
+        "任务：下面这些中文句子被中文母语者判定为不自然（搭配不成立、词义用错，"
+        "或者为了塞进某个词而写出中文里根本不这么说的句子）。\n"
+        "请重写每一句，写成中文母语者真的会说的话。"
+        if naturalness else
+        "任务：下面这些中文句子被事实核查发现有问题（编造了原文没有的细节，"
+        "或加入了主观评论/情绪/气氛描写）。\n"
+        "请仅根据各自的来源原文重写每一句，不要引入原文没有的新信息。"
+    )
+    rewrite_rules = (
+        "- 重写后的句子必须保持8到18个字，原来的目标词必须【原样、恰好出现一次】保留在句子中\n"
+        "- 【地道优先】句子必须是自然的中文：搭配要真实存在，不要生造说法，"
+        "不要写元句（「我学了X这个词」）\n"
+        "- 事实仍然只能取自来源原文。如果这个词实在无法自然地用在这份素材上，"
+        "就写一句【与素材无关的、自然地道的日常句】，并在该条上标 \"off_topic\": true"
+        if naturalness else
+        "- 如果原句包含目标词汇（见下方\"原句\"是否明显在描述一个词），重写后的句子必须保持8到18个字，\n"
+        "  只使用来源原文明确陈述的事实，原来的目标词必须【原样、恰好出现一次】保留在句子中\n"
+        "- 如果原句是【德语】的上下文句子，重写后仍然用德语、仍然是一句话，\n"
+        "  放进 sentence_de 字段（不要翻译成中文）\n"
+        "- 只允许使用来源原文明确陈述的事实，禁止主观评论、情绪、气氛或场景描写"
+    )
     problems_block_parts = []
     for idx in sorted(flagged):
         item = items[idx]
@@ -2905,22 +3023,17 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
         problems_block_parts.append(
             f"句子{idx}（原句）："
             f"{(item.get('sentence_zh') or item.get('sentence_de') or '').strip()}\n"
-            f"核查意见：{flagged[idx]}\n"
+            f"{verdict_label}：{flagged[idx]}\n"
             f"来源{noun}原文：{source_text}"
         )
     problems_block = "\n\n".join(problems_block_parts)
 
-    prompt = f"""任务：下面这些中文句子被事实核查发现有问题（编造了原文没有的细节，或加入了主观评论/情绪/气氛描写）。
-请仅根据各自的来源原文重写每一句，不要引入原文没有的新信息。
+    prompt = f"""{task_intro}
 
 {problems_block}
 
 重写要求：
-- 如果原句包含目标词汇（见下方"原句"是否明显在描述一个词），重写后的句子必须保持8到18个字，
-  只使用来源原文明确陈述的事实，原来的目标词必须【原样、恰好出现一次】保留在句子中
-- 如果原句是【德语】的上下文句子，重写后仍然用德语、仍然是一句话，
-  放进 sentence_de 字段（不要翻译成中文）
-- 只允许使用来源原文明确陈述的事实，禁止主观评论、情绪、气氛或场景描写
+{rewrite_rules}
 - 不要使用markdown格式
 
 仅返回如下JSON数组（顺序不限，用 idx 标明对应哪一句），不加任何其他文字：
@@ -2959,6 +3072,12 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
             replaced["sentence_zh"] = zh_new
         if de_new:
             replaced["sentence_de"] = de_new
+        # #1036: a naturalness rewrite may give up on the material and hand
+        # back an honest everyday sentence instead — carry the flag so the
+        # scan loop stops attaching a source link and context to it.
+        if entry.get("off_topic"):
+            replaced["off_topic"] = True
+            replaced["article_idx"] = None
         new_items[idx] = replaced
         applied += 1
 
@@ -3010,6 +3129,18 @@ def generate_briefing_sentences(
       * Kontextsummary feeds this function the item's **summary**, not its
         transcript (routes/story._contextsummary_material) — "cover everything"
         is not a satisfiable rule against a transcript we truncate.
+
+    #1036 addressed what Daniel read in the first days of using it — "sometimes
+    the sentence isn't how Chinese is said":
+
+      * The words are the day's due cards, not words picked for this material.
+        The prompt now lets a word that has no place in the source get an
+        honest everyday sentence (`off_topic`) instead of being forced into it;
+        forcing produced 「欧盟新名单将诅咒俄罗斯的行为」and 「Kallas没有调情」.
+      * Validation and the fact-check run every round, not once per call — the
+        "补漏" rounds used to reach the database unexamined.
+      * `check_briefing_naturalness` asks the question the other two checks
+        never ask, and flagged sentences go through the targeted rewrite.
 
     After generation, `validate_briefing_items` checks the raw output in Python
     (no AI): every target word exactly once, no consecutive context sentences,
@@ -3113,11 +3244,34 @@ def generate_briefing_sentences(
         if include_context else
         "\n  如果某个事实需要更难的词才能表达，就换一种更简单的说法，或省略这个细节"
     )
+    # #1036: the target words are the day's due cards, not words chosen for
+    # this material — 弹钢琴, 调情, 青春期 cannot be made to appear in a news
+    # briefing. Requiring every word to appear anyway left the model three
+    # ways out, and it took all three: force it ("欧盟新名单将诅咒俄罗斯的行为"),
+    # write a meta sentence ("电影导演没有出现在这段报道中"), or give up so the
+    # per-word fallback prints "我学了X这个词。". An honest everyday sentence
+    # beats all three, so the prompt now offers one.
+    off_topic_rule = f"""
+- 【写不进素材的词，写自然的日常句，不要硬塞】目标词是学习者今天到期的复习词，
+  和素材内容毫无关系是常事（新闻里出现不了「弹钢琴」「调情」「青春期」）。
+  这种词【绝对不要】硬塞进素材的句子里——硬塞出来的中文根本没人这么说，
+  例如「欧盟新名单将诅咒俄罗斯的行为」「工作人员给受损设备消毒」
+  「Kallas没有调情，她要提出自己的计划」，这比没有句子更糟。
+  正确做法：给这个词单独写一句【与素材无关的、自然地道的日常中文句】，
+  该条标 "off_topic": true、article_idx 填 null，并放在整个数组的【最后】。
+  长度同样是8到18个字，同样只用 HSK 1-{max_hsk} 的背景词汇
+- 【地道优先于一切】每一句的最终标准是「中文母语者会不会这么说」：
+  搭配必须真实存在（是「关闭领事馆」不是「封闭领事馆」，是「打击目标」不是「摘下目标」），
+  不要生造说法，不要把词的意思用歪，也绝不要写「我学了X这个词」
+  「X没有出现在这段报道中」这类元句"""
+
     example_block = (
         '[\n'
         '  {"sentence_de": "Deutscher Kontextsatz mit Zahlen und Namen.", '
         '"target_word": null, "article_idx": 0},\n'
-        '  {"sentence_zh": "含目标词的句子", "target_word": "词汇", "article_idx": 0}\n'
+        '  {"sentence_zh": "含目标词的句子", "target_word": "词汇", "article_idx": 0},\n'
+        '  {"sentence_zh": "与素材无关但自然的日常句", "target_word": "词汇", '
+        '"article_idx": null, "off_topic": true}\n'
         ']'
     ) if include_context else (
         '[\n'
@@ -3166,7 +3320,7 @@ def generate_briefing_sentences(
 {noun}（按 0 开始编号）：
 {articles_block}
 
-目标词汇（每个词必须在整篇摘要中恰好出现一次，以原文形式出现）：
+目标词汇（每个词必须恰好出现一次，以原文形式出现；写不进素材的词见下面的 off_topic 规则）：
 {word_list}
 
 【词序自由】你可以任意安排这些目标词在摘要中出现的先后顺序——不必按上面列表的顺序，
@@ -3178,7 +3332,7 @@ def generate_briefing_sentences(
 - 一句话最多包含一个目标词汇
 - 【难度控制，严格遵守】含目标词汇的句子长度为8到18个字，其中除目标词外只允许
   HSK 1-{max_hsk} 的词汇——这是学习者自己选择的难度上限，超纲词会让句子无法学习。{hsk_overflow_rule}
-{fact_rule}{context_hsk_rule}{section_rule}
+{fact_rule}{off_topic_rule}{context_hsk_rule}{section_rule}
 {script_rule}
 - 不要使用markdown格式
 - article_idx 是该句子所涉及的{noun}编号（上面的 0 开始编号）
@@ -3191,8 +3345,6 @@ def generate_briefing_sentences(
 
     sentences: list[dict] = []
     remaining = list(cards)
-    validation_retried = False
-    fact_check_done = False
 
     _progress(f"生成新闻总结…{attempt_label}")
 
@@ -3219,76 +3371,93 @@ def generate_briefing_sentences(
             logger.warning("briefing attempt %d: JSON parse error: %s", attempt + 1, e)
             continue
 
-        # Python-only validation + a single retry (issue #444) — only once per
-        # call, on whichever attempt first produces parseable JSON.
-        if not validation_retried:
-            validation_retried = True
-            issues = validate_briefing_items(items, expected_cards, include_context=include_context)
-            if issues:
-                logger.warning("briefing attempt %d: validation issues, retrying once: %s",
-                               attempt + 1, issues)
-                hint = "\n【上一次的结果有以下问题，请修正后重新生成整篇摘要】\n" + \
-                       "\n".join(f"- {i}" for i in issues)
-                retry_raw = _call_api(
-                    model, [{"role": "user", "content": _build_prompt(remaining, extra_hint=hint)}],
-                    8192, purpose="briefing",
-                )
-                r_start, r_end = retry_raw.find("["), retry_raw.rfind("]") + 1
-                if r_start != -1 and r_end != 0:
-                    try:
-                        retry_items = json.loads(retry_raw[r_start:r_end])
-                        items = retry_items
-                        remaining_issues = validate_briefing_items(items, expected_cards, include_context=include_context)
-                        if remaining_issues:
-                            logger.warning(
-                                "briefing: validation issues persist after retry (accepting with "
-                                "fallback repair): %s", remaining_issues)
-                    except json.JSONDecodeError as e:
-                        logger.warning("briefing: validation retry JSON parse error (%s) — "
-                                       "keeping original attempt", e)
-                else:
-                    logger.warning("briefing: validation retry produced no JSON array — "
-                                   "keeping original attempt")
-                # Fallback repair: collapse any remaining consecutive context runs
-                # to their last sentence — safe no-op if already valid.
-                items = _dedupe_consecutive_briefing_context(items, expected_cards, include_context=include_context)
+        # Python-only validation + a single retry (issue #444).
+        #
+        # #1036: this used to run once per *call*, on whichever attempt first
+        # produced parseable JSON — so the "补漏 N 个词" rounds went through
+        # neither this nor the fact-check below and landed in the database
+        # unexamined. Every sentence Daniel flagged as "not Chinese" came out
+        # of those rounds ("你过奖了，我只会弹钢琴"). Each round now checks its
+        # own output; a round only ever asks about the few words still missing,
+        # so the added calls are small ones.
+        issues = validate_briefing_items(items, expected_cards, include_context=include_context)
+        if issues:
+            logger.warning("briefing attempt %d: validation issues, retrying once: %s",
+                           attempt + 1, issues)
+            hint = "\n【上一次的结果有以下问题，请修正后重新生成整篇摘要】\n" + \
+                   "\n".join(f"- {i}" for i in issues)
+            retry_raw = _call_api(
+                model, [{"role": "user", "content": _build_prompt(remaining, extra_hint=hint)}],
+                8192, purpose="briefing",
+            )
+            r_start, r_end = retry_raw.find("["), retry_raw.rfind("]") + 1
+            if r_start != -1 and r_end != 0:
+                try:
+                    retry_items = json.loads(retry_raw[r_start:r_end])
+                    items = retry_items
+                    remaining_issues = validate_briefing_items(items, expected_cards, include_context=include_context)
+                    if remaining_issues:
+                        logger.warning(
+                            "briefing: validation issues persist after retry (accepting with "
+                            "fallback repair): %s", remaining_issues)
+                except json.JSONDecodeError as e:
+                    logger.warning("briefing: validation retry JSON parse error (%s) — "
+                                   "keeping original attempt", e)
+            else:
+                logger.warning("briefing: validation retry produced no JSON array — "
+                               "keeping original attempt")
+            # Fallback repair: collapse any remaining consecutive context runs
+            # to their last sentence — safe no-op if already valid.
+            items = _dedupe_consecutive_briefing_context(items, expected_cards, include_context=include_context)
 
-        # AI fact-check against the source articles (issue #454) — runs once,
-        # right after Python validation and before any translation. On issues,
+        # AI fact-check against the source articles (issue #454) — runs right
+        # after Python validation and before any translation, once per round
+        # (#1036; it used to run once per call, see the note above). On issues,
         # retry generation once with the concrete problems fed back in; the
         # retry's own fact-check result (if any) is logged only, never retried
         # again, to avoid an unbounded loop.
-        if not fact_check_done:
-            fact_check_done = True
-            _progress(f"核对事实…{attempt_label}")
-            fc_issues = fact_check_briefing(articles, items, model, generic=generic)
-            if fc_issues:
-                logger.warning("briefing attempt %d: fact-check issues, retrying once: %s",
-                               attempt + 1, fc_issues)
-                fc_hint = "\n【事实核查发现以下问题，请修正后重新生成整篇摘要，确保严格符合原文事实】\n" + \
-                          "\n".join(f"- {i}" for i in fc_issues)
-                fc_retry_raw = _call_api(
-                    model, [{"role": "user", "content": _build_prompt(remaining, extra_hint=fc_hint)}],
-                    8192, purpose="briefing",
-                )
-                fc_r_start, fc_r_end = fc_retry_raw.find("["), fc_retry_raw.rfind("]") + 1
-                if fc_r_start != -1 and fc_r_end != 0:
-                    try:
-                        fc_retry_items = json.loads(fc_retry_raw[fc_r_start:fc_r_end])
-                        items = _dedupe_consecutive_briefing_context(fc_retry_items, expected_cards, include_context=include_context)
-                        second_fc_issues = fact_check_briefing(articles, items, model, generic=generic)
-                        if second_fc_issues:
-                            logger.warning(
-                                "briefing: fact-check issues persist after retry, attempting "
-                                "targeted repair: %s", second_fc_issues)
-                            items = _repair_briefing_sentences(
-                                articles, items, second_fc_issues, model, generic=generic)
-                    except json.JSONDecodeError as e:
-                        logger.warning("briefing: fact-check retry JSON parse error (%s) — "
-                                       "keeping original attempt", e)
-                else:
-                    logger.warning("briefing: fact-check retry produced no JSON array — "
-                                   "keeping original attempt")
+        _progress(f"核对事实…{attempt_label}")
+        fc_issues = fact_check_briefing(articles, items, model, generic=generic)
+        if fc_issues:
+            logger.warning("briefing attempt %d: fact-check issues, retrying once: %s",
+                           attempt + 1, fc_issues)
+            fc_hint = "\n【事实核查发现以下问题，请修正后重新生成整篇摘要，确保严格符合原文事实】\n" + \
+                      "\n".join(f"- {i}" for i in fc_issues)
+            fc_retry_raw = _call_api(
+                model, [{"role": "user", "content": _build_prompt(remaining, extra_hint=fc_hint)}],
+                8192, purpose="briefing",
+            )
+            fc_r_start, fc_r_end = fc_retry_raw.find("["), fc_retry_raw.rfind("]") + 1
+            if fc_r_start != -1 and fc_r_end != 0:
+                try:
+                    fc_retry_items = json.loads(fc_retry_raw[fc_r_start:fc_r_end])
+                    items = _dedupe_consecutive_briefing_context(fc_retry_items, expected_cards, include_context=include_context)
+                    second_fc_issues = fact_check_briefing(articles, items, model, generic=generic)
+                    if second_fc_issues:
+                        logger.warning(
+                            "briefing: fact-check issues persist after retry, attempting "
+                            "targeted repair: %s", second_fc_issues)
+                        items = _repair_briefing_sentences(
+                            articles, items, second_fc_issues, model, generic=generic)
+                except json.JSONDecodeError as e:
+                    logger.warning("briefing: fact-check retry JSON parse error (%s) — "
+                                   "keeping original attempt", e)
+            else:
+                logger.warning("briefing: fact-check retry produced no JSON array — "
+                               "keeping original attempt")
+
+        # Naturalness pass (issue #1036) — the question neither check above
+        # asks: is this how Chinese is actually said? Flagged sentences go
+        # through the same targeted rewrite the second fact-check pass uses,
+        # rather than a full regeneration: the rest of the summary is fine and
+        # rewriting it would just roll the dice again.
+        _progress(f"检查中文是否地道…{attempt_label}")
+        nat_issues = check_briefing_naturalness(items, expected_cards, model)
+        if nat_issues:
+            logger.warning("briefing attempt %d: unnatural sentences, repairing: %s",
+                           attempt + 1, nat_issues)
+            items = _repair_briefing_sentences(
+                articles, items, nat_issues, model, generic=generic, naturalness=True)
 
         # Scan in reading order: context sentences accumulate until the next
         # sentence containing a still-uncovered target word, then attach to it.
@@ -3313,13 +3482,22 @@ def generate_briefing_sentences(
             remaining.remove(matched)
             article_idx = item.get("article_idx")
             source_url = source_title = source_name = None
-            if isinstance(article_idx, int) and 0 <= article_idx < len(articles):
-                _art = articles[article_idx]
-                source_url = _art.get("url") or None
-                source_title = _art.get("title") or None
-                source_name = _art.get("source_name") or None
-            context_raw = " ".join(context_buf)
-            context_buf = []
+            # #1036: an off-topic sentence is explicitly not about the source.
+            # It gets no source line (the card would link to material it never
+            # mentions) and does not consume the pending context — those German
+            # lines belong to the next real target sentence, and dropping them
+            # here would silently lose a piece of the briefing.
+            off_topic = _briefing_item_off_topic(item)
+            if off_topic:
+                context_raw = ""
+            else:
+                if isinstance(article_idx, int) and 0 <= article_idx < len(articles):
+                    _art = articles[article_idx]
+                    source_url = _art.get("url") or None
+                    source_title = _art.get("title") or None
+                    source_name = _art.get("source_name") or None
+                context_raw = " ".join(context_buf)
+                context_buf = []
             sentences.append({
                 "word_ids": [matched["word_id"]],
                 "sentence_zh": s_zh,

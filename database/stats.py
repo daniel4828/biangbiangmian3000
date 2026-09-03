@@ -216,7 +216,8 @@ _LEGACY_CLUSTER_GAP_SECONDS = 90
 # Auxiliary steps that ride along with a primary generation (comma cleanup, news
 # fact-check/repair) — excluded when labeling a legacy cluster so the row shows
 # the main action ("story"), not a 1:1 helper pass ("fix_commas").
-_AUX_PURPOSES = {"fix_commas", "briefing_fact_check", "briefing_repair"}
+_AUX_PURPOSES = {"fix_commas", "briefing_fact_check", "briefing_repair",
+                 "briefing_naturalness"}
 
 # Single-word Again regenerations get a per-mode "… Again Sentences" action label
 # (issue #578). Each click is its own action (one call), so adjacent actions with
