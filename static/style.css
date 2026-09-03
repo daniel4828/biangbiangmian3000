@@ -342,7 +342,7 @@ main.browse-open {
 .n-lrn  { color: var(--hard); }
 .n-rev  { color: var(--good); }
 .n-zero { color: var(--border); }
-/* Learning cards whose step isn't due yet — pending, not reviewable now (#1030) */
+/* Learning cards whose step isn't due yet — pending, not reviewable now (#1032) */
 .n-soon { color: var(--muted); font-weight: 600; margin-left: 2px; }
 
 /* ── Review ──────────────────────────────────────────── */

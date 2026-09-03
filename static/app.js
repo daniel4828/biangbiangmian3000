@@ -1861,24 +1861,32 @@ function aggregateCounts(deck, category) {
 
 // Cards you just rated Again sit in the 1m/10m steps and are not due *right
 // now*, so the backend keeps them out of `learning` (which several server-side
-// checks read as "due this second") and reports them separately. For display
-// they belong in the learning number — Anki counts them too, and a counter that
-// stays at 0 right after pressing Again reads like the card was lost (#844).
-// The 1d/3d steps are deliberately not in `learning_soon`: they are tomorrow.
-function lrnCount(c) {
-  return (c?.learning || 0) + (c?.learning_soon || 0);
-}
-
-// ...but on the deck list the two are not interchangeable: a card still sitting
-// in a 1m/10m step cannot be reviewed *now*, so a deck whose whole learning
-// number is `learning_soon` opens straight into the "nothing to do" screen
-// (Daniel 2026-09-03). They therefore get their own ⏳ badge instead of being
-// added into the orange number. Nothing disappears — #844's point stands, the
-// count is still on screen, just marked as pending rather than as work waiting.
+// checks read as "due this second") and reports them separately as
+// `learning_soon`. The 1d/3d steps are deliberately not in it: they are tomorrow.
+//
+// They used to be summed into the orange learning number (#844: a counter that
+// drops to 0 right after pressing Again reads like the card was lost), but that
+// number then claims work that isn't available — the deck says 6 and opens
+// straight into the "nothing to do, wait" screen (#1032). So they get their own
+// ⏳ badge: still on screen, just marked as pending instead of reviewable.
 function lrnHtml(c) {
   const soon = (c?.learning_soon || 0);
   return `<span class="n-lrn">${c?.learning || 0}</span>`
        + (soon > 0 ? `<span class="n-soon" title="${soon} in a learning step, not due yet">⏳${soon}</span>` : '');
+}
+
+// Same split for the review-screen counters (fixed elements, so the ⏳ badge is
+// its own sibling span rather than markup): the orange number is what's
+// reviewable now, the ⏳ is what's still waiting in a learning step.
+function setLrnCounter(numId, soonId, c) {
+  const num = document.getElementById(numId);
+  const soonEl = document.getElementById(soonId);
+  if (num) num.textContent = c?.learning || 0;
+  if (soonEl) {
+    const soon = c?.learning_soon || 0;
+    soonEl.textContent = soon > 0 ? `⏳${soon}` : '';
+    soonEl.title = soon > 0 ? `${soon} in a learning step, not due yet` : '';
+  }
 }
 
 function countHtml(c) {
@@ -7918,7 +7926,7 @@ function loadCard(c, counts) {
   // Update progress counts
   _lastCounts = counts;
   document.getElementById('cnt-new').textContent = counts.new;
-  document.getElementById('cnt-lrn').textContent = lrnCount(counts);
+  setLrnCounter('cnt-lrn', 'cnt-lrn-soon', counts);
   document.getElementById('cnt-rev').textContent = counts.review;
 
   // Highlight the active state item — same classification as the backend
@@ -7937,7 +7945,7 @@ function loadCard(c, counts) {
     for (const [prefix, cat] of Object.entries(catMap)) {
       const cc = counts.by_cat[cat] || {new: 0, learning: 0, review: 0};
       document.getElementById(`cnt-${prefix}-new`).textContent = cc.new;
-      document.getElementById(`cnt-${prefix}-lrn`).textContent = lrnCount(cc);
+      setLrnCounter(`cnt-${prefix}-lrn`, `cnt-${prefix}-lrn-soon`, cc);
       document.getElementById(`cnt-${prefix}-rev`).textContent = cc.review;
     }
     // A category disabled via preset is absent from by_cat → hide its tile.
@@ -8185,7 +8193,7 @@ function showFront() {
   _updateListenCounters();
 
   // Listening hint slider (sentence lives above the sentence area; the slider
-  // row itself is docked below Show Answer, #1029)
+  // row itself is docked below Show Answer, #1033)
   const hintWrap = document.getElementById('listen-hint-wrap');
   const hintSliderWrap = document.getElementById('listen-hint-slider-wrap');
   if (isListening) {
