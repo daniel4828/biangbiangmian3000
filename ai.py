@@ -3841,7 +3841,28 @@ def generate_podcast_sentences(
     title_block = source.get("title") or ""
     summary_block = source.get("material") or ""
 
+    # section_label (#1038, same reasoning as #1029 in the briefing pipeline):
+    # when a source is spread over several calls, each call is handed one
+    # contiguous slice of the material rather than the whole thing. Without
+    # saying so, the prompt's coverage rule ("facts must be spread over the
+    # beginning, middle and end of the material") makes the model write an
+    # intro to, or reach for, content it cannot see.
+    section_label = source.get("section_label") or ""
+    if section_label:
+        title_block = f"{title_block}{section_label}"
+        section_rule = (
+            "\n\n【这是整篇素材的一段】上面给出的只是原素材的其中一段。"
+            "第 6 条的覆盖面只针对这一段：把事实分散在这一段的开头、中间和结尾，"
+            "不要提及、概括或预告其它段落的内容。"
+            if lang == "zh" else
+            "\n\nNOTE: the material above is only ONE SECTION of a longer source. "
+            "Cover this section only — do not summarise, mention or announce "
+            "anything from the other sections.")
+    else:
+        section_rule = ""
+
     def _build_prompt(batch: list[dict], extra_hint: str = "") -> str:
+        extra_hint = f"{section_rule}{extra_hint}"
         if lang == "zh":
             word_list = "\n".join(
                 f"{i + 1}. {c['word_zh']}（{c.get('pinyin', '')}）— {c.get('definition', '')}"
