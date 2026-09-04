@@ -678,9 +678,37 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
                     [group[i:i + chunk_size] for i in range(0, len(group), chunk_size)])
             total_calls = sum(len(c) for c in per_source_chunks)
 
+            # #1038: when a source needs several calls, divide its material
+            # between them instead of sending the whole transcript every time —
+            # the same mismatch #1029 fixed in the briefing pipeline. The prompt
+            # tells every call to cover the beginning, middle and end of the
+            # material it is given, so N calls on the full transcript produce N
+            # passes over the same opening topics while the later half is paid
+            # for in input tokens and never used.
+            # Material that cannot be cut into as many pieces as there are calls
+            # (a short summary, one unbroken paragraph) keeps the old shape:
+            # repeating the source is worse coverage, but merging chunks to fit
+            # would risk one call overrunning the reply budget.
+            per_source_slices: list[list[dict]] = []
+            for source, chunks in zip(sources, per_source_chunks):
+                parts = (_split_text_into_parts(source.get("material") or "", len(chunks))
+                         if len(chunks) > 1 else [])
+                if len(parts) != len(chunks):
+                    if len(chunks) > 1:
+                        logger.info("story  knowledge: material of %r not divisible into "
+                                    "%d parts — every call gets the full source",
+                                    source.get("title"), len(chunks))
+                    per_source_slices.append([source] * len(chunks))
+                    continue
+                per_source_slices.append([
+                    {**source, "material": part,
+                     "section_label": f"·第{i + 1}/{len(parts)}段"}
+                    for i, part in enumerate(parts)])
+
             sentences = []
             chunk_prompts = []
-            for s_idx, (source, chunks) in enumerate(zip(sources, per_source_chunks)):
+            for s_idx, (source, chunks, slices) in enumerate(
+                    zip(sources, per_source_chunks, per_source_slices)):
                 for c_idx, chunk in enumerate(chunks):
                     if n_sources > 1:
                         label = f" (素材 {s_idx + 1}/{n_sources}"
@@ -692,7 +720,7 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
                     else:
                         label = ""
                     chunk_sentences, chunk_prompt = ai.generate_podcast_sentences(
-                        chunk, source,
+                        chunk, slices[c_idx],
                         model=model, max_hsk=max_hsk, progress_key=progress_key,
                         attempt_label=label, lang=lang)
                     sentences.extend(chunk_sentences)
