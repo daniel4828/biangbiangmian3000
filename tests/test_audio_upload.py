@@ -12,11 +12,13 @@ import io
 import os
 
 import pytest
+from fastapi.testclient import TestClient
 
 import ai
 import database
 import database.core
 import knowledge.audio_upload as audio_upload
+import main
 from audio import asr_cloud
 
 
@@ -111,7 +113,7 @@ def test_successful_upload_enqueues_an_audio_job():
     episode = database.get_episode(episode_id)
     assert job["audio_path"] == episode["audio_url"]
     assert os.path.isfile(job["audio_path"])
-    assert episode["kind"] == "video"
+    assert episode["kind"] == "audiobook"
     assert episode["platform"] == "upload"
 
 
@@ -157,3 +159,34 @@ def test_title_falls_back_to_filename_when_not_given():
     res = audio_upload.ingest_audio_upload(io.BytesIO(b"fake mp3"), "my_audiobook.mp3")
     episode = database.get_episode(res["episode_id"])
     assert episode["title"] == "my_audiobook"
+
+
+# ---------------------------------------------------------------------------
+# 7. GET /api/podcast/episodes/{id} surfaces the queued transcription job
+#    (#1073) — otherwise the detail page's summary area is blank for hours
+#    with nothing to say why.
+# ---------------------------------------------------------------------------
+
+def test_episode_detail_includes_audio_job_status():
+    res = audio_upload.ingest_audio_upload(io.BytesIO(b"fake mp3 bytes"), "book.mp3")
+    episode_id = res["episode_id"]
+
+    client = TestClient(main.app)
+    resp = client.get(f"/api/podcast/episodes/{episode_id}")
+    assert resp.status_code == 200
+    job = resp.json()["audio_job"]
+    assert job is not None
+    assert job["status"] == "pending"
+    assert job["error"] is None
+
+
+def test_episode_detail_audio_job_is_none_without_a_queued_job():
+    # A plain article never had an audio_jobs row at all.
+    episode_id = database.create_pending_episode(
+        video_id="art1", channel_id="example.com", title="An article",
+        published_at=None, youtube_url="https://example.com/a", kind="article")
+
+    client = TestClient(main.app)
+    resp = client.get(f"/api/podcast/episodes/{episode_id}")
+    assert resp.status_code == 200
+    assert resp.json()["audio_job"] is None

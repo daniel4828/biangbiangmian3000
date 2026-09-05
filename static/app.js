@@ -1090,7 +1090,7 @@ function setLoading(msg, useProgress = false) {
 // through there, so there is no per-flow plumbing. [{id, title, kind}].
 let _storyLoadingSources = [];
 
-const _KNOWLEDGE_KIND_ICON = { podcast: '\u{1F399}\uFE0F', video: '\u{1F4FA}', article: '\u{1F4C4}', newsletter: '\u{1F4F0}', kahneman: '\u{1F4A1}' };
+const _KNOWLEDGE_KIND_ICON = { podcast: '\u{1F399}\uFE0F', video: '\u{1F4FA}', article: '\u{1F4C4}', newsletter: '\u{1F4F0}', kahneman: '\u{1F4A1}', audiobook: '\u{1F3A7}' };
 
 function _renderLoadingSources() {
   const el = document.getElementById('loading-sources');
@@ -3924,6 +3924,7 @@ const PODCAST_STATUS_CLASS = {
 const KNOWLEDGE_KIND_LABEL = {
   podcast: '🎙️ Podcast', video: '📺 Video',
   article: '📄 Article', newsletter: '📰 Newsletter',
+  audiobook: '🎧 Audiobook',
 };
 const KNOWLEDGE_PLATFORM_LABEL = {
   youtube: 'YouTube', instagram: 'Instagram', podcast: 'Podcast RSS',
@@ -3995,7 +3996,7 @@ function _isInstagramEpisode(ep) {
 // that already answered that.
 function _knowledgeSourceIcon(ep) {
   if (_isInstagramEpisode(ep)) return '📱 ';
-  return ({ podcast: '🎙️ ', video: '📺 ', article: '📄 ', newsletter: '📰 ' })[ep.kind] || '';
+  return ({ podcast: '🎙️ ', video: '📺 ', article: '📄 ', newsletter: '📰 ', audiobook: '🎧 ' })[ep.kind] || '';
 }
 
 // Query string for the material list. Every axis repeats (?tag=a&tag=b), which
@@ -5324,7 +5325,41 @@ function _rememberKnowledgeTldr() {
 // rendition (translated from summary_de, new words annotated inline); a
 // failed/not-yet-generated rendition shows the reason rather than silently
 // falling back to a German block Daniel didn't ask to read.
+// Audiobooks (#1073) land as status='pending' and stay that way for hours
+// while scripts/audio_worker.py gets around to the local ASR job — with no
+// summary yet, the blocks below would just render two empty <div>s, i.e. a
+// blank box that says nothing. audio_job (attached by GET
+// /api/podcast/episodes/{id} from database.audio_jobs, #1053) is what's
+// actually true right now, so show that instead of pretending there's a
+// summary to look at.
+function _knowledgeAudioJobStatusHtml(ep) {
+  const job = ep.audio_job;
+  if (!job) return '';
+  // database/audio.py's status values: pending -> running -> done | error
+  // (claim_next_audio_job / finish_audio_job) — 'processing' is not one of
+  // them, only routes/podcast.py's *summarization* jobs use that word.
+  if (job.status === 'error') {
+    return `<p class="keymap-hint">⚠ 转录失败：${_escHtml(job.error || '未知错误')}</p>`;
+  }
+  if (job.status === 'running') {
+    return `<p class="keymap-hint">🎧 正在转录…</p>`;
+  }
+  if (job.status === 'done') {
+    // Audiobooks have no summarize() pass (they're consumed as a read-along
+    // track, not a text summary — see audio_worker.py), so podcast_episodes
+    // .status never becomes 'summarized' for this kind. Still worth a
+    // message of its own rather than falling through to the blank summary
+    // blocks below: "queued"/"transcribing" would be actively wrong once the
+    // job is actually done.
+    return `<p class="keymap-hint">✓ 转录已完成 — 切到 Full text 标签跟读。</p>`;
+  }
+  return `<p class="keymap-hint">⏳ 排队中，服务器空闲时自动转录</p>`;
+}
+
 function _knowledgeSummaryHtml(ep) {
+  if (ep.status !== 'summarized' && ep.audio_job) {
+    return _knowledgeTldrHtml(ep) + _knowledgeAudioJobStatusHtml(ep);
+  }
   if (activeLang() === 'zh') {
     return `${_knowledgeTldrHtml(ep)}
        ${ep.summary_zh ? `<div id="podcast-summary-zh">${_summaryZhHtml(ep.summary_zh)}</div>` : ''}
@@ -7168,7 +7203,7 @@ function _openKnowledgeFromHash() {
   // Tab link (#704): #knowledge-video etc. — the letters-only form, which the
   // digits-only patterns above can never match. This is what the server's
   // /knowledge/videos redirect lands on; nothing in the frontend writes it.
-  const tabMatch = /^#knowledge-(podcast|video|reel|article|newsletter)$/.exec(location.hash);
+  const tabMatch = /^#knowledge-(podcast|video|reel|article|newsletter|audiobook)$/.exec(location.hash);
   if (tabMatch) openKnowledge(tabMatch[1]);
 }
 
@@ -15683,7 +15718,7 @@ _updateBackBtn();
 // are recognized (see _openKnowledgeFromHash).
 if (/^#(?:podcast|knowledge)-feed-\d+$/.test(location.hash)
     || /^#(?:podcast|knowledge)-\d+$/.test(location.hash)
-    || /^#knowledge-(?:podcast|video|reel|article|newsletter)$/.test(location.hash)) {
+    || /^#knowledge-(?:podcast|video|reel|article|newsletter|audiobook)$/.test(location.hash)) {
   _openKnowledgeFromHash();
   // Consume the hash: a direct link is a one-shot instruction to open one
   // thing, not a sticky location. Leaving it in the address bar made every

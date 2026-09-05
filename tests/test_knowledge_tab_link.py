@@ -35,6 +35,8 @@ def client():
     ("/knowledge/instagram", "reel"),
     ("/knowledge/newsletter", "newsletter"),
     ("/knowledge/newsletters", "newsletter"),
+    ("/knowledge/audiobook", "audiobook"),
+    ("/knowledge/audiobooks", "audiobook"),
 ])
 def test_tab_link_redirects_to_the_matching_hash(client, path, tab):
     resp = client.get(path, follow_redirects=False)
@@ -60,7 +62,7 @@ APP_JS = pathlib.Path("static/app.js").read_text(encoding="utf-8")
 HASH_PATTERNS = [
     re.compile(r"^#(?:podcast|knowledge)-feed-\d+$"),
     re.compile(r"^#(?:podcast|knowledge)-\d+$"),
-    re.compile(r"^#knowledge-(?:podcast|video|reel|article|newsletter)$"),
+    re.compile(r"^#knowledge-(?:podcast|video|reel|article|newsletter|audiobook)$"),
 ]
 
 
@@ -68,14 +70,14 @@ def test_app_js_declares_the_tab_hash_pattern():
     """The boot branch decides between "open the knowledge view" and "load the
     deck list"; if it doesn't know the tab form, a bookmarked tab link opens
     the deck list instead."""
-    assert APP_JS.count("#knowledge-(?:podcast|video|reel|article|newsletter)$") == 1
-    assert "/^#knowledge-(podcast|video|reel|article|newsletter)$/" in APP_JS
+    assert APP_JS.count("#knowledge-(?:podcast|video|reel|article|newsletter|audiobook)$") == 1
+    assert "/^#knowledge-(podcast|video|reel|article|newsletter|audiobook)$/" in APP_JS
 
 
 def test_tab_hash_is_matched_by_exactly_one_pattern():
     """The tab form is letters-only and the item/feed forms are digits-only,
     so an item link can never be mistaken for a tab link or vice versa."""
-    for tab in ("podcast", "video", "reel", "article", "newsletter"):
+    for tab in ("podcast", "video", "reel", "article", "newsletter", "audiobook"):
         matched = [p for p in HASH_PATTERNS if p.match(f"#knowledge-{tab}")]
         assert len(matched) == 1, tab
     # The legacy links that already went out in podcast emails/Signal messages.
@@ -103,6 +105,15 @@ def test_boot_consumes_the_hash_so_later_reloads_go_home():
     assert "_openKnowledgeFromHash();" in boot
     # The clear has to sit in the branch that consumed the hash, before the
     # else-branch that just loads the decks.
-    assert "history.replaceState(null, '', location.pathname + location.search);" in boot
-    assert boot.index("_openKnowledgeFromHash();") < boot.index("history.replaceState")
-    assert boot.index("history.replaceState") < boot.index("loadDecks();")
+    # history.state, not null (#1057): boot's replaceState has to KEEP the
+    # navIdx set a few lines above it — passing null there would wipe the nav
+    # history index on every load with a hash. The assertion below tracked the
+    # old literal and had been failing on main ever since.
+    clear_call = "history.replaceState(history.state, '', location.pathname + location.search);"
+    assert clear_call in boot
+    # Match the FULL call, not the bare "history.replaceState" prefix: the boot
+    # block opens with a different replaceState (the navIdx seed, #1002) that
+    # sits before _openKnowledgeFromHash(), so a prefix search finds that one
+    # and the ordering assertions below compare the wrong two positions.
+    assert boot.index("_openKnowledgeFromHash();") < boot.index(clear_call)
+    assert boot.index(clear_call) < boot.index("loadDecks();")

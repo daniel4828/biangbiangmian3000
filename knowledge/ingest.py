@@ -189,7 +189,7 @@ def _store_audiobook_episode(*, video_id: str, title: str, audio_path: str,
         # episode lives").
         audio_url=audio_path,
         duration_seconds=duration,
-        kind="video",
+        kind="audiobook",
         china_critical=china_critical,
         author=author,
         platform=platform,

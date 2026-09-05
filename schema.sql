@@ -690,9 +690,15 @@ CREATE TABLE IF NOT EXISTS known_words (
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS podcast_episodes (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- kind = 'podcast' | 'video' | 'article' | 'newsletter' (#650 stage A;
-    -- 'newsletter' added #925 for known email newsletters like F.A.Z.
-    -- Frühdenker, ingested via knowledge/newsletter.py + ingest_text()).
+    -- kind = 'podcast' | 'video' | 'article' | 'newsletter' | 'audiobook'
+    -- (#650 stage A; 'newsletter' added #925 for known email newsletters
+    -- like F.A.Z. Frühdenker, ingested via knowledge/newsletter.py +
+    -- ingest_text(); 'audiobook' added #1073 to split listen-along material
+    -- — YouTube audiobooks (#1054) and direct audio uploads (#1068), both
+    -- via knowledge/ingest.py's _store_audiobook_episode — out of the
+    -- 'video' bucket it originally shared with ordinary captioned videos).
+    -- No CHECK constraint on this column (deliberately, see #925's
+    -- precedent) — adding a value never requires a production migration.
     -- The generic columns below are reused across all kinds with
     -- different meanings — see docs/knowledge-base.md for the full mapping:
     --   video_id:    RSS item guid (podcast) | YouTube video id (video) | normalized URL, utm params stripped (article) | "pasted:<hash of body>" (newsletter, same pasted-text dedup key as ingest_text())

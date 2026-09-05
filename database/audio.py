@@ -237,6 +237,25 @@ def list_audio_jobs(statuses: tuple[str, ...] = ("pending", "running")) -> list[
     return [dict(r) for r in rows]
 
 
+def get_audio_job_for_owner(owner_kind: str, owner_id: int) -> dict | None:
+    """Most recent audio_jobs row for (owner_kind, owner_id), any status —
+    used by GET /api/podcast/episodes/{id} (#1073) so the detail page can say
+    *why* an audiobook (kind='audiobook', #1054/#1068) still has no summary:
+    queued, actively transcribing, or failed with a reason. None for an
+    episode that never had a local-ASR job (i.e. every non-audiobook item).
+    Picks the latest by id rather than created_at — a requeue after an
+    interrupted run doesn't insert a new row (see requeue_audio_job), so id
+    order and created_at order agree; id is just cheaper to sort on."""
+    conn = get_db()
+    row = conn.execute(
+        """SELECT * FROM audio_jobs WHERE owner_kind = ? AND owner_id = ?
+           ORDER BY id DESC LIMIT 1""",
+        (owner_kind, owner_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def audio_disk_usage(owner_kind: str, owner_id: int) -> int:
     """Total bytes of every DISTINCT audio_path this owner's audio_tracks rows
     point at, for files that still exist on disk (#1054's disk-usage line on
