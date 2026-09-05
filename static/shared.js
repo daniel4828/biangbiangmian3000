@@ -324,3 +324,183 @@ async function ingestKnowledgeFile(file, fields) {
 async function markWordKnown(word, lang) {
   return api('POST', '/api/known-words', lang ? { word, lang } : { word });
 }
+
+// ---------------------------------------------------------------------------
+// Dictionary result rendering (#746, extracted for #1055).
+//
+// Originally lived only in dict.html — the header search box now needs the
+// exact same rendering (candidate options, the ★ add button, the sentence
+// card, ↻ Repeat), and this repo's rule is one implementation per feature
+// (#643/#668): two copies would drift, and a fix to how an option renders
+// would only land in whichever page someone happened to touch.
+//
+// Styling lives in dict-result.css under the .dr-root/.dr-* classes; the
+// caller's page must load that stylesheet and give `container` the dr-root
+// class (renderDictResult does this itself, defensively).
+
+// ★ button: adds a candidate's zh to the ★ List via the one shared add-word
+// pipeline (#643). Each button tracks its own state so several can be
+// "running" (~30s each) at once without blocking one another — addWordViaAi
+// already polls its own job, we just need to not share state.
+function _dictStarButton(zh, wordLang) {
+  const btn = document.createElement('button');
+  btn.className = 'dr-star';
+  btn.type = 'button';
+  btn.textContent = '★';
+  btn.title = `Add "${zh}" to your ★ List`;
+  const errMsg = document.createElement('div');
+  errMsg.className = 'dr-star-err-msg';
+  errMsg.style.display = 'none';
+
+  btn.onclick = () => {
+    btn.disabled = true;
+    btn.classList.add('dr-running');
+    btn.textContent = '…';
+    errMsg.style.display = 'none';
+    addWordViaAi(zh, 'list', (state, text) => {
+      if (state === 'running') {
+        btn.classList.add('dr-running');
+        btn.textContent = '…';
+      } else if (state === 'done') {
+        btn.classList.remove('dr-running');
+        btn.classList.add('dr-done');
+        btn.textContent = '✓';
+        btn.title = text || 'Added';
+      } else if (state === 'error') {
+        btn.classList.remove('dr-running');
+        btn.classList.add('dr-error');
+        btn.textContent = '⚠';
+        btn.disabled = false;
+        errMsg.textContent = text || 'Failed to add';
+        errMsg.style.display = '';
+      } else if (state === 'idle') {
+        // Cancelled the "already in your collection" confirmation (#888) —
+        // nothing happened, so put the button back to its start state.
+        btn.classList.remove('dr-running');
+        btn.textContent = '★';
+        btn.disabled = false;
+      }
+    }, wordLang);
+  };
+
+  const wrap = document.createElement('div');
+  wrap.style.flexShrink = '0';
+  wrap.append(btn, errMsg);
+  return wrap;
+}
+
+function _dictTextEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function _dictOption(opt, wordLang) {
+  const row = document.createElement('div');
+  row.className = 'dr-option' + (opt.recommended ? ' dr-recommended' : '');
+
+  row.append(_dictTextEl('div', 'dr-key', opt.key || ''));
+
+  const body = document.createElement('div');
+  body.className = 'dr-body';
+
+  const zhRow = _dictTextEl('div', 'dr-zh-row');
+  zhRow.append(_dictTextEl('span', 'dr-zh', opt.zh || ''));
+  if (opt.pinyin) zhRow.append(_dictTextEl('span', 'dr-pinyin', opt.pinyin));
+  if (opt.recommended) zhRow.append(_dictTextEl('span', 'dr-star-mark', '⭐'));
+  if (opt.register) zhRow.append(_dictTextEl('span', 'dr-register', opt.register));
+  body.append(zhRow);
+
+  if (opt.de) {
+    const t = _dictTextEl('div', 'dr-trans');
+    t.append(_dictTextEl('span', 'dr-lbl', 'de: '), document.createTextNode(opt.de));
+    body.append(t);
+  }
+  if (opt.fr) {
+    const t = _dictTextEl('div', 'dr-trans');
+    t.append(_dictTextEl('span', 'dr-lbl', 'fr: '), document.createTextNode(opt.fr));
+    body.append(t);
+  }
+  if (opt.usage) body.append(_dictTextEl('div', 'dr-usage', opt.usage));
+
+  if (opt.example_zh) {
+    const ex = document.createElement('div');
+    ex.className = 'dr-example';
+    ex.append(_dictTextEl('div', 'dr-ex-zh', opt.example_zh));
+    if (opt.example_pinyin) ex.append(_dictTextEl('div', 'dr-ex-pinyin', opt.example_pinyin));
+    if (opt.example_de) ex.append(_dictTextEl('div', 'dr-ex-de', opt.example_de));
+    body.append(ex);
+  }
+
+  row.append(body);
+  if (opt.zh) row.append(_dictStarButton(opt.zh, wordLang));
+  return row;
+}
+
+// Renders one {id, created_at, query, lang, result} record — the exact
+// response shape of POST /api/dict/lookup and GET /api/dict/history/{id} —
+// into `container`. Everything from the AI is untrusted text: textContent
+// and createElement only, never innerHTML, all the way through this
+// function and its helpers above.
+//
+// opts.onRepeat(record), if given, renders a ↻ Repeat button that re-asks
+// the exact same query and is expected to overwrite this stored answer
+// (replace_id, #777) — omit it where "ask again" doesn't make sense.
+// opts.addLang picks the language the ★ button adds the word in when the
+// record itself doesn't already say (record.lang wins when present, same
+// as dict.html's old `wordLang || lang` fallback).
+function renderDictResult(container, record, opts) {
+  opts = opts || {};
+  container.classList.add('dr-root');
+  container.replaceChildren();
+
+  const r = record.result || {};
+  // The record's own lang (the language this answer was given in) wins —
+  // exactly dict.html's pre-extraction `wordLang || lang` behaviour, where
+  // wordLang was always record.lang and `lang` was the page-level picker
+  // variable. opts.addLang plays that page-level fallback role now, for
+  // records that (e.g. pre-#805) don't carry a lang at all.
+  const wordLang = record.lang || opts.addLang || 'zh';
+
+  const head = document.createElement('div');
+  const hrow = _dictTextEl('div', 'dr-headline-row');
+  hrow.append(_dictTextEl('span', 'dr-headline', r.headline || record.query));
+  if (r.headline_pinyin) hrow.append(_dictTextEl('span', 'dr-headline-pinyin', r.headline_pinyin));
+  if (opts.onRepeat) {
+    const repeat = document.createElement('button');
+    repeat.className = 'dr-repeat';
+    repeat.type = 'button';
+    repeat.textContent = '↻ Repeat';
+    repeat.title = 'Ask again — this stored answer is replaced';
+    repeat.onclick = () => opts.onRepeat(record);
+    hrow.append(repeat);
+  }
+  head.append(hrow);
+  if (r.headline_de) head.append(_dictTextEl('div', 'dr-headline-de', r.headline_de));
+  if (r.notes) head.append(_dictTextEl('div', 'dr-notes', r.notes));
+  container.append(head);
+
+  if (r.kind === 'sentence' && r.sentence) {
+    const card = document.createElement('div');
+    card.className = 'dr-sentence-card';
+    const text = document.createElement('div');
+    text.className = 'dr-sentence-text';
+    text.append(_dictTextEl('div', 'dr-sent-zh', r.sentence.zh || ''));
+    if (r.sentence.pinyin) text.append(_dictTextEl('div', 'dr-sent-pinyin', r.sentence.pinyin));
+    if (r.sentence.de) text.append(_dictTextEl('div', 'dr-sent-de', r.sentence.de));
+    card.append(text);
+    if (r.sentence.zh) card.append(_dictStarButton(r.sentence.zh, wordLang));
+    container.append(card);
+  }
+
+  for (const group of (r.groups || [])) {
+    const g = document.createElement('div');
+    g.className = 'dr-group';
+    if (group.label) g.append(_dictTextEl('div', 'dr-group-label', group.label));
+    for (const opt of (group.options || [])) {
+      g.append(_dictOption(opt, wordLang));
+    }
+    container.append(g);
+  }
+}
