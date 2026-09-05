@@ -349,6 +349,16 @@ def get_episode(episode_id: int, lang: str = "zh"):
             episode["rendition"] = None
             episode["rendition_error"] = str(e)
     episode["disk_bytes"] = _episode_disk_bytes(episode)
+    # Local-ASR job status (#1073): an audiobook (kind='audiobook', #1054/
+    # #1068) sits at status='pending' for hours with nothing to show —
+    # without this the detail page's summary area is just blank. None for
+    # every episode that never had one of these jobs (i.e. every non-audiobook
+    # item), which the frontend takes as "nothing to report".
+    job = database.get_audio_job_for_owner("episode", episode_id)
+    episode["audio_job"] = (
+        {"status": job["status"], "started_at": job["started_at"], "error": job["error"]}
+        if job else None
+    )
     return _overlay_processing_status(episode)
 
 

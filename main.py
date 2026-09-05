@@ -552,6 +552,7 @@ try:
         "reel": "reel", "reels": "reel", "instagram": "reel",
         "article": "article", "articles": "article",
         "newsletter": "newsletter", "newsletters": "newsletter",
+        "audiobook": "audiobook", "audiobooks": "audiobook",
     }
 
     @app.get("/knowledge/{kind}")

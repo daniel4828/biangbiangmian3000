@@ -176,7 +176,7 @@ def test_episode_row_reflects_kind_platform_and_duration(monkeypatch):
 
     res = ingest.ingest_url("https://www.youtube.com/watch?v=meta1", as_audiobook=True)
     episode = database.get_episode(res["episode_id"])
-    assert episode["kind"] == "video"
+    assert episode["kind"] == "audiobook"
     assert episode["platform"] == "youtube"
     assert episode["duration_seconds"] == 600
     assert episode["author"] == "Reader"
