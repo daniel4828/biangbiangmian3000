@@ -17,6 +17,7 @@ import os
 import re
 
 import database
+import zh_annotate
 
 from . import epub, pdf
 from .epub import BookExtractionError
@@ -26,9 +27,10 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_FORMATS = ("epub", "pdf")
 
-# Deliberately tiny: the only choice is German vs English, both of which
-# Daniel's books are written in, and a full language-detection dependency for
-# a binary decision the upload form can also just ask about is not worth it.
+# Deliberately tiny: past the Chinese check below, the only remaining choice
+# is German vs English, both of which Daniel's books are written in, and a
+# full language-detection dependency for a binary decision the upload form
+# can also just ask about is not worth it.
 _DE_MARKERS = re.compile(
     r"\b(und|der|die|das|nicht|ist|ich|sie|mit|auch|eine|dass|sich|auf|für|"
     r"aber|noch|schon|werden|über)\b", re.IGNORECASE)
@@ -36,14 +38,27 @@ _EN_MARKERS = re.compile(
     r"\b(the|and|was|that|with|have|this|from|they|would|there|their|"
     r"which|about|been|were|said|what)\b", re.IGNORECASE)
 
+# Same threshold knowledge/rendition.py's _source_lang_of() and podcast.py's
+# _is_chinese_text() use for "is this Chinese?" — one constant repeated
+# across the app rather than each caller picking its own cutoff.
+_CJK_DETECT_THRESHOLD = 0.2
+
 
 def detect_source_lang(blocks: list[dict], default: str = "de") -> str:
-    """Guess 'de' or 'en' from a sample of the text. Only ever a default for
-    the upload form — the caller may override it, because getting this wrong
-    means every page is translated from the wrong source."""
+    """Guess 'zh', 'de' or 'en' from a sample of the text. Only ever a
+    default for the upload form — the caller may override it, because
+    getting this wrong means every page is translated from the wrong source
+    (#1050: a Chinese book run through the German/English word-count
+    heuristic below scores 0 on both and used to silently fall through to
+    `default`, which would then send an already-Chinese page through
+    de->zh translation — Google Translate mostly no-ops on that, so it would
+    have looked like a successful translation instead of the bug it is).
+    """
     sample = " ".join(b.get("text", "") for b in blocks[:80])[:5000]
     if not sample.strip():
         return default
+    if zh_annotate.cjk_ratio(sample) >= _CJK_DETECT_THRESHOLD:
+        return "zh"
     de, en = len(_DE_MARKERS.findall(sample)), len(_EN_MARKERS.findall(sample))
     if de == en:
         return default

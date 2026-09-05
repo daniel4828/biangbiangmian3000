@@ -23,7 +23,15 @@ DEFAULT_CHAR_BUDGET = 1200
 # books (and most PDF text layers) produce multi-page "paragraphs", and one
 # page carrying ten screens of text defeats the whole page model.
 _HARD_SPLIT_FACTOR = 2
-_SENTENCE_END = re.compile(r"(?<=[.!?。！？；;])\s+")
+# Two alternatives, not one (#1050): Chinese sentences run straight from one
+# 。！？／； into the next character with no space at all, so requiring \s+
+# after the punctuation (as the Latin side does, to avoid a false split on
+# something like "3.14" or "Dr. Müller") would never match a Chinese book —
+# every over-long Chinese paragraph would fall straight through to the hard
+# character cut below, landing mid-sentence exactly as often as an unsplit
+# one would. \s* (zero or more) after the CJK punctuation lets it split with
+# no separator present at all.
+_SENTENCE_END = re.compile(r"(?<=[。！？；])\s*|(?<=[.!?;])\s+")
 
 
 def _split_long_paragraph(text: str, budget: int) -> list[str]:

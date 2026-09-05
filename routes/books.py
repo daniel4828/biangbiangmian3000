@@ -33,7 +33,21 @@ router = APIRouter()
 UPLOAD_DIR = os.path.join("data", "books")
 # Books are big; anything past this is more likely a mistake than a book.
 _MAX_UPLOAD_BYTES = 80 * 1024 * 1024
-_SOURCE_LANGS = ("de", "en")
+_SOURCE_LANGS = ("de", "en", "zh")
+
+# render_html() decides whether to skip translation by comparing its `source`
+# argument against languages.get_lang_config(lang)["translator_source"]
+# (knowledge/rendition.py's "already in the target language" branch). That
+# table spells Chinese "zh-CN" (the same convention knowledge/rendition.py's
+# _source_lang_of() uses), so a book stored with source_lang='zh' has to be
+# translated to that code before being handed to render_html() — otherwise
+# "zh" != "zh-CN" and a Chinese book would get round-tripped through Google
+# Translate for no reason on every uncached page (#1050).
+_RENDER_SOURCE_CODES = {"zh": "zh-CN"}
+
+
+def _render_source_lang(source_lang: str) -> str:
+    return _RENDER_SOURCE_CODES.get(source_lang, source_lang)
 
 # Upload/pagination jobs. Deliberately separate from routes/imports.py's
 # _import_jobs: that dict is what the header task indicator reads to label
@@ -192,10 +206,20 @@ def patch_book(book_id: int, body: dict):
 
 @router.delete("/api/books/{book_id}")
 def delete_book(book_id: int):
-    """Delete a book, its pages, its cached renditions and the uploaded file."""
+    """Delete a book, its pages, its cached renditions, its read-along audio
+    tracks (#1050) and the uploaded file.
+
+    An unwatched leak here is exactly the kind of bug #1054 (uploaded
+    audiobooks, hundreds of MB per mp3) would turn into a full disk instead
+    of a cosmetic one — so read-along audio is cleaned up with the same
+    care as the uploaded file it sits next to.
+    """
     book = database.get_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+    # Must run before delete_book() — it looks pages up by book_id, and
+    # book_pages cascades away the moment the book row does.
+    audio_paths = database.delete_audio_tracks_for_book(book_id)
     database.delete_book(book_id)
     path = book.get("file_path")
     if path and os.path.isfile(path):
@@ -203,7 +227,31 @@ def delete_book(book_id: int):
             os.remove(path)
         except OSError as e:  # the row is gone either way; say so in the log
             logger.warning("books: could not delete %s — %s", path, e)
+    for audio_path in audio_paths:
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass  # already gone (or never written) — not a failure worth reporting
     return {"deleted": True}
+
+
+def render_book_page(book: dict, page: dict, lang: str) -> tuple[str, list[dict], bool]:
+    """(text, new_words, cached) for one page of `book` in `lang`, generating
+    and caching it on a miss.
+
+    Shared by GET .../page (the reading view) and routes/audio.py's
+    book_page track builder (#1050) — one implementation of "check the
+    rendition cache, else render_html() and save it", not two copies that
+    drift the way #643 warns about. Raises RenditionError on failure;
+    nothing is written to the database in that case.
+    """
+    cached = database.get_book_rendition(book["id"], page["page_no"], lang)
+    if cached:
+        return cached["text"], cached["new_words"], True
+    source = _render_source_lang(book["source_lang"])
+    text, new_words = render_html(page["source_text"], lang, source=source)
+    database.save_book_rendition(book["id"], page["page_no"], lang, text, new_words)
+    return text, new_words, False
 
 
 @router.get("/api/books/{book_id}/page/{page_no}")
@@ -226,6 +274,9 @@ def get_book_page(book_id: int, page_no: int, lang: str | None = None):
 
     payload = {
         "book_id": book_id,
+        # book_pages.id — distinct from page_no (which repeats across every
+        # book) — is what the read-along audio track is keyed on (#1050).
+        "page_id": page["id"],
         "title": book["title"],
         "author": book.get("author"),
         "page_no": page_no,
@@ -236,18 +287,11 @@ def get_book_page(book_id: int, page_no: int, lang: str | None = None):
         "source_text": page["source_text"],
     }
 
-    cached = database.get_book_rendition(book_id, page_no, lang)
-    if cached:
-        return {**payload, "text": cached["text"],
-                "new_words": cached["new_words"], "cached": True}
-
     try:
-        text, new_words = render_html(page["source_text"], lang,
-                                      source=book["source_lang"])
+        text, new_words, cached = render_book_page(book, page, lang)
     except RenditionError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    database.save_book_rendition(book_id, page_no, lang, text, new_words)
-    return {**payload, "text": text, "new_words": new_words, "cached": False}
+    return {**payload, "text": text, "new_words": new_words, "cached": cached}
 
 
 # ── Chapters (#864) ──────────────────────────────────────────────────────────

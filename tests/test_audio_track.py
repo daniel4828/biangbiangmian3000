@@ -323,6 +323,145 @@ def test_create_track_endpoint_returns_source_text(tmp_db, monkeypatch):
     assert cached.json()["source_text"] == "一二三"
 
 
+# ---------------------------------------------------------------------------
+# 9. owner_kind='book_page' (#1050 phase 3): reads the RENDERED page (not
+#    book_pages.source_text) and is keyed on book_pages.id, not page_no
+#    (which repeats across every book).
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_book_render(monkeypatch):
+    """Stand in for translate-then-annotate (same idea as test_books.py's
+    fake_render) so these tests exercise routes/audio.py's book_page wiring
+    without depending on the real translator/annotator or a real EPUB."""
+    import routes.books as book_routes
+
+    def _render(html, lang, source="de"):
+        return html, []
+
+    monkeypatch.setattr(book_routes, "render_html", _render)
+
+
+def _make_book_page(source_lang="zh", source_text="<p>今天天气很好。</p>"):
+    book_id = database.create_book("Testbuch", None, source_lang, "epub", None, 1200)
+    database.add_pages(book_id, [{"source_text": source_text, "ref_label": None}])
+    return database.get_page(book_id, 1)
+
+
+def test_book_page_track_summary_variant_is_400(tmp_db, fake_book_render):
+    page = _make_book_page()
+    resp = client.post("/api/audio/track", params={
+        "owner_kind": "book_page", "owner_id": page["id"], "lang": "zh", "variant": "summary",
+    })
+    assert resp.status_code == 400
+
+
+def test_book_page_track_missing_page_is_404(tmp_db, fake_book_render):
+    resp = client.post("/api/audio/track", params={
+        "owner_kind": "book_page", "owner_id": 999999, "lang": "zh", "variant": "fulltext",
+    })
+    assert resp.status_code == 404
+
+
+def test_book_page_track_is_keyed_on_book_pages_id_not_page_no(tmp_db, fake_book_render):
+    """Two different books, each with a page_no=1 — book_pages.id differs
+    (autoincrement across the whole table) even though page_no is the same,
+    and audio_tracks must key on the id, not the page_no, or the two books'
+    tracks would collide."""
+    page_a = _make_book_page(source_text="<p>第一本书的内容。</p>")
+    page_b = _make_book_page(source_text="<p>第二本书的内容。</p>")
+    assert page_a["page_no"] == page_b["page_no"] == 1
+    assert page_a["id"] != page_b["id"]
+
+    resp_a = client.post("/api/audio/track", params={
+        "owner_kind": "book_page", "owner_id": page_a["id"], "lang": "zh", "variant": "fulltext",
+    })
+    resp_b = client.post("/api/audio/track", params={
+        "owner_kind": "book_page", "owner_id": page_b["id"], "lang": "zh", "variant": "fulltext",
+    })
+    assert resp_a.status_code == 200, resp_a.text
+    assert resp_b.status_code == 200, resp_b.text
+    assert resp_a.json()["track_id"] != resp_b.json()["track_id"]
+    assert database.get_audio_track("book_page", page_a["id"], "zh", "fulltext") is not None
+    assert database.get_audio_track("book_page", page_b["id"], "zh", "fulltext") is not None
+
+
+def test_book_page_track_reads_the_rendered_text_not_the_source(tmp_db, monkeypatch):
+    """The audio must say what's on screen (the translated + annotated
+    rendition), never book_pages.source_text — same contract _episode_text
+    already has for episode summaries/full text."""
+    import routes.books as book_routes
+
+    monkeypatch.setattr(book_routes, "render_html",
+                        lambda html, lang, source="de": ("<p>RENDERED TEXT</p>", []))
+    page = _make_book_page(source_text="<p>SOURCE TEXT</p>")
+
+    resp = client.post("/api/audio/track", params={
+        "owner_kind": "book_page", "owner_id": page["id"], "lang": "zh", "variant": "fulltext",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["source_text"] == "RENDERED TEXT"
+
+
+# ---------------------------------------------------------------------------
+# 10. deleting the owner cleans up audio_tracks rows AND the mp3 on disk
+#     (#1050 follow-up) — audio_path is content-addressed, so a file shared
+#     by two different owners must survive deleting just one of them.
+# ---------------------------------------------------------------------------
+
+def test_delete_book_removes_its_audio_tracks_and_files(tmp_db, tmp_path):
+    page = _make_book_page()
+    mp3 = tmp_path / "a.mp3"
+    mp3.write_bytes(b"fake mp3")
+    database.save_audio_track(
+        "book_page", page["id"], "zh", "fulltext", str(mp3), 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+
+    resp = client.delete(f"/api/books/{page['book_id']}")
+    assert resp.status_code == 200, resp.text
+    assert database.get_audio_track("book_page", page["id"], "zh", "fulltext") is None
+    assert not mp3.exists()
+
+
+def test_delete_book_does_not_remove_a_file_still_used_by_another_owner(tmp_db, tmp_path):
+    """Two owners sharing one content-addressed mp3 (same voice+text hashed
+    to the same path, audio/tts_track.py._cache_path) — deleting one owner
+    must delete only its ROW, never the file the other owner still needs."""
+    page = _make_book_page()
+    mp3 = tmp_path / "shared.mp3"
+    mp3.write_bytes(b"fake mp3")
+    database.save_audio_track(
+        "book_page", page["id"], "zh", "fulltext", str(mp3), 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+    # A second owner (an episode — audio_tracks has no FK to podcast_episodes,
+    # so no real episode row is needed) pointing at the exact same file.
+    database.save_audio_track(
+        "episode", 4242, "zh", "fulltext", str(mp3), 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+
+    resp = client.delete(f"/api/books/{page['book_id']}")
+    assert resp.status_code == 200, resp.text
+    assert database.get_audio_track("book_page", page["id"], "zh", "fulltext") is None
+    assert mp3.exists(), "the file is still referenced by the episode row and must survive"
+    assert database.get_audio_track("episode", 4242, "zh", "fulltext")["audio_path"] == str(mp3)
+
+
+def test_delete_book_with_already_missing_audio_file_still_succeeds(tmp_db, tmp_path):
+    page = _make_book_page()
+    missing = tmp_path / "gone.mp3"   # never written
+    database.save_audio_track(
+        "book_page", page["id"], "zh", "fulltext", str(missing), 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+
+    resp = client.delete(f"/api/books/{page['book_id']}")
+    assert resp.status_code == 200, resp.text
+    assert database.get_audio_track("book_page", page["id"], "zh", "fulltext") is None
+
+
 def test_audio_tracks_source_text_migration_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr(database.core, "DB_PATH", str(tmp_path / "idempotent.db"))
     database.init_db()

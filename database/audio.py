@@ -90,21 +90,81 @@ def save_audio_track(owner_kind: str, owner_id: int, lang: str, variant: str,
     return track_id
 
 
+def _unreferenced_paths(conn, rows) -> list[str]:
+    """Of the audio_path values in `rows` (each an sqlite3.Row with "id" and
+    "audio_path", about to be deleted), return only the ones no OTHER
+    audio_tracks row still points at.
+
+    audio_path is content-addressed (sha256(voice|text) —
+    audio/tts_track.py._cache_path), so the exact same mp3 can legitimately
+    be shared by two different owners (a book page and an episode that
+    happen to render to identical text+voice). Callers must never unlink a
+    file some other row is still using — deciding that HERE, in the same
+    transaction that deletes the rows, is deliberate: a separate
+    audio_path_in_use()-style check is one a future caller could forget to
+    call, and by the time that bug shows up the file is already gone.
+    """
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return []
+    out = []
+    for path in {r["audio_path"] for r in rows}:
+        placeholders = ",".join("?" * len(ids))
+        still_used = conn.execute(
+            f"SELECT 1 FROM audio_tracks WHERE audio_path = ? AND id NOT IN ({placeholders}) LIMIT 1",
+            [path, *ids],
+        ).fetchone()
+        if not still_used:
+            out.append(path)
+    return out
+
+
 def delete_audio_tracks(owner_kind: str, owner_id: int) -> list[str]:
     """Delete every track belonging to (owner_kind, owner_id) — called when
-    the owner itself is deleted. Returns the audio_path of every row removed
-    so the caller can also delete the mp3 files on disk; this module never
-    touches the filesystem itself (same division of labor as
-    database.delete_book(), which leaves the uploaded file to routes/books.py)."""
+    the owner itself is deleted. Returns the audio_path of every mp3 that is
+    now actually safe to unlink from disk (see _unreferenced_paths — a path
+    still used by some OTHER row is excluded); this module never touches the
+    filesystem itself (same division of labor as database.delete_book(),
+    which leaves the uploaded file to routes/books.py)."""
     conn = get_db()
-    paths = [r["audio_path"] for r in conn.execute(
-        "SELECT audio_path FROM audio_tracks WHERE owner_kind = ? AND owner_id = ?",
+    rows = conn.execute(
+        "SELECT id, audio_path FROM audio_tracks WHERE owner_kind = ? AND owner_id = ?",
         (owner_kind, owner_id),
-    ).fetchall()]
+    ).fetchall()
+    safe_to_delete = _unreferenced_paths(conn, rows)
     conn.execute(
         "DELETE FROM audio_tracks WHERE owner_kind = ? AND owner_id = ?",
         (owner_kind, owner_id),
     )
     conn.commit()
     conn.close()
-    return paths
+    return safe_to_delete
+
+
+def delete_audio_tracks_for_book(book_id: int) -> list[str]:
+    """Same contract as delete_audio_tracks(), for every page of one book at
+    once (#1050) — routes/books.py's delete_book() has book_id, not the list
+    of book_pages.id its pages happen to have, and this is one query instead
+    of one delete_audio_tracks() call per page.
+
+    Must be called BEFORE database.delete_book() — it looks pages up via
+    book_pages.book_id, which no longer exists once the book row's deletion
+    cascades book_pages away.
+    """
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT id, audio_path FROM audio_tracks
+           WHERE owner_kind = 'book_page'
+             AND owner_id IN (SELECT id FROM book_pages WHERE book_id = ?)""",
+        (book_id,),
+    ).fetchall()
+    safe_to_delete = _unreferenced_paths(conn, rows)
+    conn.execute(
+        """DELETE FROM audio_tracks
+           WHERE owner_kind = 'book_page'
+             AND owner_id IN (SELECT id FROM book_pages WHERE book_id = ?)""",
+        (book_id,),
+    )
+    conn.commit()
+    conn.close()
+    return safe_to_delete

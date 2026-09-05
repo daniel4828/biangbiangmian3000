@@ -5699,7 +5699,15 @@ function setKnowledgeTtsRate(value) {
 // without altering it. That also means the word-tap spans #967/#1018 already
 // installed are completely undisturbed.
 
-let _raTrack = null;        // {episode_id, lang, variant, status, track_id, audio_url, cues, source_text}
+// #1050: generalized from "episode" to any read-along OWNER — {kind: 'episode'
+// | 'book_page', id, lang, variant, containerId}. `containerId` is computed
+// once by whoever builds the owner descriptor (_raOwnerForEpisode /
+// _raOwnerForBookPage below) rather than re-derived from (variant, lang)
+// inside every function here, because the book reader's container id has
+// nothing to do with either of those. Knowledge-base callers still pass
+// exactly what they always did, just wrapped in this shape — the outward
+// behavior is a pure refactor, not a change (see _raOwnerForEpisode).
+let _raTrack = null;        // {owner_kind, owner_id, lang, variant, status, track_id, audio_url, cues, source_text}
 let _raTrackBusy = false;   // a POST .../track is in flight (generating)
 
 let _raFollow = (() => {
@@ -5711,55 +5719,81 @@ let _raPlayer = {
   map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
 };
 
-function _raTrackChecked(ep, lang, variant) {
+function _raTrackChecked(owner) {
   const t = _raTrack;
-  return !!(t && t.episode_id === ep.id && t.lang === lang && t.variant === variant);
+  return !!(t && t.owner_kind === owner.kind && t.owner_id === owner.id &&
+           t.lang === owner.lang && t.variant === owner.variant);
 }
 
-function _raTrackFor(ep, lang, variant) {
+function _raTrackFor(owner) {
   const t = _raTrack;
-  return (_raTrackChecked(ep, lang, variant) && t.status === 'ready') ? t : null;
+  return (_raTrackChecked(owner) && t.status === 'ready') ? t : null;
 }
 
 // GET never generates (same contract as .../fulltext) — opening a detail
 // page must not silently kick off a TTS run.
-async function _raLoadTrack(episodeId, lang, variant) {
+async function _raLoadTrack(owner) {
   try {
-    const data = await api('GET', `/api/audio/track?owner_kind=episode&owner_id=${episodeId}` +
-      `&lang=${encodeURIComponent(lang)}&variant=${encodeURIComponent(variant)}`);
+    const data = await api('GET', `/api/audio/track?owner_kind=${owner.kind}&owner_id=${owner.id}` +
+      `&lang=${encodeURIComponent(owner.lang)}&variant=${encodeURIComponent(owner.variant)}`);
     _raTrack = data.status === 'ready'
-      ? { episode_id: episodeId, lang, variant, status: 'ready', track_id: data.track_id,
-          audio_url: data.audio_url, cues: data.cues || [], source_text: data.source_text || '' }
-      : { episode_id: episodeId, lang, variant, status: 'absent' };
+      ? { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
+          status: 'ready', track_id: data.track_id, audio_url: data.audio_url,
+          cues: data.cues || [], source_text: data.source_text || '' }
+      : { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant, status: 'absent' };
   } catch (e) {
-    _raTrack = { episode_id: episodeId, lang, variant, status: 'absent' };
+    _raTrack = { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant, status: 'absent' };
   }
-  if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === episodeId)
-    _renderKnowledgeDetail(_knowledgeDetailEpisode);
+  if (owner.kind === 'episode') {
+    if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id)
+      _renderKnowledgeDetail(_knowledgeDetailEpisode);
+  } else if (owner.kind === 'book_page') {
+    _refreshBookReadalongBar(owner.id);
+  }
 }
 
-async function doGenerateReadalong(episodeId, lang, variant, btn) {
+async function doGenerateReadalong(ownerKind, ownerId, lang, variant, btn) {
   if (_raTrackBusy) return;
   _raTrackBusy = true;
   if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
   try {
-    const data = await api('POST', `/api/audio/track?owner_kind=episode&owner_id=${episodeId}` +
+    const data = await api('POST', `/api/audio/track?owner_kind=${ownerKind}&owner_id=${ownerId}` +
       `&lang=${encodeURIComponent(lang)}&variant=${encodeURIComponent(variant)}`);
-    _raTrack = { episode_id: episodeId, lang, variant, status: 'ready', track_id: data.track_id,
-                 audio_url: data.audio_url, cues: data.cues || [], source_text: data.source_text || '' };
+    _raTrack = { owner_kind: ownerKind, owner_id: ownerId, lang, variant, status: 'ready',
+                 track_id: data.track_id, audio_url: data.audio_url,
+                 cues: data.cues || [], source_text: data.source_text || '' };
   } catch (e) {
     showError('Could not generate the read-along track: ' + (e.message || 'error'));
   } finally {
     _raTrackBusy = false;
-    if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+    if (ownerKind === 'episode') {
+      if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+    } else if (ownerKind === 'book_page') {
+      _refreshBookReadalongBar(ownerId);
+    }
   }
 }
 
-// Same four ids _makeWordsTappable() is applied to (see the call site below)
-// minus podcast-summary-de — no German voice, no reason to align against it.
-function _raContainerId(variant, lang) {
+// Same ids _makeWordsTappable() is applied to (see the call site below) for
+// episodes; the book reader has its own single container.
+function _raContainerId(ownerKind, variant, lang) {
+  if (ownerKind === 'book_page') return 'book-page-text';
   if (variant === 'fulltext') return 'knowledge-fulltext';
   return lang === 'zh' ? 'podcast-summary-zh' : 'podcast-summary-rendition';
+}
+
+// Owner-descriptor builders — the only two places that know how to turn an
+// episode or a book page into the {kind, id, lang, variant, containerId}
+// shape every function below takes.
+function _raOwnerForEpisode(ep, lang) {
+  const variant = _knowledgeView === 'fulltext' ? 'fulltext' : 'summary';
+  return { kind: 'episode', id: ep.id, lang, variant,
+           containerId: _raContainerId('episode', variant, lang) };
+}
+
+function _raOwnerForBookPage(pageId, lang) {
+  return { kind: 'book_page', id: pageId, lang, variant: 'fulltext',
+           containerId: _raContainerId('book_page', 'fulltext', lang) };
 }
 
 // Stops whatever the shared audio element is doing on our behalf. Does NOT
@@ -5772,14 +5806,15 @@ function _raStop() {
   _raPlayer.playing = false;
 }
 
-// Episode + language + variant + track id identify the player state — any of
-// them changing means we're pointing at different audio and cues entirely.
-function _raSync(ep, lang, variant, track) {
-  const key = `${ep.id}|${lang}|${variant}|${track.track_id}`;
+// Owner kind + id + language + variant + track id identify the player state —
+// any of them changing means we're pointing at different audio and cues
+// entirely.
+function _raSync(owner, track) {
+  const key = `${owner.kind}|${owner.id}|${owner.lang}|${owner.variant}|${track.track_id}`;
   if (_raPlayer.key === key) return _raPlayer;
   _raStop();
   _raPlayer = {
-    key, containerId: _raContainerId(variant, lang), cues: track.cues || [],
+    key, containerId: owner.containerId, cues: track.cues || [],
     sourceText: track.source_text || '', audioUrl: track.audio_url,
     map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
   };
@@ -5787,24 +5822,23 @@ function _raSync(ep, lang, variant, track) {
   return _raPlayer;
 }
 
-function _raBarHtml(ep, lang) {
-  const variant = _knowledgeView === 'fulltext' ? 'fulltext' : 'summary';
+function _raBarHtml(owner) {
   if (_raTrackBusy) {
     return `<div class="readalong-bar"><p class="keymap-hint">Generating the read-along track — this can take up to a minute for long material…</p></div>`;
   }
-  const t = _raTrackFor(ep, lang, variant);
+  const t = _raTrackFor(owner);
   if (!t) {
     // Not checked yet this session: fire the (cheap, cached) lookup and
     // render nothing until it lands — same pattern as _loadKnowledgeFulltext.
-    if (!_raTrackChecked(ep, lang, variant)) {
-      _raLoadTrack(ep.id, lang, variant);
+    if (!_raTrackChecked(owner)) {
+      _raLoadTrack(owner);
       return '';
     }
     return `<div class="readalong-bar">
-      <button class="btn-secondary" onclick="doGenerateReadalong(${ep.id}, '${lang}', '${variant}', this)">🎧 Generate read-along</button>
+      <button class="btn-secondary" onclick="doGenerateReadalong('${owner.kind}', ${owner.id}, '${owner.lang}', '${owner.variant}', this)">🎧 Generate read-along</button>
     </div>`;
   }
-  const player = _raSync(ep, lang, variant, t);
+  const player = _raSync(owner, t);
   return `<div class="readalong-bar">
     <div class="knowledge-tts-bar">
       <button class="btn-secondary" id="readalong-toggle" onclick="toggleReadalong()">${player.playing ? '⏸ Pause' : '🎧 Read along'}</button>
@@ -6002,11 +6036,10 @@ function _raBindContainerClicks(container) {
 // string being assembled. Rebuilt on every render rather than cached: the
 // detail view replaces the container's innerHTML wholesale on each render,
 // which invalidates any Range/segment referencing the OLD nodes.
-function _raAfterRender(ep, lang) {
-  const variant = _knowledgeView === 'fulltext' ? 'fulltext' : 'summary';
-  const t = _raTrackFor(ep, lang, variant);
+function _raAfterRender(owner) {
+  const t = _raTrackFor(owner);
   if (!t) return;
-  const player = _raSync(ep, lang, variant, t);
+  const player = _raSync(owner, t);
   const container = document.getElementById(player.containerId);
   if (!container) return;
   if (!(window.CSS && CSS.highlights)) {
@@ -6224,7 +6257,7 @@ function _renderKnowledgeDetail(ep) {
       <div style="margin:4px 0 10px">${links}</div>
       ${_knowledgeViewTabs(ep)}
       ${_kTtsBarHtml(ep, lang)}
-      ${_raBarHtml(ep, lang)}
+      ${_raBarHtml(_raOwnerForEpisode(ep, lang))}
       ${_knowledgeView === 'fulltext' ? _knowledgeFulltextHtml(ep, lang) : summaryBlock}
     </div>
     <div class="keymap-panel">
@@ -6245,7 +6278,7 @@ function _renderKnowledgeDetail(ep) {
   // .tap-word spans the read-along map has to walk around (see
   // _raDomIndex's docstring), and the container has to already be live DOM
   // (not a string still being assembled) for the TreeWalker to find anything.
-  _raAfterRender(ep, lang);
+  _raAfterRender(_raOwnerForEpisode(ep, lang));
   // Ask whether a full text already exists (a newsletter's was built when it
   // was processed). GET never generates, so this is cheap and safe to fire
   // on every detail view.
@@ -16161,7 +16194,7 @@ function evoLeave() {
 // standing between Daniel and reading.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const _bookState = { bookId: null, pageNo: 1, pageCount: 0, lang: 'zh', loading: false };
+const _bookState = { bookId: null, pageNo: 1, pageId: null, pageCount: 0, lang: 'zh', loading: false };
 let _bookLangs = null;   // [{code, name}] from /api/langs?available=1
 
 // Every registered language, not just the ones already in use: a book is a new
@@ -16220,9 +16253,11 @@ function _renderBookList(books) {
   document.getElementById('view-books-content').innerHTML = `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Upload a book</h2>
-      <p class="keymap-hint">EPUB or PDF in German or English. It is split into
-        reading pages once, then translated page by page into the language you
-        pick when you open it. Scanned PDFs (no text layer) cannot be read.</p>
+      <p class="keymap-hint">EPUB or PDF in German, English or Chinese. It is
+        split into reading pages once, then translated page by page into the
+        language you pick when you open it (a Chinese book read in Chinese
+        skips translation and is only annotated). Scanned PDFs (no text
+        layer) cannot be read.</p>
       <div class="book-upload-row">
         <input type="file" id="book-file" accept=".epub,.pdf">
         <input type="text" id="book-title" placeholder="Title (optional)">
@@ -16230,6 +16265,7 @@ function _renderBookList(books) {
           <option value="">Detect language</option>
           <option value="de">German</option>
           <option value="en">English</option>
+          <option value="zh">Chinese</option>
         </select>
         <button class="btn-secondary" id="book-upload-btn" onclick="doBookUpload()">Upload</button>
       </div>
@@ -16321,10 +16357,10 @@ async function editBook(id) {
   const author = await showPrompt('Author (optional)', book.author || '');
   if (author === null) return;
 
-  const sourceLang = await showPrompt('Source language: de or en', book.source_lang);
+  const sourceLang = await showPrompt('Source language: de, en, or zh', book.source_lang);
   if (sourceLang === null) return;
-  if (!['de', 'en'].includes(sourceLang.trim())) {
-    showError('Source language must be "de" or "en"');
+  if (!['de', 'en', 'zh'].includes(sourceLang.trim())) {
+    showError('Source language must be "de", "en", or "zh"');
     return;
   }
 
@@ -16374,6 +16410,15 @@ async function _showBookPage(pageNo) {
   const id = _bookState.bookId;
   if (!id || _bookState.loading) return;
   _bookState.loading = true;
+  // #1050: the read-along player is keyed on the page we're leaving — stop it
+  // now, before the new page's markup even exists, so the old audio never
+  // plays a beat over the new page's text. _raStop() only halts playback;
+  // the highlight and activeIdx are cleared explicitly too, since _raSync()
+  // won't run (and replace the player) until the NEXT page already has a
+  // ready track.
+  _raStop();
+  _raPlayer.activeIdx = -1;
+  if (window.CSS && CSS.highlights) CSS.highlights.delete('readalong');
   document.getElementById('view-books-content').innerHTML =
     '<p class="keymap-hint">Translating this page…</p>';
   let page;
@@ -16402,10 +16447,27 @@ async function _showBookPage(pageNo) {
 
 // Render the page after this one into the server-side cache while Daniel
 // reads. The response is thrown away — the point is the cached rendition.
+// #1050: also warms next page's read-along audio track, but ONLY if this
+// page already has a ready one — otherwise every page turn in a book Daniel
+// isn't using read-along for would silently start paying for a TTS run
+// nobody asked for.
 function _prefetchBookPage(pageNo) {
   const id = _bookState.bookId;
   if (!id || pageNo > _bookState.pageCount) return;
+  const wantAudio = !!_raTrackFor(_raOwnerForBookPage(_bookState.pageId, _bookState.lang));
   fetch(`/api/books/${id}/page/${pageNo}?lang=${encodeURIComponent(_bookState.lang)}`)
+    .then(r => wantAudio && r.ok ? r.json() : null)
+    .then(page => { if (page && page.page_id) _prefetchBookAudio(page.page_id, _bookState.lang); })
+    .catch(() => {});
+}
+
+// Never synthesizes more than this one page ahead — a whole book is hours
+// of server CPU. Failure is silent: this only saves Daniel a wait, it isn't
+// the feature itself.
+function _prefetchBookAudio(pageId, lang) {
+  const owner = _raOwnerForBookPage(pageId, lang);
+  api('POST', `/api/audio/track?owner_kind=${owner.kind}&owner_id=${owner.id}` +
+    `&lang=${encodeURIComponent(owner.lang)}&variant=${encodeURIComponent(owner.variant)}`)
     .catch(() => {});
 }
 
@@ -16414,6 +16476,7 @@ function _renderBookPage(page) {
   const ref = page.ref_label ? ` · ${_escHtml(page.ref_label)}` : '';
   const atStart = page.page_no <= 1;
   const atEnd = page.page_no >= page.page_count;
+  _bookState.pageId = page.page_id;
   document.getElementById('view-books-content').innerHTML = `
     <div class="book-reader-head">
       <button class="btn-secondary" onclick="openBooks()">← Books</button>
@@ -16423,7 +16486,8 @@ function _renderBookPage(page) {
         ${_bookLangOptions(page.lang)}
       </select>
     </div>
-    <div class="keymap-panel book-page">${_summaryZhHtml(page.text || '')}</div>
+    <div id="book-readalong-bar">${_raBarHtml(_raOwnerForBookPage(page.page_id, page.lang))}</div>
+    <div class="keymap-panel book-page" id="book-page-text">${_summaryZhHtml(page.text || '')}</div>
     <div class="book-reader-nav">
       <button class="btn-secondary" onclick="turnBookPage(-1)" ${atStart ? 'disabled' : ''}>← Prev</button>
       <span class="keymap-hint">
@@ -16437,6 +16501,12 @@ function _renderBookPage(page) {
       ${wordTableHtml('Nothing above your level on this page.')}
     </div>`;
   _makeWordsTappable(document.querySelector('#view-books-content .book-page'));
+  // #1050: must run AFTER _makeWordsTappable() — same ordering requirement
+  // _renderKnowledgeDetail follows for the episode case (see its comment):
+  // it inserts the .tap-word spans the read-along map has to walk around,
+  // and the container needs to already be live DOM for the TreeWalker to
+  // find anything.
+  _raAfterRender(_raOwnerForBookPage(page.page_id, page.lang));
 }
 
 function turnBookPage(delta) {
@@ -16452,6 +16522,20 @@ function jumpToBookPage(value) {
     return;
   }
   _showBookPage(page);
+}
+
+// Refreshes just the read-along bar (and its highlight map) inside the
+// currently displayed book page, without rebuilding the whole page — a full
+// _renderBookPage() re-render on every track-generation callback would cost
+// scroll position for nothing, same reasoning as _raUpdateBar() vs a full
+// _renderKnowledgeDetail() on every playback tick.
+function _refreshBookReadalongBar(pageId) {
+  if (_bookState.pageId !== pageId) return;   // navigated away already
+  const el = document.getElementById('book-readalong-bar');
+  if (!el) return;
+  const owner = _raOwnerForBookPage(pageId, _bookState.lang);
+  el.innerHTML = _raBarHtml(owner);
+  _raAfterRender(owner);
 }
 
 // Switching language re-reads the same page in the new one; each language
