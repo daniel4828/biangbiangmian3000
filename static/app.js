@@ -6214,19 +6214,25 @@ function _makeWordsTappable(root) {
       node.parentNode.replaceChild(frag, node);
     });
 
-    // Bound once per element (#1006): the listening hint re-renders into the
-    // same node on every slider move, and a second listener would mean two
-    // panels opening for one tap.
-    if (!root.dataset.tapBound) {
-      root.dataset.tapBound = '1';
-      root.addEventListener('click', (e) => {
-        const span = e.target.closest?.('.tap-word');
-        if (!span) return;
-        e.preventDefault();
-        _openWordActions(Number(span.dataset.wordIdx), span);
-      });
     }
-    }
+  }
+
+  // Bound once per element (#1006): the listening hint re-renders into the
+  // same node on every slider move, and a second listener would mean two
+  // panels opening for one tap.
+  //
+  // Bound outside the new-word block (#1042): the all-words pass below lands
+  // asynchronously and adds its own tappable spans, so the listener has to
+  // exist even on a text whose new-word list is empty.
+  if (!root.dataset.tapBound) {
+    root.dataset.tapBound = '1';
+    root.addEventListener('click', (e) => {
+      const span = e.target.closest?.('.tap-word, .known-word');
+      if (!span) return;
+      e.preventDefault();
+      if (span.dataset.wordIdx !== undefined) _openWordActions(Number(span.dataset.wordIdx), span);
+      else _openKnownWordActions(span.dataset.glossKey, span);
+    });
   }
 
   _initGlossReveal(root);
@@ -6263,11 +6269,21 @@ function _fetchAllWords(text, lang) {
   return promise;
 }
 
-// Second, non-interactive pass: wraps whatever text in `root` is NOT already
-// inside a .tap-word span (the new-word pass above already claimed those —
-// re-matching them would double the translation into the hidden gloss text
-// it left behind). No click handler and no dataset.wordIdx here — only new
-// words get the ★ List / ✓ Known panel (#967); this is display-only.
+// Second pass: wraps whatever text in `root` is NOT already inside a
+// .tap-word span (the new-word pass above already claimed those — re-matching
+// them would double the translation into the hidden gloss text it left
+// behind).
+//
+// Two kinds of span come out of it (#1042):
+//   .gloss-word   — display-only, as #1018 left it. Daniel knows the word and
+//                   there is nothing saved about it to open.
+//   .known-word   — the word has an entry (word_id from the server), so it is
+//                   tappable and its panel leads to the full entry. These are
+//                   exactly the words he studied, i.e. the ones he is most
+//                   likely to want to look up again while reading.
+// Neither gets the ★ List / ✓ Known panel: that is for new words only (#967).
+let _glossWordIndex = new Map();   // match key -> the word dict from the server
+
 function _wrapAllWordGlosses(root, words) {
   if (!root || !words || !words.length) return;
   const isZh = _wordTableLang === 'zh';
@@ -6275,9 +6291,13 @@ function _wrapAllWordGlosses(root, words) {
   words.forEach(w => {
     const key = (w.word || '').trim();
     const gloss = (w.definition_de || '').trim();
-    if (key && gloss && !index.has(isZh ? key : key.toLowerCase())) {
-      index.set(isZh ? key : key.toLowerCase(), gloss);
-    }
+    // A word with an entry stays tappable even without a gloss — the entry
+    // itself is the answer, and it is a better one than a machine translation.
+    if (!key || (!gloss && !w.word_id)) return;
+    const k = isZh ? key : key.toLowerCase();
+    if (index.has(k)) return;
+    index.set(k, gloss);
+    _glossWordIndex.set(k, w);
   });
   if (!index.size) return;
   const alternation = [...index.keys()]
@@ -6305,13 +6325,19 @@ function _wrapAllWordGlosses(root, words) {
                     _isLetter(text[match.index + match[0].length]))) continue;
       frag = frag || document.createDocumentFragment();
       frag.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+      const key = isZh ? match[0] : match[0].toLowerCase();
       const span = document.createElement('span');
-      span.className = 'gloss-word';
+      const entry = _glossWordIndex.get(key);
+      span.className = entry && entry.word_id ? 'gloss-word known-word' : 'gloss-word';
+      if (entry && entry.word_id) span.dataset.glossKey = key;
       span.appendChild(document.createTextNode(match[0]));
-      const g = document.createElement('span');
-      g.className = 'tap-word-gloss';
-      g.textContent = index.get(isZh ? match[0] : match[0].toLowerCase());
-      span.appendChild(g);
+      const glossText = index.get(key);
+      if (glossText) {
+        const g = document.createElement('span');
+        g.className = 'tap-word-gloss';
+        g.textContent = glossText;
+        span.appendChild(g);
+      }
       frag.appendChild(span);
       cursor = match.index + match[0].length;
     }
@@ -6422,6 +6448,45 @@ function _openWordActions(idx, anchor) {
   const knownBtn = box.querySelector('#word-actions-known');
   addBtn.onclick = () => doWordTableAdd(idx, addBtn);
   knownBtn.onclick = () => doWordTableKnown(idx, knownBtn);
+
+  _placeWordActions(box, anchor);
+  setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);
+  document.addEventListener('keydown', _wordActionsEscape);
+}
+
+// The panel for a word Daniel already has an entry for (#1042). Same shape as
+// _openWordActions above — word, pinyin, gloss, buttons — but the two actions
+// there (★ List / ✓ Known) make no sense for a word that is already in the
+// collection. What it offers instead is the entry itself: everything the app
+// has saved about the word (examples, hanzi breakdown, measure words,
+// synonyms, card state), rendered by the one existing detail page.
+function _openKnownWordActions(key, anchor) {
+  closeWordActions();
+  const w = key && _glossWordIndex.get(key);
+  if (!w || !w.word_id) return;
+  const gloss = w.definition_de || w.definition || '';
+
+  const box = document.createElement('div');
+  box.className = 'word-actions';
+  box.id = 'word-actions';
+  box.innerHTML = `
+    <div class="word-actions-head">
+      <span class="word-actions-word">${_escHtml(w.word || '')}</span>
+      ${w.pinyin ? `<span class="word-actions-pinyin">${_escHtml(w.pinyin)}</span>` : ''}
+      <button class="word-actions-close" aria-label="Close">✕</button>
+    </div>
+    ${gloss ? `<p class="word-actions-gloss">${_escHtml(gloss)}</p>` : ''}
+    <div class="word-actions-buttons">
+      <button class="word-table-btn" id="word-actions-detail">📖 Details</button>
+    </div>`;
+  document.body.appendChild(box);
+
+  box.querySelector('.word-actions-close').onclick = closeWordActions;
+  box.querySelector('#word-actions-detail').onclick = () => {
+    const id = w.word_id;
+    closeWordActions();
+    openWordDetail(id);
+  };
 
   _placeWordActions(box, anchor);
   setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);

@@ -181,9 +181,33 @@ def new_words(body: NewWordsRequest):
     if not text:
         return {"words": []}
     if body.mode == "all":
-        return {"words": annotate.all_words(text, body.lang)}
+        return {"words": _with_entry_ids(annotate.all_words(text, body.lang), body.lang)}
     _, words = annotate.annotate_summary(text, body.lang)
     return {"words": words}
+
+
+def _with_entry_ids(words: list[dict], lang: str) -> list[dict]:
+    """Tag every word that already has an entry with its word_id (#1042).
+
+    Only mode="all" needs this: a *new* word is by definition one without an
+    entry. The reader uses it to make a word Daniel has already studied
+    tappable — straight into its detail page — instead of leaving it as the
+    display-only gloss #1018 gave it.
+
+    Best-effort like everything else on this path: a lookup failure costs the
+    links, not the glosses."""
+    if not words:
+        return words
+    try:
+        ids = database.entry_ids_for_forms([w.get("word", "") for w in words], lang)
+    except Exception as e:
+        logger.warning("new-words: entry id lookup failed for lang=%s — %s", lang, e)
+        return words
+    for w in words:
+        wid = ids.get(w.get("word", ""))
+        if wid:
+            w["word_id"] = wid
+    return words
 
 
 # ── Chat about a knowledge item (#945) ──────────────────────────────────────
