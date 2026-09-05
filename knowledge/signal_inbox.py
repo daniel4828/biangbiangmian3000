@@ -14,6 +14,14 @@ other way round: the rest of the message IS the article, ingested via
 the UI uses. That covers paywalled pieces the server can never fetch but
 Daniel can read and copy on his phone.
 
+A message whose first line is just the keyword `word` (#1041) is a third
+shape again: each remaining line is a word to add straight to ★ List, via
+`routes.imports.add_word_to_list()` — the SAME synchronous core the
+POST /api/add-word-ai route's background job calls (routes/imports.py's
+_generate_and_import_word). No second "generate + import + park in Saved"
+implementation here; see routes/imports.py's #643 note on why one add-word
+pipeline matters.
+
 Unlike IMAP (mailbox.py can leave a message UNSEEN and retry it next poll),
 `signal-cli receive` permanently drains the queued messages off the Signal
 server the moment it's called — there is no "leave it, try again next run"
@@ -40,17 +48,21 @@ linked device — message bodies from other people, attachment metadata,
 read receipts, typing indicators. The gate above keeps all of it out of the
 database, but it does pass through this process's memory. So: never log a
 raw envelope, and never put envelope contents in an error message or a
-Signal receipt. Log the URL and the outcome, nothing else.
+Signal receipt. Log the URL and the outcome, nothing else. (Words from a
+`word` message are the one exception — Daniel typed and sent them himself
+specifically to have them stored, so they're fine in logs and receipts.)
 """
 import json
 import logging
 import os
+import re
 import subprocess
 
 import database
 import knowledge.ingest
 import podcast
 from knowledge.mailbox import extract_urls
+from languages import is_valid_lang
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +80,19 @@ _MAX_ATTEMPTS = 3
 # keyboards capitalise the first word of a message on their own — Daniel
 # types "text", the phone may send "Text", and that must not silently fail.
 _PASTE_KEYWORDS = {"text", "文本"}
+
+# Same "keyword alone on the first line" rule as _PASTE_KEYWORDS, for the
+# same reason: an ordinary message that happens to start with "word" ("Word
+# von gestern hab ich vergessen") must keep going down the URL/text path,
+# not get silently swallowed as an add-word request.
+_WORD_KEYWORDS = {"word", "words", "w", "词", "生词"}
+
+# A misfire (pasting a whole paragraph instead of a word list) would
+# otherwise burn one ~30s paid AI call per line. Cap it and say so in the
+# receipt rather than silently paying for all of them.
+_MAX_WORDS_PER_MESSAGE = 20
+
+_HAN_RE = re.compile(r"[一-鿿]")
 
 # `signal-cli receive` without -t does NOT "drain the queue and exit" — it
 # keeps listening for new messages until killed, which is exactly what we
@@ -193,6 +218,57 @@ def parse_pasted_text(body: str) -> str | None:
     return rest or None
 
 
+def parse_word_message(body: str) -> list[tuple[str, str]] | None:
+    """Return [(word, lang), ...] for a "add these words to ★ List" message
+    (#1041), or None if this message isn't one.
+
+    Format: first line is the keyword alone (see _WORD_KEYWORDS), optionally
+    followed by an explicit language code ("word fr"); everything after that
+    is one word per line (also accepting comma-separated words on a line,
+    since that's how Daniel is likely to paste a short list). Truncated to
+    _MAX_WORDS_PER_MESSAGE — the caller is responsible for saying so.
+    """
+    if not body:
+        return None
+    first, _, rest = body.partition("\n")
+    first_parts = first.strip().split()
+    if not first_parts:
+        return None
+    keyword = first_parts[0].rstrip(":：").strip().lower()
+    if keyword not in _WORD_KEYWORDS:
+        return None
+
+    lang = None
+    if len(first_parts) == 2:
+        candidate = first_parts[1].strip().lower()
+        if not is_valid_lang(candidate):
+            # Fail closed (#726): a typo'd language code must not fall
+            # through to a silently-wrong prompt.
+            return None
+        lang = candidate
+    elif len(first_parts) > 2:
+        # "word von gestern" etc — not our format, let it keep going down
+        # the URL/text path instead of misfiring on an add-word request.
+        return None
+
+    words = []
+    seen = set()
+    for line in rest.splitlines():
+        for chunk in re.split(r"[,，、]", line):
+            word = chunk.strip()
+            if word and word not in seen:
+                seen.add(word)
+                words.append(word)
+    if not words:
+        return None
+
+    pairs = []
+    for word in words[:_MAX_WORDS_PER_MESSAGE]:
+        word_lang = lang or ("zh" if _HAN_RE.search(word) else "fr")
+        pairs.append((word, word_lang))
+    return pairs
+
+
 def send_receipt(lines: list) -> bool:
     """Send one Signal "Note to Self" receipt summarizing a
     check_signal_inbox() run's results. No message is sent if `lines` is
@@ -286,6 +362,52 @@ def _ingest_pasted_body(body: str, summary: dict, receipt_lines: list) -> None:
         _process_new_episode(episode_id, receipt_lines)
 
 
+def _add_words(pairs: list, summary: dict, receipt_lines: list) -> None:
+    """Add each (word, lang) pair to ★ List via the one shared add-word core
+    (routes.imports.add_word_to_list, #643/#1041). Appends one receipt line
+    per word.
+
+    Imported inside the function, not at module load, to avoid a circular
+    import: routes/imports.py pulls in podcast/database/ai/importer at
+    module scope, and this module is imported directly by a one-shot cron
+    script (scripts/signal_check.py) rather than through the FastAPI app
+    where routes/* is always loaded first.
+
+    One word failing (bad script, AI down, ...) must not stop the rest of
+    the message's words from being added — deliberately not wired into the
+    URL retry queue: that queue is sized for URLs, and the receipt already
+    tells Daniel exactly why a word failed, so re-sending it is as cheap as
+    a retry would be.
+    """
+    from routes.imports import add_word_to_list
+
+    for word, lang in pairs:
+        try:
+            result = add_word_to_list(word, lang)
+        except Exception as e:
+            logger.warning("knowledge.signal_inbox: 加词失败 %r (%s): %s", word, lang, e)
+            summary["failed"] += 1
+            summary["errors"].append(f"word {word!r}: {e}")
+            summary["results"].append({"word": word, "lang": lang, "ok": False, "error": str(e)})
+            receipt_lines.append(f"❌ 加词失败：{word} — {e}")
+            continue
+
+        summary["ingested"] += 1
+        summary["processed"] += 1
+        stored_word = result.get("word_zh", word)
+        summary["results"].append({
+            "word": word, "lang": lang, "ok": True,
+            "status": result.get("status"), "word_zh": stored_word,
+        })
+        status = result.get("status")
+        if status == "added":
+            receipt_lines.append(f"★ 已加入 List：{stored_word}")
+        elif status == "listed":
+            receipt_lines.append(f"↺ 已有的词，已放回 ★List：{stored_word}")
+        else:  # already_listed
+            receipt_lines.append(f"↺ 已在 ★List：{stored_word}")
+
+
 def check_signal_inbox(runner=None) -> dict:
     """Poll signal-cli for new Note-to-Self messages (plus any previously
     failed URLs sitting in the retry queue), ingest every URL found, and
@@ -335,6 +457,8 @@ def check_signal_inbox(runner=None) -> dict:
 
     new_urls = []
     pasted_bodies = []
+    word_items = []
+    words_truncated = False
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
@@ -368,6 +492,19 @@ def check_signal_inbox(runner=None) -> dict:
             pasted_bodies.append(pasted)
             continue
 
+        # "add these words" messages (#1041) are checked before the URL scan
+        # for the same reason as the paste-the-text branch above: a message
+        # matching this format is never also a URL-sharing message.
+        words = parse_word_message(text)
+        if words is not None:
+            if len(words) == _MAX_WORDS_PER_MESSAGE:
+                # Can't tell from the truncated list alone whether it was
+                # exactly the cap or more — either way, flag it so Daniel
+                # knows to check nothing important got silently dropped.
+                words_truncated = True
+            word_items.extend(words)
+            continue
+
         found = extract_urls(text)
         if not found:
             summary["skipped"] += 1
@@ -387,12 +524,14 @@ def check_signal_inbox(runner=None) -> dict:
             seen.add(url)
             work_items.append((url, 0))
 
-    if work_items or pasted_bodies:
+    if work_items or pasted_bodies or word_items:
         parts = []
         if work_items:
             parts.append(f"{len(work_items)} 个链接")
         if pasted_bodies:
             parts.append(f"{len(pasted_bodies)} 段正文")
+        if word_items:
+            parts.append(f"{len(word_items)} 个生词")
         podcast.send_signal_text(
             f"📥 已收到 {' + '.join(parts)}，开始处理…",
             context="signal-inbox-start",
@@ -400,6 +539,8 @@ def check_signal_inbox(runner=None) -> dict:
 
     next_retry_queue = []
     receipt_lines = []
+    if words_truncated:
+        receipt_lines.append(f"⚠️ 一条消息最多 {_MAX_WORDS_PER_MESSAGE} 个词，多余的已忽略")
 
     for url, attempts in work_items:
         try:
