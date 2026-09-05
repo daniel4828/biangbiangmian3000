@@ -1130,6 +1130,13 @@ CREATE TABLE IF NOT EXISTS audio_tracks (
     cues_json   TEXT NOT NULL,     -- JSON array, see shape above
     source      TEXT NOT NULL,     -- 'tts' | 'forced' | 'asr_cloud' | 'asr_local'
     voice       TEXT,
+    -- The exact plain text handed to the aligner (routes/audio.py's
+    -- _resolve_text() return value) — NOT the rendered/annotated HTML Daniel
+    -- reads. cue char_start/char_end are offsets into THIS string. The
+    -- frontend needs it verbatim to build its own text->DOM mapping (#1049);
+    -- rows written before #1049 have NULL here and the frontend falls back
+    -- to audio-only playback (no highlight) rather than guessing.
+    source_text TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     UNIQUE(owner_kind, owner_id, lang, variant)
 );

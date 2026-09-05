@@ -108,6 +108,10 @@ def _track_payload(track: dict) -> dict:
         "source": track["source"],
         "duration_ms": track["duration_ms"],
         "voice": track["voice"],
+        # NULL for rows written before #1049 — the frontend falls back to
+        # audio-only playback (no highlight) rather than guessing at an
+        # alignment anchor that was never stored.
+        "source_text": track["source_text"],
     }
 
 
@@ -154,6 +158,7 @@ def create_track(owner_kind: str | None = None, owner_id: int | None = None,
             track.audio_path, track.duration_ms,
             [c.to_dict() for c in track.cues],
             track.source, track.voice,
+            source_text=text,
         )
         logger.info("audio: built track %s for %s/%s lang=%s variant=%s (%d cues)",
                    track_id, owner_kind, owner_id, lang, variant, len(track.cues))
@@ -169,6 +174,7 @@ def create_track(owner_kind: str | None = None, owner_id: int | None = None,
         "source": track.source,
         "duration_ms": track.duration_ms,
         "voice": track.voice,
+        "source_text": text,
     }
 
 

@@ -269,3 +269,65 @@ def test_build_track_with_audio_path_is_not_implemented_yet():
 def test_build_track_with_neither_text_nor_audio_raises():
     with pytest.raises(audio.AudioTrackError):
         audio.build_track()
+
+
+# ---------------------------------------------------------------------------
+# 8. source_text (#1049 phase 2): the frontend's alignment anchor round-trips,
+#    NULL rows from before #1049 don't blow up, and the migration is
+#    idempotent (init_db() runs every ~2 minutes on the server).
+# ---------------------------------------------------------------------------
+
+def test_source_text_round_trips_through_save_and_get(tmp_db):
+    database.save_audio_track(
+        "episode", 7, "zh", "fulltext", "data/audio/a.mp3", 1_000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural", source_text="这是原文。",
+    )
+
+    by_owner = database.get_audio_track("episode", 7, "zh", "fulltext")
+    assert by_owner["source_text"] == "这是原文。"
+
+    by_id = database.get_audio_track_by_id(by_owner["id"])
+    assert by_id["source_text"] == "这是原文。"
+
+
+def test_pre_1049_rows_with_null_source_text_read_back_fine(tmp_db):
+    # Simulates a row written before #1049 added the parameter — omitting it
+    # entirely, the way every caller wrote this before this change.
+    database.save_audio_track(
+        "episode", 8, "zh", "fulltext", "data/audio/b.mp3", 500,
+        [{"start_ms": 0, "end_ms": 50, "text": "y", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural",
+    )
+
+    track = database.get_audio_track("episode", 8, "zh", "fulltext")
+    assert track["source_text"] is None
+
+
+def test_create_track_endpoint_returns_source_text(tmp_db, monkeypatch):
+    import routes.audio as audio_routes
+    monkeypatch.setattr(audio_routes, "_resolve_text",
+                        lambda owner_kind, owner_id, lang, variant: "一二三")
+
+    resp = client.post("/api/audio/track", params={
+        "owner_kind": "episode", "owner_id": 321, "lang": "zh", "variant": "fulltext",
+    })
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source_text"] == "一二三"
+
+    cached = client.get("/api/audio/track", params={
+        "owner_kind": "episode", "owner_id": 321, "lang": "zh", "variant": "fulltext",
+    })
+    assert cached.json()["source_text"] == "一二三"
+
+
+def test_audio_tracks_source_text_migration_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(database.core, "DB_PATH", str(tmp_path / "idempotent.db"))
+    database.init_db()
+    database.init_db()  # must not raise "duplicate column name" on the 2nd pass
+
+    cols = {r["name"] for r in database.get_db().execute(
+        "PRAGMA table_info(audio_tracks)").fetchall()}
+    assert "source_text" in cols
