@@ -14,3 +14,4 @@ from .dictionary import *
 from .books import *
 from .knowledge_chat import *
 from .mailbox import *
+from .audio import *

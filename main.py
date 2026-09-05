@@ -199,7 +199,7 @@ try:
     import uvicorn
 
     from offline import LOCAL_MODE, OFFLINE_MODE
-    from routes import decks, review, story, browse, imports, podcast as podcast_routes, knowledge as knowledge_routes, dictionary as dictionary_routes, tasks as tasks_routes, books as books_routes, mailbox as mailbox_routes
+    from routes import decks, review, story, browse, imports, podcast as podcast_routes, knowledge as knowledge_routes, dictionary as dictionary_routes, tasks as tasks_routes, books as books_routes, mailbox as mailbox_routes, audio as audio_routes
 
     @asynccontextmanager
     async def lifespan(app):
@@ -527,6 +527,7 @@ try:
     app.include_router(tasks_routes.router)
     app.include_router(books_routes.router)
     app.include_router(mailbox_routes.router)
+    app.include_router(audio_routes.router)
     # Sync only makes sense on a laptop copy — on the server these routes must
     # not exist at all, or a stray call would overwrite production (#625).
     if LOCAL_MODE or OFFLINE_MODE:
