@@ -945,14 +945,18 @@ function closePromptModal() {
   document.getElementById('prompt-modal').style.display = 'none';
   _promptResolve = null;
 }
-function showConfirm(message) {
+// confirmLabel/color (#1054) default to the destructive red "Delete" every
+// existing caller relies on — overridden only by callers confirming a
+// non-destructive action (e.g. "start a long download?") where a red
+// "Delete" button would say the wrong thing.
+function showConfirm(message, confirmLabel = 'Delete', color = '#e53e3e') {
   return new Promise(resolve => {
     _promptResolve = resolve;
     document.getElementById('prompt-modal-title').textContent = message;
     document.getElementById('prompt-modal-input').style.display = 'none';
-    document.getElementById('prompt-modal-confirm-btn').textContent = 'Delete';
-    document.getElementById('prompt-modal-confirm-btn').style.color = '#e53e3e';
-    document.getElementById('prompt-modal-confirm-btn').style.borderColor = '#e53e3e';
+    document.getElementById('prompt-modal-confirm-btn').textContent = confirmLabel;
+    document.getElementById('prompt-modal-confirm-btn').style.color = color;
+    document.getElementById('prompt-modal-confirm-btn').style.borderColor = color;
     document.getElementById('prompt-modal-overlay').style.display = '';
     document.getElementById('prompt-modal').style.display = '';
   });
@@ -4626,6 +4630,25 @@ const _KNOWLEDGE_CHINA_ROW = `
   </label>
   <span id="knowledge-add-msg" style="font-size:12px;color:var(--muted)"></span>`;
 
+// Audiobook ingestion (#1054): YouTube audiobooks have no caption track at
+// all, so this checkbox routes the link to downloading the audio and
+// queueing it for local ASR transcription instead of the ordinary
+// (caption-only) path — see knowledge/ingest.py's _ingest_audiobook. Only
+// meaningful for YouTube links, and only offered on the 🔗 Link panel (a
+// pasted body/uploaded file has no audio to download in the first place).
+// Deliberately resets to unchecked on every re-render, same reasoning as
+// _KNOWLEDGE_CHINA_ROW above — a sticky box would silently start
+// downloading audio for every link pasted afterwards.
+function _knowledgeAudiobookChecked() {
+  return !!document.getElementById('knowledge-add-audiobook')?.checked;
+}
+
+const _KNOWLEDGE_AUDIOBOOK_ROW = `
+  <label class="keymap-row" style="gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+    <input type="checkbox" id="knowledge-add-audiobook" style="margin:0">
+    audiobook — download the audio and queue it for transcription (YouTube only)
+  </label>`;
+
 // The three optional metadata fields the text/file forms share (#833/#835):
 // whatever is left blank is read out of the material itself by one cheap AI
 // call, so none of them is required.
@@ -4676,7 +4699,7 @@ function _knowledgeAddPanelHtml() {
                placeholder="Paste a link — article, YouTube, Instagram Reel…" style="flex:1"
                onkeydown="if(event.key==='Enter') submitKnowledgeUrl()">
         <button class="btn-secondary" onclick="submitKnowledgeUrl()">Add</button>
-      </div>${_KNOWLEDGE_CHINA_ROW}`;
+      </div>${_KNOWLEDGE_AUDIOBOOK_ROW}${_KNOWLEDGE_CHINA_ROW}`;
   }
   return `<div class="keymap-panel">${_knowledgeAddModeBarHtml()}${body}</div>`;
 }
@@ -4689,11 +4712,25 @@ async function submitKnowledgeUrl() {
   const msg = document.getElementById('knowledge-add-msg');
   const url = (input?.value || '').trim();
   if (!url) return;
-  // Read the checkbox BEFORE clearing/re-rendering — _submitKnowledgeAdd
+  // Read the checkboxes BEFORE clearing/re-rendering — _submitKnowledgeAdd
   // rebuilds this panel's DOM when it refreshes the list.
   const china_critical = _knowledgeChinaCriticalChecked();
+  const as_audiobook = _knowledgeAudiobookChecked();
   if (input) { input.value = ''; input.focus(); }
-  await _submitKnowledgeAdd({ url, china_critical }, msg);
+  await _submitKnowledgeAdd({ url, china_critical, as_audiobook }, msg);
+}
+
+// The confirmFn ingestKnowledge() calls when a video's length couldn't be
+// confirmed short (#1054) — shows the ordinary confirm modal (showConfirm,
+// from app.js) rather than inventing a second one.
+async function _confirmLongAudiobook(res) {
+  const hours = res.duration_seconds != null ? (res.duration_seconds / 3600).toFixed(1) : null;
+  const length = hours ? `${hours}h long` : 'of unknown length';
+  return showConfirm(
+    `"${res.title || 'This video'}" is ${length} — downloading its audio and ` +
+    `transcribing it can take a long time and a few hundred MB of disk space. Continue?`,
+    'Continue', 'var(--primary)',
+  );
 }
 
 // Paste-a-body (#668) — for paywalled pieces the server can't fetch. Only the
@@ -4774,12 +4811,19 @@ async function submitKnowledgeFeed() {
 async function _submitKnowledgeAdd(payload, msg) {
   if (msg) msg.textContent = 'Adding…';
   try {
-    const res = await ingestKnowledge(payload);
+    const res = await ingestKnowledge(payload, payload.as_audiobook ? _confirmLongAudiobook : undefined);
     await _refreshKnowledgeList();
     const after = document.getElementById('knowledge-add-msg');
     if (after) {
-      after.textContent = res?.status === 'already_exists'
-        ? 'Already in your library.' : 'Added — processing on the server.';
+      if (res?.status === 'cancelled') {
+        after.textContent = 'Cancelled.';
+      } else if (res?.status === 'already_exists') {
+        after.textContent = 'Already in your library.';
+      } else if (res?.queued) {
+        after.textContent = 'Added — audio downloaded, queued for transcription.';
+      } else {
+        after.textContent = 'Added — processing on the server.';
+      }
     }
   } catch (e) {
     const after = document.getElementById('knowledge-add-msg') || msg;
@@ -6251,7 +6295,7 @@ function _renderKnowledgeDetail(ep) {
         <span style="flex:1"></span>
         <button class="btn-secondary" onclick="toggleKnowledgeEdit()">${_knowledgeEditOpen ? '✕ Close' : '✎ Edit'}</button>
       </div>
-      <p class="keymap-hint">${[_escHtml(ep.author || ''), _escHtml(_knowledgePlatformLabel(ep)), date].filter(Boolean).join(' · ')}</p>
+      <p class="keymap-hint">${[_escHtml(ep.author || ''), _escHtml(_knowledgePlatformLabel(ep)), date, _knowledgeDiskUsageLabel(ep)].filter(Boolean).join(' · ')}</p>
       ${_knowledgeTagRowHtml(ep)}
       ${_knowledgeEditOpen ? _knowledgeEditFormHtml(ep) : ''}
       <div style="margin:4px 0 10px">${links}</div>
@@ -6297,6 +6341,18 @@ let _knowledgeEditOpen = false;
 function toggleKnowledgeEdit() {
   _knowledgeEditOpen = !_knowledgeEditOpen;
   if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+// Disk usage line (#1054): an audiobook's downloaded mp3 is 300-500 MB and
+// the whole server disk is 55 GB (CLAUDE.md) — worth a glance, not a
+// separate screen. Omitted entirely when there's nothing on disk (an
+// ordinary article/podcast episode with no local audio file at all).
+function _knowledgeDiskUsageLabel(ep) {
+  const bytes = ep.disk_bytes;
+  if (!bytes) return '';
+  const mb = bytes / (1024 * 1024);
+  const text = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+  return `💾 ${text} on disk`;
 }
 
 function _knowledgePlatformLabel(ep) {

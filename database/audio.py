@@ -7,6 +7,7 @@ only callers — everything else that needs SQL for this feature belongs here,
 same rule as every other table in this package.
 """
 import json
+import os
 
 from .core import get_db
 
@@ -234,6 +235,28 @@ def list_audio_jobs(statuses: tuple[str, ...] = ("pending", "running")) -> list[
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def audio_disk_usage(owner_kind: str, owner_id: int) -> int:
+    """Total bytes of every DISTINCT audio_path this owner's audio_tracks rows
+    point at, for files that still exist on disk (#1054's disk-usage line on
+    the knowledge detail page). This is "how much is on disk for this item",
+    NOT "how much would be freed by deleting it" — a content-addressed path
+    (see _unreferenced_paths) shared with another owner is still counted
+    here, same as it's still fully present on disk either way."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT DISTINCT audio_path FROM audio_tracks WHERE owner_kind = ? AND owner_id = ?",
+        (owner_kind, owner_id),
+    ).fetchall()
+    conn.close()
+    total = 0
+    for r in rows:
+        try:
+            total += os.path.getsize(r["audio_path"])
+        except OSError:
+            pass
+    return total
 
 
 def delete_audio_tracks_for_book(book_id: int) -> list[str]:

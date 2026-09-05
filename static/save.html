@@ -83,6 +83,11 @@
       <input type="text" id="url" placeholder="Paste an article, YouTube or Instagram Reel link…"
              inputmode="url" autocomplete="off" autocapitalize="none"
              autocorrect="off" spellcheck="false" enterkeyhint="done" autofocus>
+      <!-- #1054: YouTube audiobooks have no caption track at all — this
+           routes the link to downloading the audio and queueing local ASR
+           transcription instead. Only meaningful for YouTube links. -->
+      <label class="china"><input type="checkbox" id="audiobook">
+        audiobook — download audio and queue for transcription (YouTube only)</label>
       <button class="go" id="go-link">Add</button>
     </div>
 
@@ -174,18 +179,39 @@
   }
 
   const china = document.getElementById('china');
+  const audiobook = document.getElementById('audiobook');
 
-  async function submit(payload, what) {
+  // ingestKnowledge()'s confirmFn (#1054): this page is deliberately
+  // self-contained (no app.js), so a plain native confirm() is the "existing
+  // prompting style" here rather than pulling in a second modal system.
+  async function confirmLongAudiobook(res) {
+    const hours = res.duration_seconds != null ? (res.duration_seconds / 3600).toFixed(1) : null;
+    const length = hours ? `${hours}h long` : 'of unknown length';
+    return confirm(
+      `"${res.title || 'This video'}" is ${length} — downloading its audio and ` +
+      `transcribing it can take a long time and a few hundred MB of disk space. Continue?`
+    );
+  }
+
+  async function submit(payload, what, confirmFn) {
     // Clear immediately — the next link can be pasted while this one runs.
     const item = { what, state: 'running', text: 'Adding…' };
     items.unshift(item);
     render();
     try {
-      const res = await ingestKnowledge(payload);
+      const res = await ingestKnowledge(payload, confirmFn);
+      if (res?.status === 'cancelled') {
+        item.state = 'done';
+        item.text = 'Cancelled.';
+        render();
+        return;
+      }
       item.state = 'done';
       item.text = res?.status === 'already_exists'
         ? 'Already in your library.'
-        : '✓ added — processing on the server';
+        : res?.queued
+          ? '✓ added — audio downloaded, queued for transcription'
+          : '✓ added — processing on the server';
     } catch (e) {
       // Paywalled/JS-only pages fail extraction on purpose rather than storing
       // a stub; the Text tab is the way out, so point at it.
@@ -198,10 +224,13 @@
   document.getElementById('go-link').onclick = () => {
     const v = url.value.trim();
     if (!v) return;
+    const as_audiobook = audiobook.checked;
     url.value = '';
     url.focus();
-    submit({ url: v, china_critical: china.checked }, v);
+    submit({ url: v, china_critical: china.checked, as_audiobook },
+            v, as_audiobook ? confirmLongAudiobook : undefined);
     china.checked = false;
+    audiobook.checked = false;
   };
   url.addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('go-link').click();
