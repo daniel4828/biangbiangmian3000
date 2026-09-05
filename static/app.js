@@ -5417,7 +5417,14 @@ async function doGenerateFulltext() {
 // Speed is the browser's playbackRate, not edge-tts's `rate`: the latter would
 // mint a separate mp3 per speed for the very same sentence (the cache is keyed
 // on the text) and changing speed would mean regenerating everything.
-const KNOWLEDGE_TTS_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+// 0.5/0.6 exist for audiobooks (#1065), not for summaries: the original
+// range started at 0.75 because it was chosen for edge-tts reading a few
+// hundred words of summary — synthetic speech at an already even, unhurried
+// pace. An audiobook (#1054) is a native narrator at native speed for hours,
+// read along with subtitles and word taps at HSK 4-5. 0.75 isn't slow enough
+// for that. Costs nothing to add: rate is the browser's audio.playbackRate
+// (#993), so no audio is ever regenerated for a new step.
+const KNOWLEDGE_TTS_RATES = [0.5, 0.6, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const _KTTS_CHUNK_MAX = 180;   // chars per request — one edge-tts round trip
 // Two reading modes (#1017). 'plain' is the original behaviour; 'gloss' reads
 // the German definition of every word Daniel does not know yet, immediately
