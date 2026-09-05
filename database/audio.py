@@ -47,27 +47,35 @@ def get_audio_track_by_id(track_id: int) -> dict | None:
 
 def save_audio_track(owner_kind: str, owner_id: int, lang: str, variant: str,
                      audio_path: str, duration_ms: int | None, cues: list,
-                     source: str, voice: str | None) -> int:
+                     source: str, voice: str | None,
+                     source_text: str | None = None) -> int:
     """Store (or overwrite) the track for (owner_kind, owner_id, lang,
     variant). Regenerating is a plain replace — there is never a reason to
     keep a stale audio file whose cues have just been superseded (same
     contract as book_renditions/knowledge_renditions: the cache is a cache,
-    not a history)."""
+    not a history).
+
+    `source_text` (#1049) is the plain text handed to the aligner — the
+    frontend's alignment anchor for mapping cue char offsets onto the
+    rendered HTML. Optional/defaulted to None only so existing callers
+    (and the pre-#1049 test fixtures) don't have to change; a NULL here
+    just means the frontend falls back to audio-only playback."""
     conn = get_db()
     conn.execute(
         """INSERT INTO audio_tracks
                (owner_kind, owner_id, lang, variant, audio_path, duration_ms,
-                cues_json, source, voice)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                cues_json, source, voice, source_text)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(owner_kind, owner_id, lang, variant) DO UPDATE SET
                audio_path  = excluded.audio_path,
                duration_ms = excluded.duration_ms,
                cues_json   = excluded.cues_json,
                source      = excluded.source,
                voice       = excluded.voice,
+               source_text = excluded.source_text,
                created_at  = datetime('now','localtime')""",
         (owner_kind, owner_id, lang, variant, audio_path, duration_ms,
-         json.dumps(cues, ensure_ascii=False), source, voice),
+         json.dumps(cues, ensure_ascii=False), source, voice, source_text),
     )
     conn.commit()
     # cursor.lastrowid is not reliably the row's id when the ON CONFLICT

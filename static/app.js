@@ -5167,6 +5167,7 @@ async function openKnowledgeItem(id) {
   _knowledgeEditOpen = false;   // #937: a fresh item opens read-only
   _knowledgeView = 'summary';   // #972: and on the summary, not whichever
   _knowledgeFulltext = null;    //       view the previous item was left on
+  _raTrack = null;              // #1049: a different item's audio track
   try {
     // lang (#804): the detail endpoint returns a translated+annotated
     // rendition of the summary for non-Chinese tabs; zh's response is
@@ -5188,6 +5189,11 @@ function closeKnowledgeDetail() {
   // a voice reading on from a screen he left is only confusing (#993).
   _kTtsStopPlayback();
   _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
+  // #1049: same reasoning, for the read-along player.
+  _raStop();
+  _raPlayer = { key: '', containerId: '', cues: [], sourceText: '', audioUrl: '',
+                map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow };
+  try { if (window.CSS && CSS.highlights) CSS.highlights.delete('readalong'); } catch (_) {}
   // Back to wherever this item was opened from — through goBack(), so that
   // this ✕ and the browser's own back button end up on the same screen
   // (#1009). goBack() falls back to the deck list when there is no history
@@ -5591,6 +5597,10 @@ function _kTtsUpdateBar() {
 
 function _kTtsPlayAt(idx) {
   if (idx < 0 || idx >= _kTts.chunks.length) { stopKnowledgeTts(); return; }
+  // #1049: the read-along player shares this same _sharedAudio element —
+  // starting a chunked-reading chunk must take it away cleanly, not race the
+  // read-along's own onended/ontimeupdate handlers.
+  _raStop();
   _kTts.idx = idx;
   _kTts.playing = true;
   const seq = ++_playSeq;
@@ -5664,6 +5674,488 @@ function setKnowledgeTtsRate(value) {
   if (_sharedAudio) _sharedAudio.playbackRate = rate;   // takes effect mid-chunk
 }
 
+// ── Read-along player (#1049, phase 2 of the #1047 umbrella) ───────────────
+//
+// Karaoke-style highlight synced to an audio/track.py cue list (#1048). This
+// coexists with the #993/#1017 chunked reader above rather than replacing it
+// — a track has to be generated first, and until then (or on a browser that
+// can't do the sync) the chunked reader is still the only way to listen.
+//
+// The hard part: cue.char_start/char_end are offsets into the PLAIN TEXT
+// handed to the aligner (track.source_text) — not into the rendered,
+// annotated HTML Daniel actually reads (which has <p>/<b> markup and, after
+// _makeWordsTappable() runs, extra <span class="tap-word"> wrappers). So
+// every render we walk the live container's text nodes, concatenate them
+// into `domText`, and align source_text to domText with a whitespace-
+// insensitive two-pointer scan (paragraph boundaries differ: source_text
+// has "\n\n" between <p>s, the DOM has none). The result is two parallel
+// arrays — srcToDom[i] and domToSrc[i] — built in the SAME pass, so a cue's
+// char range converts to a DOM Range, and a click anywhere in the DOM
+// converts back to a cue index.
+//
+// Highlighting never touches the DOM tree (Range.surroundContents() would
+// throw the moment a cue crosses a <b> boundary, which happens constantly) —
+// it uses the CSS Custom Highlight API instead, which paints over a Range
+// without altering it. That also means the word-tap spans #967/#1018 already
+// installed are completely undisturbed.
+
+let _raTrack = null;        // {episode_id, lang, variant, status, track_id, audio_url, cues, source_text}
+let _raTrackBusy = false;   // a POST .../track is in flight (generating)
+
+let _raFollow = (() => {
+  try { return localStorage.getItem('readalongFollow') !== '0'; } catch (_) { return true; }
+})();
+
+let _raPlayer = {
+  key: '', containerId: '', cues: [], sourceText: '', audioUrl: '',
+  map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
+};
+
+function _raTrackChecked(ep, lang, variant) {
+  const t = _raTrack;
+  return !!(t && t.episode_id === ep.id && t.lang === lang && t.variant === variant);
+}
+
+function _raTrackFor(ep, lang, variant) {
+  const t = _raTrack;
+  return (_raTrackChecked(ep, lang, variant) && t.status === 'ready') ? t : null;
+}
+
+// GET never generates (same contract as .../fulltext) — opening a detail
+// page must not silently kick off a TTS run.
+async function _raLoadTrack(episodeId, lang, variant) {
+  try {
+    const data = await api('GET', `/api/audio/track?owner_kind=episode&owner_id=${episodeId}` +
+      `&lang=${encodeURIComponent(lang)}&variant=${encodeURIComponent(variant)}`);
+    _raTrack = data.status === 'ready'
+      ? { episode_id: episodeId, lang, variant, status: 'ready', track_id: data.track_id,
+          audio_url: data.audio_url, cues: data.cues || [], source_text: data.source_text || '' }
+      : { episode_id: episodeId, lang, variant, status: 'absent' };
+  } catch (e) {
+    _raTrack = { episode_id: episodeId, lang, variant, status: 'absent' };
+  }
+  if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === episodeId)
+    _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+async function doGenerateReadalong(episodeId, lang, variant, btn) {
+  if (_raTrackBusy) return;
+  _raTrackBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  try {
+    const data = await api('POST', `/api/audio/track?owner_kind=episode&owner_id=${episodeId}` +
+      `&lang=${encodeURIComponent(lang)}&variant=${encodeURIComponent(variant)}`);
+    _raTrack = { episode_id: episodeId, lang, variant, status: 'ready', track_id: data.track_id,
+                 audio_url: data.audio_url, cues: data.cues || [], source_text: data.source_text || '' };
+  } catch (e) {
+    showError('Could not generate the read-along track: ' + (e.message || 'error'));
+  } finally {
+    _raTrackBusy = false;
+    if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+  }
+}
+
+// Same four ids _makeWordsTappable() is applied to (see the call site below)
+// minus podcast-summary-de — no German voice, no reason to align against it.
+function _raContainerId(variant, lang) {
+  if (variant === 'fulltext') return 'knowledge-fulltext';
+  return lang === 'zh' ? 'podcast-summary-zh' : 'podcast-summary-rendition';
+}
+
+// Stops whatever the shared audio element is doing on our behalf. Does NOT
+// touch _kTts's state — the two players guard against stealing the element
+// from each other by calling this (or _kTtsStopPlayback()) before they start.
+function _raStop() {
+  if (!_raPlayer.playing && _raPlayer.activeIdx < 0) return;
+  _stopSharedPlayback();
+  if (_sharedAudio) _sharedAudio.ontimeupdate = null;
+  _raPlayer.playing = false;
+}
+
+// Episode + language + variant + track id identify the player state — any of
+// them changing means we're pointing at different audio and cues entirely.
+function _raSync(ep, lang, variant, track) {
+  const key = `${ep.id}|${lang}|${variant}|${track.track_id}`;
+  if (_raPlayer.key === key) return _raPlayer;
+  _raStop();
+  _raPlayer = {
+    key, containerId: _raContainerId(variant, lang), cues: track.cues || [],
+    sourceText: track.source_text || '', audioUrl: track.audio_url,
+    map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
+  };
+  _raBindScrollListener();
+  return _raPlayer;
+}
+
+function _raBarHtml(ep, lang) {
+  const variant = _knowledgeView === 'fulltext' ? 'fulltext' : 'summary';
+  if (_raTrackBusy) {
+    return `<div class="readalong-bar"><p class="keymap-hint">Generating the read-along track — this can take up to a minute for long material…</p></div>`;
+  }
+  const t = _raTrackFor(ep, lang, variant);
+  if (!t) {
+    // Not checked yet this session: fire the (cheap, cached) lookup and
+    // render nothing until it lands — same pattern as _loadKnowledgeFulltext.
+    if (!_raTrackChecked(ep, lang, variant)) {
+      _raLoadTrack(ep.id, lang, variant);
+      return '';
+    }
+    return `<div class="readalong-bar">
+      <button class="btn-secondary" onclick="doGenerateReadalong(${ep.id}, '${lang}', '${variant}', this)">🎧 Generate read-along</button>
+    </div>`;
+  }
+  const player = _raSync(ep, lang, variant, t);
+  return `<div class="readalong-bar">
+    <div class="knowledge-tts-bar">
+      <button class="btn-secondary" id="readalong-toggle" onclick="toggleReadalong()">${player.playing ? '⏸ Pause' : '🎧 Read along'}</button>
+      <button class="btn-secondary" id="readalong-stop" style="${player.activeIdx >= 0 ? '' : 'display:none'}" onclick="stopReadalong()">■</button>
+      <select class="knowledge-tts-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed">
+        ${KNOWLEDGE_TTS_RATES.map(r =>
+          `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('')}
+      </select>
+      <button class="btn-secondary" id="readalong-follow-btn" style="${player.follow ? 'display:none' : ''}" onclick="_raJumpToFollow()">⤓ Follow</button>
+    </div>
+    <p class="keymap-hint readalong-note" id="readalong-note"></p>
+  </div>`;
+}
+
+// Repaint just the controls — a full _renderKnowledgeDetail() on every
+// timeupdate tick would rebuild (and lose scroll position on) the whole
+// detail view several times a second.
+function _raUpdateBar() {
+  const btn = document.getElementById('readalong-toggle');
+  const stop = document.getElementById('readalong-stop');
+  const follow = document.getElementById('readalong-follow-btn');
+  if (btn) btn.textContent = _raPlayer.playing ? '⏸ Pause' : '🎧 Read along';
+  if (stop) stop.style.display = _raPlayer.activeIdx >= 0 ? '' : 'none';
+  if (follow) follow.style.display = _raPlayer.follow ? 'none' : '';
+}
+
+const _RA_MAP_REASON_TEXT = {
+  unsupported: "This browser doesn't support synced highlighting — playing audio only.",
+  'no-source-text': 'This read-along track has no alignment data — playing audio only.',
+  mismatch: "Text and audio don't line up here — playing audio only.",
+};
+
+function _raUpdateNote() {
+  const el = document.getElementById('readalong-note');
+  if (!el) return;
+  el.textContent = _RA_MAP_REASON_TEXT[_raPlayer.mapReason] || '';
+}
+
+// Walks every text node under `root` (skipping the hidden #996/#1018 gloss
+// text that _makeWordsTappable()/_wrapAllWordGlosses() insert — that text
+// exists in the DOM but not in source_text, and would throw the alignment
+// off by however long the gloss is) and returns the concatenation plus a
+// segment table for converting a domText offset back into a (node, offset).
+function _raDomIndex(root) {
+  const segments = [];
+  let domText = '';
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return (node.parentElement && node.parentElement.closest('.tap-word-gloss'))
+        ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let node;
+  while ((node = walker.nextNode())) {
+    const text = node.nodeValue || '';
+    if (!text) continue;
+    segments.push({ node, domStart: domText.length, length: text.length });
+    domText += text;
+  }
+  return { segments, domText };
+}
+
+// Whitespace-insensitive two-pointer alignment of `src` (source_text) against
+// `domText` (see _raDomIndex). Both index arrays are built in the same pass:
+// srcToDom[i] = "src position i begins at this domText offset", and vice
+// versa. A genuine character mismatch (not just a whitespace-run
+// difference) means the rendered text has drifted from what was sent to the
+// aligner — we bail with null rather than guess, per #1049's contract.
+function _raAlignSrcToDom(src, domText) {
+  const isWs = (ch) => ch !== undefined && /[\s　]/.test(ch);
+  const n = src.length, m = domText.length;
+  const srcToDom = new Array(n + 1);
+  const domToSrc = new Array(m + 1);
+  let si = 0, di = 0;
+  while (si < n) {
+    srcToDom[si] = di;
+    domToSrc[di] = si;
+    if (isWs(src[si])) { si++; continue; }
+    while (di < m && isWs(domText[di])) { di++; domToSrc[di] = si; }
+    if (di >= m || domText[di] !== src[si]) return null;
+    si++; di++;
+  }
+  srcToDom[n] = di;
+  domToSrc[di] = n;
+  // Anything past the matched region (trailing DOM content the aligner never
+  // saw) clamps to the end of source_text rather than staying undefined.
+  for (let d = 0; d <= m; d++) if (domToSrc[d] === undefined) domToSrc[d] = n;
+  return { srcToDom, domToSrc };
+}
+
+function _raBuildMap(root, sourceText) {
+  if (!root || !sourceText) return null;
+  const { segments, domText } = _raDomIndex(root);
+  if (!segments.length) return null;
+  const aligned = _raAlignSrcToDom(sourceText, domText);
+  if (!aligned) return null;
+  return { segments, srcToDom: aligned.srcToDom, domToSrc: aligned.domToSrc };
+}
+
+function _raDomPositionAt(segments, offset) {
+  if (!segments.length) return null;
+  if (offset <= segments[0].domStart) return { node: segments[0].node, offset: 0 };
+  const last = segments[segments.length - 1];
+  if (offset >= last.domStart + last.length) return { node: last.node, offset: last.length };
+  let lo = 0, hi = segments.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (segments[mid].domStart <= offset) lo = mid; else hi = mid - 1;
+  }
+  const seg = segments[lo];
+  return { node: seg.node, offset: offset - seg.domStart };
+}
+
+function _raRangeForCue(map, cue) {
+  const clamp = (v, max) => Math.max(0, Math.min(v, max));
+  const startOff = map.srcToDom[clamp(cue.char_start, map.srcToDom.length - 1)];
+  const endOff = map.srcToDom[clamp(cue.char_end, map.srcToDom.length - 1)];
+  if (startOff == null || endOff == null || endOff <= startOff) return null;
+  const startPos = _raDomPositionAt(map.segments, startOff);
+  const endPos = _raDomPositionAt(map.segments, endOff);
+  if (!startPos || !endPos) return null;
+  try {
+    const range = new Range();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    return range;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Paints the current cue via the CSS Custom Highlight API — never mutates
+// the DOM, so it can span a <b> boundary or land inside a .tap-word span
+// without disturbing either.
+function _raHighlight(idx) {
+  if (!(window.CSS && CSS.highlights)) return;
+  const player = _raPlayer;
+  if (!player.map) { CSS.highlights.delete('readalong'); return; }
+  const cue = player.cues[idx];
+  if (!cue) { CSS.highlights.delete('readalong'); return; }
+  const range = _raRangeForCue(player.map, cue);
+  if (!range) { CSS.highlights.delete('readalong'); return; }
+  CSS.highlights.set('readalong', new Highlight(range));
+}
+
+function _raCueIndexForSrcOffset(cues, srcOffset) {
+  let lo = 0, hi = cues.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (cues[mid].char_start <= srcOffset) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return ans;
+}
+
+// Click-to-seek, delegated once per (freshly rendered) container — the
+// detail view's innerHTML is rebuilt on every full re-render, so the dataset
+// guard needs to key off the CURRENT element the same way #940's swipe
+// handler does, not a name that outlives it.
+function _raBindContainerClicks(container) {
+  if (container.dataset.raBound) return;
+  container.dataset.raBound = '1';
+  container.addEventListener('click', (e) => {
+    const player = _raPlayer;
+    if (!player.map || !player.audioUrl) return;
+    // Belt-and-suspenders alongside _makeWordsTappable()'s stopPropagation():
+    // both listeners sit on this same element, and stopPropagation() does not
+    // stop a second listener bound to the SAME node from also firing.
+    if (e.target.closest && e.target.closest('.tap-word, .known-word, .gloss-word')) return;
+    let node, offset;
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+      if (!pos) return;
+      node = pos.offsetNode; offset = pos.offset;
+    } else if (document.caretRangeFromPoint) {
+      const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+      if (!range) return;
+      node = range.startContainer; offset = range.startOffset;
+    } else {
+      return;
+    }
+    if (!node || node.nodeType !== Node.TEXT_NODE || !container.contains(node)) return;
+    const seg = player.map.segments.find(s => s.node === node);
+    if (!seg) return;
+    const domOffset = seg.domStart + offset;
+    const srcOffset = player.map.domToSrc[Math.min(domOffset, player.map.domToSrc.length - 1)];
+    const idx = _raCueIndexForSrcOffset(player.cues, srcOffset);
+    if (idx < 0) return;
+    _raPlayAt(idx);
+  });
+}
+
+// Called after _makeWordsTappable() and after the container is live in the
+// DOM (see the call site in _renderKnowledgeDetail) — building the map needs
+// real text nodes to walk, which don't exist yet while the HTML is still a
+// string being assembled. Rebuilt on every render rather than cached: the
+// detail view replaces the container's innerHTML wholesale on each render,
+// which invalidates any Range/segment referencing the OLD nodes.
+function _raAfterRender(ep, lang) {
+  const variant = _knowledgeView === 'fulltext' ? 'fulltext' : 'summary';
+  const t = _raTrackFor(ep, lang, variant);
+  if (!t) return;
+  const player = _raSync(ep, lang, variant, t);
+  const container = document.getElementById(player.containerId);
+  if (!container) return;
+  if (!(window.CSS && CSS.highlights)) {
+    player.map = null; player.mapReason = 'unsupported';
+  } else if (!player.sourceText) {
+    player.map = null; player.mapReason = 'no-source-text';
+  } else {
+    player.map = _raBuildMap(container, player.sourceText);
+    player.mapReason = player.map ? '' : 'mismatch';
+  }
+  _raUpdateNote();
+  _raBindContainerClicks(container);
+  if (player.activeIdx >= 0 && player.map) _raHighlight(player.activeIdx);
+}
+
+function toggleReadalong() {
+  const player = _raPlayer;
+  if (!player.audioUrl) return;
+  const a = _sharedAudio;
+  if (player.playing) {
+    // A real pause, not a stop: resuming continues from currentTime instead
+    // of jumping back to the cue's start (same idiom as toggleKnowledgeTts).
+    player.playing = false;
+    try { a && a.pause(); } catch (_) {}
+    _raUpdateBar();
+    return;
+  }
+  if (a && a.src && player.activeIdx >= 0 && a.src === new URL(player.audioUrl, location.href).href) {
+    _kTtsStopPlayback();
+    player.playing = true;
+    a.playbackRate = _kTtsRate;
+    a.ontimeupdate = _raOnTimeUpdate;
+    a.play().catch(() => {});
+    _raUpdateBar();
+    return;
+  }
+  _raPlayAt(player.activeIdx >= 0 ? player.activeIdx : 0);
+}
+
+function stopReadalong() {
+  _raStop();
+  _raPlayer.activeIdx = -1;
+  if (_raPlayer.map) _raHighlight(-1);
+  _raUpdateBar();
+}
+
+function _raPlayAt(idx) {
+  const player = _raPlayer;
+  if (!player.audioUrl || idx < 0 || idx >= player.cues.length) return;
+  // #1049: taking the shared element away from the chunked reader cleanly —
+  // see the matching call in _kTtsPlayAt for the reverse direction.
+  _kTtsStopPlayback();
+  const seq = ++_playSeq;
+  const a = _getAudioEl();
+  a.onended = () => {
+    if (seq !== _playSeq) return;
+    player.playing = false; player.activeIdx = -1;
+    if (player.map) _raHighlight(-1);
+    _raUpdateBar();
+  };
+  a.onerror = () => { if (seq === _playSeq) { player.playing = false; _raUpdateBar(); } };
+  a.ontimeupdate = _raOnTimeUpdate;
+  const seekMs = player.cues[idx].start_ms;
+  const doSeek = () => { try { a.currentTime = seekMs / 1000; a.playbackRate = _kTtsRate; } catch (_) {} };
+  // Assigning .src — even to the SAME string — makes the browser reset the
+  // media element and re-fetch from scratch. Jumping between sentences of
+  // the same track is this feature's core interaction (every click in
+  // _raBindContainerClicks ends up here), so re-triggering a multi-MB
+  // download and zeroing readyState on every click would turn each jump into
+  // a stall. Only reload when the track itself actually changed. Compare
+  // against an ABSOLUTE url: a.src always reads back absolute, but
+  // player.audioUrl is a relative "/api/audio/file/12" — comparing those
+  // directly never matches and silently defeats this check.
+  const absUrl = new URL(player.audioUrl, location.href).href;
+  const needsLoad = a.src !== absUrl;
+  if (needsLoad) a.src = player.audioUrl;
+  player.playing = true;
+  player.activeIdx = idx;
+  // playbackRate is set inside doSeek(), not here: a real reload resets it,
+  // so it must be reapplied only after that reload has actually happened
+  // (immediately when there's no reload, on loadedmetadata when there is).
+  if (!needsLoad || a.readyState >= 1) doSeek(); else a.addEventListener('loadedmetadata', doSeek, { once: true });
+  a.play().catch(() => { if (seq === _playSeq) { player.playing = false; _raUpdateBar(); } });
+  _raUpdateBar();
+  if (player.map) _raHighlight(idx);
+  if (player.follow) _raScrollToActive();
+}
+
+// timeupdate fires ~4x/second; with articles running thousands of cues this
+// MUST be a cursor, never a full-table find(). Almost every tick just checks
+// "has the next cue started yet"; the backward walk only runs after a scrub.
+function _raOnTimeUpdate() {
+  const player = _raPlayer;
+  if (!player.playing || !player.cues.length) return;
+  const a = _sharedAudio;
+  if (!a) return;
+  const ms = a.currentTime * 1000;
+  let idx = player.activeIdx < 0 ? 0 : player.activeIdx;
+  while (idx + 1 < player.cues.length && player.cues[idx + 1].start_ms <= ms) idx++;
+  while (idx > 0 && player.cues[idx].start_ms > ms) idx--;
+  if (idx !== player.activeIdx) {
+    player.activeIdx = idx;
+    if (player.map) _raHighlight(idx);
+    _raUpdateBar();
+    if (player.follow) _raScrollToActive();
+  }
+}
+
+let _raAutoScrolling = false;
+let _raScrollBound = false;
+
+// A manual scroll (Daniel wants to look back at something already read)
+// pauses auto-follow — without this, the next highlight tick would yank the
+// page right back down.
+function _raBindScrollListener() {
+  if (_raScrollBound) return;
+  _raScrollBound = true;
+  window.addEventListener('scroll', () => {
+    if (_raAutoScrolling || !_raPlayer.follow) return;
+    _raPlayer.follow = false;
+    _raFollow = false;
+    try { localStorage.setItem('readalongFollow', '0'); } catch (_) {}
+    _raUpdateBar();
+  }, { passive: true });
+}
+
+function _raJumpToFollow() {
+  _raPlayer.follow = true;
+  _raFollow = true;
+  try { localStorage.setItem('readalongFollow', '1'); } catch (_) {}
+  _raUpdateBar();
+  _raScrollToActive();
+}
+
+function _raScrollToActive() {
+  const player = _raPlayer;
+  if (player.activeIdx < 0 || !player.map) return;
+  const cue = player.cues[player.activeIdx];
+  if (!cue) return;
+  const range = _raRangeForCue(player.map, cue);
+  if (!range) return;
+  const node = range.startContainer.nodeType === Node.TEXT_NODE
+    ? range.startContainer.parentElement : range.startContainer;
+  if (!node || !node.scrollIntoView) return;
+  _raAutoScrolling = true;
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  setTimeout(() => { _raAutoScrolling = false; }, 600);
+}
+
 function _renderKnowledgeDetail(ep) {
   const el = document.getElementById('view-knowledge-content');
   if (!el) return;
@@ -5732,6 +6224,7 @@ function _renderKnowledgeDetail(ep) {
       <div style="margin:4px 0 10px">${links}</div>
       ${_knowledgeViewTabs(ep)}
       ${_kTtsBarHtml(ep, lang)}
+      ${_raBarHtml(ep, lang)}
       ${_knowledgeView === 'fulltext' ? _knowledgeFulltextHtml(ep, lang) : summaryBlock}
     </div>
     <div class="keymap-panel">
@@ -5748,6 +6241,11 @@ function _renderKnowledgeDetail(ep) {
   // columns are for reading along, not for picking words out of.
   ['podcast-summary-zh', 'podcast-summary-de', 'podcast-summary-rendition', 'knowledge-fulltext']
     .forEach(id => _makeWordsTappable(document.getElementById(id)));
+  // #1049: must run AFTER _makeWordsTappable() above — it inserts the
+  // .tap-word spans the read-along map has to walk around (see
+  // _raDomIndex's docstring), and the container has to already be live DOM
+  // (not a string still being assembled) for the TreeWalker to find anything.
+  _raAfterRender(ep, lang);
   // Ask whether a full text already exists (a newsletter's was built when it
   // was processed). GET never generates, so this is cheap and safe to fire
   // on every detail view.
@@ -6230,6 +6728,11 @@ function _makeWordsTappable(root) {
       const span = e.target.closest?.('.tap-word, .known-word');
       if (!span) return;
       e.preventDefault();
+      // #1049: the read-along player binds its own click-to-seek listener on
+      // this exact same element (podcast-summary-zh etc.) to jump playback to
+      // wherever was tapped. Without this, every word lookup would ALSO jump
+      // the audio — checking a word must never move the tape.
+      e.stopPropagation();
       if (span.dataset.wordIdx !== undefined) _openWordActions(Number(span.dataset.wordIdx), span);
       else _openKnownWordActions(span.dataset.glossKey, span);
     });

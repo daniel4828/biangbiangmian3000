@@ -1024,6 +1024,16 @@ def init_db() -> None:
     conn.execute("UPDATE prompt_presets SET mode = 'knowledge' WHERE mode = 'podcast'")
     conn.commit()
 
+    # One-time migration (#1049, phase 2 of the #1047 read-along umbrella):
+    # audio_tracks needs the plain source text used as the alignment anchor
+    # so the frontend can map cue char_start/char_end onto the rendered,
+    # annotated HTML it actually displays. Idempotent (PRAGMA table_info
+    # check) — deploy.sh runs init_db() every ~2 minutes on the server.
+    audio_tracks_cols = {r["name"] for r in conn.execute("PRAGMA table_info(audio_tracks)").fetchall()}
+    if "source_text" not in audio_tracks_cols:
+        conn.execute("ALTER TABLE audio_tracks ADD COLUMN source_text TEXT")
+        conn.commit()
+
     conn.close()
 
     # Seed the day-cutoff cache now that app_settings is guaranteed present

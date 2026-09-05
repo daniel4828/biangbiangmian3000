@@ -3514,6 +3514,15 @@ a.nav-btn { text-decoration: none; }
   color: inherit;
 }
 
+/* ── 听读播放器（#1049，#1047 阶段 2）───────────────────────────────────── */
+.readalong-bar { margin: 0 0 12px; }
+.readalong-note { margin: 4px 0 0; }
+/* Custom Highlight API: only background — never font-weight/size, both of
+   which would reflow the line and make the highlight itself feel jumpy. */
+::highlight(readalong) {
+  background-color: color-mix(in srgb, var(--primary) 28%, transparent);
+}
+
 /* ── 列表 + 左右滑动（#940）─────────────────────────────────────────────── */
 .knowledge-lists-bar { margin-bottom: 10px; flex-wrap: wrap; }
 /* 行本身被拖动，两个动作面板露在它后面 */
