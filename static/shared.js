@@ -324,6 +324,51 @@ async function ingestKnowledgeFile(file, fields) {
   return data;
 }
 
+// Direct audio file upload (#1068): .mp3/.m4a/.wav, straight to
+// POST /api/knowledge/add-audio which streams it to disk and queues it for
+// local ASR transcription — see knowledge/audio_upload.py's docstring for
+// why this does not go through ingest_text() the way ingestKnowledgeFile()
+// does. Unlike that function, there is no follow-up .../process call: the
+// upload is queued for TRANSCRIPTION, not summarization, and summarizing
+// only makes sense once a transcript exists.
+//
+// Uses XMLHttpRequest instead of fetch() because fetch has no upload
+// progress event at all — an audiobook can take minutes to upload, and with
+// no feedback that looks exactly like a hang. onProgress(fraction 0..1) is
+// called as the browser reports it; pass null/undefined to skip it.
+function ingestKnowledgeAudio(file, fields, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('file', file);
+    for (const [key, value] of Object.entries(fields || {})) {
+      if (value) form.append(key, value === true ? 'true' : value);
+    }
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/knowledge/add-audio');
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      };
+    }
+    xhr.onerror = () => reject(new Error('Upload failed (network error)'));
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        window.location.href = '/login';
+        reject(new Error('Not logged in'));
+        return;
+      }
+      let data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) { /* not JSON */ }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(data.detail || `HTTP ${xhr.status}`));
+        return;
+      }
+      resolve(data);
+    };
+    xhr.send(form);
+  });
+}
+
 // Mark a word as already known (#710) so zh_annotate stops flagging it in
 // future summaries. Shared by the HSK word table and the in-text word menu
 // (#711) for the same reason as addWordViaAi above: one client-side path.

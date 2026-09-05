@@ -106,10 +106,13 @@
       <button class="go" id="go-text">Add</button>
     </div>
 
-    <!-- #835: .txt / .md / .pdf / .docx. The file's text goes through the
-         very same ingest_text() the paste box uses; only the source differs. -->
+    <!-- #835: .txt / .md / .pdf / .docx go through the very same
+         ingest_text() the paste box uses; only the source differs. #1068:
+         .mp3 / .m4a / .wav are a different shape of material (no text yet,
+         they get queued for transcription) but share this tab and this file
+         picker since it's the same gesture ("I have a file"). -->
     <div id="pane-file" style="display:none">
-      <input type="file" id="file" accept=".txt,.md,.markdown,.pdf,.docx">
+      <input type="file" id="file" accept=".txt,.md,.markdown,.pdf,.docx,.mp3,.m4a,.wav">
       <input type="text" id="file-source-url" placeholder="Original link (optional)"
              inputmode="url" autocomplete="off" autocapitalize="none"
              autocorrect="off" spellcheck="false" style="margin-top:.5rem">
@@ -256,6 +259,17 @@
     china.checked = false;
   };
 
+  // #1068: audio files skip text extraction entirely (there is no text yet
+  // — that's what the queued transcription produces) and go through
+  // ingestKnowledgeAudio() instead, which also reports upload progress —
+  // a several-hundred-MB audiobook with no feedback looks exactly like a
+  // hang.
+  const AUDIO_EXTS = ['.mp3', '.m4a', '.wav'];
+  function isAudioFile(name) {
+    const lower = (name || '').toLowerCase();
+    return AUDIO_EXTS.some(ext => lower.endsWith(ext));
+  }
+
   const fileInput = document.getElementById('file');
   document.getElementById('go-file').onclick = async () => {
     const f = fileInput.files?.[0];
@@ -275,11 +289,25 @@
     fileInput.value = '';
     china.checked = false;
     try {
-      const res = await ingestKnowledgeFile(f, fields);
-      item.state = 'done';
-      item.text = res?.status === 'already_exists'
-        ? 'Already in your library.'
-        : '✓ added — processing on the server';
+      let res;
+      if (isAudioFile(f.name)) {
+        // No source_url field on the audio path — an uploaded recording has
+        // no "original link", so fields.source_url is simply ignored there.
+        res = await ingestKnowledgeAudio(f, fields, (frac) => {
+          item.text = `Uploading… ${Math.round(frac * 100)}%`;
+          render();
+        });
+        item.state = 'done';
+        item.text = res?.status === 'already_exists'
+          ? 'Already in your library.'
+          : '✓ uploaded — queued for transcription';
+      } else {
+        res = await ingestKnowledgeFile(f, fields);
+        item.state = 'done';
+        item.text = res?.status === 'already_exists'
+          ? 'Already in your library.'
+          : '✓ added — processing on the server';
+      }
     } catch (e) {
       item.state = 'error';
       item.text = e.message || 'Failed';
