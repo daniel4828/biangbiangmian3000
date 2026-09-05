@@ -509,12 +509,14 @@ def _seg_field(seg, name: str, default=None):
     return getattr(seg, name, default)
 
 
-def _filter_whisper_hallucinations(segments: list) -> str:
+def _filter_whisper_segments(segments: list) -> list:
     """Drop hallucinated segments from a Whisper/Groq verbose_json response
-    and join what's left (#750). A Reel with no speech (background music
-    only) makes Whisper-family models invent text with real confidence in
-    the *words* they pick but strong internal signals that they're making it
-    up:
+    and return the *segments themselves* (not just their text) that survive
+    (#750, split from _filter_whisper_hallucinations in #1052 so audio ASR
+    timestamps can be recovered — see that function's thin wrapper below). A
+    Reel with no speech (background music only) makes Whisper-family models
+    invent text with real confidence in the *words* they pick but strong
+    internal signals that they're making it up:
 
     1. no_speech_prob > _HALLUCINATION_NO_SPEECH_PROB — the model's own guess
        that this segment is silence/non-speech, worth ignoring the emitted
@@ -533,7 +535,7 @@ def _filter_whisper_hallucinations(segments: list) -> str:
     _transcribe_via_whisper's degraded-fallback comment) simply skips checks
     1-2 for that segment; checks 3-4 still run on whatever text came back.
     """
-    kept: list[str] = []
+    kept: list = []
     for seg in segments:
         text = (_seg_field(seg, "text") or "").strip()
         if not text:
@@ -544,24 +546,35 @@ def _filter_whisper_hallucinations(segments: list) -> str:
         avg_logprob = _seg_field(seg, "avg_logprob")
         if avg_logprob is not None and avg_logprob < _HALLUCINATION_MIN_AVG_LOGPROB:
             continue
-        kept.append(text)
+        kept.append(seg)
 
     if not kept:
-        return ""
+        return []
 
     run_text, run_len = None, 0
-    for text in kept:
+    for seg in kept:
+        text = (_seg_field(seg, "text") or "").strip()
         if text == run_text:
             run_len += 1
         else:
             run_text, run_len = text, 1
         if run_len >= _HALLUCINATION_REPEAT_COUNT:
-            return ""
+            return []
 
-    joined = " ".join(kept)
+    joined = " ".join((_seg_field(seg, "text") or "").strip() for seg in kept)
     if _word_count(joined) < _HALLUCINATION_MIN_WORDS:
-        return ""
-    return joined
+        return []
+    return kept
+
+
+def _filter_whisper_hallucinations(segments: list) -> str:
+    """Thin wrapper around _filter_whisper_segments (#1052) for the existing
+    text-only callers (_transcribe_via_whisper, _transcribe_via_groq,
+    _transcribe_instagram) — joins the surviving segments' text exactly as
+    this function always has. See _filter_whisper_segments for the four
+    hallucination checks themselves."""
+    kept = _filter_whisper_segments(segments)
+    return " ".join((_seg_field(seg, "text") or "").strip() for seg in kept)
 
 
 _CJK_CHAR_RE = re.compile(r"[一-鿿]")

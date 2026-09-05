@@ -14,14 +14,16 @@ text against the rendered HTML after the fact would drift the moment
 there's markup, a repeated phrase, or a skipped word.
 
 Four ways to build a track are planned for #1047:
-  1. TTS + WordBoundary (this phase, tts_track.py) — free, word-level,
+  1. TTS + WordBoundary (#1048, tts_track.py) — free, word-level,
      works for any plain text we already have. Implemented.
-  2. Forced alignment (aeneas) — text + an existing recording.
-  3. Cloud ASR (Groq) — a recording with no matching text.
-  4. Local ASR (whisper.cpp) — same, offline.
-Only #1 exists today. build_track() below is the single entry point all
-four eventually share, so a caller never needs to know which path produced
-a given Track — the other three raise NotImplementedError rather than a
+  2. Forced alignment (aeneas) — text + an existing recording. Not
+     implemented (#1051).
+  3. Cloud ASR (Groq, #1052, asr_cloud.py) — a recording with no matching
+     text. Implemented.
+  4. Local ASR (whisper.cpp) — same, offline. Not implemented (#1053).
+build_track() below is the single entry point all four eventually share, so
+a caller never needs to know which path produced a given Track — the
+not-yet-implemented ones raise NotImplementedError rather than a
 half-written branch.
 """
 import re
@@ -65,18 +67,21 @@ def build_track(*, text: str | None = None, audio_path: str | None = None,
     """The single entry point for all four alignment paths described in the
     module docstring above.
 
-    Only text-only (TTS + WordBoundary) is implemented. Every combination
-    involving `audio_path` is a documented NotImplementedError, not a
-    half-written branch — phases 4-6 of #1047 (aeneas forced alignment,
-    Groq ASR, local whisper.cpp) have exactly one place to plug in.
+    text-only (TTS + WordBoundary, #1048) and audio_path-only (Cloud ASR,
+    #1052) are implemented. `text` + `audio_path` together (forced alignment,
+    #1051) is a documented NotImplementedError, not a half-written branch —
+    it has exactly one place to plug in once it exists.
     """
     if text and not audio_path:
         from . import tts_track  # lazy: avoids a circular import at package load
         return tts_track.build(text, lang=lang, voice=voice)
+    if audio_path and not text:
+        from . import asr_cloud  # lazy: avoids a circular import at package load
+        return asr_cloud.build(audio_path, lang=lang)
     if audio_path:
         raise NotImplementedError(
-            "audio-based alignment is not implemented yet — see #1047 phases "
-            "4 (aeneas forced alignment), 5 (Groq ASR) and 6 (local whisper.cpp)")
+            "text+audio forced alignment is not implemented yet — see #1051 "
+            "(aeneas forced alignment)")
     raise AudioTrackError("build_track() needs at least `text` (or `audio_path`)")
 
 

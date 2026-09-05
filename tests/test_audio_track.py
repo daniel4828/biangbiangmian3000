@@ -34,10 +34,12 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import audio
+import audio.asr_cloud as asr_cloud
 import audio.tts_track as tts_track
 import database
 import database.core
 import main
+import podcast
 from audio import Cue
 from audio.segment import to_sentences
 from fastapi.testclient import TestClient
@@ -261,14 +263,252 @@ def test_sentence_merge_ignores_french_elision_apostrophes():
 # 7. the other three alignment paths are explicit NotImplementedError
 # ---------------------------------------------------------------------------
 
-def test_build_track_with_audio_path_is_not_implemented_yet():
+def test_build_track_with_text_and_audio_path_is_not_implemented_yet():
+    # Forced alignment (#1051) is the only remaining unimplemented
+    # combination now that #1052 wires audio_path-alone to Cloud ASR.
     with pytest.raises(NotImplementedError):
-        audio.build_track(audio_path="some/recording.mp3")
+        audio.build_track(text="some text", audio_path="some/recording.mp3")
 
 
 def test_build_track_with_neither_text_nor_audio_raises():
     with pytest.raises(audio.AudioTrackError):
         audio.build_track()
+
+
+# ---------------------------------------------------------------------------
+# 11. Cloud ASR (#1052): audio_path alone -> asr_cloud.build(), dispatched
+#     through audio.build_track().
+# ---------------------------------------------------------------------------
+
+class FakeCompletedProcess:
+    def __init__(self, returncode=0, stderr="", stdout=""):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = stdout
+
+
+def _padded(idx: int, n: int = 25) -> str:
+    """A segment text that's (a) long enough to clear
+    _HALLUCINATION_MIN_WORDS once a few segments are joined and (b) unique
+    per `idx` so consecutive segments never look like the same text
+    repeated (which would trip the hallucination repeat-filter and void the
+    whole transcript)."""
+    return " ".join([f"w{idx}"] * n)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_groq_cost_log(monkeypatch):
+    """These tests exercise chunking/timestamp math, not cost accounting,
+    and most of them don't use the tmp_db fixture — stub the one DB write
+    asr_cloud.build() makes so it doesn't need a real database."""
+    monkeypatch.setattr(asr_cloud.database, "log_api_call", lambda **kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _groq_api_key(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+
+
+def test_asr_cloud_chunk_offsets_are_added_to_cue_timestamps(monkeypatch):
+    """The core correctness requirement (#1052): each Groq chunk's segment
+    timestamps are relative to THAT CHUNK's start, not the whole recording —
+    getting the offset addition wrong only shows up on audio long enough to
+    need more than one chunk."""
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 1500.0)
+
+    ffmpeg_calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        ffmpeg_calls.append(cmd)
+        return FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(asr_cloud.subprocess, "run", fake_run)
+
+    groq_calls: list[str] = []
+
+    def fake_call_groq(client, path):
+        groq_calls.append(path)
+        idx = len(groq_calls)
+        return [{"text": _padded(idx), "start": 0.0, "end": 10.0}]
+
+    monkeypatch.setattr(asr_cloud, "_call_groq", fake_call_groq)
+
+    track = asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    # 1500s at 600s/chunk -> three chunks (600, 600, 300), three ffmpeg
+    # invocations and three Groq calls.
+    assert len(ffmpeg_calls) == 3
+    assert len(groq_calls) == 3
+    assert len(track.cues) == 3
+    assert track.source == "asr_cloud"
+    assert track.word_cues == []
+
+    # Chunk 1 starts at t=0, chunk 2 at t=600s, chunk 3 at t=1200s — the
+    # fake Groq response always reports "0..10s within this chunk", so the
+    # absolute cue start must be exactly the chunk's own offset.
+    assert track.cues[0].start_ms == 0
+    assert track.cues[1].start_ms == 600_000
+    assert track.cues[2].start_ms == 1_200_000
+    assert track.cues[1].end_ms == 610_000
+    assert track.cues[2].end_ms == 1_210_000
+
+
+def test_asr_cloud_does_not_split_a_short_recording(monkeypatch):
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 300.0)
+
+    def fail_if_called(cmd, **kwargs):
+        raise AssertionError("ffmpeg must not be invoked when the audio fits in one chunk")
+
+    monkeypatch.setattr(asr_cloud.subprocess, "run", fail_if_called)
+    monkeypatch.setattr(asr_cloud, "_call_groq",
+                        lambda client, path: [{"text": _padded(1), "start": 0.0, "end": 5.0}])
+
+    track = asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    assert len(track.cues) == 1
+    assert track.cues[0].start_ms == 0
+    assert track.cues[0].end_ms == 5000
+
+
+def test_asr_cloud_char_offsets_point_into_the_joined_transcript(monkeypatch):
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 300.0)
+    monkeypatch.setattr(asr_cloud.subprocess, "run",
+                        lambda cmd, **kw: FakeCompletedProcess(returncode=0))
+    segments = [
+        {"text": _padded(1), "start": 0.0, "end": 3.0},
+        {"text": _padded(2), "start": 3.0, "end": 6.0},
+    ]
+    monkeypatch.setattr(asr_cloud, "_call_groq", lambda client, path: segments)
+
+    track = asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    full_text = " ".join(c.text for c in track.cues)
+    for cue in track.cues:
+        assert full_text[cue.char_start:cue.char_end] == cue.text
+    assert track.cues[0].char_start == 0
+    assert track.cues[1].char_start == len(_padded(1)) + 1  # +1 for the join space
+
+
+def test_asr_cloud_raises_when_transcript_is_filtered_as_hallucination(monkeypatch, tmp_db):
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 300.0)
+    monkeypatch.setattr(asr_cloud.subprocess, "run",
+                        lambda cmd, **kw: FakeCompletedProcess(returncode=0))
+    # Same text 3x in a row trips _filter_whisper_segments' repeat check and
+    # voids the whole transcript, regardless of word count.
+    repeated = [{"text": "background noise", "start": float(i), "end": float(i + 1)}
+                for i in range(3)]
+    monkeypatch.setattr(asr_cloud, "_call_groq", lambda client, path: repeated)
+
+    with pytest.raises(audio.AudioTrackError, match="hallucination"):
+        asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    assert database.get_audio_track("episode", 99999, "zh", "fulltext") is None
+
+
+def test_asr_cloud_without_groq_api_key_raises_not_silently_skips(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    with pytest.raises(audio.AudioTrackError, match="GROQ_API_KEY"):
+        asr_cloud.build("/fake/input.mp3", lang="zh")
+
+
+def test_asr_cloud_cleans_up_chunk_files_on_success(monkeypatch):
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 1500.0)
+    created_paths: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        created_paths.append(cmd[-1])
+        assert os.path.exists(cmd[-1])  # tempfile.mkstemp already created it
+        return FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(asr_cloud.subprocess, "run", fake_run)
+    calls = []
+
+    def fake_call_groq(client, path):
+        calls.append(path)
+        return [{"text": _padded(len(calls)), "start": 0.0, "end": 10.0}]
+
+    monkeypatch.setattr(asr_cloud, "_call_groq", fake_call_groq)
+
+    asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    assert len(created_paths) == 3
+    for p in created_paths:
+        assert not os.path.exists(p)
+
+
+def test_asr_cloud_cleans_up_chunk_files_on_groq_failure(monkeypatch):
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 1500.0)
+    created_paths: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        created_paths.append(cmd[-1])
+        return FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(asr_cloud.subprocess, "run", fake_run)
+
+    def fake_call_groq_raises(client, path):
+        raise RuntimeError("simulated Groq API failure")
+
+    monkeypatch.setattr(asr_cloud, "_call_groq", fake_call_groq_raises)
+
+    with pytest.raises(audio.AudioTrackError):
+        asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    assert len(created_paths) == 3
+    for p in created_paths:
+        assert not os.path.exists(p)
+
+
+# ---------------------------------------------------------------------------
+# 12. _filter_whisper_hallucinations' behavior must not change across the
+#     #1052 refactor that split it into _filter_whisper_segments (returns
+#     segments, keeping timestamps) + this thin string-joining wrapper.
+# ---------------------------------------------------------------------------
+
+def test_filter_whisper_hallucinations_unchanged_normal_segments():
+    segments = [
+        {"text": "hello there this is a normal segment with plenty of words",
+         "no_speech_prob": 0.1, "avg_logprob": -0.2},
+        {"text": "and here is a second normal segment also with plenty of words",
+         "no_speech_prob": 0.05, "avg_logprob": -0.3},
+    ]
+    assert podcast._filter_whisper_hallucinations(segments) == (
+        "hello there this is a normal segment with plenty of words "
+        "and here is a second normal segment also with plenty of words")
+
+
+def test_filter_whisper_hallucinations_unchanged_drops_high_no_speech_prob():
+    long_real_speech = ("one two three four five six seven eight nine ten "
+                        "eleven twelve thirteen fourteen fifteen sixteen "
+                        "seventeen eighteen nineteen twenty twentyone")
+    segments = [
+        {"text": long_real_speech, "no_speech_prob": 0.1, "avg_logprob": -0.2},
+        {"text": "silence artifact", "no_speech_prob": 0.9, "avg_logprob": -0.1},
+    ]
+    assert podcast._filter_whisper_hallucinations(segments) == long_real_speech
+
+
+def test_filter_whisper_hallucinations_unchanged_voids_on_repeat():
+    segments = [{"text": "loop", "no_speech_prob": 0.1, "avg_logprob": -0.1} for _ in range(3)]
+    assert podcast._filter_whisper_hallucinations(segments) == ""
+
+
+def test_filter_whisper_hallucinations_unchanged_voids_too_short():
+    segments = [{"text": "too short", "no_speech_prob": 0.1, "avg_logprob": -0.1}]
+    assert podcast._filter_whisper_hallucinations(segments) == ""
+
+
+def test_filter_whisper_segments_returns_segments_not_strings():
+    segments = [
+        {"text": "hello there this is a normal segment with plenty of words",
+         "start": 0.0, "end": 5.0, "no_speech_prob": 0.1, "avg_logprob": -0.2},
+        {"text": "and here is a second normal segment also with plenty of words",
+         "start": 5.0, "end": 10.0, "no_speech_prob": 0.05, "avg_logprob": -0.3},
+    ]
+    kept = podcast._filter_whisper_segments(segments)
+    assert [s["start"] for s in kept] == [0.0, 5.0]
+    assert [s["end"] for s in kept] == [5.0, 10.0]
 
 
 # ---------------------------------------------------------------------------
