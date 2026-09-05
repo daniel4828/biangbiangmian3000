@@ -189,6 +189,38 @@ def _knowledge_tasks() -> list[dict]:
     return out
 
 
+def _audio_job_tasks() -> list[dict]:
+    """Local whisper.cpp transcriptions (#1053).
+
+    Reads the audio_jobs table's own status rather than keeping a parallel
+    registry — #821's rule: a second set of books always drifts from the
+    first and then starts lying. It also has to be the table here and not an
+    in-process dict, because the work happens in a separate cron process
+    (scripts/audio_worker.py), not in this one.
+
+    Only 'running' rows are tasks; 'pending' ones are a queue, not work in
+    progress. But the queue length goes in the detail line — a job that will
+    not start until tonight should not look like nothing was requested.
+    """
+    jobs = database.list_audio_jobs(statuses=("pending", "running"))
+    running = [j for j in jobs if j["status"] == "running"]
+    waiting = len(jobs) - len(running)
+    out = []
+    for job in running:
+        detail = "Transcribing locally…"
+        if waiting:
+            detail += f" ({waiting} queued)"
+        out.append({
+            "id": f"audiojob:{job['id']}",
+            "kind": "audio",
+            "label": f"{job['owner_kind']} {job['owner_id']} · {job['lang']}",
+            "detail": detail,
+            "percent": None,
+            "started_at": job.get("started_at"),
+        })
+    return out
+
+
 def _ad_hoc_tasks() -> list[dict]:
     with _ad_hoc_lock:
         items = list(_ad_hoc.items())
@@ -207,7 +239,7 @@ def list_tasks():
     list still tells Daniel something is running.
     """
     tasks: list[dict] = []
-    for collect in (_story_tasks, _audio_tasks, _import_tasks,
+    for collect in (_story_tasks, _audio_tasks, _audio_job_tasks, _import_tasks,
                     _knowledge_tasks, _book_tasks, _ad_hoc_tasks):
         try:
             tasks.extend(collect())

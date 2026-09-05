@@ -228,5 +228,11 @@ def build(audio_path: str, lang: str = "zh") -> Track:
     if not cues:
         raise AudioTrackError("transcript was filtered out as hallucination/silence")
 
+    # The transcript every cue's char_start/char_end indexes into. Built with
+    # exactly the same single-space join the cursor above assumed, so the two
+    # can't drift apart.
+    source_text = " ".join(c.text for c in cues)
+
     return Track(audio_path=audio_path, duration_ms=round(duration * 1000),
-                cues=cues, word_cues=[], source="asr_cloud", voice=None)
+                cues=cues, word_cues=[], source="asr_cloud", voice=None,
+                source_text=source_text)

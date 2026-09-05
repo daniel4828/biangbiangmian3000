@@ -141,6 +141,101 @@ def delete_audio_tracks(owner_kind: str, owner_id: int) -> list[str]:
     return safe_to_delete
 
 
+# ---------------------------------------------------------------------------
+# Local ASR job queue (#1053) — see schema.sql's audio_jobs comment for why
+# this is a queue of WORK rather than a cache keyed like audio_tracks.
+# ---------------------------------------------------------------------------
+
+def enqueue_audio_job(owner_kind: str, owner_id: int, lang: str, audio_path: str,
+                      variant: str = "fulltext", text_hint: str | None = None) -> int:
+    """Queue a local-ASR transcription for scripts/audio_worker.py to pick up
+    later. Returns the new job's id."""
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO audio_jobs (owner_kind, owner_id, lang, variant, audio_path, text_hint)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (owner_kind, owner_id, lang, variant, audio_path, text_hint),
+    )
+    conn.commit()
+    job_id = cur.lastrowid
+    conn.close()
+    return job_id
+
+
+def claim_next_audio_job() -> dict | None:
+    """Atomically take the oldest 'pending' job and mark it 'running', or
+    return None if there is none. The SELECT-then-UPDATE happens inside a
+    single transaction (BEGIN IMMEDIATE takes the write lock up front) so two
+    workers racing each other can never both claim the same row — the whole
+    reason this isn't a plain SELECT followed by a separate UPDATE."""
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM audio_jobs WHERE status = 'pending' "
+            "ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+        if not row:
+            conn.execute("COMMIT")
+            return None
+        conn.execute(
+            """UPDATE audio_jobs SET status = 'running', started_at = datetime('now','localtime'),
+                   attempts = attempts + 1
+               WHERE id = ?""",
+            (row["id"],),
+        )
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    out = dict(row)
+    out["status"] = "running"
+    out["attempts"] = out["attempts"] + 1
+    return out
+
+
+def finish_audio_job(job_id: int, error: str | None = None) -> None:
+    """Mark a job 'done' (error is None) or 'error' (error is a message) and
+    stamp finished_at. Never called for a job being requeued — see
+    requeue_audio_job() for that path, which deliberately goes back to
+    'pending' instead."""
+    conn = get_db()
+    conn.execute(
+        """UPDATE audio_jobs SET status = ?, error = ?, finished_at = datetime('now','localtime')
+           WHERE id = ?""",
+        ("error" if error else "done", error, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def requeue_audio_job(job_id: int) -> None:
+    """Put an interrupted job (Daniel came back while whisper.cpp was still
+    running) back to 'pending' — never 'error': transcription is idempotent,
+    so a job that got interrupted deserves an unconditional retry on the next
+    quiet window, not a failure Daniel has to notice and clear."""
+    conn = get_db()
+    conn.execute(
+        """UPDATE audio_jobs SET status = 'pending', started_at = NULL, finished_at = NULL
+           WHERE id = ?""",
+        (job_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_audio_jobs(statuses: tuple[str, ...] = ("pending", "running")) -> list[dict]:
+    """Jobs in any of `statuses`, oldest first — used by routes/tasks.py's
+    header-indicator collector and by tests."""
+    conn = get_db()
+    placeholders = ",".join("?" * len(statuses))
+    rows = conn.execute(
+        f"SELECT * FROM audio_jobs WHERE status IN ({placeholders}) ORDER BY created_at ASC",
+        statuses,
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def delete_audio_tracks_for_book(book_id: int) -> list[str]:
     """Same contract as delete_audio_tracks(), for every page of one book at
     once (#1050) — routes/books.py's delete_book() has book_id, not the list

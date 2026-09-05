@@ -27,11 +27,17 @@ Four ways to build a track are planned for #1047:
      anchored.py's module docstring for the full algorithm.
   3. Cloud ASR (Groq, #1052, asr_cloud.py) — a recording with no matching
      text. Implemented.
-  4. Local ASR (whisper.cpp) — same, offline. Not implemented (#1053).
-build_track() below is the single entry point all four eventually share, so
-a caller never needs to know which path produced a given Track — the
-not-yet-implemented one raises NotImplementedError rather than a
-half-written branch.
+  4. Local ASR (whisper.cpp, #1053, asr_local.py) — same, but running on this
+     machine's own CPU cores instead of paying Groq: free, but 1-3x slower
+     than realtime with no GPU, so it can never run synchronously inside an
+     HTTP request. build_track()'s `prefer_local` flag selects it instead of
+     asr_cloud.py; the actual scheduling decision (only transcribe while
+     Daniel is away from the server, see scripts/audio_worker.py) lives
+     entirely outside this module — build_track() itself has no notion of
+     "queue this for later", it just picks which ASR implementation to call
+     right now, synchronously, whichever caller decided that was fine.
+build_track() below is the single entry point all four share, so a caller
+never needs to know which path produced a given Track.
 """
 import re
 from dataclasses import dataclass
@@ -60,6 +66,14 @@ class Track:
     word_cues: list      # word-level Cue objects — kept for a future per-word highlight mode
     source: str           # 'tts' | 'anchored' | 'asr_cloud' | 'asr_local'
     voice: str | None
+    # The exact text every cue's char_start/char_end indexes into (#1049's
+    # audio_tracks.source_text). The frontend cuts the rendered, annotated
+    # HTML at those offsets, so it needs the same string the aligner saw —
+    # for the TTS path that's the caller's text, for the ASR paths it's the
+    # transcript the model produced. Reconstructing it from the cues after
+    # the fact is not the same thing: anything between cues (dropped words,
+    # unmatched sentences) is gone.
+    source_text: str | None = None
 
 
 class AudioTrackError(Exception):
@@ -69,26 +83,57 @@ class AudioTrackError(Exception):
     the label of a finished one is exactly what this codebase never allows."""
 
 
+class AudioTrackAborted(AudioTrackError):
+    """The caller's `should_abort` callback asked to stop mid-run (#1053).
+
+    Deliberately its own class, not a plain AudioTrackError: being asked to
+    step aside is NOT a failure. scripts/audio_worker.py catches this one to
+    put the job back in 'pending' (whisper.cpp is idempotent — re-running it
+    tomorrow costs nothing), while a real AudioTrackError marks the job
+    'error'. Collapsing the two would mean every time Daniel sat down at his
+    laptop, whichever transcription was running got permanently written off
+    as broken."""
+
+
 def build_track(*, text: str | None = None, audio_path: str | None = None,
-                lang: str = "zh", voice: str | None = None) -> Track:
+                lang: str = "zh", voice: str | None = None,
+                prefer_local: bool = False, should_abort=None) -> Track:
     """The single entry point for all four alignment paths described in the
     module docstring above.
 
-    text-only (TTS + WordBoundary, #1048), audio_path-only (Cloud ASR,
-    #1052), and `text` + `audio_path` together (text-anchored ASR alignment,
-    #1051) are all implemented. Only local/offline ASR (#1053) remains a
-    documented NotImplementedError — it has exactly one place to plug in
-    once it exists.
+    `prefer_local` (#1053) only matters when `audio_path` is involved: True
+    routes to whisper.cpp (audio/asr_local.py, free but slow, meant to be
+    called from a background worker during quiet hours — see
+    scripts/audio_worker.py), False (the default) routes to Groq
+    (audio/asr_cloud.py, paid but runs in seconds). This function does NOT
+    decide when it's okay to run the slow local path — it just dispatches to
+    whichever ASR implementation the caller already decided to use; the
+    "don't do this while Daniel is at the keyboard" logic belongs entirely to
+    the caller (the worker script), never here.
+
+    Deliberately NOT implemented here: falling back from cloud to local (or
+    vice versa) automatically. Local ASR can take hours, and that must never
+    happen synchronously inside a request just because Groq had a bad day —
+    a fallback belongs in the queueing decision, not in this dispatcher.
+
+    `should_abort` (#1053) is an optional zero-argument callback polled while
+    the slow local path runs; returning True makes it stop and raise
+    AudioTrackAborted. Only the local path honours it — the other three
+    finish in seconds, so there is nothing to interrupt.
     """
     if text and not audio_path:
         from . import tts_track  # lazy: avoids a circular import at package load
         return tts_track.build(text, lang=lang, voice=voice)
     if audio_path and not text:
+        if prefer_local:
+            from . import asr_local  # lazy: avoids a circular import at package load
+            return asr_local.build(audio_path, lang=lang, should_abort=should_abort)
         from . import asr_cloud  # lazy: avoids a circular import at package load
         return asr_cloud.build(audio_path, lang=lang)
     if text and audio_path:
         from . import anchored  # lazy: avoids a circular import at package load
-        return anchored.build(text, audio_path, lang=lang)
+        return anchored.build(text, audio_path, lang=lang, prefer_local=prefer_local,
+                              should_abort=should_abort)
     raise AudioTrackError("build_track() needs at least `text` (or `audio_path`)")
 
 

@@ -269,7 +269,11 @@ def test_build_track_dispatches_text_and_audio_path_to_anchored(monkeypatch):
     # only local/offline ASR (#1053) remains an unimplemented combination.
     called = {}
 
-    def fake_build(text, audio_path, lang="zh"):
+    # **kwargs on purpose: build_track() grows keyword arguments over time
+    # (prefer_local and should_abort arrived with #1053), and a stub with a
+    # frozen signature turns every such addition into a failure here that
+    # says nothing about the dispatch this test actually checks.
+    def fake_build(text, audio_path, lang="zh", **kwargs):
         called["args"] = (text, audio_path, lang)
         return Track(audio_path=audio_path, duration_ms=1000, cues=[],
                      word_cues=[], source="anchored", voice=None)

@@ -499,3 +499,57 @@ Whisper 便宜约 9 倍、快约 10 倍）：
 | `GROQ_API_KEY` | 无（可选） | 未配置时自动回退 OpenAI `whisper-1`，只是贵约 9 倍 |
 | `INSTAGRAM_COOKIES_FILE` | `data/instagram_cookies.txt` | Instagram cookies.txt 路径；文件不存在时公开 Reel 仍会尝试（不一定成功） |
 | `YT_DLP_PATH` | `yt-dlp` | yt-dlp 可执行文件路径，装在非默认位置时指过去 |
+
+---
+
+## audio_worker.py（issue #1053，总议题 #1047）
+
+听读模式（#1047）的本地转录 worker。`audio/asr_local.py` 用 whisper.cpp
+在服务器自己的 CPU 上转录音频，免费但慢——`large-v3` 在这台 4 核机器上
+大约**比实时慢 1–3 倍**（一小时音频跑一到三小时，三个核全满）。
+
+所以它绝不在 HTTP 请求里同步发生：需要本地转录的请求往 `audio_jobs` 表
+排一条，这个脚本由 cron 每 5 分钟触发一次，**只在 Daniel 不用服务器的
+时候**取一条来跑。四道闸门任何一道不过就立刻退出：没有排队任务 / 30 分钟
+内有过人的操作 / 落在早晨预生成窗口（05:30–09:30，服务器本地时间）/
+上一轮还没跑完（PID 锁——8 GB 内存放不下两个 whisper）。
+
+跑起来之后仍然边跑边看活动时间戳：他一回来就 SIGTERM 掉 whisper.cpp，
+任务标回 `pending`，下一轮从头再来。**被打断记 pending 不记 error**——
+转录是幂等的，重来不花钱；记成 error 的话，他每次坐到电脑前都会把当时
+正在跑的那条永久判死。
+
+whisper.cpp 全程带 `nice -n 19` + `ionice -c 3`（`ionice` 是 Linux 独有，
+macOS 上自动省略），并且只用 3 个线程，给应用留一个核。
+
+### 一次性安装（服务器）
+
+```bash
+# 1. 编译 whisper.cpp（需要 build-essential 和 cmake）
+sudo apt install -y build-essential cmake
+git clone https://github.com/ggml-org/whisper.cpp /opt/whisper.cpp
+cd /opt/whisper.cpp && cmake -B build && cmake --build build -j --config Release
+
+# 2. 下载量化模型（q5_0 精度接近全精度，磁盘和内存占用小得多，约 1.1 GB）
+bash /opt/whisper.cpp/models/download-ggml-model.sh large-v3-q5_0
+
+# 3. 让可执行文件能被找到（编译产物在 build/bin/ 下）
+sudo ln -sf /opt/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli
+
+# 4. 验证
+whisper-cli -h | head -3
+```
+
+### cron
+
+```bash
+# 每 5 分钟看一眼有没有可以跑的本地转录（自己会判断该不该跑）
+*/5 * * * * cd /home/anki/biangbiangmian3000 && /home/anki/biangbiangmian3000/.venv/bin/python scripts/audio_worker.py >> /home/anki/logs/audio_worker.log 2>&1
+```
+
+### 环境变量小结
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WHISPER_CPP_PATH` | `whisper-cli` | 可执行文件路径；找不到时本地转录路径抛出可读错误，不影响其它三条对齐路径 |
+| `WHISPER_CPP_MODEL` | `/opt/whisper.cpp/models/ggml-large-v3-q5_0.bin` | 模型文件路径 |
