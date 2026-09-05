@@ -18,8 +18,9 @@ import json
 import logging
 import os
 import re
-import subprocess
 import urllib.parse
+
+from knowledge._ytdlp import format_error, run_yt_dlp, yt_dlp_path
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class InstagramError(Exception):
 
 
 def _yt_dlp_path() -> str:
-    return os.environ.get("YT_DLP_PATH", "yt-dlp")
+    return yt_dlp_path()
 
 
 def _cookies_file() -> str | None:
@@ -98,22 +99,14 @@ def _yt_dlp_error_message(stderr: str, action: str) -> str:
         if re.search(r"login|rate.?limit|private|cookie", stderr, re.IGNORECASE)
         else ""
     )
-    tail = stderr.strip()[-500:]
-    return f"yt-dlp {action} failed{hint}: {tail}"
+    return format_error(stderr, action, hint)
 
 
-def _run_yt_dlp(cmd: list[str], timeout: int, action: str) -> subprocess.CompletedProcess:
-    """Shared subprocess wrapper for fetch_metadata/download_audio: turns a
-    missing binary or a timeout into the same InstagramError contract as an
-    ordinary yt-dlp failure, so callers only need one except clause."""
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise InstagramError(f"yt-dlp {action} timed out after {timeout}s") from e
-    except FileNotFoundError as e:
-        raise InstagramError(
-            f"yt-dlp not found (YT_DLP_PATH={_yt_dlp_path()!r}) — see scripts/README.md"
-        ) from e
+def _run_yt_dlp(cmd: list[str], timeout: int, action: str):
+    """Instagram-flavoured wrapper around knowledge._ytdlp.run_yt_dlp — same
+    behaviour, just raises InstagramError (the type this module's callers
+    already catch) instead of a generic one."""
+    return run_yt_dlp(cmd, timeout, action, InstagramError)
 
 
 def fetch_metadata(url: str) -> dict:

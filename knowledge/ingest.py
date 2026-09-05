@@ -22,12 +22,14 @@ to import fastapi just to catch a failure.
 """
 import hashlib
 import logging
+import os
 import re
 
 import database
 import knowledge.article
 import knowledge.instagram
 import knowledge.youtube
+from languages import DEFAULT_LANG
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,8 @@ class IngestError(Exception):
     failed, pasted text too short, ...)."""
 
 
-def ingest_url(url: str, china_critical: bool = False) -> dict:
+def ingest_url(url: str, china_critical: bool = False, as_audiobook: bool = False,
+               confirm_long: bool = False) -> dict:
     """Resolve `url` to a podcast_episodes row and return either
     {"episode_id": int} (newly created) or {"status": "already_exists",
     "episode_id": int} (deduped). Raises IngestError on failure.
@@ -47,13 +50,26 @@ def ingest_url(url: str, china_critical: bool = False) -> dict:
     at summarize time (podcast.summarize) — the summary happens in the
     separate .../process call when nobody is watching, so the flag has to be
     captured here, at paste time, which is the only moment Daniel knows what
-    he is adding. A deduped row keeps whatever flag it already had."""
+    he is adding. A deduped row keeps whatever flag it already had.
+
+    `as_audiobook` (#1054) routes YouTube URLs to _ingest_audiobook instead
+    of the ordinary captions-only _ingest_video: audiobook videos have no
+    caption track at all (see knowledge/youtube.py's audiobook section), so
+    the only way to get a timed transcript is to download the audio and run
+    local ASR. It is a caller error to set this for a non-YouTube URL —
+    routes/knowledge.py rejects that with a 400 before this function is even
+    reached, so it isn't re-validated here.
+    `confirm_long` is the answer to a previous {"status": "confirm_required"}
+    response — see _ingest_audiobook's docstring."""
     url = (url or "").strip()
     if not url:
         raise IngestError("url is required")
 
     video_id = knowledge.youtube.parse_video_id(url)
     if video_id:
+        if as_audiobook:
+            return _ingest_audiobook(url, video_id, china_critical=china_critical,
+                                     confirm_long=confirm_long)
         return _ingest_video(url, video_id, china_critical=china_critical)
 
     shortcode = knowledge.instagram.parse_shortcode(url)
@@ -61,6 +77,104 @@ def ingest_url(url: str, china_critical: bool = False) -> dict:
         return _ingest_instagram(url, shortcode, china_critical=china_critical)
 
     return _ingest_article(url, china_critical=china_critical)
+
+
+# Above this length (#1054), an audiobook is not downloaded until Daniel has
+# explicitly confirmed: a many-hour video means a multi-hundred-MB download
+# and an overnight whisper.cpp run (see scripts/audio_worker.py) — a decision
+# that must be his, not something that silently happens because he pasted a
+# link.
+_MAX_UNCONFIRMED_SECONDS = 3 * 60 * 60
+
+# Where downloaded audiobook source audio lives — separate from data/audio/
+# (which holds TTS-generated mp3s, audio/tts_track.py.AUDIO_CACHE_DIR) so the
+# two are never confused, though neither is included in the offline sync
+# (see CLAUDE.md's "笔记本模式" section on data/audio/ already being excluded).
+_AUDIOBOOK_AUDIO_DIR = os.path.join("data", "audio", "source")
+
+
+def _ingest_audiobook(url: str, video_id: str, china_critical: bool = False,
+                      confirm_long: bool = False) -> dict:
+    """Audiobook ingestion (#1054): download the video's audio and queue it
+    for local ASR transcription (audio/asr_local.py via database.audio_jobs,
+    picked up later by scripts/audio_worker.py during a quiet window) rather
+    than trying YouTube captions, which audiobook videos simply don't have.
+
+    Same dedup-before-any-network-work discipline as _ingest_video: an
+    already-ingested video must never be re-downloaded.
+
+    Returns {"status": "confirm_required", "duration_seconds": ..., "title":
+    ...} (HTTP 200, not an error — see routes/knowledge.py) instead of
+    downloading when the video is longer than _MAX_UNCONFIRMED_SECONDS and
+    the caller hasn't already passed confirm_long=True in response to that
+    same message. A duration yt-dlp can't determine at all (e.g. a
+    livestream) is treated the same way — "unknown" is not "safe to
+    download".
+    """
+    existing = database.get_episode_by_video_id(video_id)
+    if existing:
+        return {"status": "already_exists", "episode_id": existing["id"]}
+
+    try:
+        meta = knowledge.youtube.fetch_metadata(video_id)
+    except Exception as e:
+        logger.warning("knowledge.ingest: oEmbed metadata lookup failed for %s: %s", video_id, e)
+        raise IngestError(f"Could not fetch video metadata: {e}")
+
+    title = meta.get("title") or video_id
+
+    try:
+        duration = knowledge.youtube.fetch_duration(video_id)
+    except Exception as e:
+        logger.warning("knowledge.ingest: duration lookup failed for %s: %s", video_id, e)
+        raise IngestError(f"Could not determine video duration: {e}")
+
+    if not confirm_long and (duration is None or duration > _MAX_UNCONFIRMED_SECONDS):
+        return {"status": "confirm_required", "duration_seconds": duration, "title": title}
+
+    dest_dir = os.path.join(_AUDIOBOOK_AUDIO_DIR, video_id)
+    os.makedirs(dest_dir, exist_ok=True)
+    try:
+        mp3_path = knowledge.youtube.download_audio(url, dest_dir)
+    except Exception as e:
+        logger.warning("knowledge.ingest: audiobook download failed for %s: %s", video_id, e)
+        raise IngestError(f"Could not download audio: {e}")
+
+    # translate_title (#651) is one cheap AI call — best-effort, must not
+    # block/fail the ingest if it errors (translate_title itself already
+    # swallows exceptions and returns None in that case).
+    import ai
+    title_en = ai.translate_title(title)
+
+    episode_id = database.create_pending_episode(
+        video_id=video_id,
+        channel_id=meta.get("author_name"),
+        title=title,
+        published_at=None,
+        youtube_url=url,
+        # audio_url normally stores a remote mp3 direct link (RSS enclosure,
+        # #497). Reused here for the LOCAL path of the downloaded audiobook
+        # file — same "repurpose an existing column for a new meaning"
+        # precedent as word_zh storing French word forms (#803): a new
+        # column would mean a migration for a value that means exactly what
+        # the existing one already implies ("where the audio for this
+        # episode lives").
+        audio_url=mp3_path,
+        duration_seconds=duration,
+        kind="video",
+        china_critical=china_critical,
+        author=meta.get("author_name"),
+        platform="youtube",
+    )
+    if title_en:
+        database.update_episode(episode_id, title_en=title_en)
+
+    database.enqueue_audio_job(
+        owner_kind="episode", owner_id=episode_id, lang=DEFAULT_LANG,
+        audio_path=mp3_path,
+    )
+
+    return {"episode_id": episode_id, "queued": True}
 
 
 def _ingest_video(url: str, video_id: str, china_critical: bool = False) -> dict:

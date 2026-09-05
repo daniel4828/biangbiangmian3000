@@ -275,10 +275,24 @@ async function addWordViaAi(wordZh, day, onUpdate, lang) {
 // ({episode_id} or {status:'already_exists', episode_id}) and, for anything
 // newly ingested, kicks off transcription/summarising in the background —
 // POST /api/knowledge/add deliberately only stores the row.
-async function ingestKnowledge(payload) {
+//
+// confirmFn (#1054), only relevant when payload.as_audiobook is true: called
+// with the server's {"status":"confirm_required", duration_seconds, title}
+// response when a YouTube video's length couldn't be confirmed short — must
+// return/resolve a boolean. Returning false (or omitting confirmFn entirely,
+// which should never happen for as_audiobook but must not crash if it does)
+// resolves to {status:'cancelled'} without downloading anything; true
+// re-submits the same payload with confirm_long:true, which is what actually
+// triggers the download + local-ASR queueing server side.
+async function ingestKnowledge(payload, confirmFn) {
   const path = payload.url ? '/api/knowledge/add' : '/api/knowledge/add-text';
-  const res = await api('POST', path, payload);
-  if (res?.status !== 'already_exists' && res?.episode_id != null) {
+  let res = await api('POST', path, payload);
+  if (res?.status === 'confirm_required') {
+    const proceed = confirmFn ? await confirmFn(res) : false;
+    if (!proceed) return { status: 'cancelled' };
+    res = await api('POST', path, { ...payload, confirm_long: true });
+  }
+  if (res?.status !== 'already_exists' && res?.status !== 'cancelled' && res?.episode_id != null) {
     api('POST', `/api/podcast/episodes/${res.episode_id}/process`).catch(() => {});
   }
   return res;

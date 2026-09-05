@@ -20,6 +20,7 @@ import annotate
 import database
 import knowledge.files
 import knowledge.ingest
+import knowledge.youtube
 import routes.story
 from routes.utils import ai_disabled
 
@@ -34,6 +35,15 @@ class AddKnowledgeRequest(BaseModel):
     # iOS-shortcut / mailbox callers that don't send it keep the cheap
     # DeepSeek-first behavior.
     china_critical: bool = False
+    # #1054: YouTube audiobooks have no caption track at all, so this routes
+    # the URL to knowledge.ingest._ingest_audiobook (download audio + queue
+    # local ASR) instead of the ordinary captions-only path. Only meaningful
+    # for YouTube URLs — see add_knowledge below.
+    as_audiobook: bool = False
+    # Set by the frontend when re-submitting after a {"status":
+    # "confirm_required"} response (a video whose length ingest_url couldn't
+    # confirm is short) — see knowledge/ingest.py's _MAX_UNCONFIRMED_SECONDS.
+    confirm_long: bool = False
 
 
 class AddKnowledgeTextRequest(BaseModel):
@@ -51,8 +61,13 @@ class AddKnowledgeTextRequest(BaseModel):
 
 @router.post("/api/knowledge/add")
 def add_knowledge(body: AddKnowledgeRequest):
+    if body.as_audiobook and not knowledge.youtube.parse_video_id(body.url):
+        raise HTTPException(400, "as_audiobook is only supported for YouTube links")
     try:
-        return knowledge.ingest.ingest_url(body.url, china_critical=body.china_critical)
+        return knowledge.ingest.ingest_url(
+            body.url, china_critical=body.china_critical,
+            as_audiobook=body.as_audiobook, confirm_long=body.confirm_long,
+        )
     except knowledge.ingest.IngestError as e:
         raise HTTPException(400, str(e))
 

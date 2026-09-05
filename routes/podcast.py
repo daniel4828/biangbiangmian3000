@@ -3,6 +3,7 @@
 """
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -347,7 +348,28 @@ def get_episode(episode_id: int, lang: str = "zh"):
         except knowledge.rendition.RenditionError as e:
             episode["rendition"] = None
             episode["rendition_error"] = str(e)
+    episode["disk_bytes"] = _episode_disk_bytes(episode)
     return _overlay_processing_status(episode)
+
+
+def _episode_disk_bytes(episode: dict) -> int:
+    """Bytes on THIS server's disk for one episode's audio (#1054): the
+    downloaded source recording (audiobook ingestion writes its local path
+    into `audio_url`, reusing that column — see knowledge/ingest.py's
+    _ingest_audiobook docstring) plus every generated read-along track
+    (audio_tracks, #1048). A ~10h audiobook mp3 is 300-500 MB and the whole
+    server disk is 55 GB (per CLAUDE.md) — Daniel needs to see this, not
+    guess at it. Missing files (never downloaded, or a remote RSS
+    audio_url) are silently 0, never an error — this is informational only.
+    """
+    total = database.audio_disk_usage("episode", episode["id"])
+    audio_url = episode.get("audio_url")
+    if audio_url:
+        try:
+            total += os.path.getsize(audio_url)
+        except OSError:
+            pass
+    return total
 
 
 @router.post("/api/podcast/episodes/{episode_id}/retry")

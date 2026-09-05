@@ -31,6 +31,21 @@ os.environ["DB_PATH"] = _FALLBACK_DB
 import pytest
 
 
+def pytest_configure(config):
+    # #1054: test_youtube_audiobook.py's autouse "no real metadata/download"
+    # fixture stubs knowledge.youtube.fetch_duration/download_audio as
+    # tripwires — but the tests exercising those two functions directly need
+    # to opt out of that tripwire (they stub subprocess.run instead, one
+    # level lower). Registering the marker here avoids a
+    # PytestUnknownMarkWarning on every one of those tests.
+    config.addinivalue_line(
+        "markers",
+        "real_youtube_calls: test exercises knowledge.youtube's own "
+        "fetch_duration/download_audio (stubs subprocess.run instead) and "
+        "must skip the autouse tripwire that stubs those functions themselves",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _no_real_tts(monkeypatch, tmp_path_factory):
     """Never let a test open an edge-tts connection.

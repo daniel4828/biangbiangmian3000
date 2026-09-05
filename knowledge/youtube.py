@@ -1,7 +1,15 @@
 """YouTube ingestion (issue #651): turn a video URL into a transcript the
 existing podcast pipeline (podcast.summarize / _process_episode) can consume
-unchanged. No audio download, no Whisper — captions only; a video with no
-caption track at all falls to status='no_transcript' (see podcast.fetch_transcript).
+unchanged. Captions only for the ordinary path; a video with no caption
+track at all falls to status='no_transcript' (see podcast.fetch_transcript).
+
+Issue #1054 adds a second path, used only when the caller explicitly asks
+for it (knowledge.ingest's as_audiobook flag): audiobook videos have no
+caption track at all, so fetch_duration()/download_audio() below fetch the
+audio itself via yt-dlp and hand it to local ASR (audio/asr_local.py,
+queued through audio_jobs) instead — see that section further down for why
+this is a deliberately separate, opt-in path rather than a fallback the
+ordinary captions flow reaches for automatically.
 
 Issue #681: YouTube blocks cloud-provider IPs, so on the production VPS the
 caption API answers `RequestBlocked` for videos that do have captions. That
@@ -20,10 +28,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from knowledge._ytdlp import format_error, run_yt_dlp, yt_dlp_path
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +142,78 @@ def fetch_metadata(video_id: str) -> dict:
         "title": data.get("title") or video_id,
         "author_name": data.get("author_name"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Audiobook ingestion (#1054): YouTube offers no downloadable captions for
+# these (that's the whole reason this feature is last in #1047's umbrella —
+# see the module CLAUDE.md entry), so the pipeline downloads the audio
+# itself and hands it to audio/asr_local.py (whisper.cpp, queued via
+# audio_jobs) instead. yt-dlp is used here the same way knowledge/instagram.py
+# already uses it — see knowledge/_ytdlp.py for the shared subprocess plumbing.
+# ---------------------------------------------------------------------------
+
+# A ten-hour audiobook's audio track is a few hundred MB — the download
+# itself (bandwidth-bound, not duration-bound) takes minutes on any real
+# connection, but this is given generous headroom anyway since it runs
+# synchronously inside the add-a-URL request.
+_AUDIO_DOWNLOAD_TIMEOUT = 1800
+
+# Single lightweight metadata request, same budget as knowledge/instagram.py's
+# equivalent lookup.
+_DURATION_LOOKUP_TIMEOUT = 60
+
+
+class AudiobookDownloadError(Exception):
+    """A YouTube video's audio could not be downloaded, or its duration could
+    not be determined, for the audiobook ingestion path (#1054). Callers
+    (knowledge.ingest._ingest_audiobook) wrap this into IngestError so it
+    reads the same as every other ingestion failure."""
+
+
+def fetch_duration(video_id: str) -> int | None:
+    """Video duration in seconds via `yt-dlp --dump-json` — oEmbed
+    (fetch_metadata above) doesn't include it, and it's the audiobook
+    download guard's only way to know "is this short enough to fetch without
+    asking first" before paying for a multi-hundred-MB download.
+
+    Raises AudiobookDownloadError if yt-dlp itself can't be run or reports a
+    failure — the caller must not treat "couldn't check" as "must be fine".
+    Returns None only when yt-dlp succeeds but the video genuinely has no
+    duration field (e.g. an ongoing livestream) — the caller treats that as
+    "unknown, ask first" too, since there's nothing here to say it's safe.
+    """
+    cmd = [yt_dlp_path(), "--dump-json", "--no-warnings", _watch_url(video_id)]
+    result = run_yt_dlp(cmd, _DURATION_LOOKUP_TIMEOUT, "duration lookup", AudiobookDownloadError)
+    if result.returncode != 0:
+        raise AudiobookDownloadError(format_error(result.stderr, "duration lookup"))
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise AudiobookDownloadError(f"yt-dlp returned unparsable metadata for {video_id}: {e}") from e
+    return data.get("duration")
+
+
+def download_audio(url: str, dest_dir: str) -> str:
+    """Download `url`'s audio track as an mp3 into dest_dir via yt-dlp,
+    returning the mp3 path. Mirrors knowledge/instagram.py's download_audio —
+    same structure, same yt-dlp invocation shape — just no cookie jar
+    (public YouTube videos need none) and raises AudiobookDownloadError
+    instead of InstagramError.
+    """
+    out_template = os.path.join(dest_dir, "audio.%(ext)s")
+    cmd = [
+        yt_dlp_path(), "-f", "bestaudio", "-x", "--audio-format", "mp3",
+        "--no-warnings", "-o", out_template, url,
+    ]
+    result = run_yt_dlp(cmd, _AUDIO_DOWNLOAD_TIMEOUT, "audio download", AudiobookDownloadError)
+    if result.returncode != 0:
+        raise AudiobookDownloadError(format_error(result.stderr, "audio download"))
+
+    mp3_path = os.path.join(dest_dir, "audio.mp3")
+    if not os.path.isfile(mp3_path):
+        raise AudiobookDownloadError(f"yt-dlp reported success but no mp3 was produced for {url}")
+    return mp3_path
 
 
 def _fetch_captions_via_api(video_id: str) -> tuple[str | None, str | None]:
