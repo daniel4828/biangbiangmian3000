@@ -553,3 +553,51 @@ whisper-cli -h | head -3
 |------|--------|------|
 | `WHISPER_CPP_PATH` | `whisper-cli` | 可执行文件路径；找不到时本地转录路径抛出可读错误，不影响其它三条对齐路径 |
 | `WHISPER_CPP_MODEL` | `/opt/whisper.cpp/models/ggml-large-v3-q5_0.bin` | 模型文件路径 |
+
+---
+
+## YouTube cookies（issue #1067）
+
+有声书摄取（#1054）从 YouTube 下载音频时，**服务器的机房 IP 会被拦**：
+
+```
+ERROR: [youtube] <id>: Sign in to confirm you're not a bot.
+```
+
+2026-09-05 实测确认。这不是安装问题——venv 里 yt-dlp 装着、`YT_DLP_PATH`
+也配了。它是字幕 API 那个 `RequestBlocked`（#651 因此走 NotebookLM 兜底）
+在下载侧的同一件事：**IP 被封，不是工具坏了。**
+
+解法和 Instagram（#750）完全一样：给 yt-dlp 一份登录态 cookies。
+
+### 一次性导出（在自己电脑上做，不是服务器）
+
+1. 浏览器装一个能导出 Netscape 格式的扩展（比如 "Get cookies.txt LOCALLY"）
+2. 打开并登录 `youtube.com`，用扩展导出当前站点的 cookies
+3. 传到服务器：
+
+```bash
+scp cookies.txt anki@<服务器>:/home/anki/biangbiangmian3000/data/youtube_cookies.txt
+```
+
+4. 权限收紧（里面是登录凭据）：
+
+```bash
+ssh anki@<服务器> "chmod 600 /home/anki/biangbiangmian3000/data/youtube_cookies.txt"
+```
+
+不需要改 `.env`——默认路径就是 `data/youtube_cookies.txt`。
+
+### 会过期
+
+和 Instagram 的一样，cookies 隔一段时间就失效。失效时错误信息会**明说**
+是 cookies 过期（`knowledge/youtube.py` 的 `_cookie_hint()`），重导一次即可。
+
+**不想维护 cookies 的话**：直接上传音频文件（#1068）那条路完全不依赖
+YouTube，也不会过期。
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `YOUTUBE_COOKIES_FILE` | `data/youtube_cookies.txt` | Netscape 格式；文件不存在时照常尝试下载（未被封的 IP 上多数视频不需要），失败时错误信息会指出可能缺 cookies |

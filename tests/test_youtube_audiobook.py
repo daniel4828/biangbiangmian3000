@@ -288,6 +288,64 @@ def test_download_audio_returns_mp3_path(monkeypatch, tmp_path):
 
 
 @pytest.mark.real_youtube_calls
+def test_download_audio_passes_cookies_when_the_jar_exists(monkeypatch, tmp_path):
+    """#1067: YouTube blocks this server's datacenter IP ("Sign in to confirm
+    you're not a bot"), so the cookie jar is the only way a download from
+    production ever succeeds."""
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(jar))
+    seen = {}
+
+    def fake_run(cmd, capture_output, text, timeout):
+        seen["cmd"] = cmd
+        (tmp_path / "audio.mp3").write_bytes(b"fake mp3 bytes")
+        return _FakeCompleted(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    yt.download_audio("https://www.youtube.com/watch?v=abc", str(tmp_path))
+    assert "--cookies" in seen["cmd"]
+    assert str(jar) in seen["cmd"]
+
+
+@pytest.mark.real_youtube_calls
+def test_download_audio_still_tries_without_a_cookie_jar(monkeypatch, tmp_path):
+    """Missing cookies must not be a hard stop: from an unblocked IP plenty
+    of videos download fine without any."""
+    monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(tmp_path / "absent.txt"))
+    seen = {}
+
+    def fake_run(cmd, capture_output, text, timeout):
+        seen["cmd"] = cmd
+        (tmp_path / "audio.mp3").write_bytes(b"fake mp3 bytes")
+        return _FakeCompleted(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    yt.download_audio("https://www.youtube.com/watch?v=abc", str(tmp_path))
+    assert "--cookies" not in seen["cmd"]
+
+
+@pytest.mark.real_youtube_calls
+def test_download_failure_names_the_cookie_cause(monkeypatch, tmp_path):
+    """The message is the only diagnostic Daniel ever sees. A bare "download
+    failed" hides the one cause that is almost always the real one."""
+    monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(tmp_path / "absent.txt"))
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: _FakeCompleted(1, stderr="Sign in to confirm you're not a bot"))
+
+    with pytest.raises(yt.AudiobookDownloadError) as e:
+        yt.download_audio("https://www.youtube.com/watch?v=abc", str(tmp_path))
+    assert "cookies" in str(e.value).lower()
+
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(jar))
+    with pytest.raises(yt.AudiobookDownloadError) as e2:
+        yt.download_audio("https://www.youtube.com/watch?v=abc", str(tmp_path))
+    assert "expired" in str(e2.value).lower()
+
+
+@pytest.mark.real_youtube_calls
 def test_download_audio_missing_output_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeCompleted(0))
 

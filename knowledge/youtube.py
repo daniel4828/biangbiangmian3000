@@ -163,6 +163,47 @@ _AUDIO_DOWNLOAD_TIMEOUT = 1800
 # equivalent lookup.
 _DURATION_LOOKUP_TIMEOUT = 60
 
+# Netscape-format cookie jar, exactly like INSTAGRAM_COOKIES_FILE (#750).
+# Needed because YouTube blocks this server's datacenter IP: measured
+# 2026-09-05, a plain `yt-dlp --dump-json` from the VPS answers "Sign in to
+# confirm you're not a bot", the download-side counterpart of the caption
+# API's permanent RequestBlocked that sends #651's ingestion through
+# NotebookLM. Nothing is wrong with the install — the IP is the problem, and
+# a signed-in cookie jar is what gets past it.
+_DEFAULT_COOKIES_FILE = "data/youtube_cookies.txt"
+
+
+def _cookies_file() -> str | None:
+    """YOUTUBE_COOKIES_FILE (default data/youtube_cookies.txt), only if it
+    actually exists on disk.
+
+    Missing is deliberately NOT an error: from an unblocked IP (Daniel's
+    laptop) plenty of videos download fine without any cookies, and refusing
+    to try would break that. What must never happen is failing *silently* for
+    the real reason — see _cookie_hint below.
+    """
+    path = os.environ.get("YOUTUBE_COOKIES_FILE", _DEFAULT_COOKIES_FILE)
+    return path if path and os.path.isfile(path) else None
+
+
+def _cookie_hint() -> str:
+    """The one diagnostic line Daniel actually gets to see.
+
+    A bare "yt-dlp audio download failed" is useless here, because the
+    overwhelmingly likely cause is invisible from the message: either no
+    cookie jar exists on a blocked IP, or the one that does has expired
+    (they do, regularly — same as Instagram's, #750). Naming both cases
+    turns a dead end into a two-minute fix.
+    """
+    return (" (no YouTube cookies configured — YouTube blocks this server's IP, "
+            "see scripts/README.md)" if not _cookies_file()
+            else " (YouTube cookies may have expired — re-export them, see scripts/README.md)")
+
+
+def _with_cookies(cmd: list[str]) -> list[str]:
+    cookies = _cookies_file()
+    return cmd + ["--cookies", cookies] if cookies else cmd
+
 
 class AudiobookDownloadError(Exception):
     """A YouTube video's audio could not be downloaded, or its duration could
@@ -183,10 +224,11 @@ def fetch_duration(video_id: str) -> int | None:
     duration field (e.g. an ongoing livestream) — the caller treats that as
     "unknown, ask first" too, since there's nothing here to say it's safe.
     """
-    cmd = [yt_dlp_path(), "--dump-json", "--no-warnings", _watch_url(video_id)]
+    cmd = _with_cookies([yt_dlp_path(), "--dump-json", "--no-warnings", _watch_url(video_id)])
     result = run_yt_dlp(cmd, _DURATION_LOOKUP_TIMEOUT, "duration lookup", AudiobookDownloadError)
     if result.returncode != 0:
-        raise AudiobookDownloadError(format_error(result.stderr, "duration lookup"))
+        raise AudiobookDownloadError(
+            format_error(result.stderr, "duration lookup", _cookie_hint()))
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError as e:
@@ -197,18 +239,19 @@ def fetch_duration(video_id: str) -> int | None:
 def download_audio(url: str, dest_dir: str) -> str:
     """Download `url`'s audio track as an mp3 into dest_dir via yt-dlp,
     returning the mp3 path. Mirrors knowledge/instagram.py's download_audio —
-    same structure, same yt-dlp invocation shape — just no cookie jar
-    (public YouTube videos need none) and raises AudiobookDownloadError
-    instead of InstagramError.
+    same structure, same yt-dlp invocation shape, same optional cookie jar
+    (#1067; see _cookies_file) — and raises AudiobookDownloadError instead of
+    InstagramError.
     """
     out_template = os.path.join(dest_dir, "audio.%(ext)s")
-    cmd = [
+    cmd = _with_cookies([
         yt_dlp_path(), "-f", "bestaudio", "-x", "--audio-format", "mp3",
         "--no-warnings", "-o", out_template, url,
-    ]
+    ])
     result = run_yt_dlp(cmd, _AUDIO_DOWNLOAD_TIMEOUT, "audio download", AudiobookDownloadError)
     if result.returncode != 0:
-        raise AudiobookDownloadError(format_error(result.stderr, "audio download"))
+        raise AudiobookDownloadError(
+            format_error(result.stderr, "audio download", _cookie_hint()))
 
     mp3_path = os.path.join(dest_dir, "audio.mp3")
     if not os.path.isfile(mp3_path):

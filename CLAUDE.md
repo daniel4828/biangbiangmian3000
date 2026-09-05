@@ -396,6 +396,7 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 | `GROQ_API_KEY` | 可选 | Instagram Reel 转录（#750）的主力，Groq `whisper-large-v3-turbo`（约比 OpenAI 便宜 9 倍、快 10 倍）；未配置时自动回退已有的 OpenAI `whisper-1`（`OPENAI_API_KEY`），只是单价贵约 9 倍——不是本功能能否使用的前提。获取方式见 `scripts/README.md` |
 | `INSTAGRAM_COOKIES_FILE` | `data/instagram_cookies.txt` | Instagram Reel 摄取（#750）用的登录态 cookies（Netscape 格式，`yt-dlp --cookies`）；文件不存在时公开 Reel 仍会尝试下载，不一定成功。会过期，过期时的错误信息会明说，一次性导出步骤见 `scripts/README.md` |
 | `YT_DLP_PATH` | `yt-dlp` | Instagram Reel 摄取（#750）用的 yt-dlp 可执行文件路径；系统级命令行工具（同 `ffmpeg` 的处理方式），装在非默认位置时指过去 |
+| `YOUTUBE_COOKIES_FILE` | `data/youtube_cookies.txt` | 有声书摄取（#1054）从 YouTube 下载音频用的登录态 cookies（Netscape 格式，同 `INSTAGRAM_COOKIES_FILE`）。**服务器的机房 IP 被 YouTube 拦**（2026-09-05 实测：`Sign in to confirm you're not a bot`，即字幕 API 那个 `RequestBlocked` 在下载侧的同一件事），没有 cookies 基本下不动；文件不存在时仍会尝试，失败信息会明说可能缺 cookies 或已过期。导出步骤见 `scripts/README.md` |
 | `WHISPER_CPP_PATH` | `whisper-cli` | 听读模式本地转录（#1053）用的 whisper.cpp 可执行文件；系统级工具（同 `ffmpeg`/`yt-dlp`），未安装时该路径自动跳过并报可读原因。一次性编译步骤见 `scripts/README.md` |
 | `WHISPER_CPP_MODEL` | `/opt/whisper.cpp/models/ggml-large-v3-q5_0.bin` | 同上，量化模型文件路径 |
 
