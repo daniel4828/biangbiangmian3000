@@ -6,7 +6,11 @@
   <title>biangbiangmian3000</title>
   <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/logo.svg">
-  <link rel="stylesheet" href="/static/style.css?v=18">
+  <link rel="stylesheet" href="/static/style.css?v=19">
+  <!-- Dictionary-result styling, shared with the standalone /dict page
+       (#1055): the header search box renders lookups with shared.js's
+       renderDictResult(), so both pages must load the same sheet. -->
+  <link rel="stylesheet" href="/static/dict-result.css?v=1">
 </head>
 <body>
 
@@ -79,19 +83,23 @@
     <!-- ＋ / 📖 / 🎲 moved to the deck-list nav row (#816) so the header can
          hold the language tabs. -->
     <button id="header-regen-btn" onclick="regenerateStory()" title="Regenerate story" style="display:none">↺</button>
-    <!-- #816 moved ＋ to the deck-list nav row, which left review with no
-         add-word entry point at all on a phone (⌘A only helps on a desktop) —
-         and reading a sentence is exactly when a new word turns up (#829).
-         Since #958 it shows in every view: a new word turns up while browsing,
-         reading a book or a knowledge item just as often as during review.
-         toggleAddWordModal() (not openAddWordModal) so the language rule lives
-         in exactly one place — review uses the card's language, elsewhere the
-         home page's tab decides.
+    <!-- The header slot that held ＋ from #829/#958 is a search box since
+         #1055. Meeting a word, the first question is usually "do I already
+         have this one?", and answering it meant leaving whatever screen he
+         was on for Browse. Typing here searches the whole vocabulary; a hit
+         opens the full entry, a miss (or a whole sentence) goes to the AI
+         dictionary, and both paths end at the same ★ add-word pipeline.
+         Adding directly is still one row down in the panel, so the phone
+         entry point #829 was written for survives — ＋ itself also stays on
+         the deck list's nav row and on ⌘A.
          Last child on purpose (#975): every other button here is conditional
          (⚙ only while something runs, ⟳ only on the laptop, ↺ only in review),
-         so anywhere but the end makes the most-pressed button slide around. -->
-    <button id="header-add-btn" onclick="toggleAddWordModal()"
-            title="Add a new word (⌘A)" style="display:none">＋</button>
+         so anywhere but the end makes the most-used control slide around. -->
+    <div id="header-search-wrap">
+      <input id="header-search-input" type="search" placeholder="Search or look up…"
+             autocomplete="off" spellcheck="false" title="Search your vocabulary (⌘K)">
+      <div id="header-search-panel" style="display:none"></div>
+    </div>
   </div>
 </header>
 
@@ -788,8 +796,8 @@
 </div>
 
 <div id="word-tip" style="display:none"></div>
-<script src="/static/shared.js?v=5"></script>
-<script src="/static/app.js?v=24"></script>
+<script src="/static/shared.js?v=6"></script>
+<script src="/static/app.js?v=25"></script>
 
 <!-- Edit card modal -->
 <div id="edit-modal-overlay" onclick="closeEditCard()" style="display:none"></div>
@@ -1092,6 +1100,19 @@
     <div id="add-word-status"></div>
     <div id="add-word-queue"></div>
   </div>
+</div>
+
+<!-- Dictionary result popup (#1055) — the header search box's answer when the
+     word is not in the vocabulary. Same shell as #add-word-modal; the body is
+     filled by shared.js's renderDictResult(), the very same renderer the
+     standalone /dict page uses (#643/#668: one implementation per feature). -->
+<div id="dict-result-overlay" onclick="closeDictResultModal()" style="display:none"></div>
+<div id="dict-result-modal" style="display:none">
+  <div class="edit-modal-header">
+    <span class="edit-modal-title" id="dict-result-title">Dictionary</span>
+    <button class="edit-modal-close" onclick="closeDictResultModal()">✕</button>
+  </div>
+  <div id="dict-result-body"></div>
 </div>
 
 <!-- Sentence-question modal (#853): ask AI about the sentence on the current

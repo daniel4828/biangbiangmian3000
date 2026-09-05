@@ -13,6 +13,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Dictionary">
 <meta name="theme-color" content="#c7871f">
+<!-- Result rendering + its CSS are shared with the header search box
+     (#1055) via shared.js's renderDictResult() — see dict-result.css. -->
+<link rel="stylesheet" href="/static/dict-result.css">
 <style>
   :root { color-scheme: light dark; --bg:#f4f5f7; --card:#fff; --fg:#1c1e21; --muted:#6b7075;
           --line:#d7d9dd; --accent:#c7871f; --ok:#1f7a44; --err:#a3232b;
@@ -50,18 +53,10 @@
   button.go:disabled { opacity: .5; }
   .hint { margin: .8rem 0 0; font-size: .8rem; color: var(--muted); }
 
-  /* Result area */
+  /* Result area — rendering + styling shared with the header search box
+     (#1055) via shared.js's renderDictResult() and dict-result.css. */
   #result { margin-top: 1.1rem; }
   #result:empty { display: none; }
-  .headline-row { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
-  button.repeat {
-    margin-left: auto; align-self: center; flex-shrink: 0;
-    padding: .3rem .6rem; font: inherit; font-size: .82rem;
-    color: var(--muted); background: var(--card);
-    border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
-  }
-  button.repeat:hover:not(:disabled) { background: var(--line); color: var(--fg); }
-  button.repeat:disabled { opacity: .5; cursor: default; }
   /* Language picker (#805) — same pattern as /add (#726): hidden until
      /api/langs says more than one language is in use. */
   .langs { display: none; gap: .4rem; margin-bottom: .9rem; }
@@ -71,59 +66,6 @@
     border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
   }
   .langs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-
-  .headline { font-size: 1.6rem; font-weight: 700; }
-  .headline-pinyin { color: var(--muted); font-size: 1rem; }
-  .headline-de { color: var(--fg); opacity: .8; margin-top: .15rem; }
-  .notes { margin-top: .5rem; font-size: .9rem; color: var(--muted); }
-
-  .sentence-card {
-    margin-top: 1rem; padding: .8rem; border-radius: 10px;
-    background: var(--star-bg); border: 1px solid var(--star-line);
-    display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem;
-  }
-  .sentence-card .text { flex: 1; min-width: 0; }
-  .sentence-card .zh { font-size: 1.25rem; font-weight: 600; }
-  .sentence-card .pinyin { color: var(--muted); font-size: .9rem; margin-top: .1rem; }
-  .sentence-card .de { font-size: .9rem; margin-top: .2rem; opacity: .85; }
-
-  .group { margin-top: 1.1rem; }
-  .group-label { font-size: .85rem; font-weight: 600; color: var(--muted); margin-bottom: .4rem; }
-  .option {
-    display: flex; align-items: flex-start; gap: .6rem;
-    padding: .6rem .7rem; margin-bottom: .5rem; border-radius: 10px;
-    background: var(--bg); border: 1px solid var(--line);
-  }
-  .option.recommended { background: var(--star-bg); border-color: var(--star-line); }
-  .option .key { color: var(--muted); font-size: .85rem; min-width: 1rem; }
-  .option .body { flex: 1; min-width: 0; }
-  .option .zh-row { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
-  .option .zh { font-size: 1.15rem; font-weight: 700; }
-  .option .pinyin { color: var(--muted); font-size: .9rem; }
-  .option .star-mark { font-size: .95rem; }
-  .option .register {
-    font-size: .7rem; color: var(--muted); background: var(--card);
-    border: 1px solid var(--line); border-radius: 6px; padding: .05rem .4rem;
-  }
-  .option .trans { font-size: .88rem; margin-top: .2rem; }
-  .option .trans .lbl { color: var(--muted); }
-  .option .usage { font-size: .85rem; margin-top: .3rem; color: var(--fg); opacity: .85; }
-  .option .example { font-size: .85rem; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed var(--line); }
-  .option .example .ex-zh { font-weight: 600; }
-  .option .example .ex-pinyin { color: var(--muted); }
-  .option .example .ex-de { opacity: .8; }
-
-  button.star {
-    flex-shrink: 0; width: 2.1rem; height: 2.1rem; padding: 0;
-    font-size: 1.1rem; line-height: 1; border-radius: 8px; cursor: pointer;
-    background: var(--card); border: 1px solid var(--line); color: var(--fg);
-  }
-  button.star:hover { background: var(--line); }
-  button.star:disabled { cursor: default; }
-  button.star.running { opacity: .6; }
-  button.star.done { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
-  button.star.error { background: var(--err-bg); border-color: var(--err); color: var(--err); }
-  .star-err-msg { font-size: .78rem; color: var(--err); margin-top: .3rem; overflow-wrap: anywhere; }
 
   #status { margin-top: .8rem; font-size: .9rem; color: var(--muted); }
   #status.error { color: var(--err); }
@@ -179,7 +121,7 @@
   </div>
 </main>
 
-<script src="/static/shared.js?v=5"></script>
+<script src="/static/shared.js?v=6"></script>
 <script>
   // Standalone dictionary page (#746). Daniel already uses DeepSeek as an
   // ad-hoc dictionary — this gives that a home with history and one-tap
@@ -251,55 +193,18 @@
       : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
 
-  // ---- Star button: adds option.zh to the ★ List via the one shared
-  // add-word pipeline (#643). Each button tracks its own state so several
-  // can be "running" (~30s each) at once without blocking one another —
-  // addWordViaAi already polls its own job, we just need to not share state.
-  function makeStarButton(zh, wordLang) {
-    const btn = document.createElement('button');
-    btn.className = 'star';
-    btn.type = 'button';
-    btn.textContent = '★';
-    btn.title = `Add "${zh}" to your ★ List`;
-    const errMsg = document.createElement('div');
-    errMsg.className = 'star-err-msg';
-    errMsg.style.display = 'none';
-
-    btn.onclick = () => {
-      btn.disabled = true;
-      btn.classList.add('running');
-      btn.textContent = '…';
-      errMsg.style.display = 'none';
-      addWordViaAi(zh, 'list', (state, text) => {
-        if (state === 'running') {
-          btn.classList.add('running');
-          btn.textContent = '…';
-        } else if (state === 'done') {
-          btn.classList.remove('running');
-          btn.classList.add('done');
-          btn.textContent = '✓';
-          btn.title = text || 'Added';
-        } else if (state === 'error') {
-          btn.classList.remove('running');
-          btn.classList.add('error');
-          btn.textContent = '⚠';
-          btn.disabled = false;
-          errMsg.textContent = text || 'Failed to add';
-          errMsg.style.display = '';
-        } else if (state === 'idle') {
-          // Cancelled the "already in your collection" confirmation (#888) —
-          // nothing happened, so put the button back to its start state.
-          btn.classList.remove('running');
-          btn.textContent = '★';
-          btn.disabled = false;
-        }
-      }, wordLang || lang);
-    };
-
-    const wrap = document.createElement('div');
-    wrap.style.flexShrink = '0';
-    wrap.append(btn, errMsg);
-    return wrap;
+  // Result rendering (headline, sentence card, candidate options, ★ button)
+  // is shared with the header search box via shared.js's renderDictResult()
+  // (#1055) — see that function's doc comment for the textContent-only rule
+  // AI output must follow. Repeat (#777) re-asks the exact same question
+  // when the answer was poor — the query box is empty by then (cleared on
+  // success) and a pasted German sentence is painful to retype, so the
+  // callback closes over the stored record instead of the input box.
+  function renderResult(record) {
+    renderDictResult(resultEl, record, {
+      onRepeat: rec => lookup(rec.query, rec.id, rec.lang),
+      addLang: lang,
+    });
   }
 
   function textEl(tag, cls, text) {
@@ -307,98 +212,6 @@
     if (cls) el.className = cls;
     if (text != null) el.textContent = text;
     return el;
-  }
-
-  // Renders one {id, created_at, query, result} record into #result.
-  // Everything from the AI is untrusted text — textContent only, never
-  // innerHTML, all the way through this function.
-  function renderResult(record) {
-    const r = record.result || {};
-    resultEl.replaceChildren();
-
-    const head = document.createElement('div');
-    const hrow = textEl('div', 'headline-row');
-    hrow.append(textEl('span', 'headline', r.headline || record.query));
-    if (r.headline_pinyin) hrow.append(textEl('span', 'headline-pinyin', r.headline_pinyin));
-    // Repeat (#777): ask the exact same question again when the answer was
-    // poor. The query box is empty by now (cleared on success) and a pasted
-    // German sentence is painful to retype — the record still knows it.
-    const repeat = document.createElement('button');
-    repeat.className = 'repeat';
-    repeat.type = 'button';
-    repeat.textContent = '↻ Repeat';
-    repeat.title = 'Ask again — this stored answer is replaced';
-    repeat.onclick = () => lookup(record.query, record.id, record.lang);
-    hrow.append(repeat);
-    head.append(hrow);
-    if (r.headline_de) head.append(textEl('div', 'headline-de', r.headline_de));
-    if (r.notes) head.append(textEl('div', 'notes', r.notes));
-    resultEl.append(head);
-
-    if (r.kind === 'sentence' && r.sentence) {
-      const card = document.createElement('div');
-      card.className = 'sentence-card';
-      const text = document.createElement('div');
-      text.className = 'text';
-      text.append(textEl('div', 'zh', r.sentence.zh || ''));
-      if (r.sentence.pinyin) text.append(textEl('div', 'pinyin', r.sentence.pinyin));
-      if (r.sentence.de) text.append(textEl('div', 'de', r.sentence.de));
-      card.append(text);
-      if (r.sentence.zh) card.append(makeStarButton(r.sentence.zh, record.lang));
-      resultEl.append(card);
-    }
-
-    for (const group of (r.groups || [])) {
-      const g = document.createElement('div');
-      g.className = 'group';
-      if (group.label) g.append(textEl('div', 'group-label', group.label));
-      for (const opt of (group.options || [])) {
-        g.append(renderOption(opt, record.lang));
-      }
-      resultEl.append(g);
-    }
-  }
-
-  function renderOption(opt, wordLang) {
-    const row = document.createElement('div');
-    row.className = 'option' + (opt.recommended ? ' recommended' : '');
-
-    row.append(textEl('div', 'key', opt.key || ''));
-
-    const body = document.createElement('div');
-    body.className = 'body';
-
-    const zhRow = textEl('div', 'zh-row');
-    zhRow.append(textEl('span', 'zh', opt.zh || ''));
-    if (opt.pinyin) zhRow.append(textEl('span', 'pinyin', opt.pinyin));
-    if (opt.recommended) zhRow.append(textEl('span', 'star-mark', '⭐'));
-    if (opt.register) zhRow.append(textEl('span', 'register', opt.register));
-    body.append(zhRow);
-
-    if (opt.de) {
-      const t = textEl('div', 'trans');
-      t.append(textEl('span', 'lbl', 'de: '), document.createTextNode(opt.de));
-      body.append(t);
-    }
-    if (opt.fr) {
-      const t = textEl('div', 'trans');
-      t.append(textEl('span', 'lbl', 'fr: '), document.createTextNode(opt.fr));
-      body.append(t);
-    }
-    if (opt.usage) body.append(textEl('div', 'usage', opt.usage));
-
-    if (opt.example_zh) {
-      const ex = document.createElement('div');
-      ex.className = 'example';
-      ex.append(textEl('div', 'ex-zh', opt.example_zh));
-      if (opt.example_pinyin) ex.append(textEl('div', 'ex-pinyin', opt.example_pinyin));
-      if (opt.example_de) ex.append(textEl('div', 'ex-de', opt.example_de));
-      body.append(ex);
-    }
-
-    row.append(body);
-    if (opt.zh) row.append(makeStarButton(opt.zh, wordLang));
-    return row;
   }
 
   // ---- Lookup ----
@@ -411,7 +224,7 @@
     if (!q) return;
     goBtn.disabled = true;
     queryEl.disabled = true;
-    const repeatBtns = resultEl.querySelectorAll('button.repeat');
+    const repeatBtns = resultEl.querySelectorAll('button.dr-repeat');
     repeatBtns.forEach(b => { b.disabled = true; });
     setStatus(replaceId ? 'Asking again… (5–15s)' : 'Looking up… (5–15s)');
     try {

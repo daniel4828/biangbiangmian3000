@@ -1,0 +1,90 @@
+/* Dictionary lookup result rendering (#746, extracted for #1055).
+   Shared by the standalone /dict page (static/dict.html) and the header
+   search box in the main app — one function (shared.js renderDictResult),
+   one stylesheet, so a fix to how an option/example/star button looks only
+   has to be made once.
+
+   Every selector is scoped under .dr-root and every class name carries a
+   dr- prefix on purpose: .zh, .body, .key, .option, .example, .notes are
+   generic enough that static/style.css (4000+ lines, the main app's
+   stylesheet) very likely already defines something with the same name.
+   Without the prefix the two stylesheets would silently fight each other
+   the moment this file is loaded alongside style.css. */
+
+.dr-root {
+  --dr-bg: #f4f5f7; --dr-card: #fff; --dr-fg: #1c1e21; --dr-muted: #6b7075;
+  --dr-line: #d7d9dd; --dr-accent: #c7871f; --dr-ok: #1f7a44; --dr-err: #a3232b;
+  --dr-ok-bg: #e6f4ec; --dr-err-bg: #fdecee; --dr-star-bg: #fff7e6; --dr-star-line: #f0d38a;
+}
+@media (prefers-color-scheme: dark) {
+  .dr-root {
+    --dr-bg: #16181c; --dr-card: #232629; --dr-fg: #e6e6e6; --dr-muted: #9aa0a6;
+    --dr-line: #3a3d42; --dr-ok: #6ed49b; --dr-err: #ff9ba1;
+    --dr-ok-bg: #1d3328; --dr-err-bg: #3a2326; --dr-star-bg: #332c18; --dr-star-line: #5c4c22;
+  }
+}
+
+.dr-root .dr-headline-row { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+.dr-root button.dr-repeat {
+  margin-left: auto; align-self: center; flex-shrink: 0;
+  padding: .3rem .6rem; font: inherit; font-size: .82rem;
+  color: var(--dr-muted); background: var(--dr-card);
+  border: 1px solid var(--dr-line); border-radius: 8px; cursor: pointer;
+}
+.dr-root button.dr-repeat:hover:not(:disabled) { background: var(--dr-line); color: var(--dr-fg); }
+.dr-root button.dr-repeat:disabled { opacity: .5; cursor: default; }
+
+.dr-root .dr-headline { font-size: 1.6rem; font-weight: 700; color: var(--dr-fg); }
+.dr-root .dr-headline-pinyin { color: var(--dr-muted); font-size: 1rem; }
+.dr-root .dr-headline-de { color: var(--dr-fg); opacity: .8; margin-top: .15rem; }
+.dr-root .dr-notes { margin-top: .5rem; font-size: .9rem; color: var(--dr-muted); }
+
+.dr-root .dr-sentence-card {
+  margin-top: 1rem; padding: .8rem; border-radius: 10px;
+  background: var(--dr-star-bg); border: 1px solid var(--dr-star-line);
+  display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem;
+}
+.dr-root .dr-sentence-text { flex: 1; min-width: 0; }
+.dr-root .dr-sent-zh { font-size: 1.25rem; font-weight: 600; color: var(--dr-fg); }
+.dr-root .dr-sent-pinyin { color: var(--dr-muted); font-size: .9rem; margin-top: .1rem; }
+.dr-root .dr-sent-de { font-size: .9rem; margin-top: .2rem; opacity: .85; color: var(--dr-fg); }
+
+.dr-root .dr-group { margin-top: 1.1rem; }
+.dr-root .dr-group-label { font-size: .85rem; font-weight: 600; color: var(--dr-muted); margin-bottom: .4rem; }
+.dr-root .dr-option {
+  display: flex; align-items: flex-start; gap: .6rem;
+  padding: .6rem .7rem; margin-bottom: .5rem; border-radius: 10px;
+  background: var(--dr-bg); border: 1px solid var(--dr-line);
+}
+.dr-root .dr-option.dr-recommended { background: var(--dr-star-bg); border-color: var(--dr-star-line); }
+.dr-root .dr-option .dr-key { color: var(--dr-muted); font-size: .85rem; min-width: 1rem; }
+.dr-root .dr-option .dr-body { flex: 1; min-width: 0; }
+.dr-root .dr-option .dr-zh-row { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.dr-root .dr-option .dr-zh { font-size: 1.15rem; font-weight: 700; color: var(--dr-fg); }
+.dr-root .dr-option .dr-pinyin { color: var(--dr-muted); font-size: .9rem; }
+.dr-root .dr-option .dr-star-mark { font-size: .95rem; }
+.dr-root .dr-option .dr-register {
+  font-size: .7rem; color: var(--dr-muted); background: var(--dr-card);
+  border: 1px solid var(--dr-line); border-radius: 6px; padding: .05rem .4rem;
+}
+.dr-root .dr-option .dr-trans { font-size: .88rem; margin-top: .2rem; color: var(--dr-fg); }
+.dr-root .dr-option .dr-trans .dr-lbl { color: var(--dr-muted); }
+.dr-root .dr-option .dr-usage { font-size: .85rem; margin-top: .3rem; color: var(--dr-fg); opacity: .85; }
+.dr-root .dr-option .dr-example {
+  font-size: .85rem; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed var(--dr-line);
+}
+.dr-root .dr-option .dr-ex-zh { font-weight: 600; color: var(--dr-fg); }
+.dr-root .dr-option .dr-ex-pinyin { color: var(--dr-muted); }
+.dr-root .dr-option .dr-ex-de { opacity: .8; color: var(--dr-fg); }
+
+.dr-root button.dr-star {
+  flex-shrink: 0; width: 2.1rem; height: 2.1rem; padding: 0;
+  font-size: 1.1rem; line-height: 1; border-radius: 8px; cursor: pointer;
+  background: var(--dr-card); border: 1px solid var(--dr-line); color: var(--dr-fg);
+}
+.dr-root button.dr-star:hover { background: var(--dr-line); }
+.dr-root button.dr-star:disabled { cursor: default; }
+.dr-root button.dr-star.dr-running { opacity: .6; }
+.dr-root button.dr-star.dr-done { background: var(--dr-ok-bg); border-color: var(--dr-ok); color: var(--dr-ok); }
+.dr-root button.dr-star.dr-error { background: var(--dr-err-bg); border-color: var(--dr-err); color: var(--dr-err); }
+.dr-root .dr-star-err-msg { font-size: .78rem; color: var(--dr-err); margin-top: .3rem; overflow-wrap: anywhere; }

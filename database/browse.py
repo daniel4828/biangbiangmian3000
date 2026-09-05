@@ -91,6 +91,64 @@ def search_words(q: str, lang: str | None = None) -> dict:
     return {"primary": list(primary_ids), "secondary": list(secondary_ids)}
 
 
+def search_entries(q: str, lang: str | None = None, limit: int = 20) -> list[dict]:
+    """Return full entry rows (not just IDs) ranked by relevance, for the header search box (#1055).
+
+    search_words() above returns bare id lists because Browse already has the
+    entire vocabulary loaded client-side and just needs to filter it. The header
+    search box has no such payload sitting in memory — pulling /api/browse-words
+    (several MB) just to show three rows would be absurd — so it needs an
+    endpoint that returns rendered rows directly and does its own ranking/limit
+    in SQL.
+
+    Ranking (best match first, since `limit` would otherwise cut off the most
+    relevant rows if we sorted in Python after the fact):
+      0 = word_zh exact match
+      1 = word_zh starts with q
+      2 = word_zh contains q
+      3 = pinyin starts with q
+      4 = anything else (definition-only match)
+    Ties within a rank are broken by word_zh.
+    """
+    q = q.strip()
+    if not q:
+        return []
+    limit = max(1, min(limit, 100))
+    like = f"%{q}%"
+    prefix = f"{q}%"
+    lang_clause = " AND w.lang = ?" if lang else ""
+    lang_param = [lang] if lang else []
+    sql = f"""
+        SELECT w.id, w.word_zh, w.pinyin, w.definition, w.definition_de, w.definition_zh,
+               w.lang, w.note_type, w.hsk_level,
+               CASE
+                   WHEN w.word_zh = ? THEN 0
+                   WHEN w.word_zh LIKE ? THEN 1
+                   WHEN w.word_zh LIKE ? THEN 2
+                   WHEN w.pinyin LIKE ? THEN 3
+                   ELSE 4
+               END AS rank
+        FROM entries w
+        WHERE (w.word_zh LIKE ? OR w.pinyin LIKE ?
+           OR w.definition LIKE ? OR w.definition_zh LIKE ?
+           OR w.definition_de LIKE ?){lang_clause}
+        ORDER BY rank, w.word_zh
+        LIMIT ?
+    """
+    conn = get_db()
+    rows = conn.execute(
+        sql,
+        (q, prefix, like, prefix, like, like, like, like, like, *lang_param, limit),
+    ).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        d = dict(r)
+        d.pop("rank", None)  # SQL-only sort key, not part of the row contract
+        results.append(d)
+    return results
+
+
 def get_vocab_index(lang: str = "zh") -> list[str]:
     """Return the deduplicated list of word forms in the user's vocabulary for `lang`.
 

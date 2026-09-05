@@ -431,6 +431,22 @@ def search_words(q: str, lang: str | None = None):
     return database.search_words(q, lang)
 
 
+@router.get("/api/word-search")
+def word_search(q: str, lang: str | None = None, limit: int = 20):
+    """Header search box (#1055): return full, ranked entry rows, not just IDs.
+
+    /api/search-words above is Browse's search — it returns {"primary": [...],
+    "secondary": [...]} id lists because the caller already holds the entire
+    vocabulary in memory (/api/browse-words) and just filters it locally. The
+    header search box doesn't have that payload loaded, so making it call
+    search-words and then fetch /api/browse-words to render three rows would
+    mean pulling several MB of JSON for a live-as-you-type search box. This
+    endpoint instead returns rendered rows directly, ranked by relevance in
+    SQL (see database.search_entries), so the caller can display results as-is.
+    """
+    return {"words": database.search_entries(q, lang, limit)}
+
+
 @router.get("/api/words/{word_id}/cards")
 def get_word_cards(word_id: int):
     return database.get_cards_for_word(word_id)
