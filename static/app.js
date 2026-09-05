@@ -1037,11 +1037,11 @@ function showView(name) {
     name === 'books'        ? 'Books' :
     name === 'archive'      ? 'Archive' : 'biangbiangmian3000';
   if (name === 'decks') quickMode = false;
-  // ＋ in every view (#829 review-only, widened in #958). Hidden offline for
-  // the same reason as ↺: the whole entry generation is an AI call, so it can
-  // only fail there (#612).
-  const headerAddBtn = document.getElementById('header-add-btn');
-  if (headerAddBtn) headerAddBtn.style.display = _offlineMode ? 'none' : '';
+  // #1055 replaced the header ＋ with the search box, which needs no per-view
+  // handling: it shows in every view, offline included — searching the local
+  // vocabulary is exactly what still works without a network. The two AI rows
+  // inside its panel are the part that goes away offline, and
+  // _renderHeaderSearchPanel handles that itself.
   const headerRegenBtn = document.getElementById('header-regen-btn');
   // Offline mode hides both regenerate affordances — they can only fail (#612).
   if (headerRegenBtn) headerRegenBtn.style.display =
@@ -9584,6 +9584,211 @@ function _renderAddWordLangs() {
   }).join('');
 }
 
+// ── Header search box (#1055) ────────────────────────────────────────────────
+//
+// Took over the header slot that held ＋ (#829/#958). Meeting a word, the
+// first question is usually "do I already have this one?" — and answering it
+// meant leaving whatever screen he was on for Browse. So: type here, hit the
+// vocabulary; a hit opens the full entry, a miss (or a whole sentence) goes to
+// the AI dictionary. Adding is still one row down in the panel, so the phone
+// entry point #829 was written for is not lost.
+
+let _headerSearchTimer = null;
+let _headerSearchSeq = 0;      // guards against a slow earlier request landing last
+let _headerSearchRows = [];    // the matched entries currently drawn
+let _headerSearchActive = -1;  // keyboard cursor across rows + actions
+
+// Same rule as the ＋ this replaced (#829): during review the word was picked
+// out of the card in front of him, so that card's language wins — the home
+// page's tab is irrelevant there.
+function _headerSearchLang() {
+  return _currentView === 'review' ? currentCardLang() : activeLang();
+}
+
+function _headerSearchInput() { return document.getElementById('header-search-input'); }
+function _headerSearchPanelEl() { return document.getElementById('header-search-panel'); }
+
+function closeHeaderSearchPanel() {
+  const panel = _headerSearchPanelEl();
+  if (panel) { panel.style.display = 'none'; panel.replaceChildren(); }
+  _headerSearchRows = [];
+  _headerSearchActive = -1;
+}
+
+function _hsRowEls() {
+  const panel = _headerSearchPanelEl();
+  return panel ? Array.from(panel.querySelectorAll('.hs-row, .hs-action')) : [];
+}
+
+function _hsSetActive(idx) {
+  const els = _hsRowEls();
+  if (!els.length) return;
+  _headerSearchActive = (idx + els.length) % els.length;
+  els.forEach((el, i) => el.classList.toggle('hs-row-active', i === _headerSearchActive));
+  els[_headerSearchActive].scrollIntoView({ block: 'nearest' });
+}
+
+// Everything here is built with createElement + textContent, never innerHTML:
+// the rows carry his own vocabulary and the raw query string.
+function _hsRow(cls, parts, onClick) {
+  const row = document.createElement('div');
+  row.className = cls;
+  for (const [spanCls, text] of parts) {
+    if (!text) continue;
+    const span = document.createElement('span');
+    span.className = spanCls;
+    span.textContent = text;
+    row.appendChild(span);
+  }
+  row.onclick = onClick;
+  return row;
+}
+
+function _renderHeaderSearchPanel(q, words) {
+  const panel = _headerSearchPanelEl();
+  if (!panel) return;
+  panel.replaceChildren();
+  _headerSearchRows = words;
+  _headerSearchActive = -1;
+
+  if (!words.length) {
+    const msg = document.createElement('div');
+    msg.className = 'hs-msg';
+    msg.textContent = 'Not in your vocabulary';
+    panel.appendChild(msg);
+  }
+  for (const w of words) {
+    const def = w.definition_de || w.definition || w.definition_zh || '';
+    panel.appendChild(_hsRow('hs-row', [
+      ['hs-word', w.word_zh],
+      ['hs-pinyin', w.pinyin],
+      ['hs-def', def],
+    ], () => { closeHeaderSearchPanel(); openWordDetail(w.id); }));
+  }
+
+  // Offline both actions are an AI call away and can only fail (#612) — the
+  // same reason the ＋ used to hide itself there. Searching still works.
+  if (!_offlineMode) {
+    panel.appendChild(_hsRow('hs-action', [['hs-def', '📖 Look up "' + q + '"']],
+                             () => headerSearchLookup(q)));
+    // Kept on purpose: the header ＋ was the only add-word entry point on a
+    // phone (#829/#958, ⌘A helps nobody there), so replacing it with a search
+    // box must not take adding away.
+    panel.appendChild(_hsRow('hs-action', [['hs-def', '＋ Add "' + q + '" to ★ List']],
+                             () => headerSearchAdd(q)));
+  }
+  panel.style.display = 'block';
+}
+
+function onHeaderSearchInput() {
+  clearTimeout(_headerSearchTimer);
+  const q = _headerSearchInput().value.trim();
+  if (!q) { closeHeaderSearchPanel(); return; }
+  _headerSearchTimer = setTimeout(async () => {
+    // Typing fast, an earlier request can land after a later one and paint a
+    // stale answer over the current query — so only the newest reply renders.
+    const seq = ++_headerSearchSeq;
+    try {
+      const url = '/api/word-search?q=' + encodeURIComponent(q)
+                + '&lang=' + _headerSearchLang() + '&limit=8';
+      const res = await api('GET', url);
+      if (seq !== _headerSearchSeq) return;
+      _renderHeaderSearchPanel(q, res.words || []);
+    } catch (e) {
+      if (seq !== _headerSearchSeq) return;
+      showError('Search failed: ' + e.message);
+    }
+  }, 250);
+}
+
+function onHeaderSearchKey(e) {
+  if (e.key === 'Escape') {
+    closeHeaderSearchPanel();
+    _headerSearchInput().blur();
+    return;
+  }
+  const els = _hsRowEls();
+  if (e.key === 'ArrowDown' && els.length) { e.preventDefault(); _hsSetActive(_headerSearchActive + 1); return; }
+  if (e.key === 'ArrowUp'   && els.length) { e.preventDefault(); _hsSetActive(_headerSearchActive - 1); return; }
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (_headerSearchActive >= 0 && els[_headerSearchActive]) { els[_headerSearchActive].click(); return; }
+  const q = _headerSearchInput().value.trim();
+  if (!q) return;
+  // Nothing picked: an exact word_zh match is the one unambiguous case, so it
+  // opens. Anything else — a partial match, a definition hit, a sentence — is
+  // a question for the dictionary, not a guess at which row he meant.
+  const exact = _headerSearchRows.find(w => w.word_zh === q);
+  if (exact) { closeHeaderSearchPanel(); openWordDetail(exact.id); return; }
+  if (!_offlineMode) headerSearchLookup(q);
+}
+
+function headerSearchAdd(q) {
+  closeHeaderSearchPanel();
+  _headerSearchInput().value = '';
+  showQuickAddBanner('Generating "' + q + '"…', true);
+  addWordViaAi(q, 'list', (state, text, deckPath) => {
+    // 'idle' is the cancelled "already in your collection" confirmation
+    // (#888) — nothing happened, so say nothing.
+    if (state === 'running' || state === 'idle') return;
+    if (state === 'error') { showError('"' + q + '": ' + text); return; }
+    showQuickAddBanner('✓ "' + q + '" added to ' + deckPath, false);
+  }, _headerSearchLang());
+}
+
+function closeDictResultModal() {
+  document.getElementById('dict-result-overlay').style.display = 'none';
+  document.getElementById('dict-result-modal').style.display = 'none';
+  document.getElementById('dict-result-body').replaceChildren();
+}
+
+// The /dict pipeline (#746), rendered in place by the very same function that
+// page uses (shared.js renderDictResult, extracted in #1055) — star buttons
+// included, so adding from here still goes through the one add-word pipeline
+// (#643).
+async function headerSearchLookup(q) {
+  closeHeaderSearchPanel();
+  const body = document.getElementById('dict-result-body');
+  document.getElementById('dict-result-title').textContent = q;
+  body.replaceChildren();
+  const msg = document.createElement('div');
+  msg.className = 'hs-msg';
+  msg.textContent = 'Looking up… (5–15s)';
+  body.appendChild(msg);
+  document.getElementById('dict-result-overlay').style.display = 'block';
+  document.getElementById('dict-result-modal').style.display = 'block';
+  const lang = _headerSearchLang();
+  try {
+    const record = await api('POST', '/api/dict/lookup', { query: q, lang });
+    // No onRepeat here: a repeat overwrites the stored answer (#777), and the
+    // history that belongs to lives on /dict — that page is where re-asking
+    // has a meaning. Here it would silently rewrite a row he cannot see.
+    renderDictResult(body, record, { addLang: lang });
+  } catch (e) {
+    body.replaceChildren();
+    const err = document.createElement('div');
+    err.className = 'hs-msg';
+    // api() carries the server's `detail` through in e.message — showing it
+    // beats a blank popup that looks like the lookup found nothing.
+    err.textContent = e.message || 'Lookup failed';
+    body.appendChild(err);
+  }
+}
+
+function initHeaderSearch() {
+  const input = _headerSearchInput();
+  if (!input) return;
+  input.addEventListener('input', onHeaderSearchInput);
+  input.addEventListener('keydown', onHeaderSearchKey);
+  input.addEventListener('focus', () => { if (input.value.trim()) onHeaderSearchInput(); });
+  // Bound once on the document, not per rendered row: the panel's contents are
+  // rebuilt on every keystroke, so per-row listeners would have to be rebound
+  // forever (#940's lesson on the knowledge list).
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#header-search-wrap')) closeHeaderSearchPanel();
+  });
+}
+
 // preferredLang: the review header's ＋ passes the current card's language
 // (#829) — the word was picked out of that card, so the home page's tab is
 // irrelevant there. Everywhere else it's omitted and the tab decides.
@@ -14160,6 +14365,17 @@ document.addEventListener('keydown', async e => {
     return;
   }
 
+  // Cmd+K (Ctrl+K) focuses the header search box (#1055). Deliberately NOT
+  // guarded by inInput like the shortcuts below: reaching the search box from
+  // another text field is exactly when it is useful, and nothing else claims
+  // this chord. No single-key binding — B and the optional keys from #927
+  // already own the bare letters.
+  if (e.code === 'KeyK' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+    const hsInput = _headerSearchInput();
+    if (hsInput) { e.preventDefault(); hsInput.focus(); hsInput.select(); }
+    return;
+  }
+
   // Cmd+A (Ctrl+A on Windows/Linux) opens (or closes) the add-word modal (#788).
   // Use e.code, not e.key: with Cmd held macOS may report a different e.key.
   // Inside inputs we let the browser's select-all through untouched.
@@ -14860,6 +15076,7 @@ if (/^#(?:podcast|knowledge)-feed-\d+$/.test(location.hash)
 _loadVersionBadge();
 _startTasksPolling();
 _syncShortcutTitles();
+initHeaderSearch();
 
 
 // ===== Home calendar heatmap (issue #307) — inlined here to dodge index.html caching =====
