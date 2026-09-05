@@ -1091,7 +1091,8 @@ CREATE TABLE IF NOT EXISTS mail_senders (
 -- read-along needs an mp3 plus a time-aligned list of "cues" for whatever
 -- text Daniel is reading — a knowledge-base episode's summary/full text
 -- today, a book page later on. Four different ways to produce that pair are
--- planned (TTS + word boundaries, forced alignment, cloud ASR, local ASR —
+-- planned (TTS + word boundaries, text-anchored ASR alignment, cloud ASR,
+-- local ASR —
 -- see audio/__init__.py), and all four end up with exactly this shape. One
 -- table for all of them, not one per source: they are interchangeable once
 -- built, and a second parallel implementation is a second place every future
@@ -1128,7 +1129,7 @@ CREATE TABLE IF NOT EXISTS audio_tracks (
     audio_path  TEXT NOT NULL,     -- relative path under data/audio/
     duration_ms INTEGER,
     cues_json   TEXT NOT NULL,     -- JSON array, see shape above
-    source      TEXT NOT NULL,     -- 'tts' | 'forced' | 'asr_cloud' | 'asr_local'
+    source      TEXT NOT NULL,     -- 'tts' | 'anchored' | 'asr_cloud' | 'asr_local'
     voice       TEXT,
     -- The exact plain text handed to the aligner (routes/audio.py's
     -- _resolve_text() return value) — NOT the rendered/annotated HTML Daniel

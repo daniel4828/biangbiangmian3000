@@ -34,13 +34,14 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import audio
+import audio.anchored as anchored
 import audio.asr_cloud as asr_cloud
 import audio.tts_track as tts_track
 import database
 import database.core
 import main
 import podcast
-from audio import Cue
+from audio import Cue, Track
 from audio.segment import to_sentences
 from fastapi.testclient import TestClient
 
@@ -263,11 +264,20 @@ def test_sentence_merge_ignores_french_elision_apostrophes():
 # 7. the other three alignment paths are explicit NotImplementedError
 # ---------------------------------------------------------------------------
 
-def test_build_track_with_text_and_audio_path_is_not_implemented_yet():
-    # Forced alignment (#1051) is the only remaining unimplemented
-    # combination now that #1052 wires audio_path-alone to Cloud ASR.
-    with pytest.raises(NotImplementedError):
-        audio.build_track(text="some text", audio_path="some/recording.mp3")
+def test_build_track_dispatches_text_and_audio_path_to_anchored(monkeypatch):
+    # #1051 implements text+audio_path as text-anchored ASR alignment —
+    # only local/offline ASR (#1053) remains an unimplemented combination.
+    called = {}
+
+    def fake_build(text, audio_path, lang="zh"):
+        called["args"] = (text, audio_path, lang)
+        return Track(audio_path=audio_path, duration_ms=1000, cues=[],
+                     word_cues=[], source="anchored", voice=None)
+
+    monkeypatch.setattr(anchored, "build", fake_build)
+    track = audio.build_track(text="some text", audio_path="some/recording.mp3", lang="zh")
+    assert track.source == "anchored"
+    assert called["args"] == ("some text", "some/recording.mp3", "zh")
 
 
 def test_build_track_with_neither_text_nor_audio_raises():
@@ -710,3 +720,200 @@ def test_audio_tracks_source_text_migration_is_idempotent(tmp_path, monkeypatch)
     cols = {r["name"] for r in database.get_db().execute(
         "PRAGMA table_info(audio_tracks)").fetchall()}
     assert "source_text" in cols
+
+
+# ---------------------------------------------------------------------------
+# 13. Text-anchored ASR alignment (#1051): audio.asr_cloud.build is stubbed
+#     throughout — nothing here may ever call Groq. What's under test is
+#     anchored.build()'s own logic: transferring ASR timestamps onto a
+#     known-correct text via difflib.SequenceMatcher.
+# ---------------------------------------------------------------------------
+
+def _fake_asr_track(cues, duration_ms=None):
+    return Track(audio_path="/fake/input.mp3", duration_ms=duration_ms,
+                cues=cues, word_cues=[], source="asr_cloud", voice=None)
+
+
+def test_anchored_alignment_corrects_asr_typos(monkeypatch):
+    """The core promise of #1051: ASR misheard 浙江 ("Zhejiang") as 折江, but
+    the cue text in the output must be the KNOWN-CORRECT text, not what the
+    ASR actually said — and its timing must still fall within the ASR
+    segment that covers that part of the recording."""
+    asr_cues = [
+        Cue(start_ms=0, end_ms=2000, text="今天天气很好。", char_start=0, char_end=7),
+        Cue(start_ms=2000, end_ms=4000, text="我去了折江。", char_start=8, char_end=14),
+    ]
+    correct_text = "今天天气很好。我去了浙江。"
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+
+    track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
+
+    assert track.source == "anchored"
+    assert len(track.cues) == 2
+    assert track.cues[1].text == "我去了浙江。"  # the CORRECT text, typo fixed
+    assert 2000 <= track.cues[1].start_ms <= 4000
+    assert 2000 <= track.cues[1].end_ms <= 4000
+
+
+def test_anchored_alignment_handles_asr_text_with_no_punctuation(monkeypatch):
+    """Groq's ASR output has no punctuation; the target text does. Diffing
+    the raw strings would never line up — normalization has to strip
+    punctuation from both sides first."""
+    asr_cues = [
+        Cue(start_ms=0, end_ms=4000, text="今天天气很好我去了浙江", char_start=0, char_end=11),
+    ]
+    correct_text = "今天天气很好。我去了浙江。"
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+
+    track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
+
+    assert len(track.cues) == 2
+    assert track.cues[0].text == "今天天气很好。"
+    assert track.cues[1].text == "我去了浙江。"
+
+
+def test_anchored_alignment_drops_a_sentence_with_no_match(monkeypatch):
+    """A sentence with zero matched characters gets NO cue at all — never a
+    guess borrowed from a neighboring sentence (#1048's rule)."""
+    asr_cues = [
+        Cue(start_ms=0, end_ms=2000, text="今天天气很好。", char_start=0, char_end=7),
+        Cue(start_ms=2000, end_ms=4000, text="我去了浙江。", char_start=8, char_end=14),
+    ]
+    correct_text = "今天天气很好。我去了浙江。这句录音里完全没有出现过。"
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+
+    track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
+
+    cue_texts = [c.text for c in track.cues]
+    assert "今天天气很好。" in cue_texts
+    assert "我去了浙江。" in cue_texts
+    assert "这句录音里完全没有出现过。" not in cue_texts
+    assert len(track.cues) == 2
+
+
+def test_anchored_alignment_raises_on_low_coverage_and_writes_nothing(tmp_db, monkeypatch):
+    asr_cues = [
+        Cue(start_ms=0, end_ms=2000, text="今天天气很好。", char_start=0, char_end=7),
+    ]
+    unrelated_text = "量子物理与相对论的历史发展从未被提及过任何相关内容。"
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=2000))
+
+    with pytest.raises(audio.AudioTrackError):
+        anchored.build(unrelated_text, "/fake/input.mp3", lang="zh")
+
+    rows = database.get_db().execute("SELECT COUNT(*) AS n FROM audio_tracks").fetchone()
+    assert rows["n"] == 0
+
+
+def test_anchored_alignment_cue_start_ms_is_monotonic_despite_out_of_order_asr_times(monkeypatch):
+    """ASR segments can come back with timestamps that don't monotonically
+    increase relative to the sentences they end up matching. The output cue
+    sequence must never go backwards in time regardless."""
+    asr_cues = [
+        # Appears first in the transcript, but is timed LATER than the
+        # segment below it — a deliberately "weird" ASR ordering.
+        Cue(start_ms=5000, end_ms=6000, text="今天天气很好。", char_start=0, char_end=7),
+        Cue(start_ms=0, end_ms=1000, text="我去了浙江。", char_start=8, char_end=14),
+    ]
+    correct_text = "今天天气很好。我去了浙江。"
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=6000))
+
+    track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
+
+    starts = [c.start_ms for c in track.cues]
+    assert starts == sorted(starts)
+    for c in track.cues:
+        assert c.end_ms >= c.start_ms
+
+
+def test_anchored_alignment_char_offsets_point_into_the_correct_text(monkeypatch):
+    asr_cues = [
+        Cue(start_ms=0, end_ms=2000, text="今天天气很好。", char_start=0, char_end=7),
+        Cue(start_ms=2000, end_ms=4000, text="我去了浙江。", char_start=8, char_end=14),
+    ]
+    correct_text = "今天天气很好。我去了浙江。"
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+
+    track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
+
+    for cue in track.cues:
+        assert correct_text[cue.char_start:cue.char_end] == cue.text
+
+
+def test_anchored_alignment_propagates_asr_cloud_failure(monkeypatch):
+    """asr_cloud.build's own AudioTrackError (missing GROQ_API_KEY, filtered
+    hallucination, etc.) must propagate unchanged, never swallowed or
+    replaced with a half-built result."""
+    def fake_asr_build(audio_path, lang="zh"):
+        raise audio.AudioTrackError("simulated: GROQ_API_KEY is not configured")
+
+    monkeypatch.setattr(anchored.asr_cloud, "build", fake_asr_build)
+
+    with pytest.raises(audio.AudioTrackError, match="GROQ_API_KEY"):
+        anchored.build("一些正确的文本。", "/fake/input.mp3", lang="zh")
+
+
+def test_anchored_alignment_autojunk_false_regression(monkeypatch):
+    """Regression guard for the autojunk=False argument to
+    difflib.SequenceMatcher in anchored.build(). The default autojunk
+    heuristic treats any character occurring in more than 1% of a long
+    sequence as "popular" and excludes it from matching — ordinary Chinese
+    text blows past that threshold for its most common characters. This test
+    uses a text where one character (的) is repeated far beyond 1% of the
+    whole; if a future edit drops autojunk=False (or removes the argument
+    entirely, reverting to the default True), coverage on this input would
+    collapse and the assertion below would fail.
+    """
+    padding = "的" * 250
+    correct_text = f"{padding}。你好世界。"
+    # ASR transcript here is byte-identical (no typos) — the point of this
+    # test isn't typo-correction, it's proving alignment doesn't fall apart
+    # on a highly repetitive character even when autojunk would normally
+    # kick in on stock difflib settings.
+    asr_cues = [
+        Cue(start_ms=0, end_ms=25000, text=padding, char_start=0, char_end=len(padding)),
+        Cue(start_ms=25000, end_ms=27000, text="你好世界", char_start=len(padding) + 1,
+            char_end=len(padding) + 5),
+    ]
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=27000))
+
+    track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
+
+    assert len(track.cues) == 2
+    assert track.cues[0].text == f"{padding}。"
+    assert track.cues[1].text == "你好世界。"
+    assert track.cues[0].end_ms <= track.cues[1].start_ms
+
+
+def test_anchored_alignment_still_rejects_text_covering_only_part_of_a_long_recording(monkeypatch):
+    """The absolute floor added to the duration-drift check (_MIN_DRIFT_FLOOR_MS)
+    must not turn that check into dead code on longer audio: text that fully
+    matches (100% sentence coverage) but only accounts for the first third of
+    a 600s recording — the rest is unrelated content never mentioned in the
+    text at all — must still fail. Coverage alone wouldn't catch this (the
+    text's one sentence matches perfectly); only the duration check does."""
+    matching_text = "这是一段只对应音频前一部分的文本"
+    correct_text = f"{matching_text}。"
+    asr_cues = [
+        Cue(start_ms=0, end_ms=200_000, text=matching_text,
+            char_start=0, char_end=len(matching_text)),
+        # The remaining 400s of the recording talks about something the
+        # target text never mentions at all — deliberately using no
+        # characters in common with matching_text, so there is no way for
+        # SequenceMatcher to accidentally borrow a "close enough" match from
+        # this segment and mask the drift this test is checking for.
+        Cue(start_ms=200_000, end_ms=600_000, text="后续为完全无关旁白内容重复叙述查证",
+            char_start=len(matching_text) + 1, char_end=len(matching_text) + 18),
+    ]
+    monkeypatch.setattr(anchored.asr_cloud, "build",
+                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=600_000))
+
+    with pytest.raises(audio.AudioTrackError, match="duration"):
+        anchored.build(correct_text, "/fake/input.mp3", lang="zh")
