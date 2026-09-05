@@ -5719,6 +5719,18 @@ body.gloss-on .tap-word-gloss {
   white-space: nowrap;
 }
 
+/* A word Daniel already has an entry for (#1042). Tappable like .tap-word,
+   but marked much more quietly: on a page he has studied, most words are in
+   the collection, so the loud dotted-primary underline of a new word would
+   turn the whole text into an underline. --border is just enough to say
+   "there is something behind this one". */
+.known-word {
+  border-bottom: 1px dotted var(--border);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.known-word:active { background: var(--hover-bg); }
+
 /* Every other word's gloss (#1018) — layered in after the new-word pass
    once the full-text word list arrives async, same reveal mechanism as
    .tap-word (#996) but not clickable: only new words get the tap panel
