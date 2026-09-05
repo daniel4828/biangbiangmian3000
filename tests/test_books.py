@@ -101,6 +101,19 @@ def test_paginate_splits_an_over_long_paragraph_at_sentence_ends():
     assert all(p["source_text"].endswith("</p>") for p in pages)
 
 
+def test_paginate_splits_an_over_long_chinese_paragraph_at_sentence_ends():
+    """Chinese sentences run straight from one 。 into the next character
+    with no trailing space (#1050) — the German/English case above relies
+    on _SENTENCE_END requiring \\s+ after the punctuation, which a Chinese
+    paragraph would never satisfy, falling through to a mid-sentence hard
+    character cut instead."""
+    text = "这是一个很长的句子用来测试分页功能是否正常工作。" * 20   # ~500 chars, no spaces at all
+    pages = paginate([{"text": text, "ref_label": None}], char_budget=100)
+    assert len(pages) > 1
+    for page in pages:
+        assert page["source_text"].endswith("。</p>")
+
+
 # --- EPUB extraction --------------------------------------------------------
 
 def _write_epub(path, chapters, title="Testbuch", author="Autorin"):
@@ -331,6 +344,62 @@ def test_ingest_honours_an_explicit_source_lang(tmp_db, tmp_path):
     assert database.get_book(result["book_id"])["source_lang"] == "en"
 
 
+# --- Chinese source books (#1050) --------------------------------------------
+
+def test_detect_source_lang_recognizes_chinese_before_german_english_markers():
+    """A Chinese sample scores 0 on both the German and English word-marker
+    counts and used to silently fall through to the 'de'/'en' default —
+    exactly the bug this check exists to catch."""
+    blocks = [{"text": "这是一个中文句子，用来测试语言检测功能是否正确工作。", "ref_label": None}]
+    assert books.detect_source_lang(blocks) == "zh"
+
+
+def test_detect_source_lang_still_detects_german():
+    blocks = [{"text": "Und die Katze ist auf dem Tisch und schläft dort schon "
+                       "seit vielen Stunden, aber niemand hat es bemerkt.",
+              "ref_label": None}]
+    assert books.detect_source_lang(blocks) == "de"
+
+
+def test_ingest_detects_a_chinese_book(tmp_db, tmp_path):
+    path = tmp_path / "b.epub"
+    _write_epub(path, ["<p>这是一本中文书，里面全部都是中文的句子和段落。</p>"])
+    result = books.ingest_file(str(path), "b.epub")
+    assert result["source_lang"] == "zh"
+
+
+def test_chinese_book_read_in_chinese_is_annotated_not_translated(tmp_db, tmp_path, monkeypatch):
+    """A Chinese book read in Chinese must go through render_html()'s
+    "already in the target language" branch — annotated only, never
+    round-tripped through Google Translate (#804's guard, exercised here via
+    a book's source_lang normalizing to the same code languages.py uses for
+    Chinese, 'zh-CN'). Patches the real translator, not routes.books'
+    render_html, so this actually proves the skip happens end to end.
+    """
+    import translator
+
+    calls = []
+    monkeypatch.setattr(translator, "translate_strict",
+                        lambda *a, **kw: calls.append(a) or "SHOULD NOT BE CALLED")
+    # Defensive: extract_new_words() (annotate_summary's zh path) glosses
+    # whatever it flags as new via a DIFFERENT function (translate_zh) than
+    # the one this test is really pinning down. The text below is all HSK1
+    # vocabulary and should trip zero new words, but patch this too so a
+    # false positive there can't reach the network — it's already
+    # exception-safe on its own, this just keeps the test hermetic.
+    monkeypatch.setattr(translator, "translate_zh", lambda *a, **kw: "")
+
+    path = tmp_path / "b.epub"
+    _write_epub(path, ["<p>我是学生，今天天气很好。</p>"])
+    book = books.ingest_file(str(path), "b.epub", source_lang="zh", char_budget=200)
+
+    resp = client.get(f"/api/books/{book['book_id']}/page/1?lang=zh")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert calls == []
+    assert "我是学生" in body["text"]
+
+
 # --- reading API ------------------------------------------------------------
 
 def _make_book(tmp_path, paragraphs=("Ein Satz.", "Noch ein Satz.")):
@@ -353,6 +422,16 @@ def test_page_is_rendered_then_cached(tmp_db, tmp_path, fake_render):
     assert second.json()["cached"] is True
     assert second.json()["text"] == body["text"]
     assert len(fake_render) == 1, "a cached page must not be re-translated"
+
+
+def test_page_response_includes_the_book_pages_row_id(tmp_db, tmp_path, fake_render):
+    """page_id is book_pages.id, not page_no — routes/audio.py's read-along
+    track builder (#1050) is keyed on it because page_no repeats across
+    every book."""
+    book = _make_book(tmp_path)
+    resp = client.get(f"/api/books/{book['book_id']}/page/1?lang=zh")
+    body = resp.json()
+    assert body["page_id"] == database.get_page(book["book_id"], 1)["id"]
 
 
 def test_each_language_gets_its_own_rendition(tmp_db, tmp_path, fake_render):

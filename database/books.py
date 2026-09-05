@@ -91,6 +91,17 @@ def get_page(book_id: int, page_no: int) -> dict | None:
     return dict(row) if row else None
 
 
+def get_page_by_id(page_id: int) -> dict | None:
+    """One page by its own row id, not (book_id, page_no) — routes/audio.py's
+    book_page track builder (#1050) is keyed on book_pages.id because
+    audio_tracks is unique per owner_id and page_no repeats across every
+    book (page 1 of book A and page 1 of book B must not collide)."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM book_pages WHERE id = ?", (page_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def get_all_pages(book_id: int) -> list[dict]:
     """Every page in order, source_text included — used only by the chapter
     rescan flow (#881) to byte-compare a fresh re-parse against what's
