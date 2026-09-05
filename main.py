@@ -354,14 +354,31 @@ try:
     # for hours), so something has to record "when did a human last actually
     # do something here" for the worker to check against.
     #
-    # This must NOT fire on polling endpoints — the header task indicator
-    # (#821) hits /api/tasks every few seconds from every open tab, /api/mode
-    # is polled every 60s in LOCAL_MODE, and every *-progress endpoint is
-    # polled while something is loading. Counting any of those as "activity"
-    # would mean a tab merely left open forever looks like Daniel is at the
-    # keyboard, and whisper.cpp would never get a turn. Prefix-matched so a
-    # progress endpoint with a path parameter (".../progress/{job_id}") is
-    # still caught.
+# Two independent filters, because there are two different ways a request
+    # can arrive without a human behind it:
+    #
+    # 1. A BROWSER POLLING BY ITSELF. The header task indicator (#821) hits
+    #    /api/tasks every few seconds from every open tab, /api/mode is polled
+    #    every 60s in LOCAL_MODE, and every *-progress endpoint is polled while
+    #    something loads. A tab merely left open would otherwise look like
+    #    Daniel is at the keyboard forever. Prefix-matched, so a progress
+    #    endpoint with a path parameter (".../progress/{job_id}") is caught too.
+    #
+    # 2. THIS SERVER'S OWN CRON JOBS (#1071). scripts/due_check.py (every 5
+    #    minutes) and scripts/podcast_check.py (every 15) don't touch the
+    #    database directly the way knowledge_mail_check.py does — they make an
+    #    HTTP request to this very app. That 5-minute heartbeat kept the
+    #    timestamp permanently fresh, so audio_worker.py's "30 minutes idle"
+    #    gate NEVER opened and the queue never moved — while the log calmly
+    #    reported "1 分钟前还有动作", which looks completely normal.
+    #
+    #    The fix is NOT to add those two paths to the list below: the next cron
+    #    written against the HTTP API would silently bring the bug back. The
+    #    real dividing line is WHO is calling — a human is a browser holding
+    #    the signed session cookie (#666), while a script authenticates with
+    #    Basic Auth (curl/requests). So activity is only recorded for
+    #    cookie-authenticated requests. (iOS shortcuts open /add in a browser,
+    #    so they carry the cookie and still count.)
     _ACTIVITY_EXCLUDED_PREFIXES = (
         "/api/tasks",
         "/api/mode",
@@ -385,6 +402,16 @@ try:
             return response
         if any(path.startswith(p) for p in _ACTIVITY_EXCLUDED_PREFIXES):
             return response
+        # Filter 2 (#1071): a valid session cookie means a browser, i.e. a
+        # person. Basic Auth means a script — including this server's own cron
+        # jobs, whose heartbeat is what broke the worker in the first place.
+        # With auth switched off entirely (run.dev.sh, LOCAL_MODE) there is no
+        # cookie to check, so every non-polling request counts, as before —
+        # those instances don't run the worker anyway.
+        if _AUTH_ENABLED:
+            cookie = request.cookies.get(_SESSION_COOKIE, "")
+            if not (cookie and _session_cookie_valid(cookie)):
+                return response
         now = time.time()
         # Throttled to once/minute — this fires on nearly every request, and
         # writing app_settings on every single one would wear a hole in the

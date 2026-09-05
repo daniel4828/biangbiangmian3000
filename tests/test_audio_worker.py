@@ -83,6 +83,45 @@ def test_a_real_request_does_count_as_activity(tmp_db, monkeypatch):
     assert "last_user_activity" in written
 
 
+def test_this_servers_own_cron_jobs_do_not_count_as_activity(tmp_db, monkeypatch):
+    """#1071: scripts/due_check.py (every 5 min) and podcast_check.py (every
+    15) reach this app over HTTP with Basic Auth. Their heartbeat used to keep
+    `last_user_activity` permanently fresh, so the worker's "30 minutes idle"
+    gate never opened once — and the log said "1 分钟前还有动作", which reads
+    like everything is fine.
+
+    Deliberately tested through the auth *mechanism*, not through those two
+    paths: adding them to a blocklist would fix today and let the next
+    HTTP-based cron silently reintroduce it."""
+    written = []
+    monkeypatch.setattr(database, "set_app_setting", lambda k, v: written.append(k))
+    monkeypatch.setattr(main, "_AUTH_ENABLED", True)
+    # No session cookie on the request => a script, not a browser.
+    monkeypatch.setattr(main, "_session_cookie_valid", lambda c: False)
+    main._last_activity_write[0] = 0.0
+
+    client.get("/api/decks")
+    assert "last_user_activity" not in written
+
+
+def test_a_browser_session_cookie_does_count_as_activity(tmp_db, monkeypatch):
+    """The other half of #1071: a real person in a browser must still park the
+    worker, or it would happily eat three cores mid-review."""
+    written = []
+    monkeypatch.setattr(database, "set_app_setting", lambda k, v: written.append(k))
+    monkeypatch.setattr(main, "_AUTH_ENABLED", True)
+    monkeypatch.setattr(main, "_session_cookie_valid", lambda c: True)
+    main._last_activity_write[0] = 0.0
+
+    # Set on the client, not per-request: starlette deprecated the latter.
+    client.cookies.set(main._SESSION_COOKIE, "pretend-valid")
+    try:
+        client.get("/api/decks")
+    finally:
+        client.cookies.clear()
+    assert "last_user_activity" in written
+
+
 # ── 2. The worker's gates ───────────────────────────────────────────────────
 
 def test_worker_does_not_start_while_he_is_using_the_server(tmp_db, monkeypatch):
