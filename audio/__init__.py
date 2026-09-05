@@ -1,5 +1,5 @@
 """Time-aligned audio tracks (issue #1047 umbrella; this package implements
-phase 1, issue #1048).
+phase 1 (#1048), phase 2 (#1051) and phase 3 (#1052)).
 
 Karaoke-style read-along needs two things out of any audio source: the mp3
 itself, and a list of "cues" — {start_ms, end_ms, text, char_start,
@@ -16,14 +16,21 @@ there's markup, a repeated phrase, or a skipped word.
 Four ways to build a track are planned for #1047:
   1. TTS + WordBoundary (#1048, tts_track.py) — free, word-level,
      works for any plain text we already have. Implemented.
-  2. Forced alignment (aeneas) — text + an existing recording. Not
-     implemented (#1051).
+  2. Text-anchored ASR alignment (#1051, anchored.py) — text + an existing
+     recording. Originally planned as forced alignment via `aeneas`, which
+     turned out not to install on Python 3.14 (last released 2017, and its
+     own build script fails outright) and additionally needs a system-level
+     `espeak` binary — both dealbreakers for this project. Implemented
+     instead as: run the cloud ASR (#3 below) to get timestamps, then align
+     its (possibly typo-ridden) transcript against the known-correct text
+     with difflib.SequenceMatcher and transfer the timestamps across. See
+     anchored.py's module docstring for the full algorithm.
   3. Cloud ASR (Groq, #1052, asr_cloud.py) — a recording with no matching
      text. Implemented.
   4. Local ASR (whisper.cpp) — same, offline. Not implemented (#1053).
 build_track() below is the single entry point all four eventually share, so
 a caller never needs to know which path produced a given Track — the
-not-yet-implemented ones raise NotImplementedError rather than a
+not-yet-implemented one raises NotImplementedError rather than a
 half-written branch.
 """
 import re
@@ -51,7 +58,7 @@ class Track:
     duration_ms: int | None
     cues: list          # sentence-level Cue objects — what audio_tracks.cues_json stores
     word_cues: list      # word-level Cue objects — kept for a future per-word highlight mode
-    source: str           # 'tts' | 'forced' | 'asr_cloud' | 'asr_local'
+    source: str           # 'tts' | 'anchored' | 'asr_cloud' | 'asr_local'
     voice: str | None
 
 
@@ -67,10 +74,11 @@ def build_track(*, text: str | None = None, audio_path: str | None = None,
     """The single entry point for all four alignment paths described in the
     module docstring above.
 
-    text-only (TTS + WordBoundary, #1048) and audio_path-only (Cloud ASR,
-    #1052) are implemented. `text` + `audio_path` together (forced alignment,
-    #1051) is a documented NotImplementedError, not a half-written branch —
-    it has exactly one place to plug in once it exists.
+    text-only (TTS + WordBoundary, #1048), audio_path-only (Cloud ASR,
+    #1052), and `text` + `audio_path` together (text-anchored ASR alignment,
+    #1051) are all implemented. Only local/offline ASR (#1053) remains a
+    documented NotImplementedError — it has exactly one place to plug in
+    once it exists.
     """
     if text and not audio_path:
         from . import tts_track  # lazy: avoids a circular import at package load
@@ -78,10 +86,9 @@ def build_track(*, text: str | None = None, audio_path: str | None = None,
     if audio_path and not text:
         from . import asr_cloud  # lazy: avoids a circular import at package load
         return asr_cloud.build(audio_path, lang=lang)
-    if audio_path:
-        raise NotImplementedError(
-            "text+audio forced alignment is not implemented yet — see #1051 "
-            "(aeneas forced alignment)")
+    if text and audio_path:
+        from . import anchored  # lazy: avoids a circular import at package load
+        return anchored.build(text, audio_path, lang=lang)
     raise AudioTrackError("build_track() needs at least `text` (or `audio_path`)")
 
 

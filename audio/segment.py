@@ -42,6 +42,32 @@ def _sentence_boundaries(text: str) -> set[int]:
     return boundaries
 
 
+def sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Character (start, end) spans covering every sentence in `text`, using
+    the exact same punctuation/quote-parity rules as to_sentences() below.
+
+    Public wrapper for callers that don't have per-word cues to merge (e.g.
+    audio/anchored.py, #1051) but still need "where do the sentences start
+    and end" — this codebase's rule against a second copy of the same logic
+    (#643, #836) applies just as much to sentence boundaries as to anything
+    else, so this reuses _sentence_boundaries rather than re-deriving spans
+    from scratch.
+    """
+    if not text:
+        return []
+    boundaries = sorted(_sentence_boundaries(text))
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for b in boundaries:
+        end = b + 1
+        if end > start:
+            spans.append((start, end))
+        start = end
+    if start < len(text):
+        spans.append((start, len(text)))
+    return spans
+
+
 def to_sentences(word_cues: list[Cue], text: str) -> list[Cue]:
     """Group `word_cues` (in reading order, char_start/char_end positions
     into `text`) into sentence-level cues.
