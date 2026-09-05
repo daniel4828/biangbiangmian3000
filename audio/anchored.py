@@ -126,16 +126,28 @@ def _asr_char_times(cues: list) -> tuple[str, list[int]]:
     return "".join(chars), times
 
 
-def build(text: str, audio_path: str, lang: str = "zh") -> Track:
+def build(text: str, audio_path: str, lang: str = "zh", prefer_local: bool = False,
+          should_abort=None) -> Track:
     """text + audio_path -> Track, source='anchored' (#1051).
 
     Raises AudioTrackError when the ASR step fails (propagated straight
-    from asr_cloud.build, not re-wrapped) or when the alignment's own
-    quality checks (coverage / duration drift) don't pass. Never returns a
-    track that "looks" synced but isn't — see the module docstring for why
-    an unmatched sentence is dropped rather than guessed at.
+    from whichever of asr_cloud.build/asr_local.build ran, not re-wrapped) or
+    when the alignment's own quality checks (coverage / duration drift) don't
+    pass. Never returns a track that "looks" synced but isn't — see the
+    module docstring for why an unmatched sentence is dropped rather than
+    guessed at.
+
+    `prefer_local` (#1053) selects whisper.cpp instead of Groq for the ASR
+    timestamps this alignment is built on — same flag, same meaning, as
+    build_track()'s. The alignment step itself (SequenceMatcher against the
+    known-correct text) is identical either way; only where the timestamps
+    came from differs.
     """
-    asr_track = asr_cloud.build(audio_path, lang=lang)
+    if prefer_local:
+        from . import asr_local  # lazy: avoids a circular import at package load
+        asr_track = asr_local.build(audio_path, lang=lang, should_abort=should_abort)
+    else:
+        asr_track = asr_cloud.build(audio_path, lang=lang)
 
     asr_text, asr_times = _asr_char_times(asr_track.cues)
     norm_asr, asr_offset_map = _normalize(asr_text)
@@ -209,5 +221,10 @@ def build(text: str, audio_path: str, lang: str = "zh") -> Track:
     if not cues:
         raise AudioTrackError("text-anchored alignment produced no usable cues")
 
+    # The CORRECT text, not the ASR transcript: every cue's char_start/
+    # char_end was computed against it, and it is also what the reader sees
+    # on screen. Storing the ASR text here would put the typos this whole
+    # module exists to remove back into the frontend's alignment anchor.
     return Track(audio_path=audio_path, duration_ms=asr_track.duration_ms,
-                cues=cues, word_cues=[], source="anchored", voice=None)
+                cues=cues, word_cues=[], source="anchored", voice=None,
+                source_text=text)

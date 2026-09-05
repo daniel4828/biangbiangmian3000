@@ -349,6 +349,56 @@ try:
             return await call_next(request)
         return _unauthorized(request)
 
+    # Last-activity timestamp (#1053): scripts/audio_worker.py must only run
+    # whisper.cpp while Daniel is not using the server (it pins 3/4 CPU cores
+    # for hours), so something has to record "when did a human last actually
+    # do something here" for the worker to check against.
+    #
+    # This must NOT fire on polling endpoints — the header task indicator
+    # (#821) hits /api/tasks every few seconds from every open tab, /api/mode
+    # is polled every 60s in LOCAL_MODE, and every *-progress endpoint is
+    # polled while something is loading. Counting any of those as "activity"
+    # would mean a tab merely left open forever looks like Daniel is at the
+    # keyboard, and whisper.cpp would never get a turn. Prefix-matched so a
+    # progress endpoint with a path parameter (".../progress/{job_id}") is
+    # still caught.
+    _ACTIVITY_EXCLUDED_PREFIXES = (
+        "/api/tasks",
+        "/api/mode",
+        "/api/sync/progress",
+        "/api/story-progress",
+        "/api/tts-progress",
+        "/api/add-word-ai/progress",
+        "/api/books/upload-progress",
+    )
+    _last_activity_write = [0.0]  # single-element list so the closure below can mutate it
+
+    @app.middleware("http")
+    async def record_activity(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        # A 401 means the request was never actually authenticated (or auth
+        # is on and the cookie/Basic check failed) — that must not count as
+        # activity, or a bot hammering the login page would keep the worker
+        # locked out forever.
+        if response.status_code == 401:
+            return response
+        if any(path.startswith(p) for p in _ACTIVITY_EXCLUDED_PREFIXES):
+            return response
+        now = time.time()
+        # Throttled to once/minute — this fires on nearly every request, and
+        # writing app_settings on every single one would wear a hole in the
+        # table for no benefit: the worker only ever checks "within the last
+        # 30 minutes" (scripts/audio_worker.py), so minute-level resolution
+        # is more than enough.
+        if now - _last_activity_write[0] >= 60:
+            _last_activity_write[0] = now
+            try:
+                database.set_app_setting("last_user_activity", str(now))
+            except Exception as e:
+                logger.warning("record_activity: failed to write last_user_activity: %s", e)
+        return response
+
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         start = time.time()

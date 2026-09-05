@@ -1034,6 +1034,16 @@ def init_db() -> None:
         conn.execute("ALTER TABLE audio_tracks ADD COLUMN source_text TEXT")
         conn.commit()
 
+    # Recover audio_jobs left 'running' by a process that died mid-job (#1053):
+    # whisper.cpp can take hours, and production restarts every ~2 minutes
+    # (deploy/deploy.sh) — a job that was genuinely running when that happened
+    # is now an orphan no worker will ever come back to finish. Naturally
+    # idempotent (not marker-guarded): once no row is left in 'running', this
+    # is a no-op on every subsequent restart, same as podcast_episodes'
+    # processing_started_at recovery (#598) this mirrors.
+    conn.execute("UPDATE audio_jobs SET status = 'pending', started_at = NULL WHERE status = 'running'")
+    conn.commit()
+
     conn.close()
 
     # Seed the day-cutoff cache now that app_settings is guaranteed present

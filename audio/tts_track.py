@@ -194,4 +194,7 @@ def build(text: str, lang: str = "zh", voice: str | None = None) -> Track:
     duration_ms = round(time_offset_ms - _CHUNK_GAP_MS)
     sentence_cues = to_sentences(word_cues, orig_text)
     return Track(audio_path=path, duration_ms=duration_ms, cues=sentence_cues,
-                word_cues=word_cues, source="tts", voice=voice)
+                word_cues=word_cues, source="tts", voice=voice,
+                # The text as handed in, glosses still in it: cue offsets are
+                # original-text positions (see strip_annotations' offset_map).
+                source_text=orig_text)

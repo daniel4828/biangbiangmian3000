@@ -1143,3 +1143,39 @@ CREATE TABLE IF NOT EXISTS audio_tracks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audio_tracks_owner ON audio_tracks(owner_kind, owner_id, lang);
+
+-- ---------------------------------------------------------------------------
+-- Local ASR job queue (#1053, phase 4 of the #1047 read-along umbrella):
+-- whisper.cpp on this machine's 4 CPU cores (no GPU) runs roughly 1-3x
+-- slower than realtime for large-v3, so it cannot run synchronously inside
+-- an HTTP request the way audio/asr_cloud.py (Groq, seconds) does. Instead a
+-- request that wants a local (free) transcript enqueues a row here and a
+-- cron worker (scripts/audio_worker.py) picks it up only while Daniel is not
+-- using the server (see main.py's activity timestamp + the worker's own
+-- time-of-day window) and only outside the 05:30-09:30 morning pre-gen
+-- window scripts/morning_pregen.py already owns.
+--
+-- One row per requested transcription, not one row per (owner, lang) like
+-- audio_tracks — a job is a unit of WORK, not a cache entry; once it
+-- finishes, the actual Track is written into audio_tracks exactly like every
+-- other alignment path, and this row just records how that write happened
+-- (and whether it's still pending).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS audio_jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_kind    TEXT NOT NULL,
+    owner_id      INTEGER NOT NULL,
+    lang          TEXT NOT NULL,
+    variant       TEXT NOT NULL DEFAULT 'fulltext',
+    audio_path    TEXT NOT NULL,     -- the audio to transcribe
+    text_hint     TEXT,              -- known-correct text, if any -> anchored path; NULL -> plain ASR
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK(status IN ('pending','running','done','error')),
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    error         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    started_at    TEXT,
+    finished_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audio_jobs_status ON audio_jobs(status, created_at);
