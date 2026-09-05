@@ -6713,7 +6713,14 @@ function renderCostModal(data) {
   for (const b of data.balances || []) {
     let value;
     if (b.unsupported) {
-      value = `<span style="color:var(--muted)">${_escHtml(b.note || 'no balance API')}</span>`;
+      // The console URL is the only thing to do about a provider with no
+      // balance API, so make it clickable instead of something to retype.
+      let text = _escHtml(b.note || 'no balance API');
+      if (b.console_url) {
+        text += ` — <a href="${_escHtml(b.console_url)}" target="_blank" rel="noopener noreferrer">` +
+          `${_escHtml(b.console_label || b.console_url)}</a>`;
+      }
+      value = `<span style="color:var(--muted)">${text}</span>`;
     } else if (b.balance == null) {
       value = `<span style="color:var(--muted)">unavailable</span>`;
     } else {

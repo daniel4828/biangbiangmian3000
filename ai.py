@@ -4606,7 +4606,8 @@ def get_provider_balances() -> list[dict]:
     """Balance rows for every configured AI provider (issue #580).
 
     Row shape: {"provider": str, "balance": str|None, "currency": str|None,
-    "unsupported": bool, "note": str|None}. Providers whose key isn't
+    "unsupported": bool, "note": str|None, "console_label": str|None,
+    "console_url": str|None}. Providers whose key isn't
     configured are omitted; providers with no balance API (OpenAI, Anthropic,
     Zhipu) get unsupported=True with a pointer to their console. Fetch
     failures show balance=None so the frontend can say "unavailable"."""
@@ -4624,22 +4625,30 @@ def get_provider_balances() -> list[dict]:
     rows: list[dict] = []
 
     def _row(provider: str, balance: dict | None = None, note: str | None = None,
-             unsupported: bool = False) -> dict:
+             unsupported: bool = False, console_label: str | None = None,
+             console_url: str | None = None) -> dict:
         return {"provider": provider,
                 "balance": (balance or {}).get("balance"),
                 "currency": (balance or {}).get("currency"),
-                "unsupported": unsupported, "note": note}
+                "unsupported": unsupported, "note": note,
+                "console_label": console_label, "console_url": console_url}
 
     if os.environ.get("DEEPSEEK_API_KEY"):
         rows.append(_row("DeepSeek", ds))
     if os.environ.get("ALIBABA_CLOUD_ACCESS_KEY_ID"):
         rows.append(_row("Alibaba", ali))
     if os.environ.get("ZHIPU_API_KEY"):
-        rows.append(_row("Zhipu", unsupported=True, note="no balance API — bigmodel.cn console"))
+        rows.append(_row("Zhipu", unsupported=True, note="no balance API",
+                         console_label="bigmodel.cn console",
+                         console_url="https://bigmodel.cn/usercenter/proj-mgmt/apikeys"))
     if os.environ.get("OPENAI_API_KEY"):
-        rows.append(_row("OpenAI", unsupported=True, note="no balance API — platform.openai.com"))
+        rows.append(_row("OpenAI", unsupported=True, note="no balance API",
+                         console_label="platform.openai.com",
+                         console_url="https://platform.openai.com/settings/organization/billing/overview"))
     if os.environ.get("ANTHROPIC_API_KEY"):
-        rows.append(_row("Anthropic", unsupported=True, note="no balance API — console.anthropic.com"))
+        rows.append(_row("Anthropic", unsupported=True, note="no balance API",
+                         console_label="console.anthropic.com",
+                         console_url="https://console.anthropic.com/settings/billing"))
 
     _balance_cache.update(at=now, data=rows)
     return rows
