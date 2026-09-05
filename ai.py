@@ -4048,13 +4048,67 @@ _PODCAST_DETAIL_WORDS = {
 }
 
 
-def build_podcast_summary_prompt(transcript: str, title: str, detail_level: str) -> str:
+def build_podcast_summary_prompt(transcript: str, title: str, detail_level: str,
+                                 for_notebooklm: bool = False) -> str:
     """Shared prompt builder for both the API summary path
     (summarize_podcast_transcript, gpt/DeepSeek) and the free NotebookLM
-    chat.ask path (podcast._summarize_via_notebooklm, #510) — same prompt
-    text, same JSON contract, so parse_podcast_summary_json below can parse
-    either response the same way."""
+    chat.ask path (podcast._summarize_via_notebooklm, #510) — same JSON
+    contract in both branches, so parse_podcast_summary_json below can parse
+    either response the same way.
+
+    `for_notebooklm` (#1040) switches to a much shorter instruction text and
+    drops the inline transcript entirely. Production binary-search found that
+    NotebookLM's chat.ask silently returns an empty stream (which notebooklm-py
+    then reports as a misleading "wire format may have changed" parse error)
+    once the prompt crosses roughly 4900 characters — and the *default* prompt's
+    instructions alone already exceed that before the transcript is even added.
+    Dropping the transcript here isn't a content loss: in the NotebookLM path
+    the transcript is already uploaded and indexed as the chat's source
+    (podcast._run_notebooklm_summary), so inlining it a second time was pure
+    duplication and the main reason the prompt was so long. The API branch below
+    is untouched byte-for-byte — the default (`for_notebooklm=False`) call path
+    must not change at all."""
     words_target = _PODCAST_DETAIL_WORDS.get(detail_level, _PODCAST_DETAIL_WORDS["detailed"])
+
+    if for_notebooklm:
+        return f"""Summarize the attached transcript source for a German-speaking learner of
+Chinese (HSK 4-5, learning towards HSK 6). Episode title: {title}
+The source material may be in Chinese, German, English, or a mix — summarize
+it regardless of its language. Output languages are fixed: summary_de is
+always German, summary_zh is always Chinese.
+
+Tasks:
+1. summary_de: German HTML summary, ~{words_target} words. Wrap each paragraph in
+   <p>...</p>; each paragraph starts with ONE <b>...</b> lead sentence that
+   summarizes it (someone reading only the bold sentences gets the full
+   skeleton). Be concrete: real facts, numbers, names, arguments from the
+   source — not generic. GERMAN ONLY: no Chinese characters or pinyin, not even
+   in parentheses. Names of people/companies/institutions keep their original
+   spelling. Add an approximate "(ca. MM:SS)" timestamp per major topic ONLY IF
+   the source actually contains timestamps — never invent one. Wrap important
+   vocabulary/terms/names in <strong>...</strong>.
+2. summary_zh: the FULL Chinese translation of summary_de — same number of
+   paragraphs, same order, same facts/numbers/names/arguments, nothing dropped
+   or added. Same markup (<p> + <b> lead sentence per paragraph, paragraph N
+   matches paragraph N). HSK 4-5 level: plain vocabulary, short sentences.
+   Company/organization names in their Chinese form, without repeating the
+   foreign name. No <strong> here.
+3. words: 20-35 of the most important Chinese words/phrases from the source at
+   HSK 5+, each with pinyin and a German definition.
+4. title_suggestion: a short CHINESE title describing what this is actually
+   about (people/event/argument) — like a real headline, not generic ("某人的
+   视频"/"内容总结"). Max 15 characters, HSK 4-5. No quotes, no end punctuation.
+
+Return ONLY a JSON object, no other text, no markdown fences:
+{{
+  "title_suggestion": "<简短中文标题，最多 15 字，HSK 4-5 水平>",
+  "summary_de": "<German HTML summary: <p> paragraphs, each starting with a <b> lead sentence, <strong> highlights>",
+  "summary_zh": "<德语总结的完整中文翻译：同样的 <p> 段落，每段首句用 <b> 包住，HSK 4-5 水平的简单中文>",
+  "words": [
+    {{"word": "词语", "pinyin": "cí yǔ", "definition_de": "kurze deutsche Definition", "hsk": 5}}
+  ]
+}}"""
+
     # Transcripts can be long (auto-captions of a 30-60min episode) — cap input
     # to keep the request within a reasonable token budget. Raised to 30000
     # (#541) so a "detailed" summary can actually cover the whole episode.

@@ -112,6 +112,13 @@ _NOTEBOOKLM_INDEX_TIMEOUT = 10 * 60  # 10min cap for source indexing to finish
 _NOTEBOOKLM_RUN_TIMEOUT = _NOTEBOOKLM_INDEX_TIMEOUT + 15 * 60
 _NOTEBOOKLM_MAX_UPLOAD_BYTES = 190 * 1024 * 1024
 
+# chat.ask silently returns an empty stream above roughly 4900 prompt characters
+# (binary-searched against production, 2026-09-04, #1040) — notebooklm-py then
+# raises ChatResponseParseError with a misleading "wire format may have changed"
+# message. The cap below leaves headroom because the real limit may be counted
+# in tokens, where a Chinese prompt buys far fewer characters.
+_NOTEBOOKLM_MAX_PROMPT_CHARS = 4500
+
 # Whisper (#485) is real money, so it only runs for short episodes (#495):
 # duration <= whisper_max_minutes. The earlier title filter ("早咖啡", #486)
 # never matched real episode titles and is retired (the config key is
@@ -925,11 +932,27 @@ _NOTEBOOKLM_SUMMARY_TEXT_MAX_CHARS = 200_000
 
 async def _run_notebooklm_summary(transcript: str, title: str, detail_level: str) -> str | None:
     """Async body of _summarize_via_notebooklm (#510): upload the transcript
-    as a text source, wait for indexing, ask the same summary question used
-    by the API path (ai.build_podcast_summary_prompt) restricted to that one
-    source, then delete the source. Returns the raw answer text (still needs
-    ai.parse_podcast_summary_json) or None on any handled failure."""
+    as a text source, wait for indexing, ask the short NotebookLM-specific
+    summary question (ai.build_podcast_summary_prompt(..., for_notebooklm=True),
+    #1040 — same JSON contract as the API path, but without the transcript
+    inlined a second time and under the ~4900-char prompt cap) restricted to
+    that one source, then delete the source. Returns the raw answer text
+    (still needs ai.parse_podcast_summary_json) or None on any handled
+    failure, including an over-length prompt (checked before any network
+    call is made)."""
     import notebooklm
+
+    # Build (and length-check) the question before touching the network at
+    # all: if it's already over the limit, sending it would still burn a full
+    # upload-plus-indexing round only to get an empty stream back (#1040).
+    question = ai.build_podcast_summary_prompt(transcript, title, detail_level, for_notebooklm=True)
+    if len(question) > _NOTEBOOKLM_MAX_PROMPT_CHARS:
+        logger.warning(
+            "podcast: NotebookLM summary prompt for %r is %d chars, over the %d cap — "
+            "skipping chat.ask (would return an empty stream), falling back to the API chain",
+            title, len(question), _NOTEBOOKLM_MAX_PROMPT_CHARS,
+        )
+        return None
 
     async with notebooklm.NotebookLMClient.from_storage() as client:
         notebook_id = await _get_or_create_notebooklm_notebook(client)
@@ -941,7 +964,6 @@ async def _run_notebooklm_summary(transcript: str, title: str, detail_level: str
             await client.sources.wait_until_ready(
                 notebook_id, source.id, timeout=_NOTEBOOKLM_INDEX_TIMEOUT,
             )
-            question = ai.build_podcast_summary_prompt(transcript, title, detail_level)
             result = await client.chat.ask(notebook_id, question, source_ids=[source.id])
             return result.answer or None
         finally:

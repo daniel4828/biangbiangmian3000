@@ -273,7 +273,7 @@ _HAN_RE = re.compile(r"[一-鿿]")
 _LATIN_RE = re.compile(r"[A-Za-zÀ-ÿ]")
 
 
-def _validate_word_for_lang(word: str, lang: str) -> None:
+def _word_script_error(word: str, lang: str) -> str | None:
     """Reject input that plainly isn't the language the caller asked for.
 
     The add-word box takes no follow-up questions (unlike the de-zh-bot /
@@ -282,18 +282,59 @@ def _validate_word_for_lang(word: str, lang: str) -> None:
     the script is the one cheap guard available: it can't tell French from
     German, but it does stop 生态 from being sent to the French prompt and
     séjour from being sent to the Chinese one.
+
+    Returns the error message, or None when the script looks right. Split out
+    from _validate_word_for_lang (which raises HTTPException) so non-HTTP
+    callers such as the Signal word inbox (#1041) can turn it into a plain
+    ValueError instead.
     """
     if lang == "zh":
         if not _HAN_RE.search(word):
-            raise HTTPException(status_code=400,
-                                detail="Please enter the word in Chinese characters")
-        return
+            return "Please enter the word in Chinese characters"
+        return None
     if _HAN_RE.search(word):
-        raise HTTPException(status_code=400,
-                            detail="That looks like Chinese — switch the language first")
+        return "That looks like Chinese — switch the language first"
     if not _LATIN_RE.search(word):
         lang_name = get_lang_config(lang)["name_en"]
-        raise HTTPException(status_code=400, detail=f"Please enter the word in {lang_name}")
+        return f"Please enter the word in {lang_name}"
+    return None
+
+
+def _validate_word_for_lang(word: str, lang: str) -> None:
+    error = _word_script_error(word, lang)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+
+def _generate_and_import_word(word_zh: str, lang: str, deck_id: int,
+                              due_offset_days: int, to_list: bool) -> dict:
+    """Generate a full AI entry for word_zh and import it — the one code path
+    behind both the /api/add-word-ai background job and the Signal word inbox
+    (#1041, knowledge/signal_inbox.py). Raises on failure; never writes a
+    partial/garbage entry.
+    """
+    yaml_text = ai.generate_word_entry_yaml(word_zh, lang=lang)
+    result = importer.import_yaml_content(yaml_text, deck_id,
+                                          due_offset_days=due_offset_days)
+    if result.get("yaml_error"):
+        raise ValueError(
+            f"AI returned invalid YAML: {result['yaml_error'].get('problem', 'parse error')}")
+    # The headword actually written can differ from what Daniel typed:
+    # the fr/es prompts normalise an inflected input to the lemma
+    # (#924). Looking the entry up by the typed string would find
+    # nothing and leave the cards behind in the daily deck.
+    imported_words = result.get("imported_words") or []
+    stored_word = imported_words[0] if imported_words else word_zh
+    if to_list and result.get("imported"):
+        # Only now do the freshly created cards exist to move (#677).
+        entry = database.get_word_by_zh(stored_word)
+        if entry:
+            database.stage_word_in_saved(
+                entry["id"], database.get_or_create_saved_deck(lang))
+    if result.get("imported") and not to_list:
+        # New cards due today must reach queues built earlier (#728).
+        queue_mgr.invalidate()
+    return {**result, "word_zh": stored_word}
 
 
 @router.post("/api/add-word-ai")
@@ -450,34 +491,14 @@ def add_word_ai(body: dict):
 
     def _run():
         try:
-            yaml_text = ai.generate_word_entry_yaml(word_zh, lang=lang)
-            result = importer.import_yaml_content(yaml_text, deck_id,
-                                                  due_offset_days=due_offset_days)
-            if result.get("yaml_error"):
-                raise ValueError(
-                    f"AI returned invalid YAML: {result['yaml_error'].get('problem', 'parse error')}")
-            # The headword actually written can differ from what Daniel typed:
-            # the fr/es prompts normalise an inflected input to the lemma
-            # (#924). Looking the entry up by the typed string would find
-            # nothing and leave the cards behind in the daily deck.
-            imported_words = result.get("imported_words") or []
-            stored_word = imported_words[0] if imported_words else word_zh
-            if to_list and result.get("imported"):
-                # Only now do the freshly created cards exist to move (#677).
-                entry = database.get_word_by_zh(stored_word)
-                if entry:
-                    database.stage_word_in_saved(
-                        entry["id"], database.get_or_create_saved_deck(lang))
-            if result.get("imported") and not to_list:
-                # New cards due today must reach queues built earlier (#728).
-                queue_mgr.invalidate()
+            result = _generate_and_import_word(word_zh, lang, deck_id,
+                                              due_offset_days, to_list)
             with _import_jobs_lock:
                 started_at = _import_jobs[job_id]["started_at"]
                 _import_jobs[job_id] = {
                     "status": "done",
                     "message": "Entry added",
-                    "summary": {"word_zh": stored_word, "deck_id": deck_id,
-                                "deck_path": deck_path, **result},
+                    "summary": {"deck_id": deck_id, "deck_path": deck_path, **result},
                     "started_at": started_at,
                 }
         except Exception as e:
@@ -493,6 +514,69 @@ def add_word_ai(body: dict):
 
     threading.Thread(target=_run, daemon=True).start()
     return {"job_id": job_id, "deck_path": deck_path}
+
+
+def add_word_to_list(word_zh: str, lang: str = "zh") -> dict:
+    """Synchronous day='list' add, for non-HTTP callers (#1041): the Signal
+    word inbox runs as a one-shot cron process, so it can't spawn a
+    background thread and poll a job id like the HTTP route does — the
+    process would exit and the thread would be killed mid-generation.
+
+    Always day='list' (★ List), which is never destructive: an already-known
+    word is just parked back in Saved (database.stage_word_in_saved), never
+    reset to new, so unlike the HTTP route's day='today'/'tomorrow' this
+    needs no #888 confirm round-trip.
+
+    Raises ValueError (or whatever the AI/importer raised) on failure —
+    callers decide how to report it.
+    """
+    word_zh = (word_zh or "").strip()
+    if not word_zh:
+        raise ValueError("word is empty")
+    if not is_valid_lang(lang):
+        raise ValueError(f"Unknown language: {lang!r}")
+
+    existing = database.get_word_by_zh(word_zh)
+    if existing is None and lang != "zh":
+        # Same inflected-form lookup as add_word_ai (#924).
+        existing = database.get_word_by_form(word_zh, lang)
+    if existing:
+        word_zh = existing["word_zh"]
+        lang = existing["lang"] or DEFAULT_LANG
+    else:
+        error = _word_script_error(word_zh, lang)
+        if error:
+            raise ValueError(error)
+
+    if existing:
+        card_decks = _card_deck_ids(existing["id"])
+        saved_deck_id = database.get_or_create_saved_deck(lang)
+        was_only_saved = bool(card_decks) and card_decks <= {saved_deck_id}
+        moved = database.stage_word_in_saved(existing["id"], saved_deck_id)
+        return {
+            "status": "already_listed" if was_only_saved else "listed",
+            "word_zh": word_zh,
+            "entry_id": existing["id"],
+            "cards_moved": moved,
+        }
+
+    if ai_disabled():
+        raise ValueError("AI is disabled (offline mode) — cannot generate a new entry")
+
+    target_day = database.anki_today().isoformat()
+    daily_deck_id, _ = database.get_or_create_daily_deck(target_day, lang)
+    result = _generate_and_import_word(word_zh, lang, daily_deck_id,
+                                      due_offset_days=0, to_list=True)
+    if not result.get("imported"):
+        # Never claim success over a garbage/empty AI response.
+        raise ValueError("AI returned no entry")
+    stored_word = result["word_zh"]
+    entry = database.get_word_by_zh(stored_word)
+    return {
+        "status": "added",
+        "word_zh": stored_word,
+        "entry_id": entry["id"] if entry else None,
+    }
 
 
 @router.get("/api/add-word-ai/progress/{job_id}")

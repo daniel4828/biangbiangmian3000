@@ -390,6 +390,48 @@ def forms_lookup(surface_forms: list[str], lang: str) -> set[str]:
     return {r["form"] for r in form_rows} | {r["word_zh"] for r in zh_rows}
 
 
+def entry_ids_for_forms(surface_forms: list[str], lang: str) -> dict[str, int]:
+    """Map each surface form that belongs to a stored entry to that entry's id.
+
+    The batched, id-returning counterpart to get_word_by_form() (#1042): the
+    reader needs to know, for the few hundred words of one page, which ones
+    Daniel already has an entry for and where that entry lives — so a word he
+    has studied is tappable and opens its full detail page. Doing that with
+    one get_word_by_form() per word would be hundreds of queries per page.
+
+    Same matching rule as forms_lookup(): the headword itself, plus every
+    stored conjugated/inflected form (entry_forms). No stemming, no guessing —
+    a wrong match would send him to another word's entry. Headwords win over
+    entry_forms rows, so a form that is one word's headword and another's
+    inflection resolves to the headword.
+    """
+    if not surface_forms:
+        return {}
+    forms = list(dict.fromkeys(f for f in surface_forms if f))
+    if not forms:
+        return {}
+    conn = get_db()
+    placeholders = ",".join("?" for _ in forms)
+    out: dict[str, int] = {}
+    for row in conn.execute(
+        f"""SELECT ef.form AS form, MIN(e.id) AS id FROM entry_forms ef
+            JOIN entries e ON e.id = ef.word_id
+            WHERE e.lang = ? AND ef.form IN ({placeholders})
+            GROUP BY ef.form""",
+        (lang, *forms),
+    ).fetchall():
+        out[row["form"]] = row["id"]
+    for row in conn.execute(
+        f"""SELECT word_zh AS form, MIN(id) AS id FROM entries
+            WHERE lang = ? AND word_zh IN ({placeholders})
+            GROUP BY word_zh""",
+        (lang, *forms),
+    ).fetchall():
+        out[row["form"]] = row["id"]
+    conn.close()
+    return out
+
+
 def get_word_by_form(surface_form: str, lang: str) -> dict | None:
     """Find the entry a single inflected surface form belongs to (#924).
 
