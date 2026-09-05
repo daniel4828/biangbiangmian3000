@@ -18,6 +18,7 @@ from pydantic import BaseModel
 import ai
 import annotate
 import database
+import knowledge.audio_upload
 import knowledge.files
 import knowledge.ingest
 import knowledge.youtube
@@ -122,6 +123,46 @@ async def add_knowledge_file(
         )
     except knowledge.ingest.IngestError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/api/knowledge/add-audio")
+async def add_knowledge_audio(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    author: str | None = Form(None),
+    china_critical: bool = Form(False),
+):
+    """Upload an audio file directly (#1068) — the one ingestion path that
+    depends on no external site: YouTube blocks the server's IP outright, and
+    the #1067 cookie workaround eventually expires.
+
+    Does NOT go through knowledge/files.py's extract_file_text() -> the
+    ingest_text() family: an audio file has no text to extract, it needs
+    transcription, which is exactly what this queues (same local-ASR job
+    queue #1054's YouTube audiobook path uses, via
+    knowledge.audio_upload.ingest_audio_upload ->
+    knowledge.ingest._store_audiobook_episode — one row-building
+    implementation, not a second one for this second source).
+
+    `file.file` (not `await file.read()`) is passed straight through so the
+    bytes are streamed to disk in fixed-size chunks — a multi-hundred-MB
+    audiobook must never be pulled entirely into process memory.
+
+    Same response contract as /api/knowledge/add ({episode_id, queued:True}
+    or {status:"already_exists", episode_id}); unlike the URL/text/file-text
+    paths there is no separate .../process call to kick off afterward — the
+    file is already queued for transcription, not summarization, and
+    summarization only makes sense once that transcript exists.
+    """
+    try:
+        return knowledge.audio_upload.ingest_audio_upload(
+            file.file, file.filename,
+            title=title, author=author, china_critical=china_critical,
+        )
+    except knowledge.audio_upload.AudioUploadError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        file.file.close()
 
 
 # ── Known words (#710) ──────────────────────────────────────────────────────

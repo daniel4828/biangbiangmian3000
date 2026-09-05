@@ -140,6 +140,31 @@ def _ingest_audiobook(url: str, video_id: str, china_critical: bool = False,
         logger.warning("knowledge.ingest: audiobook download failed for %s: %s", video_id, e)
         raise IngestError(f"Could not download audio: {e}")
 
+    return _store_audiobook_episode(
+        video_id=video_id, title=title, audio_path=mp3_path, duration=duration,
+        source_url=url, author=meta.get("author_name"), platform="youtube",
+        china_critical=china_critical,
+    )
+
+
+def _store_audiobook_episode(*, video_id: str, title: str, audio_path: str,
+                             duration: int | None, source_url: str = "",
+                             author: str | None = None, platform: str,
+                             china_critical: bool = False) -> dict:
+    """Shared tail of every "audio file already on disk, queue it for local
+    ASR" ingestion path: _ingest_audiobook (YouTube, #1054) and
+    knowledge/audio_upload.py's direct-upload path (#1068 — the one entry
+    point that depends on no external site, since YouTube blocks the
+    server's IP outright and cookies (#1067) eventually expire). Both callers
+    differ only in where the mp3 and its metadata came from, so the
+    row-building + enqueue logic lives here exactly once (#643/#836's rule
+    against a second copy that only one of the two gets fixed).
+
+    Caller must already have deduped (database.get_episode_by_video_id) and
+    have the audio file in its final resting place BEFORE calling this — this
+    function never touches the filesystem, so it has no way to clean up a
+    file that turns out to be a duplicate.
+    """
     # translate_title (#651) is one cheap AI call — best-effort, must not
     # block/fail the ingest if it errors (translate_title itself already
     # swallows exceptions and returns None in that case).
@@ -148,30 +173,33 @@ def _ingest_audiobook(url: str, video_id: str, china_critical: bool = False,
 
     episode_id = database.create_pending_episode(
         video_id=video_id,
-        channel_id=meta.get("author_name"),
+        channel_id=author,
         title=title,
         published_at=None,
-        youtube_url=url,
+        # youtube_url is NOT NULL in schema.sql — an uploaded file (#1068)
+        # has no source page, so fall back to "" like _store_article does
+        # for pasted text with no link.
+        youtube_url=source_url or "",
         # audio_url normally stores a remote mp3 direct link (RSS enclosure,
-        # #497). Reused here for the LOCAL path of the downloaded audiobook
-        # file — same "repurpose an existing column for a new meaning"
-        # precedent as word_zh storing French word forms (#803): a new
-        # column would mean a migration for a value that means exactly what
-        # the existing one already implies ("where the audio for this
+        # #497). Reused here for the LOCAL path of the downloaded/uploaded
+        # audiobook file — same "repurpose an existing column for a new
+        # meaning" precedent as word_zh storing French word forms (#803): a
+        # new column would mean a migration for a value that means exactly
+        # what the existing one already implies ("where the audio for this
         # episode lives").
-        audio_url=mp3_path,
+        audio_url=audio_path,
         duration_seconds=duration,
         kind="video",
         china_critical=china_critical,
-        author=meta.get("author_name"),
-        platform="youtube",
+        author=author,
+        platform=platform,
     )
     if title_en:
         database.update_episode(episode_id, title_en=title_en)
 
     database.enqueue_audio_job(
         owner_kind="episode", owner_id=episode_id, lang=DEFAULT_LANG,
-        audio_path=mp3_path,
+        audio_path=audio_path,
     )
 
     return {"episode_id": episode_id, "queued": True}

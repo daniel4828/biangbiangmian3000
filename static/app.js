@@ -4666,7 +4666,7 @@ function _knowledgeAddPanelHtml() {
     body = `<div class="keymap-row" style="align-items:flex-start">
         <div style="flex:1;display:flex;flex-direction:column;gap:6px">
           <input type="file" id="knowledge-add-file"
-                 accept=".txt,.md,.markdown,.pdf,.docx" style="font-size:13px">
+                 accept=".txt,.md,.markdown,.pdf,.docx,.mp3,.m4a,.wav" style="font-size:13px">
           ${_KNOWLEDGE_META_FIELDS}
         </div>
         <button class="btn-secondary" onclick="submitKnowledgeFile()" style="flex-shrink:0">Add</button>
@@ -4760,6 +4760,17 @@ async function submitKnowledgeText() {
 // File upload (#835) — .txt/.md/.pdf/.docx. Goes through ingestKnowledgeFile()
 // in shared.js, which posts the file and then starts processing exactly like a
 // paste does.
+//
+// #1068: .mp3/.m4a/.wav share this same tab/picker (same "I have a file"
+// gesture) but skip text extraction entirely and go through
+// ingestKnowledgeAudio() instead, which reports upload progress — a
+// several-hundred-MB audiobook with no feedback looks exactly like a hang.
+const _KNOWLEDGE_AUDIO_EXTS = ['.mp3', '.m4a', '.wav'];
+function _isKnowledgeAudioFile(name) {
+  const lower = (name || '').toLowerCase();
+  return _KNOWLEDGE_AUDIO_EXTS.some(ext => lower.endsWith(ext));
+}
+
 async function submitKnowledgeFile() {
   const fileInput = document.getElementById('knowledge-add-file');
   const msg = document.getElementById('knowledge-add-msg');
@@ -4776,9 +4787,19 @@ async function submitKnowledgeFile() {
   };
   if (msg) msg.textContent = `Uploading ${file.name}…`;
   try {
-    const res = await ingestKnowledgeFile(file, fields);
-    const done = res?.status === 'already_exists'
-      ? 'Already in your library.' : 'Added — processing on the server.';
+    let res, done;
+    if (_isKnowledgeAudioFile(file.name)) {
+      res = await ingestKnowledgeAudio(file, fields, (frac) => {
+        const live = document.getElementById('knowledge-add-msg');
+        if (live) live.textContent = `Uploading ${file.name}… ${Math.round(frac * 100)}%`;
+      });
+      done = res?.status === 'already_exists'
+        ? 'Already in your library.' : 'Uploaded — queued for transcription.';
+    } else {
+      res = await ingestKnowledgeFile(file, fields);
+      done = res?.status === 'already_exists'
+        ? 'Already in your library.' : 'Added — processing on the server.';
+    }
     await _refreshKnowledgeList();
     // Re-query: the refresh above rebuilds this panel, so the element
     // captured before it is no longer on the page.
