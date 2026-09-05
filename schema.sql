@@ -1085,3 +1085,53 @@ CREATE TABLE IF NOT EXISTS mail_senders (
     auto_since   TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------------------
+-- Audio tracks (#1047 umbrella, this table added by #1048): karaoke-style
+-- read-along needs an mp3 plus a time-aligned list of "cues" for whatever
+-- text Daniel is reading — a knowledge-base episode's summary/full text
+-- today, a book page later on. Four different ways to produce that pair are
+-- planned (TTS + word boundaries, forced alignment, cloud ASR, local ASR —
+-- see audio/__init__.py), and all four end up with exactly this shape. One
+-- table for all of them, not one per source: they are interchangeable once
+-- built, and a second parallel implementation is a second place every future
+-- bug in "how cues line up with text" has to be fixed (the same reasoning
+-- #643 gives for a single add-word entry point and #836 gives for one
+-- rendition pipeline shared by books and the knowledge base).
+--
+-- `variant` is not optional: the same piece of source material has a short
+-- summary and a full text, and those are two different pieces of prose that
+-- need two different audio files and two different cue lists — collapsing
+-- them into one row per (owner_kind, owner_id, lang) would mean regenerating
+-- the full-text track silently destroys the summary track, or vice versa.
+--
+-- cues_json is a JSON array of:
+--   {"start_ms": int, "end_ms": int, "text": str,
+--    "char_start": int, "char_end": int}
+-- char_start/char_end are NOT optional either: they are positions in the
+-- SOURCE TEXT that was handed to the aligner (before any inline vocabulary
+-- gloss was stripped for speaking, see audio.strip_annotations), not in
+-- whatever rendered/annotated HTML Daniel actually reads (that HTML lives in
+-- knowledge_renditions / book_renditions, a different table entirely). The
+-- frontend's read-along mode has to slice the *annotated* HTML at these
+-- boundaries to highlight the right span while still showing glosses and
+-- letting words stay tappable — re-matching cue text against the rendered
+-- HTML after the fact would silently drift the moment there's markup, a
+-- repeated phrase, or a word the aligner had to skip.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS audio_tracks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_kind  TEXT NOT NULL,     -- 'episode' (knowledge base item) | 'book_page' (from phase 3)
+    owner_id    INTEGER NOT NULL,
+    lang        TEXT NOT NULL,
+    variant     TEXT NOT NULL DEFAULT 'fulltext',  -- 'fulltext' | 'summary'
+    audio_path  TEXT NOT NULL,     -- relative path under data/audio/
+    duration_ms INTEGER,
+    cues_json   TEXT NOT NULL,     -- JSON array, see shape above
+    source      TEXT NOT NULL,     -- 'tts' | 'forced' | 'asr_cloud' | 'asr_local'
+    voice       TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(owner_kind, owner_id, lang, variant)
+);
+
+CREATE INDEX IF NOT EXISTS idx_audio_tracks_owner ON audio_tracks(owner_kind, owner_id, lang);
