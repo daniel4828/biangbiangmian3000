@@ -220,6 +220,44 @@ def create_track(owner_kind: str | None = None, owner_id: int | None = None,
     }
 
 
+@router.get("/api/audio/progress")
+def get_progress(owner_kind: str | None = None, owner_id: int | None = None,
+                 lang: str | None = None, variant: str = "fulltext"):
+    """The saved playback position for (owner_kind, owner_id, lang, variant),
+    or {"status": "none"} if nothing was ever saved — never listened to this
+    one is not an error (#1078)."""
+    owner_kind, owner_id, lang, variant = _validate(owner_kind, owner_id, lang, variant)
+    progress = database.get_audio_progress(owner_kind, owner_id, lang, variant)
+    if not progress:
+        return {"status": "none"}
+    return progress
+
+
+@router.post("/api/audio/progress")
+def save_progress(body: dict):
+    """Upsert the current playback position (#1078). Body:
+    {owner_kind, owner_id, lang, variant, position_ms, finished?}.
+
+    Called on a throttled timer plus pause/ended/visibilitychange/beforeunload
+    from static/app.js — this has to stay fast, no extra reads beyond the
+    single UPSERT database.save_audio_progress() already is.
+    """
+    owner_kind, owner_id, lang, variant = _validate(
+        body.get("owner_kind"), body.get("owner_id"), body.get("lang"),
+        body.get("variant", "fulltext"))
+    raw_position = body.get("position_ms")
+    # Explicitly reject bool (True/False are ints in Python and would
+    # otherwise sail through the isinstance check below) and anything
+    # negative — a negative position is never meaningful and a client bug
+    # sending one deserves a 400, not a silently clamped 0.
+    if isinstance(raw_position, bool) or not isinstance(raw_position, (int, float)) or raw_position < 0:
+        raise HTTPException(status_code=400, detail="position_ms must be a non-negative integer")
+    database.save_audio_progress(
+        owner_kind, owner_id, lang, variant,
+        position_ms=int(raw_position), finished=bool(body.get("finished", False)))
+    return {"status": "ok"}
+
+
 @router.get("/api/audio/file/{track_id}")
 def get_track_file(track_id: int):
     """Serve the mp3. FileResponse handles HTTP Range requests natively —

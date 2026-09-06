@@ -3522,6 +3522,10 @@ a.nav-btn { text-decoration: none; }
 /* ── 听读播放器（#1049，#1047 阶段 2）───────────────────────────────────── */
 .readalong-bar { margin: 0 0 12px; }
 .readalong-note { margin: 4px 0 0; }
+/* #1078: resume banner — sits above the controls, gone the moment playback
+   actually starts (see _raResumeBannerHtml). */
+.readalong-resume:empty { margin: 0; }
+.readalong-resume { margin: 0 0 6px; }
 /* Custom Highlight API: only background — never font-weight/size, both of
    which would reflow the line and make the highlight itself feel jumpy. */
 ::highlight(readalong) {

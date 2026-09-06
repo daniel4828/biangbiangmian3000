@@ -1185,3 +1185,42 @@ CREATE TABLE IF NOT EXISTS audio_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audio_jobs_status ON audio_jobs(status, created_at);
+
+-- ---------------------------------------------------------------------------
+-- Audio playback position (#1078): a 90-minute podcast or a 107-minute
+-- audiobook is unusable if closing the tab always resets it to 0:00 — Daniel
+-- explicitly said so after #1074/#1068 shipped. A few hundred words of
+-- summary never needed this (#1049 said so at the time, and still applies:
+-- see routes/audio.py's variant='summary' path), but a whole episode does.
+--
+-- This is a SEPARATE table from audio_tracks, not a couple of extra columns
+-- on it, for the same reason book_progress is separate from book_pages: a
+-- track is a CACHE (regenerating it is a plain replace, see
+-- database.save_audio_track's docstring) while a position is USER STATE that
+-- must survive the cache being rebuilt. Collapsing them would mean every
+-- "Regenerate read-along" click silently threw away how far Daniel had
+-- listened.
+--
+-- Primary key matches audio_tracks' natural key exactly, `variant` included:
+-- a summary and a full-text reading of the same item are two different
+-- pieces of prose with two different runtimes, so "where was I" has to be
+-- tracked once per variant, not clobbered the moment the other one is
+-- opened (the very bug #1048's audio_tracks UNIQUE(..., variant) constraint
+-- exists to prevent, one layer up).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS audio_progress (
+    owner_kind  TEXT NOT NULL,
+    owner_id    INTEGER NOT NULL,
+    lang        TEXT NOT NULL,
+    variant     TEXT NOT NULL DEFAULT 'fulltext',
+    position_ms INTEGER NOT NULL DEFAULT 0,
+    -- 1 once playback reached the last ~30s (frontend's call, see
+    -- static/app.js's _raIsFinishedNow) — the NEXT open must start over from
+    -- 0, never resume 30s from the end, so this is checked instead of
+    -- comparing position_ms to duration_ms (which this table doesn't even
+    -- have; duration lives on audio_tracks and could disagree after a
+    -- regeneration).
+    finished    INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (owner_kind, owner_id, lang, variant)
+);
