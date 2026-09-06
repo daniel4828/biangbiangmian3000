@@ -514,6 +514,7 @@
       <button class="wd-edit-btn" id="wd-edit-btn">Edit</button>
       <button class="wd-edit-btn wd-regen-all-btn" id="wd-regen-all-btn" title="Regenerate all fields">↺ All</button>
       <button class="wd-back-review-btn" id="wd-back-review-btn" style="display:none" onclick="goBack()">← Review</button>
+      <button class="wd-edit-btn" id="wd-popup-close" style="display:none" onclick="closeWordDetailPopup()" title="Close">✕</button>
     </div>
     <div class="wd-body">
       <div id="wd-relations-section"></div>
@@ -1031,6 +1032,11 @@
   </div>
   <div id="cost-modal-body"></div>
 </div>
+
+<!-- Word detail popup (#1077): floats the existing #view-word-detail over the
+     screen instead of navigating to it, so tapping a word mid-review does not
+     throw Daniel out of the card he is answering. -->
+<div id="wd-popup-overlay" onclick="closeWordDetailPopup()" style="display:none"></div>
 
 <!-- Server logs modal -->
 <div id="logs-modal-overlay" onclick="closeLogsViewer()" style="display:none"></div>
