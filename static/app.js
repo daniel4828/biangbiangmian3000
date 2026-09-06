@@ -5869,6 +5869,13 @@ function setKnowledgeTtsRate(value) {
 let _raTrack = null;        // {owner_kind, owner_id, lang, variant, status, track_id, audio_url, cues, source_text}
 let _raTrackBusy = false;   // a POST .../track is in flight (generating)
 
+// #1078: the saved playback position for whichever owner _raTrack currently
+// points at — same one-slot-not-a-map pattern as _raTrack itself (only ever
+// one read-along owner "current" at a time).
+let _raProgress = null;     // {owner_kind, owner_id, lang, variant, position_ms, finished}
+let _raLastSaveAt = 0;      // Date.now() of the last progress save, for throttling
+const _RA_SAVE_INTERVAL_MS = 10000;
+
 let _raFollow = (() => {
   try { return localStorage.getItem('readalongFollow') !== '0'; } catch (_) { return true; }
 })();
@@ -5903,12 +5910,40 @@ async function _raLoadTrack(owner) {
   } catch (e) {
     _raTrack = { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant, status: 'absent' };
   }
+  // #1078: load the saved position BEFORE the re-render below — _raSync only
+  // seeds the resume banner the first time it builds a player for this
+  // owner+track, and that first build happens during the re-render this
+  // function triggers next.
+  if (_raTrack.status === 'ready') await _raLoadProgress(owner);
   if (owner.kind === 'episode') {
     if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id)
       _renderKnowledgeDetail(_knowledgeDetailEpisode);
   } else if (owner.kind === 'book_page') {
     _refreshBookReadalongBar(owner.id);
   }
+}
+
+// #1078: GET .../progress, mirroring _raLoadTrack's own contract (never
+// generates anything, absent-or-error both resolve to "nothing saved").
+async function _raLoadProgress(owner) {
+  try {
+    const data = await api('GET', `/api/audio/progress?owner_kind=${owner.kind}&owner_id=${owner.id}` +
+      `&lang=${encodeURIComponent(owner.lang)}&variant=${encodeURIComponent(owner.variant)}`);
+    _raProgress = data.status === 'none'
+      ? { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
+          position_ms: 0, finished: false }
+      : { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
+          position_ms: data.position_ms || 0, finished: !!data.finished };
+  } catch (e) {
+    _raProgress = { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
+                   position_ms: 0, finished: false };
+  }
+}
+
+function _raProgressFor(owner) {
+  const p = _raProgress;
+  return (p && p.owner_kind === owner.kind && p.owner_id === owner.id &&
+         p.lang === owner.lang && p.variant === owner.variant) ? p : null;
 }
 
 async function doGenerateReadalong(ownerKind, ownerId, lang, variant, btn) {
@@ -5921,6 +5956,10 @@ async function doGenerateReadalong(ownerKind, ownerId, lang, variant, btn) {
     _raTrack = { owner_kind: ownerKind, owner_id: ownerId, lang, variant, status: 'ready',
                  track_id: data.track_id, audio_url: data.audio_url,
                  cues: data.cues || [], source_text: data.source_text || '' };
+    // #1078: regenerating a track never clears a saved position (see
+    // schema.sql's audio_progress comment) — load it before the finally
+    // block's re-render so _raSync can seed the resume banner right away.
+    await _raLoadProgress({ kind: ownerKind, id: ownerId, lang, variant });
   } catch (e) {
     showError('Could not generate the read-along track: ' + (e.message || 'error'));
   } finally {
@@ -6070,10 +6109,22 @@ function _raSync(owner, track) {
   const key = `${owner.kind}|${owner.id}|${owner.lang}|${owner.variant}|${track.track_id}`;
   if (_raPlayer.key === key) return _raPlayer;
   _raStop();
+  // #1078: seed the resume offer from whatever _raLoadProgress last fetched
+  // for this exact owner — only offered when it's meaningfully non-zero (a
+  // saved 0:02 isn't worth a banner) and the track wasn't already finished
+  // (a finished item should read like a fresh one, never stall on the last
+  // second). This only runs once per owner+track change (see the early
+  // return above), which is why _raLoadTrack/doGenerateReadalong both await
+  // _raLoadProgress() before triggering the re-render that gets here.
+  const progress = _raProgressFor(owner);
+  const resumeMs = (progress && !progress.finished && progress.position_ms > 3000)
+    ? progress.position_ms : 0;
   _raPlayer = {
-    key, containerId: owner.containerId, cues: track.cues || [],
+    key, ownerKind: owner.kind, ownerId: owner.id, lang: owner.lang, variant: owner.variant,
+    containerId: owner.containerId, cues: track.cues || [],
     sourceText: track.source_text || '', audioUrl: track.audio_url,
     map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
+    resumeMs, resumeConsumed: false,
   };
   _raBindScrollListener();
   return _raPlayer;
@@ -6097,6 +6148,7 @@ function _raBarHtml(owner) {
   }
   const player = _raSync(owner, t);
   return `<div class="readalong-bar">
+    <div class="readalong-resume keymap-hint" id="readalong-resume">${_raResumeBannerHtml(player)}</div>
     <div class="knowledge-tts-bar">
       <button class="btn-secondary" id="readalong-toggle" onclick="toggleReadalong()">${player.playing ? '⏸ Pause' : '🎧 Read along'}</button>
       <button class="btn-secondary" id="readalong-stop" style="${player.activeIdx >= 0 ? '' : 'display:none'}" onclick="stopReadalong()">■</button>
@@ -6120,6 +6172,36 @@ function _raUpdateBar() {
   if (btn) btn.textContent = _raPlayer.playing ? '⏸ Pause' : '🎧 Read along';
   if (stop) stop.style.display = _raPlayer.activeIdx >= 0 ? '' : 'none';
   if (follow) follow.style.display = _raPlayer.follow ? 'none' : '';
+}
+
+// #1078: jumping straight into the middle of a track without saying so would
+// be startling — this banner is the "say so explicitly" half of that,
+// _raStartOver is the escape hatch. Gone the instant playback actually starts
+// (activeIdx >= 0), whether that's via this banner's own resume jump or an
+// ordinary click.
+function _raResumeBannerHtml(player) {
+  if (!player.resumeMs || player.resumeConsumed || player.activeIdx >= 0) return '';
+  return `⏱ Continuing from ${_raFormatMs(player.resumeMs)}` +
+    `<button class="btn-secondary" style="margin-left:8px;padding:2px 8px" onclick="_raStartOver()">⏮ Start over</button>`;
+}
+
+function _raFormatMs(ms) {
+  let totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  totalSec -= h * 3600;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+// The banner's own escape hatch — dismisses the resume offer without playing
+// anything, so the NEXT "🎧 Read along" click starts from the beginning
+// (same idea as toggleReadalong's normal idx-0 path).
+function _raStartOver() {
+  _raPlayer.resumeConsumed = true;
+  const el = document.getElementById('readalong-resume');
+  if (el) el.innerHTML = _raResumeBannerHtml(_raPlayer);
 }
 
 const _RA_MAP_REASON_TEXT = {
@@ -6322,6 +6404,7 @@ function toggleReadalong() {
     player.playing = false;
     try { a && a.pause(); } catch (_) {}
     _raUpdateBar();
+    _raSaveProgress(false);  // #1078: save on pause
     return;
   }
   if (a && a.src && player.activeIdx >= 0 && a.src === new URL(player.audioUrl, location.href).href) {
@@ -6333,17 +6416,48 @@ function toggleReadalong() {
     _raUpdateBar();
     return;
   }
+  // #1078: first play of a fresh player with an un-dismissed saved position —
+  // jump to it instead of the beginning. Only fires once (resumeConsumed),
+  // and only from this exact idx-0-ish "nothing has played yet" branch —
+  // an ordinary click-to-seek or the ▶/⏸ toggle once playback has already
+  // started must never be redirected by a stale saved position.
+  if (player.activeIdx < 0 && player.resumeMs && !player.resumeConsumed) {
+    player.resumeConsumed = true;
+    _raPlayAt(Math.max(_raCueIndexForMs(player.cues, player.resumeMs), 0), player.resumeMs);
+    return;
+  }
   _raPlayAt(player.activeIdx >= 0 ? player.activeIdx : 0);
 }
 
+function _raCueIndexForMs(cues, ms) {
+  let lo = 0, hi = cues.length - 1, ans = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (cues[mid].start_ms <= ms) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return ans;
+}
+
 function stopReadalong() {
+  // Save BEFORE tearing the player down (#1078): pressing ■ is the clearest
+  // "I'm done here for now" there is, and the throttled timeupdate save can
+  // be up to 10s stale at that moment. Losing ten seconds of an audiobook is
+  // exactly the kind of small annoyance that makes a resume feature feel
+  // untrustworthy. _raStop() below clears the state this reads from, so the
+  // order matters.
+  _raSaveProgress();
   _raStop();
   _raPlayer.activeIdx = -1;
   if (_raPlayer.map) _raHighlight(-1);
   _raUpdateBar();
 }
 
-function _raPlayAt(idx) {
+// `exactMs` (#1078) overrides the cue's own start_ms as the seek target —
+// used only by the resume jump above, where the saved position usually falls
+// somewhere INSIDE a sentence, not at its start; every other caller (click-
+// to-seek, the plain idx-0 fallback) omits it and gets the cue boundary as
+// before.
+function _raPlayAt(idx, exactMs) {
   const player = _raPlayer;
   if (!player.audioUrl || idx < 0 || idx >= player.cues.length) return;
   // #1049: taking the shared element away from the chunked reader cleanly —
@@ -6356,10 +6470,11 @@ function _raPlayAt(idx) {
     player.playing = false; player.activeIdx = -1;
     if (player.map) _raHighlight(-1);
     _raUpdateBar();
+    _raSaveProgress(true);  // #1078: reaching the end is unambiguously "finished"
   };
   a.onerror = () => { if (seq === _playSeq) { player.playing = false; _raUpdateBar(); } };
   a.ontimeupdate = _raOnTimeUpdate;
-  const seekMs = player.cues[idx].start_ms;
+  const seekMs = (typeof exactMs === 'number') ? exactMs : player.cues[idx].start_ms;
   const doSeek = () => { try { a.currentTime = seekMs / 1000; a.playbackRate = _kTtsRate; } catch (_) {} };
   // Assigning .src — even to the SAME string — makes the browser reset the
   // media element and re-fetch from scratch. Jumping between sentences of
@@ -6403,7 +6518,75 @@ function _raOnTimeUpdate() {
     _raUpdateBar();
     if (player.follow) _raScrollToActive();
   }
+  // #1078: throttled to once per _RA_SAVE_INTERVAL_MS — this tick fires
+  // ~4x/second, an unthrottled save here would be ~14k requests/hour on a
+  // 90-minute podcast.
+  if (Date.now() - _raLastSaveAt >= _RA_SAVE_INTERVAL_MS) _raSaveProgress(false);
 }
+
+// #1078: "the last 30s count as finished" — matches the spec Daniel asked
+// for (剩余不足 30 秒 → finished=1). Checked against the live element's
+// duration rather than audio_tracks.duration_ms: this is the actual media
+// currently loaded, which is what determines when 'ended' will fire.
+function _raIsFinishedNow() {
+  const a = _sharedAudio;
+  if (!a || !isFinite(a.duration) || !a.duration) return false;
+  return (a.duration - a.currentTime) <= 30;
+}
+
+function _raProgressBody(player, positionMs, finished) {
+  return {
+    owner_kind: player.ownerKind, owner_id: player.ownerId,
+    lang: player.lang, variant: player.variant,
+    position_ms: positionMs, finished: !!finished,
+  };
+}
+
+// Normal (fetch-based) save — used by every hook except beforeunload, where
+// a plain fetch() would be cancelled by the navigation before it lands (see
+// _raSaveProgressBeacon). Never lets a save failure interrupt playback —
+// losing one progress update is far less bad than an error popping up mid
+// listen, so failures only go to console.
+function _raSaveProgress(forceFinished) {
+  const player = _raPlayer;
+  if (!player.key || !player.audioUrl || player.activeIdx < 0) return;
+  const a = _sharedAudio;
+  const finished = !!forceFinished || _raIsFinishedNow();
+  // A finished track always resumes from 0 next time (see _raSync's
+  // resumeMs computation), so there's no reason to also persist a
+  // near-the-end position that will never be read back.
+  const positionMs = finished ? 0 : (a ? Math.max(0, Math.round((a.currentTime || 0) * 1000)) : 0);
+  _raLastSaveAt = Date.now();
+  api('POST', '/api/audio/progress', _raProgressBody(player, positionMs, finished))
+    .catch(e => console.warn('audio progress: save failed', e));
+}
+
+// beforeunload's only reliable option — a plain fetch() gets aborted by the
+// navigation before the browser actually sends it, sendBeacon() is designed
+// to survive exactly this moment. Can only POST, so the body has to be a
+// Blob with an explicit content type rather than the api() helper's fetch().
+function _raSaveProgressBeacon() {
+  const player = _raPlayer;
+  if (!player.key || !player.audioUrl || player.activeIdx < 0 || !navigator.sendBeacon) return;
+  const a = _sharedAudio;
+  const finished = _raIsFinishedNow();
+  const positionMs = finished ? 0 : (a ? Math.max(0, Math.round((a.currentTime || 0) * 1000)) : 0);
+  const blob = new Blob([JSON.stringify(_raProgressBody(player, positionMs, finished))],
+                        { type: 'application/json' });
+  try { navigator.sendBeacon('/api/audio/progress', blob); } catch (e) { /* best effort */ }
+}
+
+// Tab switched away / minimized — the read-along audio keeps playing (or sits
+// paused) but nothing else will touch it until Daniel comes back, so this is
+// the last reliable moment to save before an unknown gap.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') _raSaveProgress(false);
+});
+
+// Closing the tab/window entirely.
+window.addEventListener('beforeunload', () => {
+  _raSaveProgressBeacon();
+});
 
 let _raAutoScrolling = false;
 let _raScrollBound = false;

@@ -137,9 +137,59 @@ def delete_audio_tracks(owner_kind: str, owner_id: int) -> list[str]:
         "DELETE FROM audio_tracks WHERE owner_kind = ? AND owner_id = ?",
         (owner_kind, owner_id),
     )
+    # #1078: a deleted owner can't have a playback position either — every
+    # variant/lang row for it, not just the one that happened to be playing.
+    conn.execute(
+        "DELETE FROM audio_progress WHERE owner_kind = ? AND owner_id = ?",
+        (owner_kind, owner_id),
+    )
     conn.commit()
     conn.close()
     return safe_to_delete
+
+
+# ---------------------------------------------------------------------------
+# Playback position (#1078) — see schema.sql's audio_progress comment for why
+# this is its own table rather than columns on audio_tracks.
+# ---------------------------------------------------------------------------
+
+def get_audio_progress(owner_kind: str, owner_id: int, lang: str,
+                       variant: str = "fulltext") -> dict | None:
+    """The saved position for (owner_kind, owner_id, lang, variant), or None
+    if nothing has ever been saved — routes/audio.py turns the latter into
+    {"status": "none"} rather than a 404, since "never listened to this one"
+    isn't an error."""
+    conn = get_db()
+    row = conn.execute(
+        """SELECT position_ms, finished, updated_at FROM audio_progress
+           WHERE owner_kind = ? AND owner_id = ? AND lang = ? AND variant = ?""",
+        (owner_kind, owner_id, lang, variant),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    out = dict(row)
+    out["finished"] = bool(out["finished"])
+    return out
+
+
+def save_audio_progress(owner_kind: str, owner_id: int, lang: str, variant: str,
+                        position_ms: int, finished: bool = False) -> None:
+    """Upsert the current position — called on every throttled timeupdate
+    tick plus pause/ended/visibilitychange/beforeunload (static/app.js), so
+    this has to stay a single cheap UPSERT and nothing more."""
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO audio_progress (owner_kind, owner_id, lang, variant, position_ms, finished)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(owner_kind, owner_id, lang, variant) DO UPDATE SET
+               position_ms = excluded.position_ms,
+               finished    = excluded.finished,
+               updated_at  = datetime('now','localtime')""",
+        (owner_kind, owner_id, lang, variant, position_ms, int(bool(finished))),
+    )
+    conn.commit()
+    conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +348,15 @@ def delete_audio_tracks_for_book(book_id: int) -> list[str]:
     safe_to_delete = _unreferenced_paths(conn, rows)
     conn.execute(
         """DELETE FROM audio_tracks
+           WHERE owner_kind = 'book_page'
+             AND owner_id IN (SELECT id FROM book_pages WHERE book_id = ?)""",
+        (book_id,),
+    )
+    # #1078: same reasoning as delete_audio_tracks — must run before
+    # database.delete_book() cascades book_pages away, for the same reason
+    # given above.
+    conn.execute(
+        """DELETE FROM audio_progress
            WHERE owner_kind = 'book_page'
              AND owner_id IN (SELECT id FROM book_pages WHERE book_id = ?)""",
         (book_id,),

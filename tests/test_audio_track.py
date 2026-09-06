@@ -1160,3 +1160,117 @@ def test_listen_download_failure_also_writes_no_track(tmp_db, monkeypatch):
     status = client.get(f"/api/podcast/episodes/{episode_id}/listen")
     assert status.json()["status"] == "error"
     assert "download failed" in status.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 16. Playback position (#1078): GET/POST /api/audio/progress. audio_progress
+#     is a separate table from audio_tracks — these tests exercise the
+#     database layer directly for the plain round-trip/variant-isolation
+#     cases and the HTTP layer for validation and the delete-cascades, the
+#     same split test_variants_are_stored_and_read_back_independently (above)
+#     already uses for audio_tracks itself.
+# ---------------------------------------------------------------------------
+
+def test_audio_progress_round_trips_and_absent_is_none_not_an_error(tmp_db):
+    assert database.get_audio_progress("episode", 1, "zh", "fulltext") is None
+
+    resp = client.get("/api/audio/progress", params={
+        "owner_kind": "episode", "owner_id": 1, "lang": "zh", "variant": "fulltext",
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "none"}
+
+    database.save_audio_progress("episode", 1, "zh", "fulltext", position_ms=42_000)
+    saved = database.get_audio_progress("episode", 1, "zh", "fulltext")
+    assert saved["position_ms"] == 42_000
+    assert saved["finished"] is False
+    assert saved["updated_at"]
+
+    resp2 = client.get("/api/audio/progress", params={
+        "owner_kind": "episode", "owner_id": 1, "lang": "zh", "variant": "fulltext",
+    })
+    assert resp2.status_code == 200
+    body = resp2.json()
+    assert body["position_ms"] == 42_000
+    assert body["finished"] is False
+
+
+def test_audio_progress_post_saves_and_overwrites(tmp_db):
+    resp = client.post("/api/audio/progress", json={
+        "owner_kind": "episode", "owner_id": 2, "lang": "zh", "variant": "fulltext",
+        "position_ms": 10_000,
+    })
+    assert resp.status_code == 200, resp.text
+    assert database.get_audio_progress("episode", 2, "zh", "fulltext")["position_ms"] == 10_000
+
+    resp2 = client.post("/api/audio/progress", json={
+        "owner_kind": "episode", "owner_id": 2, "lang": "zh", "variant": "fulltext",
+        "position_ms": 55_000,
+    })
+    assert resp2.status_code == 200
+    # Overwrite, not a second row — same natural-key upsert contract as
+    # save_audio_track.
+    assert database.get_audio_progress("episode", 2, "zh", "fulltext")["position_ms"] == 55_000
+
+
+def test_audio_progress_fulltext_and_summary_do_not_clobber_each_other(tmp_db):
+    """Regression test for the primary key including `variant` — a summary
+    and a full-text reading of the same episode are two different pieces of
+    prose with two independent 'where was I' positions."""
+    database.save_audio_progress("episode", 42, "zh", "fulltext", position_ms=100_000)
+    database.save_audio_progress("episode", 42, "zh", "summary", position_ms=5_000)
+
+    full = database.get_audio_progress("episode", 42, "zh", "fulltext")
+    summ = database.get_audio_progress("episode", 42, "zh", "summary")
+    assert full["position_ms"] == 100_000
+    assert summ["position_ms"] == 5_000
+
+
+def test_audio_progress_negative_position_is_400(tmp_db):
+    resp = client.post("/api/audio/progress", json={
+        "owner_kind": "episode", "owner_id": 3, "lang": "zh", "variant": "fulltext",
+        "position_ms": -1,
+    })
+    assert resp.status_code == 400
+    assert database.get_audio_progress("episode", 3, "zh", "fulltext") is None
+
+
+def test_audio_progress_finished_round_trips(tmp_db):
+    resp = client.post("/api/audio/progress", json={
+        "owner_kind": "episode", "owner_id": 4, "lang": "zh", "variant": "fulltext",
+        "position_ms": 0, "finished": True,
+    })
+    assert resp.status_code == 200, resp.text
+    saved = database.get_audio_progress("episode", 4, "zh", "fulltext")
+    assert saved["finished"] is True
+
+    resp2 = client.get("/api/audio/progress", params={
+        "owner_kind": "episode", "owner_id": 4, "lang": "zh", "variant": "fulltext",
+    })
+    assert resp2.json()["finished"] is True
+
+
+def test_delete_audio_tracks_also_deletes_its_progress_row(tmp_db):
+    database.save_audio_track(
+        "episode", 55, "zh", "fulltext", "data/audio/x.mp3", 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+    database.save_audio_progress("episode", 55, "zh", "fulltext", position_ms=30_000)
+
+    database.delete_audio_tracks("episode", 55)
+
+    assert database.get_audio_progress("episode", 55, "zh", "fulltext") is None
+
+
+def test_delete_book_also_deletes_its_page_progress_rows(tmp_db):
+    page = _make_book_page()
+    database.save_audio_track(
+        "book_page", page["id"], "zh", "fulltext", "data/audio/page.mp3", 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+    database.save_audio_progress("book_page", page["id"], "zh", "fulltext", position_ms=20_000)
+
+    resp = client.delete(f"/api/books/{page['book_id']}")
+    assert resp.status_code == 200, resp.text
+
+    assert database.get_audio_progress("book_page", page["id"], "zh", "fulltext") is None
