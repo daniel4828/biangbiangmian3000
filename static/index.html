@@ -1479,5 +1479,22 @@
 
 <!-- Running-version badge (issue #450): branch@commit · deploy time; click/hover for commit message -->
 <div id="version-badge" style="display:none"></div>
+
+<!-- Persistent mini audio player (#1082): the read-along player (podcast
+     "Listen", book read-along) promoted from a control strip glued to
+     whichever detail page happened to be open into an application-level
+     singleton. Closing that page/item no longer stops its audio (see
+     app.js's _raUpdateMiniPlayer) — this bar is the one place its state is
+     ALWAYS visible and controllable, regardless of which screen is on top.
+     Hidden entirely until playback has started at least once this session,
+     same "no empty chip" rule #tasks-btn already follows (#821). -->
+<div id="mini-player" style="display:none">
+  <div id="mini-player-track"><div id="mini-player-fill"></div></div>
+  <div id="mini-player-row">
+    <button id="mini-player-title" onclick="_raMiniOpen()" title="Back to read-along"></button>
+    <button id="mini-player-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
+    <button id="mini-player-close" onclick="_raMiniClose()" title="Stop">✕</button>
+  </div>
+</div>
 </body>
 </html>

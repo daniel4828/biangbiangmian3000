@@ -5275,7 +5275,14 @@ async function openKnowledgeItem(id) {
   _knowledgeEditOpen = false;   // #937: a fresh item opens read-only
   _knowledgeView = 'summary';   // #972: and on the summary, not whichever
   _knowledgeFulltext = null;    //       view the previous item was left on
-  _raTrack = null;              // #1049: a different item's audio track
+  // #1049/#1082: resets the descriptor of the track CHECKED for this exact
+  // owner (used by _raBarHtml/_raTrackFor to decide "generate" vs "play"
+  // vs "generating…"). Deliberately does NOT touch _raPlayer — if some
+  // OTHER item's audio is currently playing, opening this one must not stop
+  // it (that's the mini player's whole reason to exist); _raBarHtml renders
+  // a "Play this instead" affordance for this item instead of silently
+  // taking over.
+  _raTrack = null;
   // #1074: a different item's "Listen" sync state — never carry a spinner
   // or an old error message over to whatever gets opened next.
   _listenBuildingId = null;
@@ -5302,10 +5309,18 @@ function closeKnowledgeDetail() {
   // a voice reading on from a screen he left is only confusing (#993).
   _kTtsStopPlayback();
   _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
-  // #1049: same reasoning, for the read-along player.
-  _raStop();
-  _raPlayer = { key: '', containerId: '', cues: [], sourceText: '', audioUrl: '',
-                map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow };
+  // #1082: the read-along player used to be stopped and reset here too
+  // (#1049) — leaving the item killed its audio outright, which is exactly
+  // the "常驻迷你播放器" bug this issue exists to fix. Playback (and the
+  // persistent mini player at the bottom of the screen, see
+  // _raUpdateMiniPlayer) now survive navigation; only the bits tied to
+  // THIS container's live DOM nodes are torn down below — the painted CSS
+  // Highlight, and the segment/range map built by walking this exact
+  // container (_raDomIndex). _raAfterRender rebuilds both from scratch, and
+  // re-syncs the highlight to wherever playback has gotten to, the next
+  // time this owner's page becomes the active player's rendered view again.
+  _raPlayer.map = null;
+  _raPlayer.mapReason = '';
   // #1074: leaving the item mid-sync must not leave a poll ticking in the
   // background for a screen nobody is looking at.
   _listenBuildingId = null;
@@ -5831,6 +5846,9 @@ function setKnowledgeTtsRate(value) {
   _kTtsRate = rate;
   try { localStorage.setItem('knowledgeTtsRate', String(rate)); } catch (_) {}
   if (_sharedAudio) _sharedAudio.playbackRate = rate;   // takes effect mid-chunk
+  // #1083: the lock screen's scrubber math depends on playbackRate — keep it
+  // in sync the moment the rate changes, not just on the next timeupdate tick.
+  _raUpdateMediaSessionPosition();
 }
 
 // ── Read-along player (#1049, phase 2 of the #1047 umbrella) ───────────────
@@ -5882,6 +5900,7 @@ let _raFollow = (() => {
 
 let _raPlayer = {
   key: '', containerId: '', cues: [], sourceText: '', audioUrl: '',
+  title: '', nav: null, durationMs: 0, lastMs: 0,   // #1082
   map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
 };
 
@@ -5905,7 +5924,7 @@ async function _raLoadTrack(owner) {
     _raTrack = data.status === 'ready'
       ? { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
           status: 'ready', track_id: data.track_id, audio_url: data.audio_url,
-          cues: data.cues || [], source_text: data.source_text || '' }
+          cues: data.cues || [], source_text: data.source_text || '', duration_ms: data.duration_ms || 0 }
       : { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant, status: 'absent' };
   } catch (e) {
     _raTrack = { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant, status: 'absent' };
@@ -5955,7 +5974,7 @@ async function doGenerateReadalong(ownerKind, ownerId, lang, variant, btn) {
       `&lang=${encodeURIComponent(lang)}&variant=${encodeURIComponent(variant)}`);
     _raTrack = { owner_kind: ownerKind, owner_id: ownerId, lang, variant, status: 'ready',
                  track_id: data.track_id, audio_url: data.audio_url,
-                 cues: data.cues || [], source_text: data.source_text || '' };
+                 cues: data.cues || [], source_text: data.source_text || '', duration_ms: data.duration_ms || 0 };
     // #1078: regenerating a track never clears a saved position (see
     // schema.sql's audio_progress comment) — load it before the finally
     // block's re-render so _raSync can seed the resume banner right away.
@@ -5983,15 +6002,32 @@ function _raContainerId(ownerKind, variant, lang) {
 // Owner-descriptor builders — the only two places that know how to turn an
 // episode or a book page into the {kind, id, lang, variant, containerId}
 // shape every function below takes.
+//
+// #1082: also carry `title` and `nav` — a plain, serializable {kind, ...ids}
+// descriptor (never a closure over mutable state like _bookState, which
+// would go stale the moment Daniel opens a second book while the first one
+// is still playing in the mini player). These two fields are copied onto
+// _raPlayer by _raSync and are the only thing the persistent mini player
+// needs to label itself and to know what "jump back to it" means — see
+// _raOpenOwner.
 function _raOwnerForEpisode(ep, lang) {
   const variant = _knowledgeView === 'fulltext' ? 'fulltext' : 'summary';
   return { kind: 'episode', id: ep.id, lang, variant,
-           containerId: _raContainerId('episode', variant, lang) };
+           containerId: _raContainerId('episode', variant, lang),
+           title: ep.title || '(untitled)', nav: { kind: 'episode', id: ep.id } };
 }
 
+// Reads _bookState's CURRENT values at call time (a fresh plain object each
+// call, not a reference to _bookState itself) — safe even though _bookState
+// is a single mutable global that keeps changing as Daniel turns pages or
+// opens a different book.
 function _raOwnerForBookPage(pageId, lang) {
+  const title = _bookState.title
+    ? (_bookState.author ? `${_bookState.title} · ${_bookState.author}` : _bookState.title)
+    : 'Book';
   return { kind: 'book_page', id: pageId, lang, variant: 'fulltext',
-           containerId: _raContainerId('book_page', 'fulltext', lang) };
+           containerId: _raContainerId('book_page', 'fulltext', lang),
+           title, nav: { kind: 'book_page', bookId: _bookState.bookId, pageNo: _bookState.pageNo, lang } };
 }
 
 // ── "Listen" (#1074): a podcast episode's OWN audio, time-aligned against
@@ -6012,7 +6048,8 @@ let _listenPollTimer = null;
 
 function _raOwnerForEpisodeListen(ep) {
   return { kind: 'episode', id: ep.id, lang: 'zh', variant: 'fulltext',
-           containerId: _raContainerId('episode', 'fulltext', 'zh') };
+           containerId: _raContainerId('episode', 'fulltext', 'zh'),
+           title: ep.title || '(untitled)', nav: { kind: 'episode', id: ep.id } };
 }
 
 function _clearListenPoll() {
@@ -6123,11 +6160,28 @@ function _raSync(owner, track) {
     key, ownerKind: owner.kind, ownerId: owner.id, lang: owner.lang, variant: owner.variant,
     containerId: owner.containerId, cues: track.cues || [],
     sourceText: track.source_text || '', audioUrl: track.audio_url,
+    // #1082: title/nav label the persistent mini player and let it navigate
+    // back; durationMs/lastMs feed its progress fill and the lock-screen
+    // setPositionState() call even when the shared <audio> element currently
+    // holds something else entirely (see _stopSharedPlayback's preemption
+    // branch, which is the only other place lastMs gets written).
+    title: owner.title || '', nav: owner.nav || null, durationMs: track.duration_ms || 0,
     map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
-    resumeMs, resumeConsumed: false,
+    resumeMs, resumeConsumed: false, lastMs: resumeMs,
   };
   _raBindScrollListener();
   return _raPlayer;
+}
+
+// #1082: is `owner` the one the persistent player is currently pointed at?
+// Used to decide whether a detail page should attach LIVE controls (build
+// the highlight map, reflect real play/pause) or a passive "play this
+// instead" affordance — see _raBarHtml/_raAfterRender. Deliberately ignores
+// track_id (unlike _raPlayer.key): a track being regenerated for the exact
+// owner that's already playing shouldn't count as "a different owner".
+function _raIsActive(owner) {
+  return !!_raPlayer.key && _raPlayer.ownerKind === owner.kind && _raPlayer.ownerId === owner.id &&
+         _raPlayer.lang === owner.lang && _raPlayer.variant === owner.variant;
 }
 
 function _raBarHtml(owner) {
@@ -6146,6 +6200,19 @@ function _raBarHtml(owner) {
       <button class="btn-secondary" onclick="doGenerateReadalong('${owner.kind}', ${owner.id}, '${owner.lang}', '${owner.variant}', this)">🎧 Generate read-along</button>
     </div>`;
   }
+  // #1082: this owner has a track, but a DIFFERENT owner may already be the
+  // one actually sounding (the persistent mini player at the bottom of the
+  // screen). Rendering this bar must never silently steal the shared audio
+  // element out from under it just because Daniel opened another item —
+  // that's exactly the "leaving the page kills the audio" bug this issue
+  // exists to fix, just moved one level down. Only _raSwitchTo (an explicit
+  // click) is allowed to hand control over.
+  if (!_raIsActive(owner) && _raPlayer.key && (_raPlayer.playing || _raPlayer.activeIdx >= 0)) {
+    return `<div class="readalong-bar">
+      <p class="keymap-hint">🎧 Currently playing: ${_escHtml(_raPlayer.title || 'another item')}</p>
+      <button class="btn-secondary" onclick="_raSwitchTo('${owner.kind}', ${owner.id})">▶ Play this instead</button>
+    </div>`;
+  }
   const player = _raSync(owner, t);
   return `<div class="readalong-bar">
     <div class="readalong-resume keymap-hint" id="readalong-resume">${_raResumeBannerHtml(player)}</div>
@@ -6162,6 +6229,29 @@ function _raBarHtml(owner) {
   </div>`;
 }
 
+// #1082: hand control of the shared audio element from whatever owner is
+// currently active to THIS one — the only place besides toggleReadalong's
+// resume-mid-track fallback that's allowed to do so, and only ever reached
+// from the "▶ Play this instead" button _raBarHtml renders for a non-active
+// owner (never called automatically). kind/id are enough to re-derive the
+// owner: lang/variant come from whatever is currently on screen for that
+// kind (activeLang()/_knowledgeView for an episode, _bookState.lang for a
+// book page) — this button only ever renders for the owner the CURRENT view
+// is showing, so those are guaranteed to already match.
+function _raSwitchTo(kind, id) {
+  const owner = kind === 'episode'
+    ? (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === id
+        ? _raOwnerForEpisode(_knowledgeDetailEpisode, activeLang()) : null)
+    : _raOwnerForBookPage(id, _bookState.lang);
+  if (!owner) return;
+  const t = _raTrackFor(owner);
+  if (!t) return;
+  _raSync(owner, t);
+  toggleReadalong();
+  if (owner.kind === 'episode') { if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode); }
+  else _refreshBookReadalongBar(id);
+}
+
 // Repaint just the controls — a full _renderKnowledgeDetail() on every
 // timeupdate tick would rebuild (and lose scroll position on) the whole
 // detail view several times a second.
@@ -6172,6 +6262,12 @@ function _raUpdateBar() {
   if (btn) btn.textContent = _raPlayer.playing ? '⏸ Pause' : '🎧 Read along';
   if (stop) stop.style.display = _raPlayer.activeIdx >= 0 ? '' : 'none';
   if (follow) follow.style.display = _raPlayer.follow ? 'none' : '';
+  // #1082: every caller of _raUpdateBar (play, pause, seek, stop, the idx
+  // change inside _raOnTimeUpdate) is exactly the set of moments the
+  // persistent mini player and the lock-screen/Media Session state need to
+  // repaint too — one choke point, not three copies of "when does this
+  // change" logic.
+  _raUpdateMiniPlayer();
 }
 
 // #1078: jumping straight into the middle of a track without saying so would
@@ -6378,6 +6474,12 @@ function _raBindContainerClicks(container) {
 function _raAfterRender(owner) {
   const t = _raTrackFor(owner);
   if (!t) return;
+  // #1082: a different owner may be the one actually active (see
+  // _raBarHtml's "play this instead" branch) — this container's text isn't
+  // sounding, so there's nothing to attach a highlight to. _raSync would
+  // otherwise silently steal the shared audio element right here, on a
+  // passive render pass nobody asked for.
+  if (!_raIsActive(owner) && _raPlayer.key && (_raPlayer.playing || _raPlayer.activeIdx >= 0)) return;
   const player = _raSync(owner, t);
   const container = document.getElementById(player.containerId);
   if (!container) return;
@@ -6403,6 +6505,7 @@ function toggleReadalong() {
     // of jumping back to the cue's start (same idiom as toggleKnowledgeTts).
     player.playing = false;
     try { a && a.pause(); } catch (_) {}
+    if (a) player.lastMs = Math.max(0, Math.round((a.currentTime || 0) * 1000));
     _raUpdateBar();
     _raSaveProgress(false);  // #1078: save on pause
     return;
@@ -6424,6 +6527,16 @@ function toggleReadalong() {
   if (player.activeIdx < 0 && player.resumeMs && !player.resumeConsumed) {
     player.resumeConsumed = true;
     _raPlayAt(Math.max(_raCueIndexForMs(player.cues, player.resumeMs), 0), player.resumeMs);
+    return;
+  }
+  // #1082: activeIdx >= 0 but the shared element no longer holds our audio —
+  // something else preempted it since we last played (a review sentence
+  // replay, the chunked #993 reader, a full-story playback — see
+  // _stopSharedPlayback, the single choke point all of those route through).
+  // Resume at the exact ms we were at instead of snapping back to the
+  // current cue's start.
+  if (player.activeIdx >= 0 && typeof player.lastMs === 'number') {
+    _raPlayAt(player.activeIdx, player.lastMs);
     return;
   }
   _raPlayAt(player.activeIdx >= 0 ? player.activeIdx : 0);
@@ -6475,6 +6588,7 @@ function _raPlayAt(idx, exactMs) {
   a.onerror = () => { if (seq === _playSeq) { player.playing = false; _raUpdateBar(); } };
   a.ontimeupdate = _raOnTimeUpdate;
   const seekMs = (typeof exactMs === 'number') ? exactMs : player.cues[idx].start_ms;
+  player.lastMs = seekMs;  // #1082: read back if something preempts us before the next tick/save
   const doSeek = () => { try { a.currentTime = seekMs / 1000; a.playbackRate = _kTtsRate; } catch (_) {} };
   // Assigning .src — even to the SAME string — makes the browser reset the
   // media element and re-fetch from scratch. Jumping between sentences of
@@ -6509,6 +6623,9 @@ function _raOnTimeUpdate() {
   const a = _sharedAudio;
   if (!a) return;
   const ms = a.currentTime * 1000;
+  player.lastMs = ms;  // #1082: last known position — read back by toggleReadalong
+                        // if something preempts the shared element before the
+                        // next throttled save below lands.
   let idx = player.activeIdx < 0 ? 0 : player.activeIdx;
   while (idx + 1 < player.cues.length && player.cues[idx + 1].start_ms <= ms) idx++;
   while (idx > 0 && player.cues[idx].start_ms > ms) idx--;
@@ -6518,6 +6635,12 @@ function _raOnTimeUpdate() {
     _raUpdateBar();
     if (player.follow) _raScrollToActive();
   }
+  // #1082: cheap per-tick repaints that don't warrant _raUpdateBar's fuller
+  // (idx-change-only) cascade — the mini player's progress fill and the
+  // lock screen's scrubber both want to move continuously, not just on cue
+  // boundaries.
+  _raUpdateMiniProgress();
+  _raUpdateMediaSessionPosition();
   // #1078: throttled to once per _RA_SAVE_INTERVAL_MS — this tick fires
   // ~4x/second, an unthrottled save here would be ~14k requests/hour on a
   // 90-minute podcast.
@@ -6627,6 +6750,162 @@ function _raScrollToActive() {
   _raAutoScrolling = true;
   node.scrollIntoView({ block: 'center', behavior: 'smooth' });
   setTimeout(() => { _raAutoScrolling = false; }, 600);
+}
+
+// ── Persistent mini player (#1082, the "常驻迷你播放器" half of #1081) ──────
+//
+// Everything above this point already treats _raPlayer as a module-level
+// singleton that survives navigation — the actual bug being fixed here was
+// that closeKnowledgeDetail()/openKnowledgeItem()/_showBookPage() used to
+// call _raStop() and reset it on the way out. That's fixed at each of those
+// three call sites (see their own comments). What's added here is the
+// bottom-of-screen bar (#mini-player in index.html) that makes the surviving
+// state visible and controllable from ANY view — without it, playback would
+// carry on invisibly and Daniel would have no way to pause/resume/see what's
+// playing once he's navigated away from the item that started it.
+//
+// This bar is a VIEW of _raPlayer, not a second copy of its state (same
+// "one pipeline" rule as #643/#836) — it reads _raPlayer/_sharedAudio
+// directly and reuses toggleReadalong()/stopReadalong() for its buttons.
+
+// Hidden whenever there's nothing to show controls FOR — a permanently
+// visible empty bar is exactly the noise #821's task indicator already
+// decided against for the same reason. "Something to show" means playback
+// has actually started at least once this session (activeIdx >= 0) or is
+// currently playing; a track that's merely loaded (e.g. right after opening
+// a detail page, before any ▶ press) does not count.
+function _raUpdateMiniPlayer() {
+  const el = document.getElementById('mini-player');
+  const p = _raPlayer;
+  const visible = !!(p.key && p.audioUrl && (p.playing || p.activeIdx >= 0));
+  if (el) el.style.display = visible ? '' : 'none';
+  // The bar is position:fixed, so without this it sits ON TOP of whatever is
+  // at the bottom of the page — the last row of a list, the last button of a
+  // form. Measured rather than hardcoded: the bar's real height includes
+  // env(safe-area-inset-bottom), which differs per device.
+  if (el) document.body.style.paddingBottom = visible ? `${el.offsetHeight}px` : '';
+  if (!visible) {
+    if ('mediaSession' in navigator) {
+      try { navigator.mediaSession.playbackState = 'none'; } catch (_) {}
+    }
+    return;
+  }
+  if (el) {
+    const title = document.getElementById('mini-player-title');
+    if (title) title.textContent = p.title || '…';
+    const toggle = document.getElementById('mini-player-toggle');
+    if (toggle) toggle.textContent = p.playing ? '⏸' : '▶';
+  }
+  _raUpdateMiniProgress();
+  _raUpdateMediaSession();
+}
+
+// Split out from _raUpdateMiniPlayer so _raOnTimeUpdate's ~4x/second tick
+// can move the fill bar without also touching the title/toggle text or the
+// Media Session metadata on every tick.
+function _raUpdateMiniProgress() {
+  const fill = document.getElementById('mini-player-fill');
+  if (!fill) return;
+  const p = _raPlayer;
+  const durationMs = p.durationMs || ((_sharedAudio && isFinite(_sharedAudio.duration)) ? _sharedAudio.duration * 1000 : 0);
+  const posMs = typeof p.lastMs === 'number' ? p.lastMs : 0;
+  fill.style.width = durationMs > 0 ? `${Math.min(100, Math.max(0, posMs / durationMs * 100))}%` : '0%';
+}
+
+function _raMiniToggle() {
+  if (!_raPlayer.key) return;
+  toggleReadalong();
+}
+
+// "Close" means "stop and hide the bar for this session", not "forget where
+// I was" — the server-side saved position (#1078) is untouched, so pressing
+// ▶ on the same item later still offers the resume banner.
+function _raMiniClose() {
+  stopReadalong();
+}
+
+function _raMiniOpen() {
+  _raOpenOwner(_raPlayer.nav);
+}
+
+// The only place that knows how to turn a `nav` descriptor (see the owner
+// builders above) back into a screen — kept separate from the mini player
+// functions above so a future third read-along owner kind only has to add a
+// branch here, not touch the rendering code.
+function _raOpenOwner(nav) {
+  if (!nav) return;
+  if (nav.kind === 'episode') openKnowledgeItem(nav.id);
+  else if (nav.kind === 'book_page') openBook(nav.bookId, nav.pageNo, nav.lang);
+}
+
+// ── Lock screen / headset / background controls (#1083, the other half of
+// #1081) ─────────────────────────────────────────────────────────────────
+//
+// Media Session API — capability-checked and entirely additive. A browser
+// without it (most desktop browsers still, some in-app webviews) just never
+// runs any of this; read-along playback behaves exactly as before.
+//
+// iOS gotchas (verified against real behavior, not just the spec):
+//  - metadata/action handlers only "stick" once real playback has begun
+//    inside a user gesture. Every call site below (_raUpdateBar, reached
+//    from toggleReadalong/_raPlayAt, both always inside a button's onclick)
+//    is already inside that gesture chain — nothing calls this from _raSync
+//    or from a passive render.
+//  - the lock screen only shows controls while audio is actually audible;
+//    once paused for a while it disappears on its own. That's the OS, not a
+//    bug to fix here.
+function _raUpdateMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  const player = _raPlayer;
+  if (!player.key || !player.audioUrl) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: player.title || 'Reading along',
+      artist: 'biangbiangmian3000',
+      // No per-item artwork exists (knowledge items and book pages have
+      // none in this app) — a made-up placeholder cover would be worse than
+      // just leaving this unset, so it's deliberately omitted.
+    });
+  } catch (_) {}
+  navigator.mediaSession.playbackState = player.playing ? 'playing' : 'paused';
+  navigator.mediaSession.setActionHandler('play', () => toggleReadalong());
+  navigator.mediaSession.setActionHandler('pause', () => toggleReadalong());
+  navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+    const a = _sharedAudio;
+    if (!a) return;
+    try { a.currentTime = Math.max(0, a.currentTime - (details.seekOffset || 10)); } catch (_) {}
+  });
+  navigator.mediaSession.setActionHandler('seekforward', (details) => {
+    const a = _sharedAudio;
+    if (!a || !isFinite(a.duration)) return;
+    try { a.currentTime = Math.min(a.duration, a.currentTime + (details.seekOffset || 10)); } catch (_) {}
+  });
+  navigator.mediaSession.setActionHandler('seekto', (details) => {
+    const a = _sharedAudio;
+    if (!a || details.seekTime == null) return;
+    try { a.currentTime = details.seekTime; } catch (_) {}
+  });
+  // 'previoustrack'/'nexttrack' are deliberately left UNREGISTERED — there is
+  // no playback queue yet (#1084). A lock-screen button that does nothing
+  // when pressed is worse than one that isn't there at all.
+  _raUpdateMediaSessionPosition();
+}
+
+// setPositionState must carry the current playbackRate (#1083) — omitting it
+// makes the lock screen's scrubber drift out of sync with real elapsed time
+// the moment Daniel listens at anything other than 1× (the #1017 rate
+// selector is right there in the same bar he's using this from).
+function _raUpdateMediaSessionPosition() {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const a = _sharedAudio;
+  if (!a || !isFinite(a.duration) || !a.duration) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: a.duration,
+      position: Math.min(Math.max(a.currentTime || 0, 0), a.duration),
+      playbackRate: a.playbackRate || 1,
+    });
+  } catch (_) {}
 }
 
 function _renderKnowledgeDetail(ep) {
@@ -13384,7 +13663,28 @@ function _getAudioEl() {
 }
 
 // Stop whatever the shared element is doing and invalidate pending chain callbacks.
+//
+// #1082: this is the single choke point every other player on the page (the
+// chunked #993/#1017 reader, full-story playback, review's sentence replay,
+// and the read-along player's own _raStop) routes through before taking the
+// element for themselves. Three of those four are short, one-off replays —
+// losing their place is meaningless. The read-along player is the odd one
+// out: it's long-running background listening (a 90-minute podcast, a book
+// chapter), and Daniel flipping a review card or tapping a word must never
+// make it vanish. So if IT was the one actually holding the element when
+// something else came to take it, save exactly where it got to and mark it
+// paused — never silently stopped — before the takeover proceeds. The mini
+// player then reads back as "⏸ paused, tap ▶ to continue" instead of
+// disappearing, and toggleReadalong's own preemption branch (see its
+// comment) resumes from this exact position rather than the cue's start.
 function _stopSharedPlayback() {
+  if (_raPlayer.playing) {
+    const a0 = _sharedAudio;
+    if (a0) _raPlayer.lastMs = Math.max(0, Math.round((a0.currentTime || 0) * 1000));
+    _raPlayer.playing = false;
+    _raSaveProgress(false);
+    _raUpdateBar();   // repaints the mini player (and, if visible, the detail bar) as paused
+  }
   _playSeq++;
   const a = _sharedAudio;
   if (a) { a.onended = null; a.onerror = null; try { a.pause(); } catch (_) {} }
@@ -16755,7 +17055,8 @@ function evoLeave() {
 // standing between Daniel and reading.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const _bookState = { bookId: null, pageNo: 1, pageId: null, pageCount: 0, lang: 'zh', loading: false };
+const _bookState = { bookId: null, pageNo: 1, pageId: null, pageCount: 0, lang: 'zh', loading: false,
+                     title: '', author: '' };  // #1082: for _raOwnerForBookPage's mini-player label
 let _bookLangs = null;   // [{code, name}] from /api/langs?available=1
 
 // Every registered language, not just the ones already in use: a book is a new
@@ -16971,15 +17272,17 @@ async function _showBookPage(pageNo) {
   const id = _bookState.bookId;
   if (!id || _bookState.loading) return;
   _bookState.loading = true;
-  // #1050: the read-along player is keyed on the page we're leaving — stop it
-  // now, before the new page's markup even exists, so the old audio never
-  // plays a beat over the new page's text. _raStop() only halts playback;
-  // the highlight and activeIdx are cleared explicitly too, since _raSync()
-  // won't run (and replace the player) until the NEXT page already has a
-  // ready track.
-  _raStop();
-  _raPlayer.activeIdx = -1;
+  // #1082: turning the page no longer stops audio that's actually playing —
+  // same reasoning as closeKnowledgeDetail: a page turn just means THIS
+  // container's DOM is about to be replaced, not that Daniel wants the
+  // reading to stop (if the page currently playing is a different one than
+  // the one being turned to, _raBarHtml renders a "Play this instead"
+  // affordance for the new page rather than silently taking over). Only the
+  // DOM-bound highlight is torn down here; _raAfterRender rebuilds it
+  // against whichever page's container next becomes the active player's.
   if (window.CSS && CSS.highlights) CSS.highlights.delete('readalong');
+  _raPlayer.map = null;
+  _raPlayer.mapReason = '';
   document.getElementById('view-books-content').innerHTML =
     '<p class="keymap-hint">Translating this page…</p>';
   let page;
@@ -17038,6 +17341,10 @@ function _renderBookPage(page) {
   const atStart = page.page_no <= 1;
   const atEnd = page.page_no >= page.page_count;
   _bookState.pageId = page.page_id;
+  // #1082: so _raOwnerForBookPage can label the mini player without having
+  // to thread title/author through every call site that builds an owner.
+  _bookState.title = page.title;
+  _bookState.author = page.author || '';
   document.getElementById('view-books-content').innerHTML = `
     <div class="book-reader-head">
       <button class="btn-secondary" onclick="openBooks()">← Books</button>
