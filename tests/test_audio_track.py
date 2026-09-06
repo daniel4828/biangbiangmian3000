@@ -28,6 +28,7 @@ is only a wildcard-import copy (#615).
 import os
 import re
 import sys
+import time
 
 import pytest
 
@@ -36,11 +37,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import audio
 import audio.anchored as anchored
 import audio.asr_cloud as asr_cloud
+import audio.asr_local as asr_local
 import audio.tts_track as tts_track
 import database
 import database.core
+import knowledge.audio_fetch as audio_fetch
 import main
 import podcast
+import routes.podcast as podcast_routes
 from audio import Cue, Track
 from audio.segment import to_sentences
 from fastapi.testclient import TestClient
@@ -921,3 +925,238 @@ def test_anchored_alignment_still_rejects_text_covering_only_part_of_a_long_reco
 
     with pytest.raises(audio.AudioTrackError, match="duration"):
         anchored.build(correct_text, "/fake/input.mp3", lang="zh")
+
+
+# ---------------------------------------------------------------------------
+# 14. The fast whisper.cpp model (#1074): audio/anchored.py's prefer_local
+#     path must request the SMALL model — the ASR run's own transcript is
+#     thrown away in favour of the known-correct text, so spending the slow
+#     large-v3 model's accuracy on it would be pure waste. A missing
+#     fast-model file must fall back to the default model rather than fail.
+# ---------------------------------------------------------------------------
+
+def test_anchored_alignment_uses_fast_model_for_local_asr(monkeypatch):
+    """anchored.build(prefer_local=True) must call asr_local.build(fast=True) —
+    NOT the plain default-model path pure local ASR (no known-correct text)
+    uses."""
+    captured = {}
+
+    def fake_asr_local_build(audio_path, lang="zh", should_abort=None, fast=False):
+        captured["fast"] = fast
+        return _fake_asr_track(
+            [Cue(start_ms=0, end_ms=2000, text="今天天气很好。", char_start=0, char_end=7)],
+            duration_ms=2000)
+
+    monkeypatch.setattr(asr_local, "build", fake_asr_local_build)
+
+    anchored.build("今天天气很好。", "/fake/input.mp3", lang="zh", prefer_local=True)
+
+    assert captured["fast"] is True
+
+
+def test_asr_local_whisper_cpp_model_uses_fast_env_var(monkeypatch, tmp_path):
+    fast_model = tmp_path / "fast.bin"
+    fast_model.write_bytes(b"fake model bytes")
+    monkeypatch.setenv("WHISPER_CPP_MODEL_FAST", str(fast_model))
+    monkeypatch.setenv("WHISPER_CPP_MODEL", "/nonexistent/default-model.bin")
+
+    assert asr_local._whisper_cpp_model(fast=True) == str(fast_model)
+    # The default (non-fast) path must be completely unaffected by the env
+    # var above — it always reads WHISPER_CPP_MODEL.
+    assert asr_local._whisper_cpp_model(fast=False) == "/nonexistent/default-model.bin"
+
+
+def test_asr_local_whisper_cpp_model_fast_falls_back_when_file_missing(monkeypatch):
+    """A missing WHISPER_CPP_MODEL_FAST file must fall back to the default
+    model — never raise. Slow-but-working beats "Listen" being unusable
+    because nobody downloaded the extra file yet."""
+    monkeypatch.setenv("WHISPER_CPP_MODEL_FAST", "/nonexistent/fast-model.bin")
+    monkeypatch.setenv("WHISPER_CPP_MODEL", "/nonexistent/default-model.bin")
+
+    model = asr_local._whisper_cpp_model(fast=True)  # must not raise
+
+    assert model == "/nonexistent/default-model.bin"
+
+
+# ---------------------------------------------------------------------------
+# 15. "Listen" (#1074): POST/GET /api/podcast/episodes/{id}/listen. Every
+#     test below stubs knowledge.audio_fetch.download_episode_audio and
+#     audio.build_track directly — nothing here may ever touch a real
+#     network, ffmpeg or whisper.cpp.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_listen_registries():
+    """routes/podcast.py's _LISTEN_* dicts/sets are module-level and shared
+    across the whole test session — clear them before AND after every test
+    so one test's episode id can never leak a stale 'building' flag or error
+    message into an unrelated test."""
+    podcast_routes._LISTEN_BUILDING_IDS.clear()
+    podcast_routes._LISTEN_ERRORS.clear()
+    yield
+    podcast_routes._LISTEN_BUILDING_IDS.clear()
+    podcast_routes._LISTEN_ERRORS.clear()
+
+
+def _make_listen_episode(audio_url="https://example.com/ep.mp3",
+                         transcript="今天天气很好。") -> int:
+    episode_id = database.create_pending_episode(
+        video_id=f"listen-test-{os.urandom(4).hex()}", channel_id=None,
+        title="Test episode", published_at=None,
+        youtube_url="https://example.com/ep", audio_url=audio_url, kind="podcast",
+    )
+    if transcript is not None:
+        database.update_episode(episode_id, transcript_zh=transcript, status="summarized")
+    return episode_id
+
+
+def _wait_for_listen_to_settle(episode_id: int) -> None:
+    """The build runs on a background thread — poll routes/podcast.py's own
+    in-memory registry (not a fixed sleep) until it's no longer 'building',
+    same idiom this file already uses for other daemon-thread endpoints."""
+    for _ in range(100):
+        if episode_id not in podcast_routes._LISTEN_BUILDING_IDS:
+            return
+        time.sleep(0.05)
+    raise AssertionError("listen build did not settle in time")
+
+
+def test_listen_returns_existing_track_without_downloading_or_aligning(tmp_db, monkeypatch):
+    episode_id = _make_listen_episode()
+    database.save_audio_track(
+        "episode", episode_id, "zh", "fulltext", "data/audio/existing.mp3", 5000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "anchored", None, source_text="今天天气很好。")
+
+    def fail(*a, **kw):
+        raise AssertionError("must not download/align when a track already exists")
+
+    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fail)
+    monkeypatch.setattr(podcast_routes.audio, "build_track", fail)
+
+    resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "ready"
+
+
+def test_listen_missing_audio_url_is_400_and_says_so(tmp_db):
+    episode_id = _make_listen_episode(audio_url=None)
+    resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
+    assert resp.status_code == 400
+    assert "audio" in resp.json()["detail"].lower()
+
+
+def test_listen_missing_transcript_is_400_and_says_so(tmp_db):
+    episode_id = _make_listen_episode(transcript=None)
+    resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
+    assert resp.status_code == 400
+    assert "transcript" in resp.json()["detail"].lower()
+
+
+def test_listen_duplicate_submission_is_409(tmp_db):
+    episode_id = _make_listen_episode()
+    with podcast_routes._LISTEN_BUILDING_LOCK:
+        podcast_routes._LISTEN_BUILDING_IDS.add(episode_id)
+    try:
+        resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
+        assert resp.status_code == 409
+    finally:
+        with podcast_routes._LISTEN_BUILDING_LOCK:
+            podcast_routes._LISTEN_BUILDING_IDS.discard(episode_id)
+
+
+def test_listen_success_downloads_then_aligns_with_prefer_local_and_saves_track(
+        tmp_db, tmp_path, monkeypatch):
+    episode_id = _make_listen_episode(audio_url="https://example.com/ep.mp3",
+                                      transcript="今天天气很好。")
+    downloaded_path = str(tmp_path / "downloaded.mp3")
+    calls = {}
+
+    def fake_download(url, dest_dir, filename):
+        calls["download"] = {"url": url, "dest_dir": dest_dir, "filename": filename}
+        with open(downloaded_path, "wb") as f:
+            f.write(b"fake mp3 bytes")
+        return downloaded_path
+
+    def fake_build_track(*, text=None, audio_path=None, lang="zh",
+                         prefer_local=False, should_abort=None):
+        calls["build"] = {"text": text, "audio_path": audio_path,
+                          "lang": lang, "prefer_local": prefer_local}
+        return Track(audio_path=audio_path, duration_ms=4000,
+                    cues=[Cue(start_ms=0, end_ms=4000, text="今天天气很好。",
+                              char_start=0, char_end=7)],
+                    word_cues=[], source="anchored", voice=None,
+                    source_text="今天天气很好。")
+
+    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track)
+
+    resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "building"
+
+    _wait_for_listen_to_settle(episode_id)
+
+    assert calls["download"]["url"] == "https://example.com/ep.mp3"
+    assert calls["download"]["dest_dir"] == podcast_routes._LISTEN_AUDIO_DIR
+    assert calls["build"]["text"] == "今天天气很好。"
+    assert calls["build"]["audio_path"] == downloaded_path
+    assert calls["build"]["prefer_local"] is True
+
+    track = database.get_audio_track("episode", episode_id, "zh", "fulltext")
+    assert track is not None
+    assert track["audio_path"] == downloaded_path
+    assert track["source"] == "anchored"
+
+
+def test_listen_alignment_failure_writes_no_track_and_status_is_readable(
+        tmp_db, tmp_path, monkeypatch):
+    episode_id = _make_listen_episode()
+    downloaded_path = str(tmp_path / "downloaded.mp3")
+
+    def fake_download(url, dest_dir, filename):
+        with open(downloaded_path, "wb") as f:
+            f.write(b"fake mp3 bytes")
+        return downloaded_path
+
+    def fake_build_track_fails(**kwargs):
+        raise audio.AudioTrackError("simulated: alignment coverage too low")
+
+    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track_fails)
+
+    resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "building"
+
+    _wait_for_listen_to_settle(episode_id)
+
+    assert database.get_audio_track("episode", episode_id, "zh", "fulltext") is None
+
+    status = client.get(f"/api/podcast/episodes/{episode_id}/listen")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["status"] == "error"
+    assert "coverage" in body["detail"]
+
+
+def test_listen_download_failure_also_writes_no_track(tmp_db, monkeypatch):
+    episode_id = _make_listen_episode()
+
+    def fake_download_fails(url, dest_dir, filename):
+        raise audio_fetch.AudioFetchError("simulated: download failed")
+
+    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio",
+                        fake_download_fails)
+
+    resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "building"
+
+    _wait_for_listen_to_settle(episode_id)
+
+    assert database.get_audio_track("episode", episode_id, "zh", "fulltext") is None
+    status = client.get(f"/api/podcast/episodes/{episode_id}/listen")
+    assert status.json()["status"] == "error"
+    assert "download failed" in status.json()["detail"]

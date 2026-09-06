@@ -46,6 +46,23 @@ _DEFAULT_WHISPER_CPP_PATH = "whisper-cli"
 # see scripts/README.md for the one-time download step.
 _DEFAULT_WHISPER_CPP_MODEL = "/opt/whisper.cpp/models/ggml-large-v3-q5_0.bin"
 
+# 🔴 A second, much smaller model used ONLY when this module is asked for
+# `fast=True` (audio/anchored.py's text-anchored path, #1074's "Listen"
+# button). When text-anchored alignment already has the CORRECT transcript,
+# the ASR run here exists purely to recover TIMESTAMPS — every word it
+# transcribes is thrown away the moment anchored.build() replaces it with the
+# known-correct text via difflib. Spending large-v3's accuracy on text nobody
+# will ever read is pure waste, and it is not a small waste: measured
+# 2026-09-06 on this project's 4-core EPYC VPS (no GPU), large-v3-q5_0 runs
+# roughly 4-6x slower than realtime, while `base` should be an order of
+# magnitude faster. Daniel clicks "Listen" and waits for the result — a
+# 16-minute episode taking 2-3 minutes (base) versus an hour or more
+# (large-v3) is the entire difference between this feature being usable and
+# not. DO NOT "simplify" this back to one model for both paths — that
+# reintroduces the multi-hour wait #1053's own worker was built to avoid in
+# the one case where it actually matters that the transcription be quick.
+_DEFAULT_WHISPER_CPP_MODEL_FAST = "/home/anki/whisper.cpp/models/ggml-base.bin"
+
 # Leaves one of the server's 4 cores free for the actual web app (and the
 # cron jobs that hit it every few minutes) instead of pinning all four —
 # whisper.cpp running flat-out on every core would make the app itself
@@ -85,18 +102,34 @@ def _whisper_cpp_path() -> str:
     return os.environ.get("WHISPER_CPP_PATH", _DEFAULT_WHISPER_CPP_PATH)
 
 
-def _whisper_cpp_model() -> str:
+def _whisper_cpp_model(fast: bool = False) -> str:
+    """The model file to use. `fast=True` (#1074) asks for the small model
+    used when the ASR run's only job is recovering timestamps — see the
+    constant above for why this must never quietly become the same model as
+    the default path.
+
+    A missing fast-model file falls back to the default model (with a
+    warning) rather than failing outright: slow-but-working beats "Listen"
+    being unusable because nobody has downloaded the extra file yet.
+    """
+    if fast:
+        path = os.environ.get("WHISPER_CPP_MODEL_FAST", _DEFAULT_WHISPER_CPP_MODEL_FAST)
+        if os.path.exists(path):
+            return path
+        logger.warning(
+            "audio.asr_local: fast model %r not found, falling back to the "
+            "default model (WHISPER_CPP_MODEL_FAST) — see scripts/README.md", path)
     return os.environ.get("WHISPER_CPP_MODEL", _DEFAULT_WHISPER_CPP_MODEL)
 
 
-def _require_installed() -> tuple[str, str]:
+def _require_installed(fast: bool = False) -> tuple[str, str]:
     exe = _whisper_cpp_path()
     resolved = shutil.which(exe) if os.sep not in exe else (exe if os.path.exists(exe) else None)
     if not resolved:
         raise AudioTrackError(
             f"whisper.cpp executable {exe!r} was not found (WHISPER_CPP_PATH) — "
             "see scripts/README.md for the one-time build/install steps (#1053)")
-    model = _whisper_cpp_model()
+    model = _whisper_cpp_model(fast=fast)
     if not os.path.exists(model):
         raise AudioTrackError(
             f"whisper.cpp model {model!r} was not found (WHISPER_CPP_MODEL) — "
@@ -166,14 +199,17 @@ def _kill(proc) -> None:
             logger.warning("audio.asr_local: whisper.cpp survived SIGKILL, giving up on it")
 
 
-def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None) -> list:
+def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None, fast: bool = False) -> list:
     """Invoke whisper.cpp on the (already 16kHz mono) wav_path, requesting
     JSON output so segment-level timestamps survive — whisper.cpp's plain
     stdout transcript has no timing information at all. Returns the raw
     `transcription` array from the JSON file (offsets.from/to in ms, plus
     text), or raises AudioTrackError.
+
+    `fast` (#1074) selects the small model — see _whisper_cpp_model's
+    docstring for why.
     """
-    exe, model = _require_installed()
+    exe, model = _require_installed(fast=fast)
     fd, json_stub = tempfile.mkstemp(suffix="")
     os.close(fd)
     os.remove(json_stub)  # whisper.cpp appends ".json" itself to -of's path
@@ -214,7 +250,7 @@ def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None) -> list:
                 pass
 
 
-def build(audio_path: str, lang: str = "zh", should_abort=None) -> Track:
+def build(audio_path: str, lang: str = "zh", should_abort=None, fast: bool = False) -> Track:
     """audio_path -> Track, source='asr_local' (#1053).
 
     Raises AudioTrackError when the whisper.cpp binary/model is missing, the
@@ -227,12 +263,19 @@ def build(audio_path: str, lang: str = "zh", should_abort=None) -> Track:
     AudioTrackAborted — which is NOT a failure, see that class's docstring.
     scripts/audio_worker.py passes one so that Daniel touching the server
     frees the CPU within seconds instead of hours.
+
+    `fast` (#1074): use the small model instead of the default large-v3.
+    Only correct when the caller (audio/anchored.py) is going to throw away
+    this run's own transcript text and keep only its timestamps — see
+    _DEFAULT_WHISPER_CPP_MODEL_FAST's comment. Pure ASR (this function called
+    with no known-correct text to anchor against) must never pass fast=True:
+    there the transcript IS the final result, and large-v3's accuracy matters.
     """
-    _require_installed()  # fail fast, before paying for the transcode
+    _require_installed(fast=fast)  # fail fast, before paying for the transcode
 
     wav_path = _transcode_to_wav16(audio_path)
     try:
-        raw_segments = _run_whisper_cpp(wav_path, lang, should_abort=should_abort)
+        raw_segments = _run_whisper_cpp(wav_path, lang, should_abort=should_abort, fast=fast)
     finally:
         try:
             os.remove(wav_path)

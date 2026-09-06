@@ -249,7 +249,10 @@ def test_temp_wav_is_removed_on_both_success_and_failure(monkeypatch, tmp_path):
         made.append(str(wav))
         return str(wav)
 
-    monkeypatch.setattr(asr_local, "_require_installed", lambda: ("exe", "model"))
+    # **kwargs on purpose: _require_installed grew a `fast` argument with
+    # #1074, and a stub with a frozen signature turns every such addition into
+    # a failure here that says nothing about the cleanup this test checks.
+    monkeypatch.setattr(asr_local, "_require_installed", lambda **kw: ("exe", "model"))
     monkeypatch.setattr(asr_local, "_transcode_to_wav16", _fake_transcode)
 
     # Long enough to clear the shared hallucination filter's minimum-word

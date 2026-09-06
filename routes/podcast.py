@@ -9,11 +9,15 @@ import sqlite3
 import threading
 from xml.etree import ElementTree
 
+import audio
 import database
+import knowledge.audio_fetch
 import knowledge.rendition
 import podcast
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from . import tasks
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,6 +28,27 @@ router = APIRouter()
 # report a "processing" status without writing anything to the DB for it.
 _PROCESSING_IDS: set[int] = set()
 _PROCESSING_LOCK = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# "Listen" (#1074): podcast episode's own audio + its transcript, aligned
+# into a read-along track (audio/anchored.py). Separate guard/error registry
+# from _PROCESSING_IDS above on purpose — that one means "the summarization
+# pipeline is running", a different job with a different meaning, and
+# collapsing the two would make an episode look "processing" (or block a
+# real process request) for the wrong reason.
+# ---------------------------------------------------------------------------
+_LISTEN_BUILDING_IDS: set[int] = set()
+_LISTEN_BUILDING_LOCK = threading.Lock()
+# episode_id -> last failure's message. Populated on failure, cleared the
+# moment a new attempt starts — an old error must never linger and be
+# reported for a build that hasn't even run yet.
+_LISTEN_ERRORS: dict[int, str] = {}
+
+# Where a "Listen" download's mp3 lives, kept (not cleaned up after the
+# align) so a rebuild never has to download it a second time. Same parent
+# knowledge/ingest.py's _AUDIOBOOK_AUDIO_DIR uses for downloaded audiobook
+# audio — one place on disk for "source audio fetched for local processing".
+_LISTEN_AUDIO_DIR = os.path.join("data", "audio", "source")
 
 
 @router.post("/api/podcast/check")
@@ -430,6 +455,158 @@ def process_episode(episode_id: int):
         _PROCESSING_IDS.add(episode_id)
     threading.Thread(target=_process_episode_thread, args=(episode_id,), daemon=True).start()
     return {"status": "processing"}
+
+
+def _listen_track_payload(track: dict) -> dict:
+    return {
+        "status": "ready",
+        "track_id": track["id"],
+        "audio_url": f"/api/audio/file/{track['id']}",
+        "cues": track["cues"],
+        "source": track["source"],
+        "duration_ms": track["duration_ms"],
+    }
+
+
+def _listen_thread(episode_id: int) -> None:
+    """Background body for POST .../listen (#1074): download the episode's
+    own audio, align it against its already-correct transcript
+    (audio/anchored.py, prefer_local=True so the ASR step runs on this
+    machine's own whisper.cpp instead of paying Groq — free, and there's no
+    HTTP request open waiting on it here anyway), and save the resulting
+    track.
+
+    🔴 This runs IMMEDIATELY in a background thread, never queued into
+    database.audio_jobs (the table scripts/audio_worker.py drains only
+    during quiet hours, see its own module docstring). That queue's whole
+    reason to exist is "don't run whisper.cpp while Daniel is at the
+    keyboard" — but here Daniel himself just clicked "Listen" and is sitting
+    there waiting for the result. Making him wait until tonight for a
+    16-minute episode that a *fast* local model finishes in a couple of
+    minutes (see audio/asr_local.py's fast-model comment) would defeat the
+    entire point of the button. Contrast with knowledge/audio_upload.py's
+    audiobooks, which ARE queued — those are hours long and nobody is
+    waiting on them synchronously.
+
+    Never writes a half-built track: any failure (download or alignment)
+    just records the reason in _LISTEN_ERRORS and leaves audio_tracks
+    untouched, exactly as audio.build_track's own callers are required to.
+    """
+    task_id = f"listen:{episode_id}"
+    tasks.register(task_id, "audio", f"Syncing audio · episode {episode_id}",
+                   "Downloading audio…")
+    try:
+        episode = database.get_episode(episode_id)
+        if not episode:
+            _LISTEN_ERRORS[episode_id] = "Episode no longer exists"
+            return
+        audio_url = (episode.get("audio_url") or "").strip()
+        transcript = (episode.get("transcript_zh") or "").strip()
+        if not audio_url or not transcript:
+            # Guarded again here (already checked by the route before the
+            # thread was spawned) in case the episode changed underneath us
+            # between the check and the thread actually starting.
+            _LISTEN_ERRORS[episode_id] = "Missing audio_url or transcript"
+            return
+
+        ext = os.path.splitext(audio_url.split("?")[0])[1] or ".mp3"
+        filename = f"episode-{episode_id}{ext}"
+        try:
+            local_path = knowledge.audio_fetch.download_episode_audio(
+                audio_url, _LISTEN_AUDIO_DIR, filename)
+        except knowledge.audio_fetch.AudioFetchError as e:
+            logger.warning("podcast: listen download failed for episode %s: %s", episode_id, e)
+            _LISTEN_ERRORS[episode_id] = str(e)
+            return
+
+        tasks.register(task_id, "audio", f"Syncing audio · episode {episode_id}",
+                       "Transcribing + aligning (local, a few minutes)…")
+        try:
+            track = audio.build_track(text=transcript, audio_path=local_path,
+                                      lang="zh", prefer_local=True)
+        except audio.AudioTrackError as e:
+            logger.warning("podcast: listen alignment failed for episode %s: %s", episode_id, e)
+            _LISTEN_ERRORS[episode_id] = str(e)
+            return
+
+        database.save_audio_track(
+            "episode", episode_id, "zh", "fulltext",
+            track.audio_path, track.duration_ms,
+            [c.to_dict() for c in track.cues],
+            track.source, track.voice, source_text=track.source_text,
+        )
+        logger.info("podcast: listen track ready for episode %s (%d cues)",
+                   episode_id, len(track.cues))
+    except Exception as e:
+        logger.error("podcast: listen build failed for episode %s: %s", episode_id, e)
+        _LISTEN_ERRORS[episode_id] = str(e)
+    finally:
+        with _LISTEN_BUILDING_LOCK:
+            _LISTEN_BUILDING_IDS.discard(episode_id)
+        tasks.finish(task_id)
+
+
+@router.post("/api/podcast/episodes/{episode_id}/listen")
+def start_listen(episode_id: int):
+    """Start (or return the already-built) read-along track for this
+    episode's own audio (#1074) — the single entry point the "🎧 Listen"
+    button calls.
+
+    Idempotent: an already-built track (owner_kind='episode', lang='zh',
+    variant='fulltext') is returned immediately, no re-download or
+    re-alignment. 400 when the episode is missing either half of what this
+    needs (its own audio, or a transcript to align against) — spelled out
+    which one, since "something is missing" tells Daniel nothing he can act
+    on. 409 on a duplicate submission while a build is already running for
+    this episode, same idea as POST .../process's _PROCESSING_IDS guard.
+    """
+    episode = database.get_episode(episode_id)
+    if not episode:
+        raise HTTPException(404, "Episode not found")
+
+    existing = database.get_audio_track("episode", episode_id, "zh", "fulltext")
+    if existing:
+        return _listen_track_payload(existing)
+
+    if not (episode.get("audio_url") or "").strip():
+        raise HTTPException(400, "This item has no audio to listen to (no audio_url)")
+    if not (episode.get("transcript_zh") or "").strip():
+        raise HTTPException(
+            400, "This item has no transcript yet to align the audio against")
+
+    with _LISTEN_BUILDING_LOCK:
+        if episode_id in _LISTEN_BUILDING_IDS:
+            raise HTTPException(409, "Already syncing audio for this item")
+        _LISTEN_BUILDING_IDS.add(episode_id)
+        _LISTEN_ERRORS.pop(episode_id, None)
+    threading.Thread(target=_listen_thread, args=(episode_id,), daemon=True).start()
+    return {"status": "building"}
+
+
+@router.get("/api/podcast/episodes/{episode_id}/listen")
+def listen_status(episode_id: int):
+    """Poll while a "Listen" build runs (#1074) — separate from GET
+    .../episodes/{id} so the frontend doesn't need to re-fetch (and
+    re-render) the whole detail payload every few seconds just to learn
+    whether the sync finished.
+
+    'building' while the background thread is running; 'error' with the
+    reason once it fails (read once — the message is not cleared here, only
+    when a new attempt starts, so refreshing the page still shows why the
+    last one failed); 'ready' once the track exists (GET /api/audio/track is
+    still what actually hands back the cues); 'idle' otherwise — no build has
+    ever run, or the episode doesn't have what "Listen" needs.
+    """
+    with _LISTEN_BUILDING_LOCK:
+        building = episode_id in _LISTEN_BUILDING_IDS
+    if building:
+        return {"status": "building"}
+    error = _LISTEN_ERRORS.get(episode_id)
+    if error:
+        return {"status": "error", "detail": error}
+    if database.get_audio_track("episode", episode_id, "zh", "fulltext"):
+        return {"status": "ready"}
+    return {"status": "idle"}
 
 
 def _regenerate_summary_thread(episode_id: int) -> None:
