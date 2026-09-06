@@ -5276,6 +5276,11 @@ async function openKnowledgeItem(id) {
   _knowledgeView = 'summary';   // #972: and on the summary, not whichever
   _knowledgeFulltext = null;    //       view the previous item was left on
   _raTrack = null;              // #1049: a different item's audio track
+  // #1074: a different item's "Listen" sync state — never carry a spinner
+  // or an old error message over to whatever gets opened next.
+  _listenBuildingId = null;
+  _listenErrors = {};
+  _clearListenPoll();
   try {
     // lang (#804): the detail endpoint returns a translated+annotated
     // rendition of the summary for non-Chinese tabs; zh's response is
@@ -5301,6 +5306,11 @@ function closeKnowledgeDetail() {
   _raStop();
   _raPlayer = { key: '', containerId: '', cues: [], sourceText: '', audioUrl: '',
                 map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow };
+  // #1074: leaving the item mid-sync must not leave a poll ticking in the
+  // background for a screen nobody is looking at.
+  _listenBuildingId = null;
+  _listenErrors = {};
+  _clearListenPoll();
   try { if (window.CSS && CSS.highlights) CSS.highlights.delete('readalong'); } catch (_) {}
   // Back to wherever this item was opened from — through goBack(), so that
   // this ✕ and the browser's own back button end up on the same screen
@@ -5945,6 +5955,104 @@ function _raOwnerForBookPage(pageId, lang) {
            containerId: _raContainerId('book_page', 'fulltext', lang) };
 }
 
+// ── "Listen" (#1074): a podcast episode's OWN audio, time-aligned against
+// its own transcript (audio/anchored.py), one click, no second "generate"
+// step to press once it's ready.
+//
+// Deliberately always owner_kind='episode', lang='zh', variant='fulltext':
+// that's the exact key POST/GET /api/podcast/episodes/{id}/listen build and
+// read back (routes/podcast.py) — transcript_zh is the correct-text side of
+// the alignment, so this only ever makes sense in the zh tab. The generic
+// _raBarHtml/_raOwnerForEpisode machinery is reused untouched for the actual
+// playback once the track exists (see doStartListen below) — a second
+// player implementation is exactly what #643/#836's "one pipeline" lesson
+// warns against.
+let _listenBuildingId = null;   // episode id currently downloading+aligning, or null
+let _listenErrors = {};         // episode id -> last failure's message
+let _listenPollTimer = null;
+
+function _raOwnerForEpisodeListen(ep) {
+  return { kind: 'episode', id: ep.id, lang: 'zh', variant: 'fulltext',
+           containerId: _raContainerId('episode', 'fulltext', 'zh') };
+}
+
+function _clearListenPoll() {
+  if (_listenPollTimer) { clearTimeout(_listenPollTimer); _listenPollTimer = null; }
+}
+
+function _scheduleListenPoll(episodeId, owner) {
+  _clearListenPoll();
+  _listenPollTimer = setTimeout(async () => {
+    if (_listenBuildingId !== episodeId) return;  // left this item, or a new attempt started
+    try {
+      const data = await api('GET', `/api/podcast/episodes/${episodeId}/listen`);
+      if (data.status === 'building') { _scheduleListenPoll(episodeId, owner); return; }
+      _listenBuildingId = null;
+      if (data.status === 'error') {
+        _listenErrors[episodeId] = data.detail || 'Sync failed';
+        if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === episodeId)
+          _renderKnowledgeDetail(_knowledgeDetailEpisode);
+        return;
+      }
+      // 'ready' (or 'idle', which should not happen right after a build) —
+      // _raLoadTrack re-renders the detail view itself once it lands.
+      await _raLoadTrack(owner);
+    } catch (e) {
+      // Transient (network blip) — never surfaced as a failure, same idiom
+      // as _schedulePodcastPollIfNeeded: just try again next tick.
+      _scheduleListenPoll(episodeId, owner);
+    }
+  }, 4000);
+}
+
+// Never silently "nothing happens" (CLAUDE.md's rule for this feature):
+// every branch below is a distinct, visible state — no-op is not one of them.
+function _knowledgeListenBarHtml(ep) {
+  if (!ep.audio_url || !ep.transcript_zh) return '';  // this item has nothing "Listen" can build from
+  const owner = _raOwnerForEpisodeListen(ep);
+  if (_raTrackFor(owner)) return '';  // already built — the normal read-along bar below shows the player
+  if (_listenBuildingId === ep.id) {
+    return `<div class="readalong-bar"><p class="keymap-hint">⏳ 正在同步…</p></div>`;
+  }
+  const err = _listenErrors[ep.id];
+  if (err) {
+    return `<div class="readalong-bar">
+      <p class="keymap-hint">⚠ 同步失败：${_escHtml(err)}</p>
+      <button class="btn-secondary" onclick="doStartListen(${ep.id})">Retry</button>
+    </div>`;
+  }
+  return `<div class="readalong-bar">
+    <button class="btn-secondary" onclick="doStartListen(${ep.id})">🎧 Listen</button>
+  </div>`;
+}
+
+async function doStartListen(episodeId) {
+  const ep = _knowledgeDetailEpisode;
+  if (!ep || ep.id !== episodeId || _listenBuildingId === episodeId) return;
+  // "自动进入 live 模式" — switch to the Full text tab right away so the
+  // transcript (and, the moment it lands, the synced player) is what he's
+  // looking at, instead of making him press a second button once it's ready.
+  _knowledgeView = 'fulltext';
+  delete _listenErrors[episodeId];
+  _listenBuildingId = episodeId;
+  _renderKnowledgeDetail(ep);
+  const owner = _raOwnerForEpisodeListen(ep);
+  try {
+    const data = await api('POST', `/api/podcast/episodes/${episodeId}/listen`);
+    if (data.status === 'ready') {
+      _listenBuildingId = null;
+      await _raLoadTrack(owner);
+      return;
+    }
+    _scheduleListenPoll(episodeId, owner);
+  } catch (e) {
+    _listenBuildingId = null;
+    _listenErrors[episodeId] = e.message || 'error';
+    if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === episodeId)
+      _renderKnowledgeDetail(_knowledgeDetailEpisode);
+  }
+}
+
 // Stops whatever the shared audio element is doing on our behalf. Does NOT
 // touch _kTts's state — the two players guard against stealing the element
 // from each other by calling this (or _kTtsStopPlayback()) before they start.
@@ -6406,6 +6514,7 @@ function _renderKnowledgeDetail(ep) {
       <div style="margin:4px 0 10px">${links}</div>
       ${_knowledgeViewTabs(ep)}
       ${_kTtsBarHtml(ep, lang)}
+      ${isZh ? _knowledgeListenBarHtml(ep) : ''}
       ${_raBarHtml(_raOwnerForEpisode(ep, lang))}
       ${_knowledgeView === 'fulltext' ? _knowledgeFulltextHtml(ep, lang) : summaryBlock}
     </div>

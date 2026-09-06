@@ -142,10 +142,18 @@ def build(text: str, audio_path: str, lang: str = "zh", prefer_local: bool = Fal
     build_track()'s. The alignment step itself (SequenceMatcher against the
     known-correct text) is identical either way; only where the timestamps
     came from differs.
+
+    When `prefer_local` is used here, whisper.cpp runs with `fast=True`
+    (#1074): this function only ever keeps the ASR run's TIMESTAMPS — every
+    character of its transcript text is replaced by the known-correct `text`
+    below via difflib. Spending the large, slow model's accuracy on text that
+    is discarded on the very next line would make this the single slowest
+    path in the app for no benefit; see asr_local.py's
+    _DEFAULT_WHISPER_CPP_MODEL_FAST comment for the measured numbers.
     """
     if prefer_local:
         from . import asr_local  # lazy: avoids a circular import at package load
-        asr_track = asr_local.build(audio_path, lang=lang, should_abort=should_abort)
+        asr_track = asr_local.build(audio_path, lang=lang, should_abort=should_abort, fast=True)
     else:
         asr_track = asr_cloud.build(audio_path, lang=lang)
 
