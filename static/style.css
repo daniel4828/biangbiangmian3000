@@ -6307,6 +6307,68 @@ body.gloss-on .gloss-word {
   #tasks-btn { min-height: 40px; font-size: 15px; }
 }
 
+/* ── Persistent mini audio player (#1082) ────────────────
+   Promotes the read-along player (podcast "Listen", book read-along) from a
+   control strip glued to whichever detail page happened to be open into an
+   application-level singleton — always fixed to the bottom of the viewport,
+   above every view. Hidden entirely (display:none, set from app.js) until
+   playback has started at least once this session — same "no empty chip"
+   rule #tasks-btn already follows a few rules up (#821). */
+#mini-player {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  /* Deliberately below the z-index:100+ tier every modal/overlay in this file
+     uses (add-word-modal, sentence-question-overlay, fsrs-inspector, …) — a
+     modal must always cover this bar, never sit behind it. Still comfortably
+     above ordinary scrolling content (z-index: auto or single digits). */
+  z-index: 90;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, .10);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+#mini-player-track { height: 3px; background: var(--border); }
+#mini-player-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+  transition: width .2s linear;
+}
+#mini-player-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+#mini-player-title {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 4px 0;
+}
+#mini-player-toggle, #mini-player-close {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  width: 34px;
+  height: 34px;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+#mini-player-toggle:hover, #mini-player-close:hover { background: var(--border); }
+
 /* ── Browse on phones (#827) ─────────────────────────────
    Browse had no mobile breakpoint at all: a 200px fixed sidebar next to
    flex:1 main left ~190px for the list on a 390px screen, and the row
