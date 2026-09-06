@@ -676,6 +676,11 @@ main.browse-open {
 .listen-hint-sentence .hint-blank-target {
   color: var(--primary, #4a90d9);
 }
+/* A masked word Daniel already has an entry for (#1077): the blanks stay
+   blanks — the point is that he can look the word up, not that it is given
+   away — but the run of them is one tap target. */
+.hint-blank-word { cursor: pointer; border-radius: 3px; }
+.hint-blank-word:active { background: var(--hover-bg); }
 .listen-hint-slider-row {
   display: flex;
   align-items: center;
@@ -4110,6 +4115,32 @@ select.opt-input {
 #cost-modal-body {
   overflow-y: auto;
   padding: 16px 20px 24px;
+}
+
+/* ── Word detail popup (#1077) ──────────────────────────────
+   The same view element and the same renderWordDetail() — floated by a body
+   class rather than moved in the DOM, so every id-based handler inside it
+   keeps working and there is no second copy of the renderer to drift. */
+#wd-popup-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 200;
+}
+body.wd-popup #view-word-detail {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(94vw, 760px);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--card);
+  border-radius: 18px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.22);
+  z-index: 201;
+  padding: 16px;
+}
+@media (max-width: 600px) {
+  body.wd-popup #view-word-detail { width: 96vw; max-height: 92vh; padding: 10px; }
 }
 
 /* ── Server logs modal (issue #454) ─────────────────────── */

@@ -1001,6 +1001,11 @@ function _renderDoneHint() {
 }
 
 function showView(name) {
+  // #1077: the word-detail popup floats the real #view-word-detail element, so
+  // any navigation out of it (a hanzi chip, a related word) would hide the
+  // popup's own body and leave the overlay stranded on screen. Closing first
+  // also puts that element's display back under this function's control.
+  if (document.body.classList.contains('wd-popup')) closeWordDetailPopup();
   _currentView = name;
   if (name === 'done') _renderDoneHint();
   if (name === 'done' && _sessionReviewedCount > 0) _triggerClapAnimation();
@@ -3204,6 +3209,43 @@ async function openWordDetail(wordId) {
     showError('Failed to load word: ' + e.message);
     showView('browse');
   }
+}
+
+// The same word detail, as a popup instead of a whole-page navigation (#1077).
+// Tapping a word inside a review card must not throw Daniel out of the card he
+// is answering — he wants to see what is saved about the word and carry on.
+// Deliberately shares openWordDetail's fetch shape and renderWordDetail: one
+// renderer, one set of ids, nothing to keep in sync.
+async function openWordDetailPopup(wordId) {
+  const el = document.getElementById('view-word-detail');
+  if (!el) return;
+  try {
+    const word = await api('GET', `/api/word/${wordId}`);
+    word.cards = await api('GET', `/api/words/${wordId}/cards`);
+    _currentWordId = wordId;
+    renderWordDetail(word);
+  } catch (e) {
+    showError('Failed to load word: ' + e.message);
+    return;
+  }
+  const backBtn = document.getElementById('wd-back-review-btn');
+  if (backBtn) backBtn.style.display = 'none';
+  document.getElementById('wd-popup-close').style.display = '';
+  document.getElementById('wd-popup-overlay').style.display = 'block';
+  el.style.display = 'block';
+  el.scrollTop = 0;
+  document.body.classList.add('wd-popup');
+}
+
+function closeWordDetailPopup() {
+  if (!document.body.classList.contains('wd-popup')) return;
+  document.body.classList.remove('wd-popup');
+  document.getElementById('wd-popup-overlay').style.display = 'none';
+  document.getElementById('wd-popup-close').style.display = 'none';
+  // Back to whatever showView() would have it be: the popup floated the real
+  // view element, so leaving it displayed would leave it stranded on the page.
+  document.getElementById('view-word-detail').style.display =
+    _currentView === 'word-detail' ? 'block' : 'none';
 }
 
 function renderWordDetail(word) {
@@ -6791,13 +6833,19 @@ function doWordTableKnown(idx, extraBtn) {
 // this (knowledge detail, book page). The story loading screen shares
 // _knowledgeSummaryHtml() but never sets the word table, so it would wrap
 // against whatever list the previous screen left behind.
-function _makeWordsTappable(root) {
+function _makeWordsTappable(root, glossText) {
   if (!root) return;
   // Captured before any DOM mutation below — the #1018 all-words fetch at
   // the bottom needs the ORIGINAL text (mutating first would fold the
   // hidden .tap-word-gloss text, already in the DOM per #996, into what
   // gets sent for segmentation and double-count those words).
-  const originalText = root.textContent;
+  //
+  // The text sent for segmentation. Callers whose DOM is not the plain
+  // sentence pass it explicitly — the listening hint (#1006) renders masked
+  // characters ("__的__"), and sending that would both waste the request and
+  // poison the per-text cache with a garbage entry. Everyone else keeps
+  // reading it off the DOM as before.
+  const originalText = glossText || root.textContent;
 
   if (_wordTableWords.length) {
     const isZh = _wordTableLang === 'zh';
@@ -6913,13 +6961,30 @@ function _makeWordsTappable(root) {
 // per-process too (zh_annotate._translation_cache / annotate.romance's
 // batch), so a repeat visit after the page cache is gone is still fast.
 let _allWordsCache = new Map();
+// The same results, once they have landed — the listening hint (#1077) needs
+// them synchronously while it builds its markup, and re-rendering on every
+// slider move must not re-await a promise that already resolved.
+let _allWordsResolved = new Map();
+
+function _allWordsKey(text, lang) { return (lang || 'zh') + '\n' + text; }
+
+// undefined = not fetched yet (or still in flight); an array (possibly empty)
+// = the answer, failures included.
+function _allWordsSync(text, lang) { return _allWordsResolved.get(_allWordsKey(text, lang)); }
 
 function _fetchAllWords(text, lang) {
-  const key = (lang || 'zh') + '\n' + text;
+  const key = _allWordsKey(text, lang);
   if (_allWordsCache.has(key)) return _allWordsCache.get(key);
   const promise = api('POST', '/api/new-words', { text, lang, mode: 'all' })
-    .then(r => r.words || [])
-    .catch(() => []);
+    .then(r => {
+      const words = r.words || [];
+      _allWordsResolved.set(key, words);
+      return words;
+    })
+    .catch(() => {
+      _allWordsResolved.set(key, []);
+      return [];
+    });
   _allWordsCache.set(key, promise);
   return promise;
 }
@@ -7140,7 +7205,10 @@ function _openKnownWordActions(key, anchor) {
   box.querySelector('#word-actions-detail').onclick = () => {
     const id = w.word_id;
     closeWordActions();
-    openWordDetail(id);
+    // #1077: a popup, not a page navigation — this word was just tapped
+    // mid-review (a card back, or a masked-but-known word in the listening
+    // hint), and a whole-page jump would throw Daniel out of the card.
+    openWordDetailPopup(id);
   };
 
   _placeWordActions(box, anchor);
@@ -9166,6 +9234,14 @@ function revealAnswer() {
     document.getElementById('creating-answer-section').style.display = 'none';
     document.getElementById('sentence-row-back').style.display = 'flex';
     document.getElementById('sentence-back').innerHTML = renderSentence();
+    // #1077: the back is where the answer is already out, so every word in the
+    // sentence may as well be lookup-able — Cmd/swipe for the inline glosses,
+    // a tap on a word he already has an entry for for the entry itself.
+    // setWordTable([]) first: there is no word table on a card, and
+    // _makeWordsTappable would otherwise wrap against whatever list the
+    // previous screen (a knowledge item, the listening hint) left behind.
+    setWordTable([], currentCardLang());
+    _makeWordsTappable(document.getElementById('sentence-back'));
   }
 
   // Sentence notes have no story — hide story button; show German/French translation
@@ -10757,11 +10833,63 @@ function _renderListenHint(level) {
          : _markWordPositions(zh, loaded.map(w => w.word || w.word_zh || ''), isZh);
   }
 
+  // #1077: a masked word Daniel already has an entry for (word_id from the
+  // server's all-words pass) is still tap-able — the blanks stay blanks, the
+  // point is that the answer is *findable*, not given away. Only relevant
+  // when something is actually hidden; "Show all" (keep === null) has nothing
+  // to wrap, and the target word's own blank is handled separately above.
+  const wordAt = new Map();   // start index -> { len, key }
+  if (keep !== null) {
+    const candidates = (_allWordsSync(zh, lang) || []).filter(w => w.word_id);
+    // Longest first, mirroring _makeWordsTappable's rule above — a
+    // multi-character word must claim its positions before one of its own
+    // substrings can.
+    candidates.sort((a, b) => (b.word || '').length - (a.word || '').length);
+    const used = new Set();
+    const isLetter = ch => !!ch && /[\p{L}\p{M}]/u.test(ch);
+    const hay = isZh ? zh : zh.toLowerCase();
+    for (const w of candidates) {
+      const raw = (w.word || '').trim();
+      if (!raw) continue;
+      const needle = isZh ? raw : raw.toLowerCase();
+      let start = 0;
+      while (true) {
+        const idx = hay.indexOf(needle, start);
+        if (idx === -1) break;
+        start = idx + needle.length;
+        // Same word-boundary rule as _markWordPositions: "an" must not light
+        // up inside "manger".
+        if (!isZh && (isLetter(zh[idx - 1]) || isLetter(zh[idx + needle.length]))) continue;
+        let ok = true;
+        for (let k = 0; k < needle.length; k++) {
+          const p = idx + k;
+          // Every position must actually be a blank (not kept visible, not
+          // the target's own blank, not already claimed by a longer word) or
+          // this word does not count as a single tappable unit here.
+          if (used.has(p) || keep.has(p) || targetPositions.has(p) || !isMaskable(zh[p])) { ok = false; break; }
+        }
+        if (!ok) continue;
+        for (let k = 0; k < needle.length; k++) used.add(idx + k);
+        const key = isZh ? raw : raw.toLowerCase();
+        wordAt.set(idx, { len: needle.length, key });
+        // So the panel this opens (_openKnownWordActions) can find the word —
+        // same map _wrapAllWordGlosses fills for the reading views (#1042).
+        _glossWordIndex.set(key, w);
+      }
+    }
+  }
+
   let html = '';
   for (let i = 0; i < zh.length; i++) {
     const ch = zh[i];
     if (targetPositions.has(i)) {
       html += `<span class="hint-blank hint-blank-target">_</span>`;
+    } else if (wordAt.has(i)) {
+      const { len, key } = wordAt.get(i);
+      html += `<span class="hint-blank-word known-word" data-gloss-key="${_escHtml(key)}">` +
+              '<span class="hint-blank">_</span>'.repeat(len) +
+              '</span>';
+      i += len - 1;
     } else if (!isMaskable(ch) || keep === null || keep.has(i)) {
       html += _escHtml(ch);
     } else {
@@ -10770,12 +10898,24 @@ function _renderListenHint(level) {
   }
   el.innerHTML = html;
 
-  // The words left standing are the ones he does not know — tapping one opens
-  // the reader's own panel (★ List / ✓ Known, #967). Same table, same
-  // handlers, no second add path (#643/#710).
-  if (level < _HINT_MAX && loaded && loaded.length) {
-    setWordTable(loaded, lang);
-    _makeWordsTappable(el);
+  // #1077: bound unconditionally now — the masked words above are tappable at
+  // every level, including "hide all", where there is no new-word list at all.
+  setWordTable(level < _HINT_MAX && loaded ? loaded : [], lang);
+  _makeWordsTappable(el, zh);   // zh, not the masked DOM text (see #1077)
+
+  // The masked-word spans above need the all-words list synchronously. The
+  // first render after a new sentence will not have it, so ask once and redo
+  // the render when it lands. _allWordsResolved records failures too, so this
+  // cannot loop.
+  if (keep !== null && _allWordsSync(zh, lang) === undefined) {
+    _fetchAllWords(zh, lang).then(() => {
+      const slider = document.getElementById('listen-hint-slider');
+      if (document.getElementById('listen-hint-sentence') === el &&
+          _hintSentenceText() === zh &&
+          slider && parseInt(slider.value, 10) === level) {
+        _renderListenHint(level);
+      }
+    });
   }
 }
 
@@ -14818,6 +14958,7 @@ function _hasOpenModal() {
     'kahneman-examples-overlay',
     'session-summary-overlay',
     'logs-modal-overlay',
+    'wd-popup-overlay',
   ];
   return modalIds.some(_isVisible);
 }
@@ -14926,6 +15067,15 @@ document.addEventListener('keydown', async e => {
     if (_fsrsInspectorOpen()) {
       e.preventDefault();
       closeFsrsInspector();
+      return;
+    }
+    // #1077: the word detail popup floats over whatever review card was
+    // showing — Esc must close only the popup, not fall through to whatever
+    // Escape does on the card underneath.
+    const wdPopup = document.getElementById('wd-popup-overlay');
+    if (wdPopup && wdPopup.style.display !== 'none') {
+      e.preventDefault();
+      closeWordDetailPopup();
       return;
     }
     const sessOverlay = document.getElementById('session-summary-overlay');
