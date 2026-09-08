@@ -1494,12 +1494,28 @@
      Hidden entirely until playback has started at least once this session,
      same "no empty chip" rule #tasks-btn already follows (#821). -->
 <div id="mini-player" style="display:none">
+  <!-- #1084: "up next" panel — position:absolute inside #mini-player (already
+       position:fixed, so it's the positioning context), sitting just above
+       the bar itself. Populated by _raRenderQueuePanel(), toggled by
+       _raToggleQueuePanel(). -->
+  <div id="mini-player-queue-panel" style="display:none">
+    <div class="tasks-panel-title">Up next</div>
+    <div id="mini-player-queue-list"></div>
+    <button class="btn-secondary mini-player-queue-clear" onclick="raQueueClear()">Clear queue</button>
+  </div>
   <div id="mini-player-track"><div id="mini-player-fill"></div></div>
   <div id="mini-player-row">
     <button id="mini-player-title" onclick="_raMiniOpen()" title="Back to read-along"></button>
     <button id="mini-player-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
     <button id="mini-player-close" onclick="_raMiniClose()" title="Stop">✕</button>
   </div>
+  <!-- #1084: "Next: …" line and the skip-reason note — both hidden
+       (display:none, toggled from _raUpdateMiniPlayer) when there's nothing
+       to say. -->
+  <div id="mini-player-queue-line" style="display:none">
+    <button id="mini-player-queue-btn" onclick="_raToggleQueuePanel()" title="Up next"></button>
+  </div>
+  <div id="mini-player-note" style="display:none"></div>
 </div>
 </body>
 </html>

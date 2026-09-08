@@ -1522,6 +1522,13 @@ document.addEventListener('click', (e) => {
   if (wrap && !wrap.contains(e.target)) toggleTasksPanel();
 });
 
+// #1084: same dismiss-on-outside-click idiom as the tasks panel above.
+document.addEventListener('click', (e) => {
+  if (!_raQueuePanelOpen) return;
+  const wrap = document.getElementById('mini-player');
+  if (wrap && !wrap.contains(e.target)) _raToggleQueuePanel();
+});
+
 
 // ── Local mode + sync (#625) ────────────────────────────────────────────────
 // The laptop instance is a full copy of the app that happens to lose its AI
@@ -5910,6 +5917,7 @@ let _raPlayer = {
   key: '', containerId: '', cues: [], sourceText: '', audioUrl: '',
   title: '', nav: null, durationMs: 0, lastMs: 0,   // #1082
   map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
+  queueNote: '',  // #1084: transient "skipped X" / "queue empty" message for the mini player
 };
 
 function _raTrackChecked(owner) {
@@ -5971,6 +5979,158 @@ function _raProgressFor(owner) {
   const p = _raProgress;
   return (p && p.owner_kind === owner.kind && p.owner_id === owner.id &&
          p.lang === owner.lang && p.variant === owner.variant) ? p : null;
+}
+
+// ── Play queue / "Up next" (#1084) ──────────────────────────────────────────
+// Lets Daniel line up several episodes/book pages and have them play back to
+// back instead of the track just stopping. Stored in localStorage, NOT the
+// database, and deliberately so: "what I feel like listening to next" is a
+// throwaway arrangement in this one browser tab, not real learning state —
+// unlike #1078's playback position (which server-side matters because it's
+// what "where was I" means across devices/reloads), losing the queue on a
+// different device or a cleared localStorage costs nothing. No new table, no
+// new endpoint (CLAUDE.md's instruction for this issue).
+const _RA_QUEUE_KEY = 'raPlayQueue';
+
+// Each entry is a plain owner descriptor — the SAME {kind, id, lang, variant,
+// title, nav} shape _raOwnerForEpisode/_raOwnerForBookPage already build.
+// Reusing it rather than inventing a second identity scheme is the whole
+// reason _raQueueAdvance below can hand an entry straight to _raSync once its
+// track is confirmed ready.
+function _raQueueLoad() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(_RA_QUEUE_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    // Tolerate stale/garbage entries (an older format, a hand-edited value) —
+    // same idiom as #936's knowledgeFilters merge: a bad stored value must
+    // never throw and wipe out today's queue.
+    return raw.filter(it => it && typeof it === 'object' &&
+      (it.kind === 'episode' || it.kind === 'book_page') && it.id != null &&
+      typeof it.lang === 'string' && typeof it.variant === 'string');
+  } catch (_) { return []; }
+}
+
+function _raQueueSave() {
+  try { localStorage.setItem(_RA_QUEUE_KEY, JSON.stringify(_raQueue)); } catch (_) {}
+}
+
+let _raQueue = _raQueueLoad();
+let _raQueuePanelOpen = false;
+
+function _raQueueKeyFor(o) { return `${o.kind}|${o.id}|${o.lang}|${o.variant}`; }
+
+// Called from the "+ Queue" buttons — never builds its own owner shape, only
+// takes one already produced by the existing owner builders (or reconstructed
+// from an /api/audio/library row in the same shape, see raQueueAddFromShelf).
+function raQueueAdd(owner) {
+  if (!owner || owner.id == null) return;
+  const key = _raQueueKeyFor(owner);
+  if (_raQueue.some(it => _raQueueKeyFor(it) === key)) {
+    showNotice('Already in the queue');
+    return;
+  }
+  _raQueue.push({ kind: owner.kind, id: owner.id, lang: owner.lang, variant: owner.variant,
+                 title: owner.title || '(untitled)', nav: owner.nav || null });
+  _raQueueSave();
+  showNotice(`+ Queue: ${owner.title || 'item'}`);
+  _raUpdateMiniPlayer();
+  if (_raQueuePanelOpen) _raRenderQueuePanel();
+}
+
+// "+ Queue" inside the active read-along toolbar (_raBarHtml) — at that point
+// _raPlayer IS already synced to the owner the bar is showing (_raBarHtml
+// calls _raSync just before rendering it), so there is nothing to look up.
+function raQueueAddCurrent() {
+  if (!_raPlayer.key) return;
+  raQueueAdd({ kind: _raPlayer.ownerKind, id: _raPlayer.ownerId, lang: _raPlayer.lang,
+              variant: _raPlayer.variant, title: _raPlayer.title, nav: _raPlayer.nav });
+}
+
+// "+ Queue" on a Listening-shelf row (#1085's list) — the row itself was
+// never synced into _raPlayer, so the owner has to be rebuilt from the
+// /api/audio/library item at that index, mirroring exactly what
+// _openListeningItem already does to turn the same row into a `nav`.
+function raQueueAddFromShelf(idx) {
+  const item = _listeningState.items && _listeningState.items[idx];
+  if (!item) return;
+  const owner = item.owner_kind === 'book_page'
+    ? { kind: 'book_page', id: item.owner_id, lang: item.lang, variant: item.variant,
+        title: item.title, nav: { kind: 'book_page', bookId: item.book_id, pageNo: item.page_no, lang: item.lang } }
+    : { kind: 'episode', id: item.owner_id, lang: item.lang, variant: item.variant,
+        title: item.title, nav: { kind: 'episode', id: item.owner_id, variant: item.variant } };
+  raQueueAdd(owner);
+}
+
+function raQueueRemoveAt(idx) {
+  _raQueue.splice(idx, 1);
+  _raQueueSave();
+  _raUpdateMiniPlayer();
+  _raRenderQueuePanel();
+}
+
+function raQueueClear() {
+  _raQueue = [];
+  _raQueueSave();
+  _raUpdateMiniPlayer();
+  _raRenderQueuePanel();
+}
+
+function _raToggleQueuePanel() {
+  const panel = document.getElementById('mini-player-queue-panel');
+  if (!panel) return;
+  _raQueuePanelOpen = !_raQueuePanelOpen;
+  panel.style.display = _raQueuePanelOpen ? 'block' : 'none';
+  if (_raQueuePanelOpen) _raRenderQueuePanel();
+}
+
+function _raRenderQueuePanel() {
+  const list = document.getElementById('mini-player-queue-list');
+  if (!list) return;
+  list.textContent = '';
+  if (!_raQueue.length) {
+    const empty = document.createElement('div');
+    empty.className = 'tasks-empty';
+    empty.textContent = 'Queue is empty.';
+    list.appendChild(empty);
+    return;
+  }
+  _raQueue.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'task-row task-row-head';
+    const label = document.createElement('span');
+    label.className = 'task-row-label';
+    label.textContent = `${idx + 1}. ${item.title || 'untitled'}`;
+    row.appendChild(label);
+    const remove = document.createElement('button');
+    remove.className = 'task-cancel-btn';
+    remove.textContent = '✕';
+    remove.title = 'Remove from queue';
+    remove.onclick = () => raQueueRemoveAt(idx);
+    row.appendChild(remove);
+    list.appendChild(row);
+  });
+}
+
+// Sets/clears the mini player's transient note line ("Skipped X…", "Queue
+// empty…") and auto-clears it after a while — same lifespan idea as
+// showError/showNotice's timed banners, just living on the mini player
+// instead of the top banner since the top banner would be torn down by
+// _renderTasks/navigation while this message is still relevant. Guarded by
+// object identity (`ref`) rather than a raw setTimeout id: if a NEW player
+// object has since taken over (a successful queue advance replaces
+// _raPlayer wholesale via _raSync), the old note must not stomp on it.
+function _raSetQueueNote(text) {
+  _raPlayer.queueNote = text;
+  const ref = _raPlayer;
+  _raUpdateMiniPlayer();
+  if (text) {
+    setTimeout(() => {
+      if (_raPlayer === ref && _raPlayer.queueNote === text) {
+        _raPlayer.queueNote = '';
+        _raUpdateMiniPlayer();
+      }
+    }, 8000);
+  }
 }
 
 async function doGenerateReadalong(ownerKind, ownerId, lang, variant, btn) {
@@ -6176,6 +6336,7 @@ function _raSync(owner, track) {
     title: owner.title || '', nav: owner.nav || null, durationMs: track.duration_ms || 0,
     map: null, mapReason: '', activeIdx: -1, playing: false, follow: _raFollow,
     resumeMs, resumeConsumed: false, lastMs: resumeMs,
+    queueNote: '',  // #1084: a fresh player never carries over the old one's note
   };
   _raBindScrollListener();
   return _raPlayer;
@@ -6232,6 +6393,7 @@ function _raBarHtml(owner) {
           `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('')}
       </select>
       <button class="btn-secondary" id="readalong-follow-btn" style="${player.follow ? 'display:none' : ''}" onclick="_raJumpToFollow()">⤓ Follow</button>
+      <button class="btn-secondary" onclick="raQueueAddCurrent()" title="Play this next after the current queue">+ Queue</button>
     </div>
     <p class="keymap-hint readalong-note" id="readalong-note"></p>
   </div>`;
@@ -6581,6 +6743,7 @@ function stopReadalong() {
 function _raPlayAt(idx, exactMs) {
   const player = _raPlayer;
   if (!player.audioUrl || idx < 0 || idx >= player.cues.length) return;
+  player.queueNote = '';  // #1084: a real (re)start of playback supersedes any stale note
   // #1049: taking the shared element away from the chunked reader cleanly —
   // see the matching call in _kTtsPlayAt for the reverse direction.
   _kTtsStopPlayback();
@@ -6592,6 +6755,7 @@ function _raPlayAt(idx, exactMs) {
     if (player.map) _raHighlight(-1);
     _raUpdateBar();
     _raSaveProgress(true);  // #1078: reaching the end is unambiguously "finished"
+    _raAdvanceQueue();      // #1084: play the next queued item, if any
   };
   a.onerror = () => { if (seq === _playSeq) { player.playing = false; _raUpdateBar(); } };
   a.ontimeupdate = _raOnTimeUpdate;
@@ -6620,6 +6784,79 @@ function _raPlayAt(idx, exactMs) {
   _raUpdateBar();
   if (player.map) _raHighlight(idx);
   if (player.follow) _raScrollToActive();
+}
+
+// #1084: called when the current track reaches its natural end, or when
+// Daniel presses "next" (lock screen / a future mini-player button — see
+// _raSkipToNext). Walks the queue in order; an entry whose track isn't ready
+// yet is SKIPPED with a visible reason instead of silently stopping — a
+// player that just goes quiet with no explanation is indistinguishable from
+// a bug (the CLAUDE.md rule this issue was written under). Each attempt
+// mutates the module-level _raQueue/_raPlayer directly, so there is nothing
+// to return — callers just fire-and-forget it.
+async function _raAdvanceQueue() {
+  while (_raQueue.length) {
+    const next = _raQueue.shift();
+    _raQueueSave();
+    _raUpdateMiniPlayer();  // reflect the shrunken queue immediately, before the network round trip
+    const owner = { kind: next.kind, id: next.id, lang: next.lang, variant: next.variant,
+                    containerId: _raContainerId(next.kind, next.variant, next.lang),
+                    title: next.title, nav: next.nav };
+    let data;
+    try {
+      data = await api('GET', `/api/audio/track?owner_kind=${owner.kind}&owner_id=${owner.id}` +
+        `&lang=${encodeURIComponent(owner.lang)}&variant=${encodeURIComponent(owner.variant)}`);
+    } catch (e) {
+      data = { status: 'absent' };
+    }
+    if (data.status !== 'ready') {
+      _raSetQueueNote(`Skipped ${owner.title || 'an item'}: no read-along track yet`);
+      continue;
+    }
+    // Same shape _raLoadTrack builds — keeping _raTrack in sync means a
+    // detail page for this exact owner, opened right after, sees the track
+    // as already resolved instead of re-fetching it.
+    _raTrack = { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
+                status: 'ready', track_id: data.track_id, audio_url: data.audio_url,
+                cues: data.cues || [], source_text: data.source_text || '', duration_ms: data.duration_ms || 0 };
+    await _raLoadProgress(owner);
+    const player = _raSync(owner, _raTrack);
+    // Honour the saved position here too, exactly as toggleReadalong does
+    // (#1078): _raLoadProgress was just called, so queueing something already
+    // half-listened-to and then restarting it from zero would throw away the
+    // very state that feature exists to keep. _raSync only sets resumeMs for
+    // an unfinished item past the first few seconds, so a finished one still
+    // correctly starts at 0.
+    if (player.resumeMs && !player.resumeConsumed) {
+      player.resumeConsumed = true;
+      _raPlayAt(Math.max(_raCueIndexForMs(player.cues, player.resumeMs), 0), player.resumeMs);
+    } else {
+      _raPlayAt(0);
+    }
+    // Repaint whichever detail view happens to be open for this owner — same
+    // idiom _raLoadTrack/doStartListen use after landing a track.
+    if (owner.kind === 'episode') {
+      if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+    } else if (owner.kind === 'book_page') {
+      _refreshBookReadalongBar(owner.id);
+    }
+    return;
+  }
+  _raSetQueueNote('Queue empty — playback finished');
+}
+
+// Manual "next" (Media Session's nexttrack button — see _raUpdateMediaSession).
+// Saves wherever Daniel actually was first (he skipped, he didn't necessarily
+// finish — forceFinished=false, unlike the natural-end path in _raPlayAt's
+// onended), then hands off exactly like reaching the end would.
+function _raSkipToNext() {
+  if (!_raQueue.length) return;
+  _raSaveProgress(false);
+  _raStop();
+  _raPlayer.activeIdx = -1;
+  if (_raPlayer.map) _raHighlight(-1);
+  _raUpdateBar();
+  _raAdvanceQueue();
 }
 
 // timeupdate fires ~4x/second; with articles running thousands of cues this
@@ -6782,10 +7019,17 @@ function _raScrollToActive() {
 // has actually started at least once this session (activeIdx >= 0) or is
 // currently playing; a track that's merely loaded (e.g. right after opening
 // a detail page, before any ▶ press) does not count.
+//
+// #1084: a pending queueNote ALSO counts — right after a track ends with a
+// queue behind it, playing/activeIdx have already gone false/-1 (see
+// _raPlayAt's onended), but "skipped X, still looking" or "queue empty" is
+// exactly the kind of silent-looking stop this issue's CLAUDE.md rule
+// forbids. Without this the bar would flash away and reappear (or vanish for
+// good) mid-explanation.
 function _raUpdateMiniPlayer() {
   const el = document.getElementById('mini-player');
   const p = _raPlayer;
-  const visible = !!(p.key && p.audioUrl && (p.playing || p.activeIdx >= 0));
+  const visible = !!(p.key && p.audioUrl && (p.playing || p.activeIdx >= 0 || p.queueNote));
   if (el) el.style.display = visible ? '' : 'none';
   // The bar is position:fixed, so without this it sits ON TOP of whatever is
   // at the bottom of the page — the last row of a list, the last button of a
@@ -6803,6 +7047,27 @@ function _raUpdateMiniPlayer() {
     if (title) title.textContent = p.title || '…';
     const toggle = document.getElementById('mini-player-toggle');
     if (toggle) toggle.textContent = p.playing ? '⏸' : '▶';
+  }
+  // #1084: "Next: …" line — hidden entirely (same "no empty chip" rule as
+  // the bar itself, and as #821's task indicator) when the queue is empty,
+  // never a blank row.
+  const queueLine = document.getElementById('mini-player-queue-line');
+  const queueBtn = document.getElementById('mini-player-queue-btn');
+  if (queueLine) {
+    if (_raQueue.length) {
+      queueLine.style.display = '';
+      if (queueBtn) queueBtn.textContent = `\u{1F4CB} Next: ${_raQueue[0].title || 'untitled'} (${_raQueue.length})`;
+    } else {
+      queueLine.style.display = 'none';
+      _raQueuePanelOpen = false;
+      const panel = document.getElementById('mini-player-queue-panel');
+      if (panel) panel.style.display = 'none';
+    }
+  }
+  const note = document.getElementById('mini-player-note');
+  if (note) {
+    if (p.queueNote) { note.style.display = ''; note.textContent = p.queueNote; }
+    else note.style.display = 'none';
   }
   _raUpdateMiniProgress();
   _raUpdateMediaSession();
@@ -6828,7 +7093,13 @@ function _raMiniToggle() {
 // "Close" means "stop and hide the bar for this session", not "forget where
 // I was" — the server-side saved position (#1078) is untouched, so pressing
 // ▶ on the same item later still offers the resume banner.
+//
+// #1084: also clears any pending queueNote — without this, closing the bar
+// right after a "Skipped X" / "Queue empty" message would leave
+// _raUpdateMiniPlayer's visibility check (which now also fires on queueNote)
+// holding the bar open, defeating the ✕ button entirely.
 function _raMiniClose() {
+  _raPlayer.queueNote = '';
   stopReadalong();
 }
 
@@ -6897,9 +7168,22 @@ function _raUpdateMediaSession() {
     if (!a || details.seekTime == null) return;
     try { a.currentTime = details.seekTime; } catch (_) {}
   });
-  // 'previoustrack'/'nexttrack' are deliberately left UNREGISTERED — there is
-  // no playback queue yet (#1084). A lock-screen button that does nothing
-  // when pressed is worse than one that isn't there at all.
+  // #1084: 'nexttrack' only registered when there's actually somewhere to
+  // advance to — passing null unregisters the handler entirely, which is how
+  // a capable browser hides/disables the lock-screen button instead of
+  // showing one that does nothing when pressed (the same reasoning #1083
+  // used to leave both handlers off before the queue existed).
+  navigator.mediaSession.setActionHandler('nexttrack', _raQueue.length ? _raSkipToNext : null);
+  // 'previoustrack' means "restart the current track from 0" (the common
+  // Audible/Spotify behavior for a single tap), not "go back to whatever
+  // played before it" — this feature only ever tracks a forward queue, there
+  // is no play HISTORY anywhere to go back to, so a true "previous" has
+  // nothing to point at. Always registered: restarting doesn't depend on the
+  // queue having anything in it.
+  navigator.mediaSession.setActionHandler('previoustrack', () => {
+    const a = _sharedAudio;
+    try { if (a) a.currentTime = 0; } catch (_) {}
+  });
   _raUpdateMediaSessionPosition();
 }
 
@@ -18428,11 +18712,11 @@ function _renderListeningShelf() {
     </div>`;
     return;
   }
-  const rows = items.map(_listeningRowHtml).join('');
+  const rows = items.map((item, idx) => _listeningRowHtml(item, idx)).join('');
   box.innerHTML = head + `<div class="bw-list">${rows}</div>`;
 }
 
-function _listeningRowHtml(item) {
+function _listeningRowHtml(item, idx) {
   const icon = _LISTENING_KIND_ICON[item.kind] || '\u{1F3A7}';
   const pct = item.duration_ms > 0
     ? Math.min(100, Math.max(0, item.position_ms / item.duration_ms * 100)) : 0;
@@ -18453,6 +18737,9 @@ function _listeningRowHtml(item) {
       <div class="listening-row-bar"><div class="listening-row-fill" style="width:${pct}%"></div></div>
       <div class="ss-meta"><span>${_escHtml(time)}</span></div>
     </div>
+    <button class="btn-secondary listening-row-queue-btn"
+            onclick="event.stopPropagation(); raQueueAddFromShelf(${idx})"
+            title="Add to play queue">+ Queue</button>
   </div>`;
 }
 
