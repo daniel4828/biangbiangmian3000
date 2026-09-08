@@ -1442,3 +1442,110 @@ def test_asr_cloud_build_raises_when_neither_key_is_configured(monkeypatch):
 
     with pytest.raises(audio.AudioTrackError, match="OPENAI_API_KEY"):
         asr_cloud.build("/fake/input.mp3", lang="zh")
+
+
+# ---------------------------------------------------------------------------
+# 19. Listening shelf (#1085): database.list_listening() + GET /api/audio/library.
+# One JOIN across audio_tracks/audio_progress/podcast_episodes/book_pages/books
+# — no per-row re-query — resolving the title for both owner kinds.
+# ---------------------------------------------------------------------------
+
+def _dummy_cue():
+    return [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}]
+
+
+def test_list_listening_resolves_titles_for_episode_and_book_page(tmp_db):
+    episode_id = database.create_pending_episode(
+        video_id="listening-shelf-ep", channel_id=None, title="My Episode Title",
+        published_at=None, youtube_url="https://example.com/ep",
+        audio_url="https://example.com/ep.mp3", kind="podcast")
+    database.save_audio_track("episode", episode_id, "zh", "fulltext",
+                              "data/audio/ep.mp3", 60_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+
+    page = _make_book_page()
+    database.update_book(page["book_id"], title="My Book", author="Some Author")
+    database.save_audio_track("book_page", page["id"], "zh", "fulltext",
+                              "data/audio/page.mp3", 30_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+
+    items = database.list_listening()
+    by_kind = {i["owner_kind"]: i for i in items}
+    assert by_kind["episode"]["title"] == "My Episode Title"
+    assert by_kind["episode"]["kind"] == "podcast"
+    assert "My Book" in by_kind["book_page"]["title"]
+    assert by_kind["book_page"]["book_id"] == page["book_id"]
+    assert by_kind["book_page"]["page_no"] == page["page_no"]
+
+
+def test_list_listening_includes_tracks_with_no_progress_yet(tmp_db):
+    episode_id = database.create_pending_episode(
+        video_id="listening-shelf-noprog", channel_id=None, title="Never opened",
+        published_at=None, youtube_url="https://example.com/ep2",
+        audio_url="https://example.com/ep2.mp3", kind="podcast")
+    database.save_audio_track("episode", episode_id, "zh", "fulltext",
+                              "data/audio/noprog.mp3", 60_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+
+    items = database.list_listening()
+    row = next(i for i in items if i["owner_id"] == episode_id)
+    assert row["position_ms"] == 0
+    assert row["finished"] is False
+    assert row["updated_at"] is None
+
+
+def _episode_with_progress(video_id, title, position_ms, finished):
+    episode_id = database.create_pending_episode(
+        video_id=video_id, channel_id=None, title=title, published_at=None,
+        youtube_url=f"https://example.com/{video_id}",
+        audio_url=f"https://example.com/{video_id}.mp3", kind="podcast")
+    database.save_audio_track("episode", episode_id, "zh", "fulltext",
+                              f"data/audio/{video_id}.mp3", 100_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+    database.save_audio_progress("episode", episode_id, "zh", "fulltext",
+                                 position_ms=position_ms, finished=finished)
+    return episode_id
+
+
+def test_library_status_listening_excludes_finished(tmp_db):
+    listening_id = _episode_with_progress("shelf-listening", "In progress", 10_000, False)
+    finished_id = _episode_with_progress("shelf-finished", "Done", 99_000, True)
+
+    resp = client.get("/api/audio/library", params={"status": "listening"})
+    assert resp.status_code == 200
+    ids = {i["owner_id"] for i in resp.json()["items"]}
+    assert listening_id in ids
+    assert finished_id not in ids
+
+
+def test_library_status_finished_only_has_finished(tmp_db):
+    listening_id = _episode_with_progress("shelf-listening2", "In progress", 10_000, False)
+    finished_id = _episode_with_progress("shelf-finished2", "Done", 99_000, True)
+
+    resp = client.get("/api/audio/library", params={"status": "finished"})
+    assert resp.status_code == 200
+    ids = {i["owner_id"] for i in resp.json()["items"]}
+    assert finished_id in ids
+    assert listening_id not in ids
+
+
+def test_library_unknown_status_falls_back_to_default_not_400(tmp_db):
+    _episode_with_progress("shelf-anystatus", "Whatever", 10_000, False)
+
+    resp = client.get("/api/audio/library", params={"status": "not-a-real-status"})
+    assert resp.status_code == 200
+    assert len(resp.json()["items"]) >= 1
+
+
+def test_list_listening_orphan_track_gets_readable_placeholder_title(tmp_db):
+    """The owner (episode or book page) can be deleted without its
+    audio_tracks row being cleaned up — the row must stay visible with a
+    readable placeholder title, never a blank/NULL one."""
+    database.save_audio_track("episode", 999999, "zh", "fulltext",
+                              "data/audio/orphan.mp3", 10_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+
+    items = database.list_listening()
+    row = next(i for i in items if i["owner_kind"] == "episode" and i["owner_id"] == 999999)
+    assert row["title"]
+    assert "999999" in row["title"]

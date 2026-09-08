@@ -258,6 +258,31 @@ def save_progress(body: dict):
     return {"status": "ok"}
 
 
+_LIBRARY_STATUSES = ("listening", "finished", "all")
+
+
+@router.get("/api/audio/library")
+def get_library(status: str | None = None):
+    """The listening shelf (#1085) — every item that has a read-along track,
+    across episodes and book pages, in one list.
+
+    `status` is a display filter applied here (not pushed into the SQL,
+    which already has to do the ordering) rather than a query the frontend
+    could get wrong: 'listening' = has a saved position and isn't finished,
+    'finished' = finished=1, 'all'/anything unrecognized = no filter — same
+    "unknown value falls back to default, never 400" rule #936 set for the
+    episode list's sort/order params. A stale bookmarked filter should still
+    show *something*, not an error page."""
+    if status not in _LIBRARY_STATUSES:
+        status = "all"
+    items = database.list_listening()
+    if status == "listening":
+        items = [i for i in items if i["position_ms"] > 0 and not i["finished"]]
+    elif status == "finished":
+        items = [i for i in items if i["finished"]]
+    return {"items": items}
+
+
 @router.get("/api/audio/file/{track_id}")
 def get_track_file(track_id: int):
     """Serve the mp3. FileResponse handles HTTP Range requests natively —

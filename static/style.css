@@ -6717,6 +6717,19 @@ body.gloss-on .gloss-word {
 .arch-r3 { background: #16a34a; }
 .arch-r4 { background: #0284c7; }
 
+/* Listening shelf (#1085) — reuses .arch-* / .bw-row above for the shell and
+   row layout; these two are the only bits specific to a progress row. */
+.listening-row-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  margin: 4px 0;
+  max-width: 360px;
+}
+.listening-row-fill { height: 100%; background: var(--primary); }
+.listening-row-done { opacity: 0.55; }
+
 .arch-session-words { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; }
 .arch-word {
   border: 1.5px solid var(--border);
