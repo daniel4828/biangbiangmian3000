@@ -11402,6 +11402,15 @@ function _renderListenHint(level) {
     keep = _hintWords.error ? null
          : loaded === null ? new Set()
          : _markWordPositions(zh, loaded.map(w => w.word || w.word_zh || ''), isZh);
+    // #1098: everything up to the first target word stays visible at this
+    // stop, known or not. That run is the lead-in he listens the sentence
+    // into; blanked, what is left on screen is scattered new words with no
+    // shape to hang them on. The target itself is still blanked below (it is
+    // the answer), and everything after it keeps the new-words-only rule.
+    if (keep !== null && targetPositions.size > 0) {
+      const firstTarget = Math.min(...targetPositions);
+      for (let i = 0; i < firstTarget; i++) keep.add(i);
+    }
   }
 
   // #1077: a masked word Daniel already has an entry for (word_id from the
