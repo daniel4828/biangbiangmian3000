@@ -6369,6 +6369,50 @@ body.gloss-on .gloss-word {
 }
 #mini-player-toggle:hover, #mini-player-close:hover { background: var(--border); }
 
+/* ── Play queue / "Up next" (#1084) ──────────────────────
+   Both the "Next: …" line and the skip-reason note are hidden entirely
+   (not just emptied) from app.js's _raUpdateMiniPlayer when there's nothing
+   to say — same "no empty chip" rule the mini player itself already follows
+   (#821). The panel is position:absolute inside #mini-player, which is
+   already position:fixed and therefore its positioning context — no extra
+   wrapper needed to anchor it just above the bar. */
+#mini-player-queue-line { padding: 0 12px 6px; }
+#mini-player-queue-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+#mini-player-queue-btn:hover { color: var(--text); }
+#mini-player-note {
+  padding: 0 12px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#mini-player-queue-panel {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  right: 12px;
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px 10px 0 0;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, .18);
+  padding: 10px 12px;
+  z-index: 40;
+  text-align: left;
+}
+.mini-player-queue-clear { margin-top: 8px; width: 100%; }
+
 /* ── Browse on phones (#827) ─────────────────────────────
    Browse had no mobile breakpoint at all: a 200px fixed sidebar next to
    flex:1 main left ~190px for the list on a 390px screen, and the row
@@ -6729,6 +6773,9 @@ body.gloss-on .gloss-word {
 }
 .listening-row-fill { height: 100%; background: var(--primary); }
 .listening-row-done { opacity: 0.55; }
+/* #1084: always visible (not a hover affordance) — this row layout has no
+   pointer-hover guarantee on the phone this app is mostly used on. */
+.listening-row-queue-btn { flex-shrink: 0; font-size: 12px; padding: 4px 8px; }
 
 .arch-session-words { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; }
 .arch-word {
