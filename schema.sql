@@ -1224,3 +1224,49 @@ CREATE TABLE IF NOT EXISTS audio_progress (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     PRIMARY KEY (owner_kind, owner_id, lang, variant)
 );
+
+-- ---------------------------------------------------------------------------
+-- Audio bookmarks (#1086, scoped down from the #1081 umbrella to bookmarks
+-- only — no chapters: an audiobook's mp3 carries no chapter metadata, and
+-- guessing chapter boundaries from silence would be unfounded. Chapters for
+-- EPUBs already have real data in book_chapters (#864); if that's ever
+-- wanted here it should read from there, not from this table.
+--
+-- This is real database state, not localStorage, unlike the play queue
+-- (#1084, see its comment right above audio_progress in database/audio.py):
+-- a bookmark means "this moment mattered to me", which is the same kind of
+-- durable learning state as the playback position (#1078) — losing it to a
+-- cleared browser or a different device would be a real loss, not just an
+-- inconvenience. The queue, by contrast, is a throwaway arrangement of what
+-- to play next in this one tab.
+--
+-- `cue_text` is a deliberate denormalization — the exact wording of the
+-- sentence at position_ms, copied in at bookmark time. Two reasons, same
+-- shape as dict_queries.headline's docstring: (1) a bookmarks LIST should
+-- never have to re-fetch and re-parse an entire track's cues_json just to
+-- show one line of text per bookmark; (2) regenerating the track (a plain
+-- replace, see database.save_audio_track's docstring) can shift or reword
+-- every cue, so the sentence the bookmark originally pointed at has to be
+-- captured now or it is gone for good.
+--
+-- No FK to audio_tracks: `owner_kind`/`owner_id`/`lang`/`variant` is the
+-- same natural key audio_tracks/audio_progress use, matched the same way
+-- (an application-level join, not a foreign key) — SQLite has no partial FK
+-- across a composite non-unique-in-general grouping anyway. Cleanup on
+-- delete is explicit, in database.delete_audio_tracks() /
+-- delete_audio_tracks_for_book(), same as audio_progress's cleanup there.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS audio_bookmarks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_kind  TEXT NOT NULL,
+    owner_id    INTEGER NOT NULL,
+    lang        TEXT NOT NULL,
+    variant     TEXT NOT NULL DEFAULT 'fulltext',
+    position_ms INTEGER NOT NULL,
+    cue_text    TEXT,
+    note        TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_audio_bookmarks_owner
+    ON audio_bookmarks(owner_kind, owner_id, lang, variant);

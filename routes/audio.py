@@ -283,6 +283,57 @@ def get_library(status: str | None = None):
     return {"items": items}
 
 
+@router.get("/api/audio/bookmarks")
+def list_bookmarks(owner_kind: str | None = None, owner_id: int | None = None,
+                   lang: str | None = None, variant: str | None = None):
+    """Bookmarks for one item, or — when owner_kind/owner_id are both omitted
+    — every bookmark across everything (#1086). Unlike GET .../track and
+    .../progress, an owner here is genuinely optional: this endpoint also
+    backs a future "all bookmarks" list, not just a single item's detail
+    page, so it does not run the four-argument _validate() that requires
+    owner_kind/owner_id.
+    """
+    if owner_kind is not None and owner_kind not in _OWNER_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"owner_kind must be one of {', '.join(_OWNER_KINDS)}")
+    if variant is not None and variant not in _VARIANTS:
+        raise HTTPException(
+            status_code=400, detail=f"variant must be one of {', '.join(_VARIANTS)}")
+    resolved_lang = _resolve_lang(lang) if lang is not None else None
+    bookmarks = database.list_audio_bookmarks(owner_kind, owner_id, resolved_lang, variant)
+    return {"bookmarks": bookmarks}
+
+
+@router.post("/api/audio/bookmarks")
+def create_bookmark(body: dict):
+    """Add a bookmark (#1086). Body:
+    {owner_kind, owner_id, lang, variant, position_ms, cue_text?, note?}.
+
+    Reuses _validate() for the owner tuple — same contract as
+    POST /api/audio/progress just above."""
+    owner_kind, owner_id, lang, variant = _validate(
+        body.get("owner_kind"), body.get("owner_id"), body.get("lang"),
+        body.get("variant", "fulltext"))
+    raw_position = body.get("position_ms")
+    if isinstance(raw_position, bool) or not isinstance(raw_position, (int, float)) or raw_position < 0:
+        raise HTTPException(status_code=400, detail="position_ms must be a non-negative integer")
+    bookmark_id = database.add_audio_bookmark(
+        owner_kind, owner_id, lang, variant, position_ms=int(raw_position),
+        cue_text=body.get("cue_text"), note=body.get("note"))
+    return {"id": bookmark_id}
+
+
+@router.delete("/api/audio/bookmarks/{bookmark_id}")
+def delete_bookmark(bookmark_id: int):
+    """Never pretends success on a bookmark that was already gone (CLAUDE.md's
+    rule) — a stale delete from a UI that hasn't refreshed its list yet must
+    say so, not silently return {"status": "ok"}."""
+    if not database.delete_audio_bookmark(bookmark_id):
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    return {"status": "ok"}
+
+
 @router.get("/api/audio/file/{track_id}")
 def get_track_file(track_id: int):
     """Serve the mp3. FileResponse handles HTTP Range requests natively —

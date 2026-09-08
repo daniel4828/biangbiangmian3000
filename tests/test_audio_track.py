@@ -1549,3 +1549,118 @@ def test_list_listening_orphan_track_gets_readable_placeholder_title(tmp_db):
     row = next(i for i in items if i["owner_kind"] == "episode" and i["owner_id"] == 999999)
     assert row["title"]
     assert "999999" in row["title"]
+
+
+# ---------------------------------------------------------------------------
+# 20. Audio bookmarks (#1086, scoped down from the #1081 umbrella — no
+#     chapters, see schema.sql's audio_bookmarks comment): GET/POST/DELETE
+#     /api/audio/bookmarks.
+# ---------------------------------------------------------------------------
+
+def test_audio_bookmark_round_trips_via_database_layer(tmp_db):
+    bookmark_id = database.add_audio_bookmark(
+        "episode", 1, "zh", "fulltext", position_ms=12_345, cue_text="今天天气很好。")
+    assert isinstance(bookmark_id, int)
+
+    rows = database.list_audio_bookmarks("episode", 1, "zh", "fulltext")
+    assert len(rows) == 1
+    assert rows[0]["id"] == bookmark_id
+    assert rows[0]["position_ms"] == 12_345
+    assert rows[0]["cue_text"] == "今天天气很好。"
+    assert rows[0]["note"] is None
+
+
+def test_audio_bookmark_filter_by_owner_excludes_other_items(tmp_db):
+    database.add_audio_bookmark("episode", 1, "zh", "fulltext", position_ms=1_000)
+    database.add_audio_bookmark("episode", 2, "zh", "fulltext", position_ms=2_000)
+
+    rows = database.list_audio_bookmarks("episode", 1, "zh", "fulltext")
+    assert len(rows) == 1
+    assert rows[0]["owner_id"] == 1
+
+
+def test_audio_bookmark_no_owner_args_returns_everything(tmp_db):
+    database.add_audio_bookmark("episode", 1, "zh", "fulltext", position_ms=1_000)
+    database.add_audio_bookmark("book_page", 5, "zh", "fulltext", position_ms=2_000)
+
+    rows = database.list_audio_bookmarks()
+    assert len(rows) == 2
+
+
+def test_audio_bookmark_cue_text_is_optional(tmp_db):
+    bookmark_id = database.add_audio_bookmark(
+        "episode", 3, "zh", "fulltext", position_ms=500, cue_text=None)
+    rows = database.list_audio_bookmarks("episode", 3, "zh", "fulltext")
+    assert rows[0]["id"] == bookmark_id
+    assert rows[0]["cue_text"] is None
+
+
+def test_audio_bookmark_http_create_and_list_round_trip(tmp_db):
+    resp = client.post("/api/audio/bookmarks", json={
+        "owner_kind": "episode", "owner_id": 10, "lang": "zh", "variant": "fulltext",
+        "position_ms": 5_000, "cue_text": "一句话。",
+    })
+    assert resp.status_code == 200, resp.text
+    bookmark_id = resp.json()["id"]
+
+    listed = client.get("/api/audio/bookmarks", params={
+        "owner_kind": "episode", "owner_id": 10, "lang": "zh", "variant": "fulltext",
+    })
+    assert listed.status_code == 200
+    bookmarks = listed.json()["bookmarks"]
+    assert len(bookmarks) == 1
+    assert bookmarks[0]["id"] == bookmark_id
+    assert bookmarks[0]["cue_text"] == "一句话。"
+
+
+def test_audio_bookmark_negative_position_is_400(tmp_db):
+    resp = client.post("/api/audio/bookmarks", json={
+        "owner_kind": "episode", "owner_id": 11, "lang": "zh", "variant": "fulltext",
+        "position_ms": -1,
+    })
+    assert resp.status_code == 400
+    assert database.list_audio_bookmarks("episode", 11, "zh", "fulltext") == []
+
+
+def test_audio_bookmark_delete_missing_id_is_404(tmp_db):
+    resp = client.delete("/api/audio/bookmarks/999999")
+    assert resp.status_code == 404
+
+
+def test_audio_bookmark_delete_removes_it(tmp_db):
+    bookmark_id = database.add_audio_bookmark(
+        "episode", 12, "zh", "fulltext", position_ms=1_000)
+
+    resp = client.delete(f"/api/audio/bookmarks/{bookmark_id}")
+    assert resp.status_code == 200, resp.text
+    assert database.list_audio_bookmarks("episode", 12, "zh", "fulltext") == []
+    # A second delete of the same (now-gone) id must say so, not pretend
+    # success again.
+    resp2 = client.delete(f"/api/audio/bookmarks/{bookmark_id}")
+    assert resp2.status_code == 404
+
+
+def test_delete_audio_tracks_also_deletes_its_bookmarks(tmp_db):
+    database.save_audio_track(
+        "episode", 60, "zh", "fulltext", "data/audio/x.mp3", 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+    database.add_audio_bookmark("episode", 60, "zh", "fulltext", position_ms=1_000)
+
+    database.delete_audio_tracks("episode", 60)
+
+    assert database.list_audio_bookmarks("episode", 60, "zh", "fulltext") == []
+
+
+def test_delete_book_also_deletes_its_page_bookmarks(tmp_db):
+    page = _make_book_page()
+    database.save_audio_track(
+        "book_page", page["id"], "zh", "fulltext", "data/audio/page.mp3", 1000,
+        [{"start_ms": 0, "end_ms": 100, "text": "x", "char_start": 0, "char_end": 1}],
+        "tts", "zh-CN-XiaoxiaoNeural")
+    database.add_audio_bookmark("book_page", page["id"], "zh", "fulltext", position_ms=2_000)
+
+    resp = client.delete(f"/api/books/{page['book_id']}")
+    assert resp.status_code == 200, resp.text
+
+    assert database.list_audio_bookmarks("book_page", page["id"], "zh", "fulltext") == []

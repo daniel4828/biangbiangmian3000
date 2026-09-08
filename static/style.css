@@ -3531,6 +3531,11 @@ a.nav-btn { text-decoration: none; }
 ::highlight(readalong) {
   background-color: color-mix(in srgb, var(--primary) 28%, transparent);
 }
+/* #1086: bookmark list under the controls — absent entirely when there are
+   no bookmarks, see _raBookmarksHtml's "no bookmarks -> no block" rule. */
+.readalong-bookmarks { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.readalong-bookmark-row { display: flex; align-items: center; gap: 8px; }
+.readalong-bookmark-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 列表 + 左右滑动（#940）─────────────────────────────────────────────── */
 .knowledge-lists-bar { margin-bottom: 10px; flex-wrap: wrap; }

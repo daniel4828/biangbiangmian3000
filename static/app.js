@@ -6394,9 +6394,139 @@ function _raBarHtml(owner) {
       </select>
       <button class="btn-secondary" id="readalong-follow-btn" style="${player.follow ? 'display:none' : ''}" onclick="_raJumpToFollow()">⤓ Follow</button>
       <button class="btn-secondary" onclick="raQueueAddCurrent()" title="Play this next after the current queue">+ Queue</button>
+      <button class="btn-secondary" onclick="raAddBookmark()" title="Bookmark this moment (#1086)">☆</button>
     </div>
     <p class="keymap-hint readalong-note" id="readalong-note"></p>
+    ${_raBookmarksHtml(owner)}
   </div>`;
+}
+
+// ── Bookmarks (#1086, scoped down from the #1081 umbrella — no chapters, see
+// schema.sql's audio_bookmarks comment) ─────────────────────────────────────
+// Same "one slot, not a map" pattern as _raTrack/_raProgress above: only ever
+// one owner's bookmark list is "current" on screen at a time.
+let _raBookmarks = null;       // list for _raBookmarksOwner below, or null if never fetched this session
+let _raBookmarksOwner = null;  // {kind, id, lang, variant} matching _raBookmarks, or null
+
+function _raBookmarksChecked(owner) {
+  const o = _raBookmarksOwner;
+  return !!(o && o.kind === owner.kind && o.id === owner.id &&
+           o.lang === owner.lang && o.variant === owner.variant);
+}
+
+function _raBookmarksFor(owner) {
+  return _raBookmarksChecked(owner) ? _raBookmarks : null;
+}
+
+// Re-renders whatever screen is currently showing `owner` — the same
+// dispatch _raLoadTrack/_raLoadProgress already do after landing, kept
+// separate rather than shared because this fires strictly less often (once
+// per item view, not once per player-state tick) and inlining it here reads
+// clearer than adding another parameter to those.
+function _raRerenderBookmarkOwner(owner) {
+  if (owner.kind === 'episode') {
+    if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id)
+      _renderKnowledgeDetail(_knowledgeDetailEpisode);
+  } else if (owner.kind === 'book_page') {
+    _refreshBookReadalongBar(owner.id);
+  }
+}
+
+// GET never generates anything (there's nothing to generate) — this just
+// fetches once per owner per session, same contract as _raLoadTrack.
+async function _raLoadBookmarks(owner) {
+  try {
+    const data = await api('GET', `/api/audio/bookmarks?owner_kind=${owner.kind}&owner_id=${owner.id}` +
+      `&lang=${encodeURIComponent(owner.lang)}&variant=${encodeURIComponent(owner.variant)}`);
+    _raBookmarks = data.bookmarks || [];
+  } catch (e) {
+    _raBookmarks = [];
+  }
+  _raBookmarksOwner = { kind: owner.kind, id: owner.id, lang: owner.lang, variant: owner.variant };
+  _raRerenderBookmarkOwner(owner);
+}
+
+// No bookmarks means the whole block is absent, not an empty header (#821's
+// "no tasks -> hide the whole button" rule, applied here).
+function _raBookmarksHtml(owner) {
+  const list = _raBookmarksFor(owner);
+  if (list === null) {
+    if (!_raBookmarksChecked(owner)) _raLoadBookmarks(owner);
+    return '';
+  }
+  if (!list.length) return '';
+  return `<div class="readalong-bookmarks">
+    ${list.map(b => `
+      <div class="readalong-bookmark-row">
+        <button class="btn-secondary" onclick="raJumpToBookmark(${b.id})">${_raFormatMs(b.position_ms)}</button>
+        <span class="readalong-bookmark-text">${_escHtml(b.cue_text || '')}</span>
+        <button class="btn-secondary" onclick="raDeleteBookmark(${b.id})" title="Delete bookmark">✕</button>
+      </div>`).join('')}
+  </div>`;
+}
+
+// Jumps straight to a bookmarked moment — reuses the exact same seek path
+// #1078's resume banner uses (_raPlayAt + _raCueIndexForMs), never a second
+// implementation of "find the cue for this timestamp and play from there".
+// Only reachable from a bookmark row, which only renders once _raSync has
+// already pointed _raPlayer at this exact owner (see _raBarHtml above), so
+// _raPlayer.cues is guaranteed to be the right track's cues here.
+function raJumpToBookmark(id) {
+  const list = _raBookmarks;
+  if (!list) return;
+  const b = list.find(x => x.id === id);
+  if (!b) return;
+  _raPlayAt(_raCueIndexForMs(_raPlayer.cues, b.position_ms), b.position_ms);
+}
+
+// Bookmarks the exact moment the read-along bar is currently at — the
+// currently-playing sentence's text if there is one, otherwise none.
+// Optimistic (same reasoning as #692's toggleSentenceStar): a stalled button
+// mid-listening is more disruptive than a bookmark that turns out not to
+// have saved.
+async function raAddBookmark() {
+  const player = _raPlayer;
+  if (!player.key) return;
+  const owner = { kind: player.ownerKind, id: player.ownerId, lang: player.lang, variant: player.variant };
+  const positionMs = Math.round(player.lastMs || 0);
+  const cue = player.activeIdx >= 0 ? player.cues[player.activeIdx] : null;
+  const cueText = cue ? cue.text : null;
+  const tempId = `tmp-${Date.now()}`;
+  const optimistic = { id: tempId, position_ms: positionMs, cue_text: cueText, note: null };
+  if (!_raBookmarksChecked(owner)) { _raBookmarks = []; _raBookmarksOwner = owner; }
+  _raBookmarks = [..._raBookmarks, optimistic].sort((a, b) => a.position_ms - b.position_ms);
+  _raRerenderBookmarkOwner(owner);
+  try {
+    const saved = await api('POST', '/api/audio/bookmarks', {
+      owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
+      position_ms: positionMs, cue_text: cueText,
+    });
+    if (_raBookmarksChecked(owner)) {
+      _raBookmarks = _raBookmarks.map(b => b.id === tempId ? { ...optimistic, id: saved.id } : b);
+      _raRerenderBookmarkOwner(owner);
+    }
+  } catch (e) {
+    if (_raBookmarksChecked(owner)) {
+      _raBookmarks = _raBookmarks.filter(b => b.id !== tempId);
+      _raRerenderBookmarkOwner(owner);
+    }
+    showError('Bookmark failed: ' + e.message);
+  }
+}
+
+async function raDeleteBookmark(id) {
+  const owner = _raBookmarksOwner;
+  if (!owner || _raBookmarks === null) return;
+  const prev = _raBookmarks;
+  _raBookmarks = _raBookmarks.filter(b => b.id !== id);
+  _raRerenderBookmarkOwner(owner);
+  try {
+    await api('DELETE', `/api/audio/bookmarks/${id}`);
+  } catch (e) {
+    _raBookmarks = prev;
+    _raRerenderBookmarkOwner(owner);
+    showError('Delete bookmark failed: ' + e.message);
+  }
 }
 
 // #1082: hand control of the shared audio element from whatever owner is
