@@ -1506,6 +1506,15 @@
   <div id="mini-player-track"><div id="mini-player-fill"></div></div>
   <div id="mini-player-row">
     <button id="mini-player-title" onclick="_raMiniOpen()" title="Back to read-along"></button>
+    <!-- #1087: sleep timer — same two ids/functions as the detail toolbar's
+         copy in app.js's _raBarHtml (_raSetSleepTimer/_raUpdateSleepUI), just
+         a second place to reach them from. This <select> starts empty; its
+         options are filled in once by _raUpdateSleepUI() the first time it
+         runs, from the same _raSleepOptionsHtml() the toolbar's copy uses —
+         one list of durations, not two. -->
+    <span id="mini-player-sleep-remaining" class="mini-player-sleep-remaining" style="display:none"></span>
+    <select id="mini-player-sleep-select" class="mini-player-sleep-select"
+            onchange="_raSetSleepTimer(this.value)" title="Sleep timer"></select>
     <button id="mini-player-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
     <button id="mini-player-close" onclick="_raMiniClose()" title="Stop">✕</button>
   </div>

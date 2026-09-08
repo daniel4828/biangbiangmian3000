@@ -6360,6 +6360,25 @@ body.gloss-on .gloss-word {
   cursor: pointer;
   padding: 4px 0;
 }
+/* ── Sleep timer (#1087) ── mini player's copy of the pair of controls the
+   detail toolbar also has (see .knowledge-tts-rate for that one); both call
+   the same app.js functions, this is purely presentational duplication. */
+#mini-player-sleep-remaining {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+#mini-player-sleep-select {
+  flex-shrink: 0;
+  max-width: 64px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  padding: 4px 6px;
+}
 #mini-player-toggle, #mini-player-close {
   background: none;
   border: 1px solid var(--border);

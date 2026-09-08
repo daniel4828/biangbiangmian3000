@@ -6395,6 +6395,9 @@ function _raBarHtml(owner) {
       <button class="btn-secondary" id="readalong-follow-btn" style="${player.follow ? 'display:none' : ''}" onclick="_raJumpToFollow()">⤓ Follow</button>
       <button class="btn-secondary" onclick="raQueueAddCurrent()" title="Play this next after the current queue">+ Queue</button>
       <button class="btn-secondary" onclick="raAddBookmark()" title="Bookmark this moment (#1086)">☆</button>
+      <select class="knowledge-tts-rate" id="readalong-sleep-select" onchange="_raSetSleepTimer(this.value)"
+              title="Sleep timer (#1087): pause after N minutes, or after this item ends">${_raSleepOptionsHtml()}</select>
+      <span class="keymap-hint" id="readalong-sleep-remaining" style="display:none"></span>
     </div>
     <p class="keymap-hint readalong-note" id="readalong-note"></p>
     ${_raBookmarksHtml(owner)}
@@ -6552,6 +6555,112 @@ function _raSwitchTo(kind, id) {
   else _refreshBookReadalongBar(id);
 }
 
+// ── Sleep timer (#1087, the last #1081 sub-issue) ───────────────────────────
+//
+// Deliberately in-memory ONLY — not persisted to localStorage the way _raQueue
+// is. A sleep timer means "stop playback in N minutes, starting right now";
+// carrying that intent forward into the NEXT time the app happens to open
+// would silently mute audio he never asked to be muted THIS session. Every
+// other _ra* piece of state that IS persisted (progress, queue) describes
+// where something IS, not a one-shot instruction to act on soon — this is the
+// odd one out, and it stays memory-only for exactly that reason.
+let _raSleepMode = null;      // null (off) | 15|30|45|60 (minutes) | 'end' (stop when the current item ends)
+let _raSleepRemainingMs = 0;  // only meaningful while _raSleepMode is a number; counts down PLAYED audio time (see _raOnTimeUpdate), not wall-clock time — see the note there for why
+const _RA_SLEEP_OPTIONS = [15, 30, 45, 60];
+
+// Single source of truth for the <option> list so it only has to be written
+// once even though it appears in two different <select> elements (the
+// detail toolbar's, rebuilt fresh by _raBarHtml every render, and the mini
+// player's static one in index.html, populated lazily by _raUpdateSleepUI
+// below the first time it's touched). `selected` is baked in here so a
+// freshly-rendered toolbar select already shows the right value without a
+// separate follow-up write.
+function _raSleepOptionsHtml() {
+  const cur = String(_raSleepMode || '');
+  const opt = (value, label) => `<option value="${value}"${cur === value ? ' selected' : ''}>${label}</option>`;
+  return opt('', '💤') + _RA_SLEEP_OPTIONS.map(m => opt(String(m), `${m} min`)).join('') +
+    opt('end', 'Until this item ends');
+}
+
+// Shared by both entry points — the mini player's select and the detail
+// toolbar's select (see _raBarHtml) both call this exact function via their
+// onchange; neither has its own copy of "what does picking a duration mean".
+// Picking the placeholder option (value === '') is how re-opening either
+// select and choosing 💤 again cancels an active timer.
+function _raSetSleepTimer(value) {
+  if (!value) {
+    const wasOn = !!_raSleepMode;
+    _raSleepMode = null;
+    _raSleepRemainingMs = 0;
+    _raUpdateSleepUI();
+    if (wasOn) _raSetQueueNote('💤 Sleep timer cancelled');
+    return;
+  }
+  if (value === 'end') {
+    _raSleepMode = 'end';
+    _raSleepRemainingMs = 0;
+  } else {
+    const minutes = parseInt(value, 10);
+    if (!_RA_SLEEP_OPTIONS.includes(minutes)) return;  // an unexpected value from a stale/foreign <option> — do nothing rather than guess
+    _raSleepMode = minutes;
+    _raSleepRemainingMs = minutes * 60 * 1000;
+  }
+  _raUpdateSleepUI();
+}
+
+// Fired when the countdown reaches zero (from _raOnTimeUpdate) — NEVER for
+// 'end' mode, whose own stopping condition is the track's onended handler in
+// _raPlayAt. PAUSES, deliberately not stop()/_raStop(): #1078 already exists
+// so that a pause saves position, and falling asleep mid-book means tomorrow
+// he wants to pick up exactly where the timer caught him — activeIdx and the
+// highlighted sentence are left untouched so the screen still shows that spot
+// the next time this view opens. Must also NOT fall through into
+// _raAdvanceQueue — a timer that "expires" into the next chapter starting up
+// defeats the entire point of setting one.
+function _raSleepFire() {
+  const player = _raPlayer;
+  const a = _sharedAudio;
+  player.playing = false;
+  try { a && a.pause(); } catch (_) {}
+  if (a) player.lastMs = Math.max(0, Math.round((a.currentTime || 0) * 1000));
+  _raSleepMode = null;
+  _raSleepRemainingMs = 0;
+  _raSaveProgress(false);
+  _raUpdateBar();  // repaints the (now paused) toggle button, the mini player, and the sleep select/countdown via _raUpdateSleepUI below
+  _raSetQueueNote('💤 Sleep timer stopped playback');
+}
+
+// Repaints both possible sleep controls — getElementById simply misses for
+// whichever one isn't currently in the DOM (the toolbar's only exists while
+// its detail page is open; the mini player's is static and always present
+// once index.html has loaded, just possibly hidden). Called from _raUpdateBar
+// (state changes: play/pause/seek/stop) and, more cheaply, once per tick from
+// _raOnTimeUpdate while a numeric timer is running, so the countdown text
+// actually counts down instead of only updating on the next play/pause.
+function _raUpdateSleepUI() {
+  ['readalong', 'mini-player'].forEach(prefix => {
+    const sel = document.getElementById(`${prefix}-sleep-select`);
+    if (sel) {
+      if (!sel.options.length) sel.innerHTML = _raSleepOptionsHtml();  // mini player's select starts empty — see index.html
+      sel.value = _raSleepMode === 'end' ? 'end' : (_raSleepMode || '');
+    }
+    const remaining = document.getElementById(`${prefix}-sleep-remaining`);
+    if (!remaining) return;
+    // No timer running -> no countdown text at all, not an empty chip (#821's
+    // "hide the whole thing when there's nothing to show" rule, applied here).
+    if (_raSleepMode === 'end') {
+      remaining.style.display = '';
+      remaining.textContent = '💤 until end';
+    } else if (typeof _raSleepMode === 'number') {
+      remaining.style.display = '';
+      remaining.textContent = `💤 ${_raFormatMs(Math.max(0, _raSleepRemainingMs))}`;
+    } else {
+      remaining.style.display = 'none';
+      remaining.textContent = '';
+    }
+  });
+}
+
 // Repaint just the controls — a full _renderKnowledgeDetail() on every
 // timeupdate tick would rebuild (and lose scroll position on) the whole
 // detail view several times a second.
@@ -6568,6 +6677,7 @@ function _raUpdateBar() {
   // repaint too — one choke point, not three copies of "when does this
   // change" logic.
   _raUpdateMiniPlayer();
+  _raUpdateSleepUI();  // #1087
 }
 
 // #1078: jumping straight into the middle of a track without saying so would
@@ -6885,6 +6995,18 @@ function _raPlayAt(idx, exactMs) {
     if (player.map) _raHighlight(-1);
     _raUpdateBar();
     _raSaveProgress(true);  // #1078: reaching the end is unambiguously "finished"
+    // #1087: "listen to just this one item" sleep mode — its stopping
+    // condition IS this event, there's no countdown involved. Must NOT fall
+    // through into _raAdvanceQueue below: auto-advancing into the next
+    // chapter the instant the timer's condition is met would defeat the
+    // entire point of setting it. Progress is already saved above
+    // (finished=true), same as any other natural end.
+    if (_raSleepMode === 'end') {
+      _raSleepMode = null;
+      _raUpdateSleepUI();
+      _raSetQueueNote('💤 Sleep timer stopped playback');
+      return;
+    }
     _raAdvanceQueue();      // #1084: play the next queued item, if any
   };
   a.onerror = () => { if (seq === _playSeq) { player.playing = false; _raUpdateBar(); } };
@@ -6998,6 +7120,7 @@ function _raOnTimeUpdate() {
   const a = _sharedAudio;
   if (!a) return;
   const ms = a.currentTime * 1000;
+  const prevMs = player.lastMs;  // #1087: last tick's position, needed below to turn this into a played-time DELTA before it gets overwritten
   player.lastMs = ms;  // #1082: last known position — read back by toggleReadalong
                         // if something preempts the shared element before the
                         // next throttled save below lands.
@@ -7016,6 +7139,24 @@ function _raOnTimeUpdate() {
   // boundaries.
   _raUpdateMiniProgress();
   _raUpdateMediaSessionPosition();
+  // #1087: sleep timer countdown piggybacks on this existing ~4x/second tick
+  // instead of a dedicated setInterval — one less timer to ever leak, and it
+  // gets the "pauses when the audio pauses" behaviour for free: this whole
+  // function returns at the very top while !player.playing, so the countdown
+  // simply stops being touched the moment he pauses to go get water, and
+  // resumes counting the moment he presses play again. Deliberately counts
+  // PLAYED audio time (this delta), not wall-clock time — the alternative
+  // (a Date.now()-based countdown) would keep draining while paused, and
+  // finding the timer already expired after a two-minute pause is exactly the
+  // "why did it stop while I wasn't even listening" surprise this avoids.
+  // Delta is clamped so a big seek forward doesn't masquerade as minutes of
+  // actual listening and eat the timer in one tick.
+  if (typeof _raSleepMode === 'number') {
+    const deltaMs = (typeof prevMs === 'number' && ms > prevMs) ? Math.min(ms - prevMs, 2000) : 0;
+    _raSleepRemainingMs -= deltaMs;
+    _raUpdateSleepUI();
+    if (_raSleepRemainingMs <= 0) { _raSleepFire(); return; }
+  }
   // #1078: throttled to once per _RA_SAVE_INTERVAL_MS — this tick fires
   // ~4x/second, an unthrottled save here would be ~14k requests/hour on a
   // 90-minute podcast.
