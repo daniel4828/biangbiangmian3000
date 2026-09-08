@@ -120,6 +120,74 @@ def _unreferenced_paths(conn, rows) -> list[str]:
     return out
 
 
+def add_audio_bookmark(owner_kind: str, owner_id: int, lang: str, variant: str,
+                       position_ms: int, cue_text: str | None = None,
+                       note: str | None = None) -> int:
+    """Insert a bookmark for (owner_kind, owner_id, lang, variant) at
+    position_ms, returning its id. Unlike audio_tracks/audio_progress this
+    is a plain append, not an upsert — a listener can bookmark several
+    different moments of the same item, so there is no natural key to
+    collide on."""
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO audio_bookmarks
+               (owner_kind, owner_id, lang, variant, position_ms, cue_text, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (owner_kind, owner_id, lang, variant, position_ms, cue_text, note),
+    )
+    conn.commit()
+    bookmark_id = cur.lastrowid
+    conn.close()
+    return bookmark_id
+
+
+def list_audio_bookmarks(owner_kind: str | None = None, owner_id: int | None = None,
+                         lang: str | None = None, variant: str | None = None,
+                         limit: int = 200) -> list[dict]:
+    """Bookmarks, newest-position-first within an owner (oldest overall last).
+    With no owner arguments, returns every bookmark across every item — for
+    a future "all my bookmarks" screen; routes/audio.py's list endpoint is
+    the only caller that currently passes an owner, but the shape supports
+    both from day one rather than needing a second function later."""
+    conn = get_db()
+    clauses = []
+    params: list = []
+    if owner_kind is not None:
+        clauses.append("owner_kind = ?")
+        params.append(owner_kind)
+    if owner_id is not None:
+        clauses.append("owner_id = ?")
+        params.append(owner_id)
+    if lang is not None:
+        clauses.append("lang = ?")
+        params.append(lang)
+    if variant is not None:
+        clauses.append("variant = ?")
+        params.append(variant)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    rows = conn.execute(
+        f"""SELECT * FROM audio_bookmarks {where}
+            ORDER BY owner_kind, owner_id, lang, variant, position_ms ASC
+            LIMIT ?""",
+        params,
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_audio_bookmark(bookmark_id: int) -> bool:
+    """Delete one bookmark by id. Returns False if it never existed — the
+    route turns that into a 404 rather than a blanket "ok" (CLAUDE.md's rule
+    against pretending an action succeeded)."""
+    conn = get_db()
+    cur = conn.execute("DELETE FROM audio_bookmarks WHERE id = ?", (bookmark_id,))
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
+
+
 def delete_audio_tracks(owner_kind: str, owner_id: int) -> list[str]:
     """Delete every track belonging to (owner_kind, owner_id) — called when
     the owner itself is deleted. Returns the audio_path of every mp3 that is
@@ -141,6 +209,12 @@ def delete_audio_tracks(owner_kind: str, owner_id: int) -> list[str]:
     # variant/lang row for it, not just the one that happened to be playing.
     conn.execute(
         "DELETE FROM audio_progress WHERE owner_kind = ? AND owner_id = ?",
+        (owner_kind, owner_id),
+    )
+    # #1086: same reasoning — a bookmark into audio that no longer exists is
+    # an orphan row pointing at nothing, not a harmless leftover.
+    conn.execute(
+        "DELETE FROM audio_bookmarks WHERE owner_kind = ? AND owner_id = ?",
         (owner_kind, owner_id),
     )
     conn.commit()
@@ -441,6 +515,13 @@ def delete_audio_tracks_for_book(book_id: int) -> list[str]:
     # given above.
     conn.execute(
         """DELETE FROM audio_progress
+           WHERE owner_kind = 'book_page'
+             AND owner_id IN (SELECT id FROM book_pages WHERE book_id = ?)""",
+        (book_id,),
+    )
+    # #1086: same reasoning, same "must run before the cascade" ordering.
+    conn.execute(
+        """DELETE FROM audio_bookmarks
            WHERE owner_kind = 'book_page'
              AND owner_id IN (SELECT id FROM book_pages WHERE book_id = ?)""",
         (book_id,),
