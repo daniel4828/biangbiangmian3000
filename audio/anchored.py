@@ -127,7 +127,7 @@ def _asr_char_times(cues: list) -> tuple[str, list[int]]:
 
 
 def build(text: str, audio_path: str, lang: str = "zh", prefer_local: bool = False,
-          should_abort=None) -> Track:
+          should_abort=None, provider: str | None = None) -> Track:
     """text + audio_path -> Track, source='anchored' (#1051).
 
     Raises AudioTrackError when the ASR step fails (propagated straight
@@ -150,12 +150,15 @@ def build(text: str, audio_path: str, lang: str = "zh", prefer_local: bool = Fal
     is discarded on the very next line would make this the single slowest
     path in the app for no benefit; see asr_local.py's
     _DEFAULT_WHISPER_CPP_MODEL_FAST comment for the measured numbers.
+
+    `provider` (#1090): forwarded to asr_cloud.build() when `prefer_local` is
+    False; ignored (whisper.cpp has no notion of providers) otherwise.
     """
     if prefer_local:
         from . import asr_local  # lazy: avoids a circular import at package load
         asr_track = asr_local.build(audio_path, lang=lang, should_abort=should_abort, fast=True)
     else:
-        asr_track = asr_cloud.build(audio_path, lang=lang)
+        asr_track = asr_cloud.build(audio_path, lang=lang, provider=provider)
 
     asr_text, asr_times = _asr_char_times(asr_track.cues)
     norm_asr, asr_offset_map = _normalize(asr_text)

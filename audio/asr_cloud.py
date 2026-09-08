@@ -1,18 +1,36 @@
 """Phase 3 of #1047 (issue #1052): a recording with no matching text is
-transcribed by Groq's whisper-large-v3-turbo (response_format="verbose_json")
+transcribed by a cloud Whisper-family API (response_format="verbose_json")
 and its own segments become the cues directly — see audio/__init__.py's
 module docstring for how this sits alongside the other three planned
 alignment paths.
 
-This deliberately does NOT call podcast._transcribe_via_groq: that function
-joins segments into one string (throwing the timestamps away, which is the
-whole point here) and hardcodes purpose="podcast-transcribe" for cost
-accounting. This module makes its own Groq request but reuses the shared
-hallucination filter (podcast._filter_whisper_segments, #1052's split of the
-old text-only _filter_whisper_hallucinations) rather than duplicating those
-four checks a second time — this codebase's rule against a second copy of
-the same logic (#643, #836) applies just as much to a filter as to a
-pipeline.
+Two providers (#1090), both spoken to through the `openai` SDK since Groq's
+audio endpoint is OpenAI-compatible — only the base_url and model name
+differ:
+  - 'openai': whisper-1 @ $0.006/min, api.openai.com. Daniel's 2026-09-08
+    default after a 107-minute audiobook failed local whisper.cpp twice (a
+    6-hour timeout with large-v3, then an 8h14m run with medium that then
+    got voided entirely by the hallucination filter — see podcast.py's
+    _VOID_ALL_MAX_SECONDS for the other half of that fix). Minutes instead of
+    hours, ~$0.64 for that book.
+  - 'groq': whisper-large-v3-turbo @ ~$0.0007/min, api.groq.com. ~9x cheaper
+    and ~10x faster than OpenAI's whisper-1 (#750), kept as the default when
+    only GROQ_API_KEY is configured.
+🔴 OpenAI's model MUST be whisper-1, not gpt-4o-mini-transcribe: only
+whisper-1 accepts response_format="verbose_json" (gpt-4o-mini-transcribe
+rejects it outright, so it can't give per-segment no_speech_prob/
+avg_logprob) — podcast._transcribe_via_whisper's docstring already documents
+this the hard way (#750), don't relearn it here.
+
+This deliberately does NOT call podcast._transcribe_via_groq /
+_transcribe_via_whisper: those join segments into one string (throwing the
+timestamps away, which is the whole point here) and hardcode a
+purpose="podcast-transcribe" cost-accounting label. This module makes its
+own request but reuses the shared hallucination filter
+(podcast._filter_whisper_segments, #1052's split of the old text-only
+_filter_whisper_hallucinations) rather than duplicating those checks a
+second time — this codebase's rule against a second copy of the same logic
+(#643, #836) applies just as much to a filter as to a pipeline.
 """
 import logging
 import os
@@ -28,13 +46,20 @@ from . import AudioTrackError, Cue, Track
 logger = logging.getLogger(__name__)
 
 _GROQ_MODEL = "whisper-large-v3-turbo"
+_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+# 🔴 Must stay whisper-1 — see the module docstring's callout. This is the
+# only OpenAI model this module is allowed to request.
+_OPENAI_MODEL = "whisper-1"
 
 # Groq's audio endpoint caps uploads around 25MB; a fixed 600s (10min) chunk
 # keeps an mp3 well under that regardless of bitrate. Splitting at a fixed
 # duration (not on silence) costs at most one word cut across a seam — the
 # same tradeoff audio/tts_track.py makes for chunking TTS input, for the same
 # reason: silence-aware splitting needs its own analysis pass and isn't worth
-# it for a read-along that's tracking sentences, not syllables.
+# it for a read-along that's tracking sentences, not syllables. OpenAI's
+# endpoint has the same ~25MB cap, so the same chunking serves both
+# providers unchanged.
 _CHUNK_SECONDS = 600
 
 
@@ -125,38 +150,82 @@ def _call_groq(client, path: str) -> list:
     return [{"text": (getattr(resp, "text", "") or "").strip(), "start": 0.0, "end": 0.0}]
 
 
-def build(audio_path: str, lang: str = "zh") -> Track:
+def _call_openai(client, path: str) -> list:
+    """One OpenAI request for a single (<=25MB) audio chunk, using whisper-1
+    — see the module docstring's 🔴 callout for why that model specifically.
+    Same shape/degraded-fallback contract as _call_groq above."""
+    with open(path, "rb") as f:
+        resp = client.audio.transcriptions.create(
+            model=_OPENAI_MODEL, file=f, response_format="verbose_json",
+        )
+    seg_list = getattr(resp, "segments", None) or []
+    if seg_list:
+        return seg_list
+    return [{"text": (getattr(resp, "text", "") or "").strip(), "start": 0.0, "end": 0.0}]
+
+
+def _resolve_provider(provider: str | None) -> str:
+    """Decide which cloud ASR provider to call (#1090).
+
+    An explicit `provider` argument wins. Otherwise AUDIO_ASR_PROVIDER, then
+    whichever credential is actually configured — OpenAI first (Daniel's
+    2026-09-08 decision, see module docstring), Groq if only that key is
+    present. Raising when neither is configured follows the same reasoning
+    this function's predecessor always used for a missing GROQ_API_KEY:
+    silently returning None here would look like nothing happened at all.
+    """
+    chosen = provider or os.environ.get("AUDIO_ASR_PROVIDER")
+    if chosen:
+        return chosen
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    if os.environ.get("GROQ_API_KEY"):
+        return "groq"
+    raise AudioTrackError(
+        "cloud ASR (#1052/#1090) needs OPENAI_API_KEY or GROQ_API_KEY — neither is configured")
+
+
+def build(audio_path: str, lang: str = "zh", provider: str | None = None) -> Track:
     """audio_path -> Track, source='asr_cloud' (#1052).
 
-    Raises AudioTrackError on any failure — missing GROQ_API_KEY, missing
-    ffmpeg, an API error, or the whole transcript getting filtered out as
-    hallucination/silence — and always cleans up any temporary chunk files
-    it created, on both the success and failure paths. Never writes to the
-    database except the cost log entry, and only after a successful API
+    Raises AudioTrackError on any failure — no usable API key configured,
+    missing ffmpeg, an API error, or the whole transcript getting filtered
+    out as hallucination/silence — and always cleans up any temporary chunk
+    files it created, on both the success and failure paths. Never writes to
+    the database except the cost log entry, and only after a successful API
     call.
+
+    `provider` (#1090): 'openai' or 'groq', see _resolve_provider for how the
+    default is chosen when this is None.
     """
     if is_offline():
         raise AudioTrackError("offline mode: cannot run cloud ASR")
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        # Unlike podcast.py's optional-credential transcribers (Tingwu,
-        # NotebookLM, this same Groq call in _transcribe_instagram), there is
-        # no fallback chain here yet (#1053 will add local whisper.cpp, and
-        # that decision belongs to build_track()'s caller, not this
-        # function) — so silently returning None here would look like
-        # nothing happened at all. Raise instead.
-        raise AudioTrackError("GROQ_API_KEY is not configured — cloud ASR (#1052) needs it")
+
+    provider = _resolve_provider(provider)
+    if provider == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise AudioTrackError("OPENAI_API_KEY is not configured — cloud ASR (#1090) needs it")
+        model, base_url, call_chunk = _OPENAI_MODEL, None, _call_openai
+    elif provider == "groq":
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise AudioTrackError("GROQ_API_KEY is not configured — cloud ASR (#1052) needs it")
+        model, base_url, call_chunk = _GROQ_MODEL, _GROQ_BASE_URL, _call_groq
+    else:
+        raise AudioTrackError(
+            f"unknown ASR provider {provider!r} (AUDIO_ASR_PROVIDER must be 'openai' or 'groq')")
 
     duration = _probe_duration_seconds(audio_path)
     chunks = _split_chunks(audio_path, duration)
 
     import openai  # lazy: same pattern podcast._transcribe_via_groq uses
-    client = openai.OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+    client = openai.OpenAI(api_key=api_key, base_url=base_url) if base_url else openai.OpenAI(api_key=api_key)
 
     all_segments: list[dict] = []
     try:
         for chunk_path, offset_seconds in chunks:
-            raw_segments = _call_groq(client, chunk_path)
+            raw_segments = call_chunk(client, chunk_path)
             for seg in raw_segments:
                 # Every timestamp Groq hands back is relative to the START
                 # OF THIS CHUNK, not the whole recording — the same seam
@@ -180,7 +249,7 @@ def build(audio_path: str, lang: str = "zh") -> Track:
     except AudioTrackError:
         raise
     except Exception as e:
-        raise AudioTrackError(f"Groq ASR request failed: {e}") from e
+        raise AudioTrackError(f"{provider} ASR request failed: {e}") from e
     finally:
         # Only remove files _split_chunks actually created — when the audio
         # fit in a single chunk, chunk_path IS audio_path, and that file
@@ -193,13 +262,21 @@ def build(audio_path: str, lang: str = "zh") -> Track:
                     pass
 
     # Billed per minute of audio, same accounting convention as every other
-    # transcriber in podcast.py.
+    # transcriber in podcast.py. `model` must be the actual model called
+    # (whisper-1 or whisper-large-v3-turbo) — database/stats.py._MODEL_PRICING
+    # is keyed by exact model name, so logging the wrong one would silently
+    # mis-price every call.
     database.log_api_call(
-        model=_GROQ_MODEL, input_tokens=int(duration),
+        model=model, input_tokens=int(duration),
         output_tokens=0, purpose="audio_asr",
     )
 
-    kept = podcast._filter_whisper_segments(all_segments)
+    # total_seconds=duration (#1090) lets the shared filter tell a genuine
+    # short-clip hallucination (voids everything, unchanged since #750) apart
+    # from a few repeated seconds buried in an hours-long recording (drops
+    # only that run) — see podcast._filter_whisper_segments and
+    # _VOID_ALL_MAX_SECONDS.
+    kept = podcast._filter_whisper_segments(all_segments, total_seconds=duration)
     if not kept:
         raise AudioTrackError("transcript was filtered out as hallucination/silence")
 

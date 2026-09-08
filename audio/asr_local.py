@@ -295,7 +295,12 @@ def build(audio_path: str, lang: str = "zh", should_abort=None, fast: bool = Fal
             "end": (offsets.get("to", 0) or 0) / 1000.0,
         })
 
-    kept = podcast._filter_whisper_segments(segments)
+    # No probe of the source file's duration is needed here — whisper.cpp's
+    # own last segment end IS the recording's duration (unlike asr_cloud.py,
+    # this path never chunks, see this module's docstring), and it's already
+    # in hand from the reshape loop above.
+    total_seconds = segments[-1]["end"] if segments else None
+    kept = podcast._filter_whisper_segments(segments, total_seconds=total_seconds)
     if not kept:
         raise AudioTrackError("transcript was filtered out as hallucination/silence")
 
