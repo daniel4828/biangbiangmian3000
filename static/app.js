@@ -11969,14 +11969,29 @@ function _renderListenHint(level) {
     keep = _hintWords.error ? null
          : loaded === null ? new Set()
          : _markWordPositions(zh, loaded.map(w => w.word || w.word_zh || ''), isZh);
-    // #1098: everything up to the first target word stays visible at this
-    // stop, known or not. That run is the lead-in he listens the sentence
-    // into; blanked, what is left on screen is scattered new words with no
-    // shape to hang them on. The target itself is still blanked below (it is
-    // the answer), and everything after it keeps the new-words-only rule.
+    // #1101 (was #1098): the one word immediately before the target stays
+    // visible at this stop, known or not — it is the run-up he hangs the
+    // recall on. #1098 kept the whole lead-in, which lit up half the sentence
+    // and turned this stop into a second "Show all". Word boundaries come
+    // from the same all-words pass the masked words below use, so there is no
+    // second segmenter here; if it has not landed the re-render at the end of
+    // this function redoes the whole thing, and if it fails nothing extra is
+    // kept (the plain #1006 behaviour).
     if (keep !== null && targetPositions.size > 0) {
-      const firstTarget = Math.min(...targetPositions);
-      for (let i = 0; i < firstTarget; i++) keep.add(i);
+      let end = Math.min(...targetPositions);
+      while (end > 0 && !isMaskable(zh[end - 1])) end--;   // the space or comma
+      const hay = isZh ? zh : zh.toLowerCase();
+      let best = 0;
+      for (const w of (_allWordsSync(zh, lang) || [])) {
+        const needle = isZh ? (w.word || '') : (w.word || '').toLowerCase();
+        const idx = end - needle.length;
+        if (!needle || idx < 0 || needle.length <= best) continue;
+        if (!hay.startsWith(needle, idx)) continue;
+        // Same boundary rule as _markWordPositions: no match inside a word.
+        if (!isZh && /[\p{L}\p{M}]/u.test(zh[idx - 1] || '')) continue;
+        best = needle.length;
+      }
+      for (let i = end - best; i < end; i++) keep.add(i);
     }
   }
 
