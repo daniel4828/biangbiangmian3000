@@ -24,6 +24,7 @@ never produce (same rule asr_cloud.py's chunk-file cleanup follows).
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -76,6 +77,46 @@ _TIMEOUT_SECONDS = 6 * 60 * 60  # 6h hard cap — see scripts/audio_worker.py's 
 # Every few seconds is plenty: the thing being waited on takes hours, and the
 # only cost of a late reaction is a few more seconds of CPU contention.
 _ABORT_POLL_SECONDS = 5
+
+# whisper.cpp prints one progress line per segment to stdout as it goes, e.g.
+# "[00:12:34.000 --> 00:12:38.000]   <segment text>" — the log file
+# _run_whisper_cpp redirects that stream into (see its own docstring for why
+# a pipe would deadlock) is otherwise never read back. Only the SECOND
+# timestamp of the LATEST such line is ever extracted (#1100): that's how far
+# transcription has progressed. 🔴 The segment text itself is deliberately
+# never captured here — see build()'s docstring on why transcript text must
+# never end up in a progress message, log line or error string.
+_PROGRESS_TS_RE = re.compile(r"-->\s*(\d\d):(\d\d):(\d\d)\.\d+\]")
+# Only the last few KB of the log need to be read to find the latest
+# timestamp — the file only grows, and re-reading it from the start on every
+# poll would get slower as transcription drags on for hours.
+_PROGRESS_TAIL_BYTES = 4000
+
+
+def _tail_timestamp_seconds(log_path: str) -> float | None:
+    """The latest "...--> HH:MM:SS.mmm]" timestamp near the end of
+    whisper.cpp's progress log, in seconds — or None if the file is empty,
+    missing, or has no such line yet (e.g. still loading the model)."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - _PROGRESS_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return None
+    matches = _PROGRESS_TS_RE.findall(tail)
+    if not matches:
+        return None
+    h, m, s = matches[-1]
+    return int(h) * 3600 + int(m) * 60 + int(s)
+
+
+def _fmt_hms(seconds: float) -> str:
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
 def _priority_prefix() -> list[str]:
@@ -159,7 +200,8 @@ def _transcode_to_wav16(audio_path: str) -> str:
     return wav_path
 
 
-def _wait_or_abort(proc, should_abort) -> None:
+def _wait_or_abort(proc, should_abort, log_path=None, on_progress=None,
+                   total_seconds: float | None = None) -> None:
     """Block until `proc` exits, killing it if `should_abort()` says to.
 
     subprocess.run() cannot do this: it hands control back only when the
@@ -171,6 +213,15 @@ def _wait_or_abort(proc, should_abort) -> None:
     Escalates SIGTERM -> SIGKILL: whisper.cpp normally exits promptly, but a
     worker that hangs waiting for a well-behaved shutdown would hold both the
     CPU and the PID lock, which is the exact situation this is meant to end.
+
+    `log_path`/`on_progress` (#1100): every time this loop wakes up anyway
+    (to check `should_abort`), it also peeks at the tail of whisper.cpp's own
+    progress log and reports "已转录 H:MM:SS[ / H:MM:SS]" — this is what lets
+    the "Listen" button show something better than an unchanging "正在同步…"
+    for the minutes whisper.cpp needs. `total_seconds` (the recording's own
+    duration, probed once up front) is appended when known; omitted
+    otherwise rather than guessing. Silently skipped (no exception) when the
+    log has no timestamp line yet — the model may still be loading.
     """
     deadline = time.monotonic() + _TIMEOUT_SECONDS
     while True:
@@ -179,6 +230,13 @@ def _wait_or_abort(proc, should_abort) -> None:
             return
         except subprocess.TimeoutExpired:
             pass
+        if on_progress is not None and log_path is not None:
+            elapsed = _tail_timestamp_seconds(log_path)
+            if elapsed is not None:
+                msg = f"已转录 {_fmt_hms(elapsed)}"
+                if total_seconds:
+                    msg += f" / {_fmt_hms(total_seconds)}"
+                on_progress(msg)
         if should_abort is not None and should_abort():
             _kill(proc)
             raise AudioTrackAborted("local transcription was asked to stop (the server is in use again)")
@@ -199,7 +257,8 @@ def _kill(proc) -> None:
             logger.warning("audio.asr_local: whisper.cpp survived SIGKILL, giving up on it")
 
 
-def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None, fast: bool = False) -> list:
+def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None, fast: bool = False,
+                     on_progress=None, total_seconds: float | None = None) -> list:
     """Invoke whisper.cpp on the (already 16kHz mono) wav_path, requesting
     JSON output so segment-level timestamps survive — whisper.cpp's plain
     stdout transcript has no timing information at all. Returns the raw
@@ -208,6 +267,9 @@ def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None, fast: bool = F
 
     `fast` (#1074) selects the small model — see _whisper_cpp_model's
     docstring for why.
+
+    `on_progress`/`total_seconds` (#1100): forwarded to `_wait_or_abort`,
+    which tails the redirected log file — see that function's docstring.
     """
     exe, model = _require_installed(fast=fast)
     fd, json_stub = tempfile.mkstemp(suffix="")
@@ -227,7 +289,8 @@ def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None, fast: bool = F
     try:
         with os.fdopen(log_fd, "w") as log_file:
             proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True)
-            _wait_or_abort(proc, should_abort)
+            _wait_or_abort(proc, should_abort, log_path=log_path,
+                          on_progress=on_progress, total_seconds=total_seconds)
         if proc.returncode != 0:
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 tail = f.read()[-500:]
@@ -250,7 +313,8 @@ def _run_whisper_cpp(wav_path: str, lang: str, should_abort=None, fast: bool = F
                 pass
 
 
-def build(audio_path: str, lang: str = "zh", should_abort=None, fast: bool = False) -> Track:
+def build(audio_path: str, lang: str = "zh", should_abort=None, fast: bool = False,
+         on_progress=None) -> Track:
     """audio_path -> Track, source='asr_local' (#1053).
 
     Raises AudioTrackError when the whisper.cpp binary/model is missing, the
@@ -270,12 +334,28 @@ def build(audio_path: str, lang: str = "zh", should_abort=None, fast: bool = Fal
     _DEFAULT_WHISPER_CPP_MODEL_FAST's comment. Pure ASR (this function called
     with no known-correct text to anchor against) must never pass fast=True:
     there the transcript IS the final result, and large-v3's accuracy matters.
+
+    `on_progress` (#1100): optional `callable(str) -> None`. When given, the
+    (already-transcoded) wav's own duration is probed once up front — via
+    audio/asr_cloud.py's ffprobe helper, reused rather than duplicated — so
+    progress messages can say "已转录 4:20 / 11:03" instead of just "4:20".
+    That extra ffprobe call is skipped entirely when `on_progress` is None
+    (the ordinary scripts/audio_worker.py background path), since nobody is
+    watching.
     """
     _require_installed(fast=fast)  # fail fast, before paying for the transcode
 
     wav_path = _transcode_to_wav16(audio_path)
+    total_seconds = None
+    if on_progress is not None:
+        from . import asr_cloud  # lazy: avoids a circular import at package load
+        try:
+            total_seconds = asr_cloud._probe_duration_seconds(wav_path)
+        except AudioTrackError:
+            total_seconds = None  # missing ffprobe is reported for real below anyway
     try:
-        raw_segments = _run_whisper_cpp(wav_path, lang, should_abort=should_abort, fast=fast)
+        raw_segments = _run_whisper_cpp(wav_path, lang, should_abort=should_abort, fast=fast,
+                                        on_progress=on_progress, total_seconds=total_seconds)
     finally:
         try:
             os.remove(wav_path)
