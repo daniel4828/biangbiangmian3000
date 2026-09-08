@@ -43,6 +43,14 @@ _LISTEN_BUILDING_LOCK = threading.Lock()
 # moment a new attempt starts — an old error must never linger and be
 # reported for a build that hasn't even run yet.
 _LISTEN_ERRORS: dict[int, str] = {}
+# episode_id -> latest progress line from the running build (#1100: "第
+# 2/3 块", "已转录 4:20 / 11:03", "正在对齐…", or the cloud->local fallback
+# notice). Populated by audio.build_track's on_progress callback, read by
+# GET .../listen while 'building' so the "Listen" button's waiting state
+# isn't a static, unchanging string for minutes at a time. Same lifecycle as
+# _LISTEN_ERRORS: cleared when a new attempt starts and once the build ends,
+# never left over from a previous run.
+_LISTEN_PROGRESS: dict[int, str] = {}
 
 # Where a "Listen" download's mp3 lives, kept (not cleaned up after the
 # align) so a rebuild never has to download it a second time. Same parent
@@ -471,22 +479,32 @@ def _listen_track_payload(track: dict) -> dict:
 def _listen_thread(episode_id: int) -> None:
     """Background body for POST .../listen (#1074): download the episode's
     own audio, align it against its already-correct transcript
-    (audio/anchored.py, prefer_local=True so the ASR step runs on this
-    machine's own whisper.cpp instead of paying Groq — free, and there's no
-    HTTP request open waiting on it here anyway), and save the resulting
-    track.
+    (audio/anchored.py), and save the resulting track.
 
     🔴 This runs IMMEDIATELY in a background thread, never queued into
     database.audio_jobs (the table scripts/audio_worker.py drains only
     during quiet hours, see its own module docstring). That queue's whole
     reason to exist is "don't run whisper.cpp while Daniel is at the
     keyboard" — but here Daniel himself just clicked "Listen" and is sitting
-    there waiting for the result. Making him wait until tonight for a
-    16-minute episode that a *fast* local model finishes in a couple of
-    minutes (see audio/asr_local.py's fast-model comment) would defeat the
-    entire point of the button. Contrast with knowledge/audio_upload.py's
+    there waiting for the result. Contrast with knowledge/audio_upload.py's
     audiobooks, which ARE queued — those are hours long and nobody is
     waiting on them synchronously.
+
+    Cloud first, local as a fallback (#1100) — NOT prefer_local=True as this
+    started out. "There's no HTTP request open waiting on it" (the original
+    reasoning for defaulting to the free local path) was backwards: Daniel is
+    sitting there waiting BECAUSE this bypasses the audio_jobs queue in the
+    first place, which is exactly the situation that calls for the fast
+    path, not the free one. Measured on the same 11-minute episode: cloud
+    (OpenAI whisper-1) ~30s and ~$0.07; local whisper.cpp's fast model ~5min
+    and $0. Since anchored.py only keeps the ASR step's TIMESTAMPS (the
+    known-correct transcript replaces its text via difflib), cloud's slightly
+    lower accuracy costs nothing here. If cloud ASR fails outright (no
+    OPENAI_API_KEY/GROQ_API_KEY configured, or a transient API error), this
+    falls back to local rather than failing the whole click — but that
+    fallback is reported (_LISTEN_PROGRESS, surfaced by GET .../listen), not
+    silent: going from ~30s to ~5min without a word said about it is exactly
+    the kind of surprise this codebase doesn't allow.
 
     Never writes a half-built track: any failure (download or alignment)
     just records the reason in _LISTEN_ERRORS and leaves audio_tracks
@@ -519,15 +537,35 @@ def _listen_thread(episode_id: int) -> None:
             _LISTEN_ERRORS[episode_id] = str(e)
             return
 
+        def _on_progress(msg: str) -> None:
+            # 🔴 `msg` must only ever be a chunk counter/timestamp (see
+            # audio.build_track's on_progress docstring) — never transcript
+            # text. Both sinks below are things Daniel can see.
+            _LISTEN_PROGRESS[episode_id] = msg
+            tasks.update(task_id, msg)
+
         tasks.register(task_id, "audio", f"Syncing audio · episode {episode_id}",
-                       "Transcribing + aligning (local, a few minutes)…")
+                       "Transcribing + aligning (cloud, usually under a minute)…")
         try:
             track = audio.build_track(text=transcript, audio_path=local_path,
-                                      lang="zh", prefer_local=True)
-        except audio.AudioTrackError as e:
-            logger.warning("podcast: listen alignment failed for episode %s: %s", episode_id, e)
-            _LISTEN_ERRORS[episode_id] = str(e)
-            return
+                                      lang="zh", prefer_local=False, on_progress=_on_progress)
+        except audio.AudioTrackError as cloud_err:
+            logger.warning(
+                "podcast: listen cloud ASR failed for episode %s (%s) — falling back to local "
+                "whisper.cpp (roughly 10x slower)", episode_id, cloud_err)
+            fallback_msg = "云端转录失败，改用本地转录（会慢很多）…"
+            _LISTEN_PROGRESS[episode_id] = fallback_msg
+            tasks.update(task_id, fallback_msg)
+            try:
+                track = audio.build_track(text=transcript, audio_path=local_path,
+                                          lang="zh", prefer_local=True, on_progress=_on_progress)
+            except audio.AudioTrackError as local_err:
+                logger.warning(
+                    "podcast: listen local fallback also failed for episode %s: %s",
+                    episode_id, local_err)
+                _LISTEN_ERRORS[episode_id] = (
+                    f"Cloud ASR failed ({cloud_err}); local fallback also failed: {local_err}")
+                return
 
         database.save_audio_track(
             "episode", episode_id, "zh", "fulltext",
@@ -535,14 +573,15 @@ def _listen_thread(episode_id: int) -> None:
             [c.to_dict() for c in track.cues],
             track.source, track.voice, source_text=track.source_text,
         )
-        logger.info("podcast: listen track ready for episode %s (%d cues)",
-                   episode_id, len(track.cues))
+        logger.info("podcast: listen track ready for episode %s (%d cues, source=%s)",
+                   episode_id, len(track.cues), track.source)
     except Exception as e:
         logger.error("podcast: listen build failed for episode %s: %s", episode_id, e)
         _LISTEN_ERRORS[episode_id] = str(e)
     finally:
         with _LISTEN_BUILDING_LOCK:
             _LISTEN_BUILDING_IDS.discard(episode_id)
+        _LISTEN_PROGRESS.pop(episode_id, None)
         tasks.finish(task_id)
 
 
@@ -579,6 +618,7 @@ def start_listen(episode_id: int):
             raise HTTPException(409, "Already syncing audio for this item")
         _LISTEN_BUILDING_IDS.add(episode_id)
         _LISTEN_ERRORS.pop(episode_id, None)
+        _LISTEN_PROGRESS.pop(episode_id, None)
     threading.Thread(target=_listen_thread, args=(episode_id,), daemon=True).start()
     return {"status": "building"}
 
@@ -590,17 +630,26 @@ def listen_status(episode_id: int):
     re-render) the whole detail payload every few seconds just to learn
     whether the sync finished.
 
-    'building' while the background thread is running; 'error' with the
-    reason once it fails (read once — the message is not cleared here, only
-    when a new attempt starts, so refreshing the page still shows why the
-    last one failed); 'ready' once the track exists (GET /api/audio/track is
-    still what actually hands back the cues); 'idle' otherwise — no build has
-    ever run, or the episode doesn't have what "Listen" needs.
+    'building' while the background thread is running — with an optional
+    `detail` progress line (#1100: "第 2/3 块", "已转录 4:20 / 11:03", the
+    cloud->local fallback notice) when one has been reported yet; omitted
+    (not an empty string) when nothing has come in so far, so the frontend
+    can fall back to its own static "正在同步…" instead of showing a blank
+    line. 'error' with the reason once it fails (read once — the message is
+    not cleared here, only when a new attempt starts, so refreshing the page
+    still shows why the last one failed); 'ready' once the track exists (GET
+    /api/audio/track is still what actually hands back the cues); 'idle'
+    otherwise — no build has ever run, or the episode doesn't have what
+    "Listen" needs.
     """
     with _LISTEN_BUILDING_LOCK:
         building = episode_id in _LISTEN_BUILDING_IDS
     if building:
-        return {"status": "building"}
+        resp = {"status": "building"}
+        detail = _LISTEN_PROGRESS.get(episode_id)
+        if detail:
+            resp["detail"] = detail
+        return resp
     error = _LISTEN_ERRORS.get(episode_id)
     if error:
         return {"status": "error", "detail": error}

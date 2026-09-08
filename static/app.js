@@ -6213,6 +6213,11 @@ function _raOwnerForBookPage(pageId, lang) {
 let _listenBuildingId = null;   // episode id currently downloading+aligning, or null
 let _listenErrors = {};         // episode id -> last failure's message
 let _listenPollTimer = null;
+// episode id -> latest progress line from GET .../listen's `detail` (#1100:
+// "第 2/3 块", "已转录 4:20 / 11:03", or the cloud->local fallback notice).
+// Absent (not '') while nothing has been reported yet, so the bar falls
+// back to the static "正在同步…" instead of ever showing a blank line.
+let _listenProgress = {};
 
 function _raOwnerForEpisodeListen(ep) {
   return { kind: 'episode', id: ep.id, lang: 'zh', variant: 'fulltext',
@@ -6230,8 +6235,17 @@ function _scheduleListenPoll(episodeId, owner) {
     if (_listenBuildingId !== episodeId) return;  // left this item, or a new attempt started
     try {
       const data = await api('GET', `/api/podcast/episodes/${episodeId}/listen`);
-      if (data.status === 'building') { _scheduleListenPoll(episodeId, owner); return; }
+      if (data.status === 'building') {
+        if (data.detail && data.detail !== _listenProgress[episodeId]) {
+          _listenProgress[episodeId] = data.detail;
+          if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === episodeId)
+            _renderKnowledgeDetail(_knowledgeDetailEpisode);
+        }
+        _scheduleListenPoll(episodeId, owner);
+        return;
+      }
       _listenBuildingId = null;
+      delete _listenProgress[episodeId];
       if (data.status === 'error') {
         _listenErrors[episodeId] = data.detail || 'Sync failed';
         if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === episodeId)
@@ -6256,7 +6270,12 @@ function _knowledgeListenBarHtml(ep) {
   const owner = _raOwnerForEpisodeListen(ep);
   if (_raTrackFor(owner)) return '';  // already built — the normal read-along bar below shows the player
   if (_listenBuildingId === ep.id) {
-    return `<div class="readalong-bar"><p class="keymap-hint">⏳ 正在同步…</p></div>`;
+    // Progress (#1100) is optional — data.detail only shows up once the
+    // build has actually reported something. Keep the plain "正在同步…"
+    // until then rather than a blank line.
+    const detail = _listenProgress[ep.id];
+    const label = detail ? `⏳ ${_escHtml(detail)}` : '⏳ 正在同步…';
+    return `<div class="readalong-bar"><p class="keymap-hint">${label}</p></div>`;
   }
   const err = _listenErrors[ep.id];
   if (err) {
@@ -6278,6 +6297,7 @@ async function doStartListen(episodeId) {
   // looking at, instead of making him press a second button once it's ready.
   _knowledgeView = 'fulltext';
   delete _listenErrors[episodeId];
+  delete _listenProgress[episodeId];
   _listenBuildingId = episodeId;
   _renderKnowledgeDetail(ep);
   const owner = _raOwnerForEpisodeListen(ep);

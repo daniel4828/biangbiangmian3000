@@ -185,7 +185,8 @@ def _resolve_provider(provider: str | None) -> str:
         "cloud ASR (#1052/#1090) needs OPENAI_API_KEY or GROQ_API_KEY — neither is configured")
 
 
-def build(audio_path: str, lang: str = "zh", provider: str | None = None) -> Track:
+def build(audio_path: str, lang: str = "zh", provider: str | None = None,
+         on_progress=None) -> Track:
     """audio_path -> Track, source='asr_cloud' (#1052).
 
     Raises AudioTrackError on any failure — no usable API key configured,
@@ -197,6 +198,11 @@ def build(audio_path: str, lang: str = "zh", provider: str | None = None) -> Tra
 
     `provider` (#1090): 'openai' or 'groq', see _resolve_provider for how the
     default is chosen when this is None.
+
+    `on_progress` (#1100): optional `callable(str) -> None`, called once
+    before each chunk is sent — "第 N/M 块" when the recording needed
+    splitting, a plain "正在转录…" when it fit in one request. `_split_chunks`
+    already knows the chunk count, so this costs nothing extra to report.
     """
     if is_offline():
         raise AudioTrackError("offline mode: cannot run cloud ASR")
@@ -222,9 +228,12 @@ def build(audio_path: str, lang: str = "zh", provider: str | None = None) -> Tra
     import openai  # lazy: same pattern podcast._transcribe_via_groq uses
     client = openai.OpenAI(api_key=api_key, base_url=base_url) if base_url else openai.OpenAI(api_key=api_key)
 
+    n_chunks = len(chunks)
     all_segments: list[dict] = []
     try:
-        for chunk_path, offset_seconds in chunks:
+        for idx, (chunk_path, offset_seconds) in enumerate(chunks, start=1):
+            if on_progress is not None:
+                on_progress(f"第 {idx}/{n_chunks} 块" if n_chunks > 1 else "正在转录…")
             raw_segments = call_chunk(client, chunk_path)
             for seg in raw_segments:
                 # Every timestamp Groq hands back is relative to the START

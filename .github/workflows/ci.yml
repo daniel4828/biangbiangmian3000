@@ -21,18 +21,41 @@ jobs:
       - name: Install dependencies
         run: pip install fastapi uvicorn anthropic edge-tts pyyaml openai python-multipart jieba pypinyin
 
+      # Every .py file, not a hand-kept list. The old list covered main/srs/
+      # importer/ai/tts + database/* + routes/* — so audio/, knowledge/,
+      # books/, annotate/ and podcast.py were never syntax-checked here even
+      # though the server imports them at startup. A file this job never
+      # compiles can still take the app down, and then the only symptom is
+      # the startup check failing with no explanation.
       - name: Check syntax (all Python files)
-        run: python -m py_compile main.py srs.py importer.py ai.py tts.py
-             && for f in database/*.py routes/*.py; do python -m py_compile "$f"; done
+        run: |
+          find . -name '*.py' \
+            -not -path './.venv/*' -not -path './venv/*' \
+            -not -path './.git/*' -not -path './.claude/*' \
+            -print0 | xargs -0 -n1 python -m py_compile
 
       - name: Import check (no crash on import)
         run: python -c "import database; import ai; import importer; import srs"
 
       - name: Server startup check
-        # Start server, wait briefly, check it responds, then kill it
+        # Start server, wait for it to answer, then kill it.
+        #
+        # The server's own output goes to a file and is printed when the check
+        # fails (it used to go nowhere, so a startup crash showed up as a bare
+        # "exit code 1" with the traceback lost — the one piece of information
+        # actually needed). Polling instead of a flat `sleep 4` so a slow
+        # runner isn't reported as a broken app.
         run: |
-          ANTHROPIC_API_KEY=dummy python main.py &
+          ANTHROPIC_API_KEY=dummy python main.py > server.log 2>&1 &
           SERVER_PID=$!
-          sleep 4
-          curl --fail --silent http://localhost:8000/api/decks || (kill $SERVER_PID; exit 1)
+          for i in $(seq 1 30); do
+            curl --fail --silent http://localhost:8000/api/decks >/dev/null && break
+            sleep 1
+          done
+          if ! curl --fail --silent http://localhost:8000/api/decks >/dev/null; then
+            echo "--- server did not answer /api/decks; its output follows ---"
+            cat server.log
+            kill $SERVER_PID 2>/dev/null
+            exit 1
+          fi
           kill $SERVER_PID

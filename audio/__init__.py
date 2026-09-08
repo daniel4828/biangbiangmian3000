@@ -98,7 +98,7 @@ class AudioTrackAborted(AudioTrackError):
 def build_track(*, text: str | None = None, audio_path: str | None = None,
                 lang: str = "zh", voice: str | None = None,
                 prefer_local: bool = False, should_abort=None,
-                provider: str | None = None) -> Track:
+                provider: str | None = None, on_progress=None) -> Track:
     """The single entry point for all four alignment paths described in the
     module docstring above.
 
@@ -127,6 +127,18 @@ def build_track(*, text: str | None = None, audio_path: str | None = None,
     given). Ignored on the local path — asr_local.py has no notion of
     providers, it only ever runs whisper.cpp. None (the default) lets
     asr_cloud._resolve_provider pick based on which API key is configured.
+
+    `on_progress` (#1100): optional `callable(str) -> None`, called with a
+    short human-readable status line ("第 2/3 块", "已转录 4:20 / 11:03",
+    "正在对齐…") while a slow ASR path runs — the caller decides where that
+    string ends up (routes/podcast.py's "Listen" button feeds it into both
+    the header task indicator and its own building-status poll response so
+    Daniel isn't staring at an unchanging "正在同步…" for minutes). 🔴 Only
+    ever timestamps/chunk counters, never transcript text — see
+    audio/asr_local.py's log-tail reader for why. Forwarded unchanged to
+    whichever of asr_cloud.build/asr_local.build/anchored.build ends up
+    running; ignored by the tts path (audio/tts_track.py), which finishes in
+    seconds and has nothing worth reporting.
     """
     if text and not audio_path:
         from . import tts_track  # lazy: avoids a circular import at package load
@@ -134,13 +146,15 @@ def build_track(*, text: str | None = None, audio_path: str | None = None,
     if audio_path and not text:
         if prefer_local:
             from . import asr_local  # lazy: avoids a circular import at package load
-            return asr_local.build(audio_path, lang=lang, should_abort=should_abort)
+            return asr_local.build(audio_path, lang=lang, should_abort=should_abort,
+                                   on_progress=on_progress)
         from . import asr_cloud  # lazy: avoids a circular import at package load
-        return asr_cloud.build(audio_path, lang=lang, provider=provider)
+        return asr_cloud.build(audio_path, lang=lang, provider=provider, on_progress=on_progress)
     if text and audio_path:
         from . import anchored  # lazy: avoids a circular import at package load
         return anchored.build(text, audio_path, lang=lang, prefer_local=prefer_local,
-                              should_abort=should_abort, provider=provider)
+                              should_abort=should_abort, provider=provider,
+                              on_progress=on_progress)
     raise AudioTrackError("build_track() needs at least `text` (or `audio_path`)")
 
 

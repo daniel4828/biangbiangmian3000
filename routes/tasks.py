@@ -50,6 +50,21 @@ def finish(task_id: str) -> None:
         _ad_hoc.pop(task_id, None)
 
 
+def update(task_id: str, detail: str) -> None:
+    """Update an ad-hoc task's detail line in place (#1100) — used by
+    long-running jobs that only learn their own progress well after
+    register() was called (audio/asr_cloud.py's "chunk N/M",
+    audio/asr_local.py's "已转录 H:MM:SS"). Deliberately does NOT touch
+    started_at: re-registering on every progress tick would make the header
+    panel's elapsed-time display (_taskAge in app.js) look like the job keeps
+    restarting. A no-op if the task was never registered or already
+    finished — a stray callback firing after finish() must never resurrect a
+    stale entry."""
+    with _ad_hoc_lock:
+        if task_id in _ad_hoc:
+            _ad_hoc[task_id]["detail"] = detail
+
+
 # ── Aggregation ─────────────────────────────────────────────────────────────
 
 # Terminal states that _story_progress keeps around for the loading screen to
