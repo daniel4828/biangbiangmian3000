@@ -654,6 +654,10 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 - **Signal 分享入口（`knowledge/signal_inbox.py`，#749）**：手机把链接分享到 Signal 自己的「Note to Self」，服务器用 #521 早就关联好的**同一个** signal-cli 设备（`SIGNAL_ACCOUNT`）把消息收下来，正文里的 URL 同样走 `ingest_url()`。与邮件收件方向相反、账号相同——`send_signal()` 是服务器→Daniel，这个是 Daniel→服务器
   - **安全防线**：只收下**源账号和目的账号都等于 `SIGNAL_ACCOUNT` 自己**的消息（真正的 Note to Self）——关联设备会同步收到 Daniel 手机发出的所有消息，包括发给别人的，那些一律忽略。作用等同于邮件入口的发件人开关（#960 之前是 `KNOWLEDGE_MAIL_ALLOWED_SENDERS`）
   - **粘贴正文入口（#834）**：消息第一行只写 `text`（小写，大小写不敏感；也接受 `text:` / `文本`）→ 剩下的整条消息当文章正文，走 `ingest_text()`。**关键字必须独占第一行**，否则 "Text von gestern, siehe Link" 这种普通句子会被误认；正文里的**第一个链接自动存为 `source_url`**；标题/作者交给 #833 的服务端 AI 抽取。**粘贴正文的失败不进重试队列**——那个队列在 `app_settings` 里存 JSON（是给 URL 用的），而且正文失败的方式是"太短"，重试一百次结果一样；回执说明原因，重发一次即可。🔴 正文绝不进日志/错误信息/回执（下面 Privacy 那条同样适用）
+  - **加词入口（#1041、#1091）**：消息第一行只写 `word`（也接受 `words`/`w`/`词`/`生词`，可跟语言码 `word fr`）→ 后面每行一个词（也接受逗号分隔），逐个走**同一条**加词管线 `routes.imports.add_word_to_list()`（#643），一律 `day='list'` 进 ★ List，回执逐词一行。一条消息最多 20 个词——每词一次约 30 秒的付费 AI 调用，误发一整段的代价必须封顶
+    - **裸词免关键字（#1091）**：Daniel 实际上直接发词本身（一条消息就两个字「促进」），从来不写关键字。所以**不含链接、不匹配关键字、且每一行都"像词"**的消息也当加词请求。判定必须保守（`parse_bare_words`：非空行 ≤5，每个逗号切出的片段都要过 `_looks_like_word` —— 长度、句末标点、中文 ≤6 字无空格、拉丁 ≤2 个 token），因为这里没有 Daniel 的明示信号，全靠形状推断，误判 = 一次付费调用 + ★List 里一个错词。分支挂在 **URL 扫描之后**：带链接的消息永远走链接路径
+    - **切词/语言判定只有一份**（`_word_pairs`）：关键字版和裸词版共用，否则两条路对"什么算一个词"会慢慢漂移
+    - 🔴 **`_add_words()` 必须真的被调用**：#1041 最初只收集了 `word_items` 并发出「已收到 N 个生词」，却从没调加词函数——回执说了话，库里什么都没发生。这类"通知已发但活儿没干"的洞不会有任何地方报错
   - **失败重试靠自己存队列，不是靠"留着不读"**：`signal-cli receive` 一次调用就把消息从 Signal 服务器上取走，不像 IMAP 能把邮件留成 UNSEEN 等下一轮。入库失败的 URL 存进 `app_settings['signal_retry_queue']`（JSON 列表），下一轮优先处理，满 3 次放弃并在回执里说明
   - **新链接入库后立即同步处理**（转录+摘要），不像邮件/网页粘贴那样只入库、等前端另外调 `.../process`——Signal 分享的语义就是"现在就要"。处理复用 `podcast.retry_episode()`（`routes/podcast.py` 的 process 端点背后那个同步函数，脚本进程里直接调用，不起后台线程——脚本跑完就退出，线程会被杀掉）
   - **`podcast.send_signal_text(text, context=...)`（#749 从 `send_signal()` 抽出）是发 Signal 消息的唯一函数**：`send_signal()`（摘要通知）和 `signal_inbox.send_receipt()`（收件回执）都调它，不重复写 subprocess 调用。处理成功时**不重复发一遍摘要**——`send_signal()` 已经在摘要成功后自动发了完整版，回执只发一行简短结果

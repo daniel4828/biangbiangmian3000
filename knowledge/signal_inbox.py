@@ -22,6 +22,14 @@ _generate_and_import_word). No second "generate + import + park in Saved"
 implementation here; see routes/imports.py's #643 note on why one add-word
 pipeline matters.
 
+Turns out Daniel doesn't actually type the `word` keyword (#1091): he just
+sends the bare word itself ("促进"), which has no URL and doesn't match
+_WORD_KEYWORDS, so it used to fall all the way through to
+`summary["skipped"] += 1` without even a receipt. `parse_bare_words()`
+catches this shape too — conservatively, since there's no explicit "this is
+a word list" signal from Daniel to lean on here, only the message's shape.
+See its docstring for the exact rules.
+
 Unlike IMAP (mailbox.py can leave a message UNSEEN and retry it next poll),
 `signal-cli receive` permanently drains the queued messages off the Signal
 server the moment it's called — there is no "leave it, try again next run"
@@ -93,6 +101,11 @@ _WORD_KEYWORDS = {"word", "words", "w", "词", "生词"}
 _MAX_WORDS_PER_MESSAGE = 20
 
 _HAN_RE = re.compile(r"[一-鿿]")
+
+# Sentence-ending punctuation (Chinese and Latin) — a fragment containing any
+# of these reads as a sentence, not a word, for parse_bare_words()'s "does
+# this look like a word list" check.
+_SENTENCE_PUNCT = "。！？!?.；;:："
 
 # `signal-cli receive` without -t does NOT "drain the queue and exit" — it
 # keeps listening for new messages until killed, which is exactly what we
@@ -218,6 +231,37 @@ def parse_pasted_text(body: str) -> str | None:
     return rest or None
 
 
+def _word_pairs(text: str, lang: str | None = None) -> list[tuple[str, str]]:
+    """Split `text` into one word per line (also accepting comma-separated
+    words on a line, since that's how Daniel is likely to paste a short
+    list), dedupe, cap at _MAX_WORDS_PER_MESSAGE, and tag each with a
+    language — the given `lang` if explicit, else guessed per-word from
+    script (any Han character -> zh, else fr).
+
+    Shared by parse_word_message() (#1041, explicit `word` keyword) and
+    parse_bare_words() (#1091, no keyword at all) so the two entry points
+    can never drift on what counts as "a word" or which language it gets
+    tagged with — see #643/#1041's "one pipeline" rule, same principle
+    applied one layer down to parsing rather than the add-word call itself.
+    """
+    words = []
+    seen = set()
+    for line in text.splitlines():
+        for chunk in re.split(r"[,，、]", line):
+            word = chunk.strip()
+            if word and word not in seen:
+                seen.add(word)
+                words.append(word)
+    if not words:
+        return []
+
+    pairs = []
+    for word in words[:_MAX_WORDS_PER_MESSAGE]:
+        word_lang = lang or ("zh" if _HAN_RE.search(word) else "fr")
+        pairs.append((word, word_lang))
+    return pairs
+
+
 def parse_word_message(body: str) -> list[tuple[str, str]] | None:
     """Return [(word, lang), ...] for a "add these words to ★ List" message
     (#1041), or None if this message isn't one.
@@ -251,22 +295,77 @@ def parse_word_message(body: str) -> list[tuple[str, str]] | None:
         # the URL/text path instead of misfiring on an add-word request.
         return None
 
-    words = []
-    seen = set()
-    for line in rest.splitlines():
-        for chunk in re.split(r"[,，、]", line):
-            word = chunk.strip()
-            if word and word not in seen:
-                seen.add(word)
-                words.append(word)
-    if not words:
+    pairs = _word_pairs(rest, lang)
+    return pairs or None
+
+
+def _looks_like_word(fragment: str) -> bool:
+    """True if `fragment` (one comma-split piece of one line, already
+    stripped) is short and unpunctuated enough to plausibly be a single
+    word or fixed expression rather than a sentence. See
+    parse_bare_words() for why this has to run conservative."""
+    if not fragment or len(fragment) > 30:
+        return False
+    if any(ch in fragment for ch in _SENTENCE_PUNCT):
+        return False
+    if _HAN_RE.search(fragment):
+        # Han fragments: no internal whitespace, and short — real Chinese
+        # words/short expressions don't run long or contain spaces; a
+        # sentence usually does one or the other.
+        return not any(ch.isspace() for ch in fragment) and len(fragment) <= 6
+    # Latin-script (or other non-Han) fragment: at most two whitespace-
+    # separated tokens ("se réduire"), each made only of letters (accented
+    # ones included, via str.isalpha()) plus hyphen/apostrophe.
+    tokens = fragment.split()
+    if not tokens or len(tokens) > 2:
+        return False
+    for token in tokens:
+        if not all(ch.isalpha() or ch in "-'’" for ch in token):
+            return False
+    return True
+
+
+def parse_bare_words(body: str) -> list[tuple[str, str]] | None:
+    """Return [(word, lang), ...] for a message that looks like a bare word
+    list with NO `word`/`words` keyword at all (#1091), or None if this
+    message doesn't look like one.
+
+    Why this exists: the `word`-keyword flow (#1041) was built assuming
+    Daniel would type "word" on its own line first. In practice he just
+    sends the word itself ("促进") — obviously the simplest thing to type
+    from a phone. That message has no URL and doesn't match _WORD_KEYWORDS,
+    so before this it fell all the way through check_signal_inbox() to
+    `summary["skipped"] += 1` — not even a receipt, total silence.
+
+    Why the check must be conservative: unlike parse_word_message(), there
+    is no explicit signal from Daniel here that this message IS a word
+    list — it's being inferred purely from shape. A false positive costs a
+    real ~30s paid AI call (add_word_to_list()) plus a wrong entry parked
+    in ★ List, so this errs hard toward None: at most 5 non-empty lines,
+    and EVERY comma-split fragment on EVERY line must pass
+    _looks_like_word() (no partial credit — one line that reads as a
+    sentence sinks the whole message). See _looks_like_word() for the
+    per-fragment rules (length, punctuation, Han vs Latin heuristics).
+
+    Why this runs where it does in check_signal_inbox(): AFTER the URL scan
+    and AFTER parse_word_message() — a message with a link or the explicit
+    `word` keyword is unambiguous and must keep going down its own path;
+    this is purely the leftover case of "no URL, no keyword, but still
+    plausibly just word(s)".
+    """
+    if not body:
+        return None
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not lines or len(lines) > 5:
         return None
 
-    pairs = []
-    for word in words[:_MAX_WORDS_PER_MESSAGE]:
-        word_lang = lang or ("zh" if _HAN_RE.search(word) else "fr")
-        pairs.append((word, word_lang))
-    return pairs
+    for line in lines:
+        for chunk in re.split(r"[,，、]", line):
+            fragment = chunk.strip()
+            if not fragment or not _looks_like_word(fragment):
+                return None
+
+    return _word_pairs(body) or None
 
 
 def send_receipt(lines: list) -> bool:
@@ -507,6 +606,16 @@ def check_signal_inbox(runner=None) -> dict:
 
         found = extract_urls(text)
         if not found:
+            # No link and no explicit `word` keyword — last chance before
+            # giving up on this message: does it just look like bare
+            # word(s) (#1091)? Checked here, after the URL scan, so a
+            # message with a link never gets reinterpreted as a word list.
+            bare_words = parse_bare_words(text)
+            if bare_words is not None:
+                if len(bare_words) == _MAX_WORDS_PER_MESSAGE:
+                    words_truncated = True
+                word_items.extend(bare_words)
+                continue
             summary["skipped"] += 1
             continue
         new_urls.extend(found)
@@ -582,6 +691,12 @@ def check_signal_inbox(runner=None) -> dict:
 
     for body in pasted_bodies:
         _ingest_pasted_body(body, summary, receipt_lines)
+
+    # Words last: each one is a ~30s paid AI call, so links and pasted
+    # bodies (fast, and the ones with a "processing…" notice pending) get
+    # their receipt lines settled first.
+    if word_items:
+        _add_words(word_items, summary, receipt_lines)
 
     _save_retry_queue(next_retry_queue)
     send_receipt(receipt_lines)

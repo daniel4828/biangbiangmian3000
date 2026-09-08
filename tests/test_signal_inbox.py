@@ -519,3 +519,163 @@ def test_pasted_text_from_someone_else_is_ignored(tmp_db, monkeypatch):
 
     summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
     assert summary["skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# "add these words" via the explicit `word` keyword (#1041)
+# ---------------------------------------------------------------------------
+
+def _fake_add_word_to_list(monkeypatch, calls):
+    """Patch the one shared add-word core (routes.imports.add_word_to_list)
+    the way _add_words() imports it — inside the function, from
+    routes.imports, not from knowledge.signal_inbox."""
+    def fake(word, lang):
+        calls.append((word, lang))
+        return {"status": "added", "word_zh": word}
+    monkeypatch.setattr("routes.imports.add_word_to_list", fake)
+    return fake
+
+
+def test_word_keyword_message_adds_each_word(tmp_db, monkeypatch):
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("word\n促进\n默契"))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == [("促进", "zh"), ("默契", "zh")]
+    assert summary["ingested"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Bare word messages with no `word` keyword at all (#1091)
+# ---------------------------------------------------------------------------
+
+def test_bare_single_chinese_word_is_added(tmp_db, monkeypatch):
+    """The actual real-world case that motivated #1091: Daniel just sends
+    the word itself, no keyword."""
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("促进"))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == [("促进", "zh")]
+    assert summary["ingested"] == 1
+    assert summary["skipped"] == 0
+
+
+def test_bare_multiline_chinese_words_are_all_added(tmp_db, monkeypatch):
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("促进\n默契\n生态"))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == [("促进", "zh"), ("默契", "zh"), ("生态", "zh")]
+    assert summary["ingested"] == 3
+
+
+def test_bare_comma_separated_words_on_one_line_are_all_added(tmp_db, monkeypatch):
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("生态，默契"))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == [("生态", "zh"), ("默契", "zh")]
+    assert summary["ingested"] == 2
+
+
+def test_bare_french_expression_is_tagged_fr(tmp_db, monkeypatch):
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("se réduire"))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == [("se réduire", "fr")]
+    assert summary["ingested"] == 1
+
+
+def test_bare_chinese_sentence_is_not_treated_as_a_word(tmp_db, monkeypatch):
+    """A real sentence (has sentence-ending punctuation) must fall through
+    to skipped, not misfire an AI call for each "word" in it."""
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("今天要记得买菜。"))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == []
+    assert summary["skipped"] == 1
+
+
+def test_bare_long_multiline_text_is_not_treated_as_a_word_list(tmp_db, monkeypatch):
+    """More than 5 non-empty lines -> not a plausible word list, even if
+    every individual line happens to look short."""
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("一\n二\n三\n四\n五\n六"))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == []
+    assert summary["skipped"] == 1
+
+
+def test_bare_long_sentence_is_not_treated_as_a_word_list(tmp_db, monkeypatch):
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self(
+        "Das ist ein ganz normaler langer Satz, der eindeutig kein einzelnes Wort ist."))
+
+    calls = []
+    _fake_add_word_to_list(monkeypatch, calls)
+
+    summary = signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert calls == []
+    assert summary["skipped"] == 1
+
+
+def test_message_with_a_link_still_goes_down_the_url_path_not_bare_words(tmp_db, monkeypatch):
+    """A message containing a URL must never be reinterpreted as a bare word
+    list, even if it's short."""
+    monkeypatch.setenv("SIGNAL_ACCOUNT", ACCOUNT)
+    stdout = _lines(_envelope_note_to_self("https://example.com/a"))
+
+    word_calls = []
+    _fake_add_word_to_list(monkeypatch, word_calls)
+    urls = []
+    monkeypatch.setattr(knowledge.ingest, "ingest_url",
+                        lambda url: urls.append(url) or {"episode_id": 1})
+    monkeypatch.setattr(podcast, "retry_episode", lambda episode_id: {"status": "summarized"})
+    monkeypatch.setattr(database, "get_episode", lambda episode_id: {"id": episode_id, "title": "T"})
+
+    signal_inbox.check_signal_inbox(runner=_make_runner(stdout))
+
+    assert word_calls == []
+    assert urls == ["https://example.com/a"]
+
+
+def test_parse_bare_words_unit():
+    assert signal_inbox.parse_bare_words("促进") == [("促进", "zh")]
+    assert signal_inbox.parse_bare_words("se réduire") == [("se réduire", "fr")]
+    assert signal_inbox.parse_bare_words("生态，默契") == [("生态", "zh"), ("默契", "zh")]
+    assert signal_inbox.parse_bare_words("今天要记得买菜。") is None
+    assert signal_inbox.parse_bare_words("") is None
+    assert signal_inbox.parse_bare_words("一\n二\n三\n四\n五\n六") is None
