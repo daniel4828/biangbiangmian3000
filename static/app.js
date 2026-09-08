@@ -1017,7 +1017,7 @@ function showView(name) {
   // loading screen ends that run, so they must not survive into the next
   // unrelated setLoading() ("Loading audio…", opening a knowledge item, …).
   if (name !== 'loading') _storyLoadingSources = [];
-  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books', 'archive'].forEach(v => {
+  ['loading', 'decks', 'review', 'done', 'browse', 'word-detail', 'hanzi-detail', 'stats', 'settings', 'knowledge', 'books', 'archive', 'listening'].forEach(v => {
     document.getElementById(`view-${v}`).style.display = 'none';
   });
   document.getElementById(`view-${name}`).style.display =
@@ -1044,7 +1044,8 @@ function showView(name) {
     name === 'settings'     ? 'Settings' :
     name === 'knowledge'    ? 'Knowledge' :
     name === 'books'        ? 'Books' :
-    name === 'archive'      ? 'Archive' : 'biangbiangmian3000';
+    name === 'archive'      ? 'Archive' :
+    name === 'listening'    ? 'Listening' : 'biangbiangmian3000';
   if (name === 'decks') quickMode = false;
   // #1055 replaced the header ＋ with the search box, which needs no per-view
   // handling: it shows in every view, offline included — searching the local
@@ -1982,6 +1983,7 @@ function renderDecks(decks) {
       <button class="nav-btn" onclick="openArchive()" title="Every generated story and every study session">📜 Archive</button>
       <button class="nav-btn" onclick="openKnowledge()">🧠 Knowledge</button>
       <button class="nav-btn" onclick="openBooks()" title="Read an uploaded book">📚 Books</button>
+      <button class="nav-btn" onclick="openListeningShelf()" title="Everything you can listen to">🎧 Listening</button>
       <button class="nav-btn" onclick="openSettings()" title="Customize shortcuts">⚙ Settings</button>
       <button class="nav-btn" onclick="openCostModal()">API Costs</button>
       <button class="nav-btn" onclick="openImportModal()" title="Shortcut: Command+I">Import</button>
@@ -5269,11 +5271,17 @@ function _schedulePodcastPollIfNeeded() {
 // detail view is open (the podcast list, or any other view).
 let _knowledgeDetailId = null;
 
-async function openKnowledgeItem(id) {
+// `preferView` (#1085): which tab to land on. Normally omitted — a freshly
+// opened item shows its summary. The listening shelf passes 'fulltext' when
+// the track it is resuming belongs to that view: landing on the summary tab
+// instead would show a "generate read-along" button for a track that already
+// exists, i.e. a click that looks like it did nothing.
+async function openKnowledgeItem(id, preferView) {
   navPush(`knowledge:item:${id}`);
   setLoading('Loading…');
   _knowledgeEditOpen = false;   // #937: a fresh item opens read-only
-  _knowledgeView = 'summary';   // #972: and on the summary, not whichever
+  _knowledgeView = preferView === 'fulltext' ? 'fulltext' : 'summary';
+                                // #972: otherwise the summary, not whichever
   _knowledgeFulltext = null;    //       view the previous item was left on
   // #1049/#1082: resets the descriptor of the track CHECKED for this exact
   // owner (used by _raBarHtml/_raTrackFor to decide "generate" vs "play"
@@ -6834,7 +6842,11 @@ function _raMiniOpen() {
 // branch here, not touch the rendering code.
 function _raOpenOwner(nav) {
   if (!nav) return;
-  if (nav.kind === 'episode') openKnowledgeItem(nav.id);
+  // nav.variant (#1085) rides along so the episode lands on the tab its
+  // track actually belongs to. Extended here — the ONE place that turns an
+  // owner into navigation — rather than in the shelf, which would be a
+  // second copy of this dispatch.
+  if (nav.kind === 'episode') openKnowledgeItem(nav.id, nav.variant);
   else if (nav.kind === 'book_page') openBook(nav.bookId, nav.pageNo, nav.lang);
 }
 
@@ -14401,6 +14413,9 @@ function _navHere() {
     const t = _archiveState.tab;
     return { key: `archive:${t}`, restore: () => openArchive(t) };
   }
+  if (view === 'listening') {
+    return { key: `listening:${_listeningState.status}`, restore: () => openListeningShelf(_listeningState.status) };
+  }
   if (view === 'stats')         return { key: 'stats', restore: () => openStats() };
   if (view === 'settings')      return { key: 'settings', restore: () => openSettings() };
   if (view === 'decks')         return { key: 'decks', restore: () => _goHomeNow() };
@@ -18344,4 +18359,111 @@ function _archiveSessionsHtml(sessions) {
 function toggleArchiveSession(startedAt) {
   _archiveState.openSession = _archiveState.openSession === startedAt ? null : startedAt;
   _renderArchive();
+}
+
+// ── Listening shelf (#1085) ──────────────────────────────────────────────────
+// "What am I listening to right now" — every item with a read-along track,
+// in one screen, instead of buried inside the several-hundred-row knowledge
+// list. Deliberately thin: the actual playback (and the navigation to reach
+// it) is 100% reused from the existing read-along machinery (_raOpenOwner) —
+// this view's only job is to list rows and point at them.
+const _listeningState = { status: 'listening', items: null, error: null };
+const _LISTENING_TABS = [
+  { key: 'listening', label: 'Listening' },
+  { key: 'finished',  label: 'Finished' },
+  { key: 'all',       label: 'All' },
+];
+const _LISTENING_KIND_ICON = {
+  podcast: '\u{1F3A7}', video: '\u{1F3AC}', article: '\u{1F4C4}',
+  newsletter: '\u{1F4F0}', audiobook: '\u{1F3A7}', book: '\u{1F4DA}',
+};
+
+async function openListeningShelf(status) {
+  if (status) _listeningState.status = status;
+  navPush(`listening:${_listeningState.status}`);
+  showView('listening');
+  _listeningState.items = null;
+  _listeningState.error = null;
+  _renderListeningShelf();
+  try {
+    const r = await api('GET', `/api/audio/library?status=${_listeningState.status}`);
+    _listeningState.items = r.items;
+  } catch (e) {
+    _listeningState.error = e.message;
+  }
+  if (_currentView === 'listening') _renderListeningShelf();
+}
+
+// mm:ss under an hour, h:mm:ss past it — "已听 42:13 / 1:47:20".
+function _fmtHMS(ms) {
+  const total = Math.max(0, Math.round((ms || 0) / 1000));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function _renderListeningShelf() {
+  const box = document.getElementById('view-listening-content');
+  if (!box) return;
+  const tabs = _LISTENING_TABS.map(t =>
+    `<button class="arch-tab${_listeningState.status === t.key ? ' arch-tab-on' : ''}"
+             onclick="openListeningShelf('${t.key}')">${t.label}</button>`).join('');
+  const head = `<div class="arch-head">
+      <div class="arch-title"><h2>\u{1F3A7} Listening</h2>
+        <span class="arch-sub">Everything with a read-along track</span></div>
+      <div class="arch-tabs">${tabs}</div>
+    </div>`;
+  if (_listeningState.error) {
+    box.innerHTML = head + `<div class="browse-empty">Could not load: ${_escHtml(_listeningState.error)}</div>`;
+    _listeningState.error = null;
+    return;
+  }
+  const items = _listeningState.items;
+  if (!items) { box.innerHTML = head + '<div class="browse-empty">Loading…</div>'; return; }
+  if (!items.length) {
+    box.innerHTML = head + `<div class="browse-empty">
+      Nothing here yet. Generate a read-along version from a knowledge item or
+      a book page ("Generate read-along" / "\u{1F3A7} Listen") and it will show up here.
+    </div>`;
+    return;
+  }
+  const rows = items.map(_listeningRowHtml).join('');
+  box.innerHTML = head + `<div class="bw-list">${rows}</div>`;
+}
+
+function _listeningRowHtml(item) {
+  const icon = _LISTENING_KIND_ICON[item.kind] || '\u{1F3A7}';
+  const pct = item.duration_ms > 0
+    ? Math.min(100, Math.max(0, item.position_ms / item.duration_ms * 100)) : 0;
+  const time = item.duration_ms > 0
+    ? `${_fmtHMS(item.position_ms)} / ${_fmtHMS(item.duration_ms)}`
+    : _fmtHMS(item.position_ms);
+  // The variant rides along for episodes (#1085): a 'fulltext' track opened
+  // on the summary tab would show a "generate read-along" button for a track
+  // that already exists — a click that looks like it did nothing.
+  const nav = item.owner_kind === 'book_page'
+    ? `'book_page',${item.owner_id},${item.book_id},${item.page_no},'${item.lang}'`
+    : `'episode',${item.owner_id},null,null,'${item.lang}','${item.variant}'`;
+  return `<div class="bw-row arch-row${item.finished ? ' listening-row-done' : ''}"
+               onclick="_openListeningItem(${nav})">
+    <div class="arch-cat">${item.finished ? '✓' : icon}</div>
+    <div class="ss-main">
+      <div class="arch-row-title">${_escHtml(item.title)}</div>
+      <div class="listening-row-bar"><div class="listening-row-fill" style="width:${pct}%"></div></div>
+      <div class="ss-meta"><span>${_escHtml(time)}</span></div>
+    </div>
+  </div>`;
+}
+
+// The only bit of navigation logic this view owns: turning one /api/audio/library
+// row back into the `nav` shape _raOpenOwner already knows how to open — the
+// exact same descriptor the mini player's "jump back to it" button uses.
+// No second copy of "how do I get to an episode / book page" is written here.
+function _openListeningItem(ownerKind, ownerId, bookId, pageNo, lang, variant) {
+  if (ownerKind === 'episode') {
+    _raOpenOwner({ kind: 'episode', id: ownerId, variant });
+  } else if (ownerKind === 'book_page' && bookId != null) {
+    _raOpenOwner({ kind: 'book_page', bookId, pageNo, lang });
+  }
 }

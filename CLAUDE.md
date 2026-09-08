@@ -19,7 +19,7 @@
 10. [数据库模式](#数据库模式概述) · 11. [调度算法 FSRS-5](#调度算法--fsrs-5默认--sm-2-回退) · 12. [队列设计](#队列设计) · 13. [多语言支持](#多语言支持)
 
 **功能详解**
-14. [数据与导入 / 界面内加词](#数据与导入) · 15. [故事生成](#故事生成) · 16. [加星句子](#加星句子改进提示词的正例样本692) · 17. [知识库](#知识库knowledge-base650655) · 18. [生词标注](#生词标注代码做不用-aizh_annotatepy638) · 19. [复习收尾提醒](#复习收尾提醒701) · 19b. [顶栏后台任务指示器](#顶栏后台任务指示器821) · 20. [AI 词典页 /dict](#ai-词典页-dict746) · 21. [书籍阅读器](#书籍阅读器836)
+14. [数据与导入 / 界面内加词](#数据与导入) · 15. [故事生成](#故事生成) · 16. [加星句子](#加星句子改进提示词的正例样本692) · 17. [知识库](#知识库knowledge-base650655) · 18. [生词标注](#生词标注代码做不用-aizh_annotatepy638) · 19. [复习收尾提醒](#复习收尾提醒701) · 19b. [顶栏后台任务指示器](#顶栏后台任务指示器821) · 20. [AI 词典页 /dict](#ai-词典页-dict746) · 21. [书籍阅读器](#书籍阅读器836) · 21b. [听读模式与音频播放器](#听读模式与音频播放器1047--1081)
 
 **参考**
 22. [API 接口](#api-接口) · 23. [测试](#测试tests-pytest-tests-全套约-11-秒) · 24. [规范与约束](#规范与约束)
@@ -399,6 +399,8 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 | `YOUTUBE_COOKIES_FILE` | `data/youtube_cookies.txt` | 有声书摄取（#1054）从 YouTube 下载音频用的登录态 cookies（Netscape 格式，同 `INSTAGRAM_COOKIES_FILE`）。**服务器的机房 IP 被 YouTube 拦**（2026-09-05 实测：`Sign in to confirm you're not a bot`，即字幕 API 那个 `RequestBlocked` 在下载侧的同一件事），没有 cookies 基本下不动；文件不存在时仍会尝试，失败信息会明说可能缺 cookies 或已过期。导出步骤见 `scripts/README.md` |
 | `WHISPER_CPP_PATH` | `whisper-cli` | 听读模式本地转录（#1053）用的 whisper.cpp 可执行文件；系统级工具（同 `ffmpeg`/`yt-dlp`），未安装时该路径自动跳过并报可读原因。一次性编译步骤见 `scripts/README.md` |
 | `WHISPER_CPP_MODEL` | `/opt/whisper.cpp/models/ggml-large-v3-q5_0.bin` | 同上，量化模型文件路径 |
+| `WHISPER_CPP_MODEL_FAST` | `…/ggml-base.bin` | 文本锚定对齐（#1051/#1074）专用的小模型：那条路上 ASR **只提供时间轴**，文字会被已有的正确转录整个替换掉，所以模型糙一点完全没关系，换来的是快十倍以上。文件不存在时回落默认模型并 warning |
+| `AUDIO_ASR_PROVIDER` | 按凭据自动选 | `openai`（`whisper-1`，$0.36/小时）或 `groq`（`whisper-large-v3-turbo`，$0.04/小时）。不设时：有 `OPENAI_API_KEY` 就用它，否则用 Groq，都没有才报错。有声书自 #1090 起默认走云端——本地 whisper.cpp 在这台机器上比实时慢 4–6 倍，不实用 |
 
 注意：uvicorn 直接启动不建表——测试前先手动 `database.init_db()`（`run.sh`/`main.py` 会自动处理）。
 
@@ -906,6 +908,76 @@ Daniel 2026-08-21 定的三件事：**源书是德/英原版**（不是上传中
 - **语言下拉用 `GET /api/langs?available=1`**（全部已注册语言，不是「在用语言」）：同 `/add`、`/dict` 的理由 —— 一门还没建牌组的语言，按「在用」过滤就永远读不了第一本书
 - **上传原件放 `data/books/`，不进离线同步**；上传解析走后台线程 + `job_id` 轮询，并由 `routes/tasks.py` 的 `_book_tasks` 采集器（读上传 job 已有的状态，不新建记账）出现在顶栏任务指示器里
 - 测试见 `tests/test_books.py`
+
+---
+
+## 听读模式与音频播放器（#1047 → #1081）
+
+一边听一边看，当前句子跟着声音高亮，点词能查释义、能加进 ★ List——把「听」和「读生词」变成同一件事。素材来源：知识库的任意素材、书籍的每一页、播客单集、上传或从 YouTube 摄取的有声书。
+
+### 唯一的数据结构：cue
+
+一条**轨道**（`audio_tracks`）= 一个 mp3 + 一串 cue，cue 就是 `{start_ms, end_ms, text, char_start, char_end}`——和 SRT 是同一样东西。
+
+- **主键 `(owner_kind, owner_id, lang, variant)`**：`variant` 不可省，同一条素材的摘要和全文是两段不同的音频
+- 🔴 **`char_start`/`char_end` 是在源文本里的字符区间，不是可选的**：字幕要和阅读模式一样可点词，而标注过的 HTML 存在 rendition 里、不在这张表里。前端把标注 HTML 按字符区间切开——**重新拿文本去匹配会在有标注、有重复句子的地方错位**
+- `source_text` 存的正是那份「cue 的偏移所指向的」文本（#1049）。从 cue 反推**不等价**：cue 之间被丢弃的内容会凭空消失
+
+### 四条时间轴路径，一个入口
+
+`audio.build_track()` 按手里有什么分派：
+
+| 手里有 | 路径 | 精度 | 成本 |
+|---|---|---|---|
+| 只有文本 | `tts_track.py`：edge-tts + WordBoundary | **词级** | 免费 |
+| 音频 + 正确文本 | `anchored.py`：ASR 给时间轴、已有文本给文字，`difflib` 对齐 | 句级 | 见下 |
+| 只有音频 | `asr_cloud.py`：OpenAI `whisper-1` / Groq turbo | 句级 | $0.36 / $0.04 每小时 |
+| 只有音频、要免费 | `asr_local.py`：本地 whisper.cpp | 句级 | 免费但很慢 |
+
+- **词级时间轴是 edge-tts 白送的**：`Communicate.stream()` 的 WordBoundary 事件带每个词的 offset/duration。必须用 `.stream()` 而不是 `.save()`——后者拿不到事件，这也是本模块没有复用 `tts.py` 的唯一原因
+- **anchored 的价值是「文字是给定的正确答案」**：ASR 把「浙江」听成「折江」不影响输出，那份糙文字整个被丢掉、只留时间戳。**因此这条路上该用小模型**（`WHISPER_CPP_MODEL_FAST`，默认 `base`）——反正文字要被替换掉
+- 🔴 `difflib.SequenceMatcher` **必须 `autojunk=False`**：默认启发式把长序列里出现超过 1% 的字符当「垃圾」忽略，而中文常用字远超这个比例。不关掉，中文对齐会莫名其妙地烂**且没有任何报错**
+- **匹配不上的句子直接丢弃**，绝不拿相邻句子的时间糊上去
+- 原计划的 `aeneas` 强制对齐**已放弃**：2026-09-05 实测在 Python 3.14 上装不上（三种装法全失败），且需要系统级 `espeak`。一个八年没更新的依赖不该进这里——**别再提议它**
+
+### 长音频推翻了几条为短片段写的假设
+
+都是实测踩出来的（一本 107 分钟的书连挂两轮，白烧十四小时 CPU）：
+
+- 🔴 **幻觉过滤的「整条作废」只对短片段成立**（#1090）：`podcast._filter_whisper_segments` 的第 3 道检查是「同一段文本连续重复 ≥3 次 → 整条转录作废」，注释里的理由是「模型在**这么短的片段**里胡编，别处也不可信」。107 分钟的音频里出现一小段重复（静音、音乐、翻页停顿）几乎必然发生。现在按 `total_seconds` 分岔：< 300 秒保持原行为（Reel 场景一字不变，有回归测试），更长只丢那一段重复
+- **本地 whisper.cpp 在这台机器上不实用**：4 核 EPYC 无 GPU，`large-v3-q5_0` 约比实时**慢 4–6 倍**（107 分钟音频要 7–10 小时），`medium-q5_0` 约 4.6 倍。同样一本书 OpenAI `whisper-1` **6 分钟、$0.64**。本地那条留着当免费兜底，不是默认
+- **超时不能写死**（#1076 未做）：`asr_local._TIMEOUT_SECONDS` 是常数 6 小时，对 3 分钟的 Reel 等于没有上限，对 10 小时的书必被判死
+- **跑几小时的任务必须有进度**（#1076 未做）：whisper.cpp 一直在往 stdout 写进度，我们重定向到临时文件后再没人看过，于是跑满六小时才知道不行
+
+### 闲时队列（#1053）
+
+本地转录排进 `audio_jobs`，`scripts/audio_worker.py` 每 5 分钟一轮，四道闸门：没有任务 / 30 分钟内有人操作 / 落在早晨预生成窗口（05:30–09:30，**服务器本地时间 `Asia/Shanghai`**）/ 上一轮还在跑（PID 锁——8 GB 内存放不下两个 whisper）。
+
+- 🔴 **判断「他在用」只算带会话 Cookie 的请求**（#1071）：`due_check.py`/`podcast_check.py` 这两个 cron 是**走 HTTP 打自己 API** 的，5 分钟一次的心跳曾让这道闸门**永远开不了**，而日志上写着「1 分钟前还有动作」，看起来完全正常。修法不是把这两个路径加进黑名单（下一个 HTTP cron 会原样带回来），而是改判**谁在发请求**：浏览器带 Cookie，脚本走 Basic Auth。前端轮询端点的排除名单同时保留
+- **被打断标回 `pending` 不标 `error`**（`AudioTrackAborted`）：转录幂等，重来不花钱；记成 error 的话，他每次坐到电脑前都会把当时正在跑的那条永久判死
+- **他主动点的不进这个队列**：播客的 🎧 Listen（#1074）起后台线程**立刻做**——他是点了才等的，让他等到半夜违背这个按钮的意义。规则是「主动点的立刻做，上传的长有声书排队等闲时」
+
+### 播放器（#1081 及其子议题）
+
+- **播放状态是应用级单例，不是页面的一部分**（#1082）：离开详情页只清掉和 DOM 绑定的高亮映射，**音频照常在放**；底部常驻迷你播放器，点标题回到听读界面
+- 🔴 **仍然只有一个 `<audio>` 元素**（#606 手势解锁过的那个）。多建一个，iOS 上就前功尽弃
+- **看别的素材时不静默抢占**：显示「▶ 改播这条」，而不是把共享元素从正在播的那条手里夺走
+- **抢占必须可恢复**：复习朗读/分块朗读/整篇故事播放都经过 `_stopSharedPlayback()` 这个唯一瓶颈，它在抢占前保存位置和进度并标记为**暂停**。绝不能出现「复习完一张卡，正在听的书没了」
+- **锁屏/耳机走 Media Session API**（#1083）：`setPositionState` **必须带 `playbackRate`**，否则 1.5× 听的时候进度条走不对；**队列做出来之前不注册 `previoustrack`/`nexttrack`**——按下去没反应的按钮比没有更糟
+- **速度走浏览器的 `playbackRate`**（0.5–2×），不用 edge-tts 的 `rate`：后者会让同一段文字按每个速度各存一份 mp3
+- **进度存 `audio_progress`**（#1078），主键与 `audio_tracks` 对齐。🔴 **绝不在 `timeupdate` 里写库**（每秒约 4 次），节流到 10 秒 + `pause`/`ended`/`visibilitychange`/`beforeunload`；`beforeunload` 必须用 `sendBeacon`（`fetch` 会被取消）。**保存失败只 `console.warn` 不打断播放**——这是「失败绝不静默」的一个刻意例外
+
+### 有声书的三个入口
+
+`kind='audiobook'`（该列**没有 CHECK 约束**，加值不需要迁移，同 #925 的 `newsletter`）：
+
+- **上传音频**（#1068，最稳）：`.mp3/.m4a/.wav`，2 GB 上限。🔴 **分块读写 + 同一遍算 sha256**，绝不整个读进内存（服务器只有 7.8 GB）；哈希即去重键，同一文件传两次不会重复占磁盘、也不会重复排一次几小时的转录
+- **粘 YouTube 链接**（#1054）：⚠️ **服务器的机房 IP 被 YouTube 拦**，带 cookies 也只返回 storyboard 格式，**一个音频流都不给**（2026-09-05/09-06 两次实测）。代码是好的、对别的站点有效，但 YouTube 实际走不通——**在本机下载再上传**才是可行路径
+- **播客一键听读**（#1074）：`audio_url` 是 RSS 直链、`transcript_zh` 已有，所以直接走 anchored，文字准确
+
+### 相关文件
+
+`audio/`（`__init__.py` / `tts_track.py` / `segment.py` / `anchored.py` / `asr_cloud.py` / `asr_local.py`）、`database/audio.py`、`routes/audio.py`、`knowledge/audio_upload.py`、`knowledge/audio_fetch.py`、`scripts/audio_worker.py`、`static/app.js` 的 `_ra*` 一组。测试见 `tests/test_audio_track.py`、`tests/test_audio_worker.py`、`tests/test_audio_upload.py`、`tests/test_youtube_audiobook.py`。
 
 ---
 

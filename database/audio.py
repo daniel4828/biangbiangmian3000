@@ -328,6 +328,90 @@ def audio_disk_usage(owner_kind: str, owner_id: int) -> int:
     return total
 
 
+# ---------------------------------------------------------------------------
+# Listening shelf (#1085) — "what am I listening to right now", across every
+# owner kind, in one screen instead of buried inside the knowledge list.
+# ---------------------------------------------------------------------------
+
+def list_listening(limit: int = 100) -> list[dict]:
+    """Every audio_tracks row (an item that HAS a read-along track) left-
+    joined against its audio_progress row (only present once he's actually
+    pressed play), with the title resolved in the same query — one JOIN, not
+    an N+1 lookup per row.
+
+    Ordering: rows with a saved position come first, most recently listened
+    first (updated_at DESC); tracks nobody has ever opened come after, most
+    recently generated first. "Has progress" is a real column
+    (`has_progress`, 0/1) rather than relying on NULL-ordering quirks across
+    SQLite versions.
+
+    Orphan rows — a track whose owner (episode or book page) was deleted
+    without its audio_tracks row being cleaned up — get a readable
+    placeholder title ("episode #123") instead of NULL, so a stale row is
+    still visible (and deletable) rather than rendering as a blank line.
+    """
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT
+               t.owner_kind, t.owner_id, t.lang, t.variant,
+               t.duration_ms, t.created_at AS track_created_at,
+               COALESCE(pr.position_ms, 0) AS position_ms,
+               COALESCE(pr.finished, 0)    AS finished,
+               pr.updated_at               AS updated_at,
+               CASE WHEN pr.owner_kind IS NULL THEN 0 ELSE 1 END AS has_progress,
+               ep.title                    AS episode_title,
+               ep.kind                     AS episode_kind,
+               bk.title                    AS book_title,
+               bk.author                   AS book_author,
+               bp.book_id                  AS book_id,
+               bp.page_no                  AS page_no
+           FROM audio_tracks t
+           LEFT JOIN audio_progress pr
+               ON pr.owner_kind = t.owner_kind AND pr.owner_id = t.owner_id
+              AND pr.lang = t.lang AND pr.variant = t.variant
+           LEFT JOIN podcast_episodes ep
+               ON t.owner_kind = 'episode' AND ep.id = t.owner_id
+           LEFT JOIN book_pages bp
+               ON t.owner_kind = 'book_page' AND bp.id = t.owner_id
+           LEFT JOIN books bk
+               ON bp.book_id = bk.id
+           ORDER BY has_progress DESC, pr.updated_at DESC, t.created_at DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    conn.close()
+
+    out = []
+    for r in rows:
+        row = dict(r)
+        if row["owner_kind"] == "episode":
+            title = row["episode_title"]
+            kind = row["episode_kind"]
+        else:  # book_page
+            title = row["book_title"]
+            if title and row["book_author"]:
+                title = f"{title} · {row['book_author']}"
+            kind = "book"
+        if not title:
+            # Orphan: owner row is gone but the audio_tracks row survived it.
+            title = f"{row['owner_kind']} #{row['owner_id']}"
+        out.append({
+            "owner_kind": row["owner_kind"],
+            "owner_id": row["owner_id"],
+            "lang": row["lang"],
+            "variant": row["variant"],
+            "duration_ms": row["duration_ms"],
+            "position_ms": row["position_ms"],
+            "finished": bool(row["finished"]),
+            "updated_at": row["updated_at"],
+            "title": title,
+            "kind": kind,
+            "book_id": row["book_id"],
+            "page_no": row["page_no"],
+        })
+    return out
+
+
 def delete_audio_tracks_for_book(book_id: int) -> list[str]:
     """Same contract as delete_audio_tracks(), for every page of one book at
     once (#1050) — routes/books.py's delete_book() has book_id, not the list
