@@ -509,7 +509,18 @@ def _seg_field(seg, name: str, default=None):
     return getattr(seg, name, default)
 
 
-def _filter_whisper_segments(segments: list) -> list:
+# Below this, check 3 (see _filter_whisper_segments) still voids the WHOLE
+# transcript, exactly as it always has (#750) — a model confabulating
+# anywhere in a clip this short isn't trustworthy anywhere else in it
+# either. At or above this, only the repeated RUN itself is dropped: a few
+# seconds of repeated silence/music partway through an hours-long audiobook
+# (#1090) says nothing about the other hour of it, and voiding the entire
+# transcript over it is exactly what turned an 8-hour whisper.cpp run on a
+# 107-minute book into zero usable output.
+_VOID_ALL_MAX_SECONDS = 300
+
+
+def _filter_whisper_segments(segments: list, total_seconds: float | None = None) -> list:
     """Drop hallucinated segments from a Whisper/Groq verbose_json response
     and return the *segments themselves* (not just their text) that survive
     (#750, split from _filter_whisper_hallucinations in #1052 so audio ASR
@@ -525,15 +536,25 @@ def _filter_whisper_segments(segments: list) -> list:
        token-confidence for the segment.
     3. the exact same segment text repeated >= _HALLUCINATION_REPEAT_COUNT
        times in a row — a stronger signal than either probability alone, and
-       catches cases they miss. This voids the WHOLE transcript, not just
-       the repeats: a model confabulating anywhere in a clip this short
-       isn't trustworthy anywhere else in it either.
+       catches cases they miss. On short audio (see `total_seconds` below)
+       this voids the WHOLE transcript; on long audio it only drops that run.
     4. fewer than _HALLUCINATION_MIN_WORDS words survive checks 1-3 — too
        short to be worth summarizing/carding regardless of confidence.
 
     A segment missing no_speech_prob/avg_logprob (see
     _transcribe_via_whisper's degraded-fallback comment) simply skips checks
     1-2 for that segment; checks 3-4 still run on whatever text came back.
+
+    `total_seconds` (#1090): the total duration of the ORIGINAL recording
+    these segments came from (not just the current chunk, for callers that
+    split long audio into chunks — see audio/asr_cloud.py). None (the
+    default, and every call site that predates this parameter — all of them
+    short-clip paths: Instagram Reels, single Whisper/Groq calls) or a value
+    below _VOID_ALL_MAX_SECONDS reproduces check 3's original behavior
+    exactly. At or above that threshold, check 3 drops only the repeated run
+    and keeps everything else. Either way, whatever gets dropped is always
+    logged — see this module's rule against ever silently discarding
+    content.
     """
     kept: list = []
     for seg in segments:
@@ -551,14 +572,41 @@ def _filter_whisper_segments(segments: list) -> list:
     if not kept:
         return []
 
-    run_text, run_len = None, 0
-    for seg in kept:
-        text = (_seg_field(seg, "text") or "").strip()
-        if text == run_text:
-            run_len += 1
-        else:
-            run_text, run_len = text, 1
-        if run_len >= _HALLUCINATION_REPEAT_COUNT:
+    void_whole = total_seconds is None or total_seconds < _VOID_ALL_MAX_SECONDS
+
+    if void_whole:
+        run_text, run_len = None, 0
+        for seg in kept:
+            text = (_seg_field(seg, "text") or "").strip()
+            if text == run_text:
+                run_len += 1
+            else:
+                run_text, run_len = text, 1
+            if run_len >= _HALLUCINATION_REPEAT_COUNT:
+                logger.info(
+                    "podcast: voiding the whole transcript — %r repeated >= %d times in a "
+                    "row (total_seconds=%s, treated as a short clip)",
+                    run_text, _HALLUCINATION_REPEAT_COUNT, total_seconds)
+                return []
+    else:
+        deduped: list = []
+        i, n = 0, len(kept)
+        while i < n:
+            text = (_seg_field(kept[i], "text") or "").strip()
+            j = i + 1
+            while j < n and (_seg_field(kept[j], "text") or "").strip() == text:
+                j += 1
+            run_len = j - i
+            if run_len >= _HALLUCINATION_REPEAT_COUNT:
+                logger.info(
+                    "podcast: dropping a run of %d repeated segment(s) (%r) out of a "
+                    "%.0fs transcript — keeping the rest",
+                    run_len, text, total_seconds)
+            else:
+                deduped.extend(kept[i:j])
+            i = j
+        kept = deduped
+        if not kept:
             return []
 
     joined = " ".join((_seg_field(seg, "text") or "").strip() for seg in kept)

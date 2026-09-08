@@ -97,7 +97,8 @@ class AudioTrackAborted(AudioTrackError):
 
 def build_track(*, text: str | None = None, audio_path: str | None = None,
                 lang: str = "zh", voice: str | None = None,
-                prefer_local: bool = False, should_abort=None) -> Track:
+                prefer_local: bool = False, should_abort=None,
+                provider: str | None = None) -> Track:
     """The single entry point for all four alignment paths described in the
     module docstring above.
 
@@ -120,6 +121,12 @@ def build_track(*, text: str | None = None, audio_path: str | None = None,
     the slow local path runs; returning True makes it stop and raise
     AudioTrackAborted. Only the local path honours it — the other three
     finish in seconds, so there is nothing to interrupt.
+
+    `provider` (#1090): 'openai' or 'groq', forwarded to audio/asr_cloud.py
+    (directly, or via audio/anchored.py when both text and audio_path are
+    given). Ignored on the local path — asr_local.py has no notion of
+    providers, it only ever runs whisper.cpp. None (the default) lets
+    asr_cloud._resolve_provider pick based on which API key is configured.
     """
     if text and not audio_path:
         from . import tts_track  # lazy: avoids a circular import at package load
@@ -129,11 +136,11 @@ def build_track(*, text: str | None = None, audio_path: str | None = None,
             from . import asr_local  # lazy: avoids a circular import at package load
             return asr_local.build(audio_path, lang=lang, should_abort=should_abort)
         from . import asr_cloud  # lazy: avoids a circular import at package load
-        return asr_cloud.build(audio_path, lang=lang)
+        return asr_cloud.build(audio_path, lang=lang, provider=provider)
     if text and audio_path:
         from . import anchored  # lazy: avoids a circular import at package load
         return anchored.build(text, audio_path, lang=lang, prefer_local=prefer_local,
-                              should_abort=should_abort)
+                              should_abort=should_abort, provider=provider)
     raise AudioTrackError("build_track() needs at least `text` (or `audio_path`)")
 
 

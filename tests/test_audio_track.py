@@ -34,6 +34,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import openai as openai_sdk
+
 import audio
 import audio.anchored as anchored
 import audio.asr_cloud as asr_cloud
@@ -325,6 +327,12 @@ def _no_real_groq_cost_log(monkeypatch):
 @pytest.fixture(autouse=True)
 def _groq_api_key(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    # These pre-#1090 tests all assume Groq is what gets picked — clear
+    # OPENAI_API_KEY/AUDIO_ASR_PROVIDER so a real one sitting in the host
+    # environment can't silently flip _resolve_provider's default and break
+    # a test that only set up a Groq stub.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AUDIO_ASR_PROVIDER", raising=False)
 
 
 def test_asr_cloud_chunk_offsets_are_added_to_cue_timestamps(monkeypatch):
@@ -753,7 +761,7 @@ def test_anchored_alignment_corrects_asr_typos(monkeypatch):
     ]
     correct_text = "今天天气很好。我去了浙江。"
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=4000))
 
     track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
 
@@ -773,7 +781,7 @@ def test_anchored_alignment_handles_asr_text_with_no_punctuation(monkeypatch):
     ]
     correct_text = "今天天气很好。我去了浙江。"
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=4000))
 
     track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
 
@@ -791,7 +799,7 @@ def test_anchored_alignment_drops_a_sentence_with_no_match(monkeypatch):
     ]
     correct_text = "今天天气很好。我去了浙江。这句录音里完全没有出现过。"
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=4000))
 
     track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
 
@@ -808,7 +816,7 @@ def test_anchored_alignment_raises_on_low_coverage_and_writes_nothing(tmp_db, mo
     ]
     unrelated_text = "量子物理与相对论的历史发展从未被提及过任何相关内容。"
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=2000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=2000))
 
     with pytest.raises(audio.AudioTrackError):
         anchored.build(unrelated_text, "/fake/input.mp3", lang="zh")
@@ -829,7 +837,7 @@ def test_anchored_alignment_cue_start_ms_is_monotonic_despite_out_of_order_asr_t
     ]
     correct_text = "今天天气很好。我去了浙江。"
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=6000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=6000))
 
     track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
 
@@ -846,7 +854,7 @@ def test_anchored_alignment_char_offsets_point_into_the_correct_text(monkeypatch
     ]
     correct_text = "今天天气很好。我去了浙江。"
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=4000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=4000))
 
     track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
 
@@ -858,7 +866,7 @@ def test_anchored_alignment_propagates_asr_cloud_failure(monkeypatch):
     """asr_cloud.build's own AudioTrackError (missing GROQ_API_KEY, filtered
     hallucination, etc.) must propagate unchanged, never swallowed or
     replaced with a half-built result."""
-    def fake_asr_build(audio_path, lang="zh"):
+    def fake_asr_build(audio_path, lang="zh", **kwargs):
         raise audio.AudioTrackError("simulated: GROQ_API_KEY is not configured")
 
     monkeypatch.setattr(anchored.asr_cloud, "build", fake_asr_build)
@@ -890,7 +898,7 @@ def test_anchored_alignment_autojunk_false_regression(monkeypatch):
             char_end=len(padding) + 5),
     ]
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=27000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=27000))
 
     track = anchored.build(correct_text, "/fake/input.mp3", lang="zh")
 
@@ -921,7 +929,7 @@ def test_anchored_alignment_still_rejects_text_covering_only_part_of_a_long_reco
             char_start=len(matching_text) + 1, char_end=len(matching_text) + 18),
     ]
     monkeypatch.setattr(anchored.asr_cloud, "build",
-                        lambda audio_path, lang="zh": _fake_asr_track(asr_cues, duration_ms=600_000))
+                        lambda audio_path, lang="zh", **kwargs: _fake_asr_track(asr_cues, duration_ms=600_000))
 
     with pytest.raises(audio.AudioTrackError, match="duration"):
         anchored.build(correct_text, "/fake/input.mp3", lang="zh")
@@ -1274,3 +1282,163 @@ def test_delete_book_also_deletes_its_page_progress_rows(tmp_db):
     assert resp.status_code == 200, resp.text
 
     assert database.get_audio_progress("book_page", page["id"], "zh", "fulltext") is None
+
+
+# ---------------------------------------------------------------------------
+# 17. Long-audio hallucination filtering (#1090): a 107-minute audiobook was
+#     voided in its ENTIRETY over a few seconds of repeated hallucinated
+#     text — check 3's "void the whole transcript" reasoning was calibrated
+#     for ~60s Instagram Reels (#750) and never revisited for hours-long
+#     input. Short clips must behave exactly as before; long ones must only
+#     lose the repeated run.
+# ---------------------------------------------------------------------------
+
+def test_filter_whisper_segments_short_audio_still_voids_whole_transcript_on_repeat():
+    """#750 regression: nothing about this behavior may change for a clip
+    under _VOID_ALL_MAX_SECONDS, even when good segments sit right next to
+    the repeated run."""
+    segments = [
+        {"text": "a real sentence with plenty of actual words spoken here", "start": 0.0, "end": 5.0},
+        {"text": "background noise", "start": 5.0, "end": 6.0},
+        {"text": "background noise", "start": 6.0, "end": 7.0},
+        {"text": "background noise", "start": 7.0, "end": 8.0},
+        {"text": "another real sentence with plenty of actual words spoken here", "start": 8.0, "end": 13.0},
+    ]
+    assert podcast._filter_whisper_segments(segments, total_seconds=60.0) == []
+    # None (no caller passing it yet) must reproduce the identical behavior —
+    # this is the default every pre-#1090 call site still gets.
+    assert podcast._filter_whisper_segments(segments, total_seconds=None) == []
+
+
+def test_filter_whisper_segments_long_audio_only_drops_the_repeated_run():
+    """#1090: the same repeated run inside an hours-long recording must not
+    take the rest of a 60-minute-plus transcript down with it."""
+    segments = [
+        {"text": "a real sentence with plenty of actual words spoken here", "start": 0.0, "end": 5.0},
+        {"text": "background noise", "start": 5.0, "end": 6.0},
+        {"text": "background noise", "start": 6.0, "end": 7.0},
+        {"text": "background noise", "start": 7.0, "end": 8.0},
+        {"text": "another real sentence with plenty of actual words spoken here", "start": 8.0, "end": 13.0},
+    ]
+    kept = podcast._filter_whisper_segments(segments, total_seconds=3600.0)
+    kept_texts = [s["text"] for s in kept]
+    assert "background noise" not in kept_texts
+    assert kept_texts == [
+        "a real sentence with plenty of actual words spoken here",
+        "another real sentence with plenty of actual words spoken here",
+    ]
+
+
+def test_filter_whisper_segments_long_audio_logs_the_dropped_run(caplog):
+    segments = [
+        {"text": "a real sentence with plenty of actual words spoken here", "start": 0.0, "end": 5.0},
+        {"text": "background noise", "start": 5.0, "end": 6.0},
+        {"text": "background noise", "start": 6.0, "end": 7.0},
+        {"text": "background noise", "start": 7.0, "end": 8.0},
+    ]
+    with caplog.at_level("INFO", logger="podcast"):
+        podcast._filter_whisper_segments(segments, total_seconds=3600.0)
+
+    assert any("dropping" in r.message.lower() and "background noise" in r.message
+               for r in caplog.records)
+
+
+def test_filter_whisper_segments_short_audio_logs_when_voiding(caplog):
+    """Even the unchanged short-clip path must log what happened — silent
+    discarding of content is never acceptable in this codebase."""
+    segments = [{"text": "loop", "start": float(i), "end": float(i + 1)} for i in range(3)]
+    with caplog.at_level("INFO", logger="podcast"):
+        assert podcast._filter_whisper_segments(segments, total_seconds=60.0) == []
+
+    assert any("voiding" in r.message.lower() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# 18. Cloud ASR provider selection (#1090): default picked from whichever
+#     credential is configured, OpenAI's whisper-1 winning when both (or
+#     only OPENAI_API_KEY) are present.
+# ---------------------------------------------------------------------------
+
+def test_asr_cloud_resolve_provider_prefers_openai_when_configured(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert asr_cloud._resolve_provider(None) == "openai"
+
+
+def test_asr_cloud_resolve_provider_falls_back_to_groq(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    assert asr_cloud._resolve_provider(None) == "groq"
+
+
+def test_asr_cloud_resolve_provider_raises_with_neither_key_configured(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(audio.AudioTrackError, match="OPENAI_API_KEY"):
+        asr_cloud._resolve_provider(None)
+
+
+def test_asr_cloud_build_uses_openai_whisper1_when_only_openai_key_configured(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 300.0)
+    monkeypatch.setattr(asr_cloud.subprocess, "run",
+                        lambda cmd, **kw: FakeCompletedProcess(returncode=0))
+
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+    monkeypatch.setattr(openai_sdk, "OpenAI", FakeOpenAI)
+
+    call_paths = []
+    monkeypatch.setattr(asr_cloud, "_call_openai",
+                        lambda client, path: call_paths.append(path) or
+                        [{"text": _padded(1), "start": 0.0, "end": 5.0}])
+
+    log_calls = []
+    monkeypatch.setattr(asr_cloud.database, "log_api_call", lambda **kw: log_calls.append(kw))
+
+    track = asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    assert captured["client_kwargs"]["api_key"] == "sk-test"
+    assert "base_url" not in captured["client_kwargs"]  # OpenAI's own default endpoint
+    assert len(call_paths) == 1
+    assert log_calls[0]["model"] == "whisper-1"
+    assert track.source == "asr_cloud"
+
+
+def test_asr_cloud_build_uses_groq_base_url_and_turbo_model_by_default(monkeypatch):
+    # _groq_api_key fixture already sets GROQ_API_KEY and clears OPENAI_API_KEY.
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 300.0)
+    monkeypatch.setattr(asr_cloud.subprocess, "run",
+                        lambda cmd, **kw: FakeCompletedProcess(returncode=0))
+
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+    monkeypatch.setattr(openai_sdk, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(asr_cloud, "_call_groq",
+                        lambda client, path: [{"text": _padded(1), "start": 0.0, "end": 5.0}])
+
+    log_calls = []
+    monkeypatch.setattr(asr_cloud.database, "log_api_call", lambda **kw: log_calls.append(kw))
+
+    track = asr_cloud.build("/fake/input.mp3", lang="zh")
+
+    assert captured["client_kwargs"]["base_url"] == "https://api.groq.com/openai/v1"
+    assert log_calls[0]["model"] == "whisper-large-v3-turbo"
+    assert track.source == "asr_cloud"
+
+
+def test_asr_cloud_build_raises_when_neither_key_is_configured(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    with pytest.raises(audio.AudioTrackError, match="OPENAI_API_KEY"):
+        asr_cloud.build("/fake/input.mp3", lang="zh")
