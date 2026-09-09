@@ -616,6 +616,22 @@ def save_knowledge_fulltext(episode_id: int, lang: str, text: str,
     conn.close()
 
 
+def delete_knowledge_fulltext(episode_id: int, lang: str) -> bool:
+    """Delete the cached full text for (episode_id, lang) (#1104's
+    "Regenerate full text" button). Returns whether a row actually existed —
+    callers use this to decide whether there's a now-stale read-along audio
+    track to clean up too."""
+    conn = get_db()
+    cur = conn.execute(
+        "DELETE FROM knowledge_fulltexts WHERE episode_id = ? AND lang = ?",
+        (episode_id, lang),
+    )
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
+
+
 def delete_knowledge_renditions(episode_id: int) -> None:
     """Wipe every cached rendition for an episode (#804) — called whenever
     summary_de is regenerated, so a stale French/Spanish translation of the

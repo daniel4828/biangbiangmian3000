@@ -7,7 +7,10 @@ engine itself.
 Communicate.stream() is used instead of Communicate.save() specifically
 because .save() never surfaces WordBoundary events — that is the whole
 reason this module exists rather than reusing tts.py, which only ever calls
-.save().
+.save(). On top of that, edge-tts 7.x requires WordBoundary events to be
+requested explicitly: Communicate()'s `boundary` kwarg defaults to
+"SentenceBoundary", and without passing boundary="WordBoundary" the stream
+never yields a single word-level event, no matter how .stream() is called.
 """
 import asyncio
 import hashlib
@@ -90,7 +93,13 @@ async def _synthesize_chunk(text: str, voice: str) -> tuple[bytes, list[dict]]:
     event {"start_ms", "end_ms", "text"} measured relative to the START OF
     THIS CHUNK — the caller adds the running offset to make them absolute
     over the whole track."""
-    communicate = edge_tts.Communicate(text, voice)
+    # edge-tts 7.x added a `boundary` kwarg whose default is
+    # "SentenceBoundary" — leave it unset and zero WordBoundary events ever
+    # arrive below, silently emptying word_cues. Word-level timing is the
+    # entire reason this module exists rather than reusing tts.py (see the
+    # module docstring's note on .stream() vs .save()); this is the other
+    # half of that same story.
+    communicate = edge_tts.Communicate(text, voice, boundary="WordBoundary")
     raw_audio = bytearray()
     words: list[dict] = []
     async for msg in communicate.stream():
