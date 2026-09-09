@@ -1001,6 +1001,9 @@ function _renderDoneHint() {
 }
 
 function showView(name) {
+  // #1117: the previous view's readable containers are about to be detached —
+  // recheck whether the gloss button still has anything to act on.
+  if (typeof _updateGlossToggleBtn === 'function') setTimeout(_updateGlossToggleBtn, 0);
   // #1077: the word-detail popup floats the real #view-word-detail element, so
   // any navigation out of it (a hanzi chip, a related word) would hide the
   // popup's own body and leave the overlay stranded on screen. Closing first
@@ -8499,9 +8502,39 @@ function _wrapAllWordGlosses(root, words) {
 // first time gloss-on is switched on.
 function _setGlossMode(on) {
   document.body.classList.toggle('gloss-on', !!on);
+  _updateGlossToggleBtn();
   if (!on) return;
   _glossErrorShown = false;   // a fresh gesture deserves a fresh answer, error included
   _ensureSentenceGlosses();
+}
+
+// #1117: a visible button, because on a phone the left-swipe simply does not
+// fire — reported as "works on the computer with Ctrl, does nothing on the
+// phone". Whichever touch heuristic is eating it (the 90px threshold, the
+// axis lock, Safari's own edge-swipe), a gesture that is the ONLY way to
+// reach a feature and works only sometimes is not a way to reach it at all.
+// The swipe stays as a shortcut for when it does work; this is the entry
+// point that is always there.
+//
+// Shown only while some registered gloss root is actually on screen — a
+// button for text that isn't there is the "empty chip" #821 already ruled
+// against.
+function toggleGlossMode() {
+  _setGlossMode(!document.body.classList.contains('gloss-on'));
+}
+
+function _updateGlossToggleBtn() {
+  const btn = document.getElementById('gloss-toggle-btn');
+  if (!btn) return;
+  let live = false;
+  for (const root of [..._glossRoots]) {
+    if (root.isConnected) { live = true; break; }
+    _glossRoots.delete(root);
+  }
+  btn.style.display = live ? '' : 'none';
+  const on = document.body.classList.contains('gloss-on');
+  btn.classList.toggle('is-on', on);
+  btn.title = on ? 'Hide the German translations' : 'Show a German translation under each block';
 }
 
 // Every container _initGlossReveal() has ever bound to — swipe-in views (book
@@ -8672,6 +8705,11 @@ function _initGlossReveal(root) {
   // repeat calls (a Set, so re-adding is a no-op) — the early return just
   // below is only about not double-binding the swipe listener.
   _glossRoots.add(root);
+  _updateGlossToggleBtn();   // #1117: a newly rendered readable container is what makes the button relevant
+  // #1111: if the mode is already on when this container renders (he toggled
+  // it, then navigated), its blocks start out untranslated — fill them in
+  // rather than making him toggle off and on again.
+  if (document.body.classList.contains('gloss-on')) _ensureSentenceGlosses();
   if (root.dataset.glossSwipeBound) return;
   root.dataset.glossSwipeBound = '1';
   let g = null;

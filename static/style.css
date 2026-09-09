@@ -5837,6 +5837,34 @@ table.fsrs-table td.ivl { font-weight: 700; }
    container's TEXT NODES, and one extra text node in the middle of the
    article would make the whole highlight silently stop matching.
    Pseudo-element content is invisible to that walk and to textContent. */
+/* #1117: the floating "show German translations" toggle. z-index 96 puts it
+   above the full-screen player (95) — the mode applies there too — while
+   staying under the z-index:100+ modal tier, so .word-actions (1200) and every
+   dialog still cover it. Sits above the mini player's own floating bar. */
+#gloss-toggle-btn {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 64px);
+  z-index: 96;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .14);
+  /* Phones: without this a tap flashes a grey box over the button. */
+  -webkit-tap-highlight-color: transparent;
+}
+#gloss-toggle-btn.is-on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
 /* While a batch is in flight the block shows a quiet placeholder instead of
    nothing: on a phone "nothing appeared" and "still loading" look identical,
    and that ambiguity is how #1111 got reported as simply broken. */
