@@ -61,6 +61,28 @@ def test_empty_source_produces_no_markup():
     assert rendition.text_to_paragraph_html("   \n\n  ") == ""
 
 
+def test_long_block_with_no_blank_lines_is_split_into_several_paragraphs():
+    """Podcast transcripts (Tingwu/Whisper/NotebookLM output) have no blank
+    lines at all — without splitting, an hour-long transcript would collapse
+    into a single multi-thousand-character <p>, which is both unreadable and
+    breaks app.js's _raScrollToActive() (the highlighted cue's bounding rect
+    is meaningless inside a giant paragraph)."""
+    import re
+
+    sentence = "这是一句用来测试段落切分逻辑的中文句子。"  # 20 chars
+    text = sentence * 60  # 1200 chars, well past _PARAGRAPH_CHAR_BUDGET (260), no blank lines anywhere
+
+    html = rendition.text_to_paragraph_html(text)
+    paragraphs = re.findall(r"<p>(.*?)</p>", html)
+
+    assert len(paragraphs) > 1
+    # No sentence was cut in half: every paragraph ends on a sentence boundary.
+    for p in paragraphs:
+        assert p.endswith("。")
+    # Nothing was dropped — rejoining every paragraph reproduces the original.
+    assert "".join(paragraphs) == text
+
+
 # ---------------------------------------------------------------------------
 # source language detection
 # ---------------------------------------------------------------------------

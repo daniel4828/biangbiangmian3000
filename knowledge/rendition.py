@@ -178,6 +178,43 @@ def get_or_create_rendition(episode_id: int, lang: str) -> dict:
 
 # --- full text (#972) -------------------------------------------------------
 
+# Podcast transcripts (Tingwu / Whisper / NotebookLM output) have no blank
+# lines at all — a whole hour-long episode is otherwise a single blank-line
+# separated "block" and therefore a single giant <p>, which is both unreadable
+# and defeats app.js's _raScrollToActive() (the active-cue rect it scrolls to
+# is meaningless when it's inside a multi-thousand-character paragraph). This
+# is a pure typesetting call, unrelated to books/paginate.py's 1200-char page
+# budget — that one decides how much text loads at once, this one decides how
+# much sits in a single visual paragraph on screen (roughly 4-6 lines of
+# Chinese on a phone).
+_PARAGRAPH_CHAR_BUDGET = 260
+
+_SENTENCE_END_RE = re.compile(r"(?<=[。！？!?；;])")
+
+
+def _split_block_into_paragraphs(block: str) -> list[str]:
+    """Break one blank-line-delimited block into paragraphs of roughly
+    _PARAGRAPH_CHAR_BUDGET characters, cutting only after sentence-ending
+    punctuation — never mid-sentence. A single sentence longer than the
+    budget becomes its own paragraph rather than being hard-cut."""
+    sentences = [s for s in _SENTENCE_END_RE.split(block) if s]
+    if not sentences:
+        return [block] if block else []
+    paragraphs: list[str] = []
+    current = ""
+    for s in sentences:
+        if not current:
+            current = s
+        elif len(current) + len(s) <= _PARAGRAPH_CHAR_BUDGET:
+            current += s
+        else:
+            paragraphs.append(current)
+            current = s
+    if current:
+        paragraphs.append(current)
+    return paragraphs
+
+
 def text_to_paragraph_html(text: str) -> str:
     """Turn plain source text into the markup render_html() expects.
 
@@ -194,10 +231,13 @@ def text_to_paragraph_html(text: str) -> str:
     blocks = [b.strip() for b in re.split(r"\n\s*\n", (text or "").strip()) if b.strip()]
     if not blocks:
         return ""
+    paragraphs = [para for block in blocks for para in _split_block_into_paragraphs(block)]
     return "".join(
-        # Single newlines inside a block are line breaks, not paragraph
-        # breaks — newsletters wrap their lines.
-        f"<p>{html_mod.escape(b).replace(chr(10), '<br>')}</p>" for b in blocks
+        # Single newlines inside a paragraph are line breaks, not paragraph
+        # breaks — newsletters wrap their lines. This is preserved exactly
+        # by splitting on sentence punctuation above, which never touches
+        # the newlines a sentence happens to contain.
+        f"<p>{html_mod.escape(p).replace(chr(10), '<br>')}</p>" for p in paragraphs
     )
 
 
@@ -214,12 +254,20 @@ def _source_lang_of(text: str) -> str:
     return "zh-CN" if zh_annotate.cjk_ratio(text) >= 0.2 else "de"
 
 
-def get_or_create_fulltext(episode_id: int, lang: str, generate: bool = False) -> dict | None:
+def get_or_create_fulltext(episode_id: int, lang: str, generate: bool = False,
+                            force: bool = False) -> dict | None:
     """The full source text of an episode, in `lang` (#972).
 
     Returns None when nothing is cached and `generate` is False — reading a
     detail page must not silently kick off a translation of an hour-long
     transcript. Only an explicit request (POST) passes generate=True.
+
+    `force` (only meaningful together with generate=True) skips the cache
+    and regenerates from scratch, deleting the stale cached row first. Used
+    by the "↻ Regenerate full text" button once #1104's paragraph-splitting
+    change ships, so already-cached fulltexts (a single giant <p>) can be
+    re-rendered without waiting for their cache to be invalidated some other
+    way.
 
     Unlike get_or_create_rendition(), `lang` may be 'zh': a summary has an
     AI-native Chinese version to fall back on, a full text has none.
@@ -227,9 +275,12 @@ def get_or_create_fulltext(episode_id: int, lang: str, generate: bool = False) -
     if not languages.is_valid_lang(lang):
         raise RenditionError(f"unknown language: {lang!r}")
 
-    cached = database.get_knowledge_fulltext(episode_id, lang)
-    if cached:
-        return {"lang": lang, "text": cached["text"], "new_words": cached["new_words"]}
+    if force:
+        database.delete_knowledge_fulltext(episode_id, lang)
+    else:
+        cached = database.get_knowledge_fulltext(episode_id, lang)
+        if cached:
+            return {"lang": lang, "text": cached["text"], "new_words": cached["new_words"]}
     if not generate:
         return None
 

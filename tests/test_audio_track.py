@@ -90,9 +90,13 @@ class FakeCommunicate:
     fail_at: int | None = None
     calls: list[str] = []
 
-    def __init__(self, text: str, voice: str):
+    # **kwargs so a new Communicate() keyword (edge-tts 7.x's `boundary`,
+    # #1104) doesn't break every test in this file — CLAUDE.md's rule for
+    # test doubles: eat kwargs, assert on the stable contract instead.
+    def __init__(self, text: str, voice: str, **kwargs):
         self.text = text
         self.voice = voice
+        self.kwargs = kwargs
 
     async def stream(self):
         FakeCommunicate.calls.append(self.text)
@@ -135,6 +139,29 @@ def test_chunk_boundary_keeps_cue_timestamps_monotonic(monkeypatch):
     # The core correctness requirement: the second chunk's cues don't just
     # come after the first's in list order, their *time* is later too.
     assert second_chunk_cues[0].start_ms > first_chunk_cues[-1].end_ms
+
+
+# ---------------------------------------------------------------------------
+# 0. edge-tts 7.x requires boundary="WordBoundary" to be requested explicitly
+#    (its default is "SentenceBoundary") — without it, zero WordBoundary
+#    events ever arrive and word_cues stays empty no matter what else is
+#    right. Regression guard for that exact kwarg.
+# ---------------------------------------------------------------------------
+
+def test_synthesize_chunk_requests_word_boundary(monkeypatch):
+    captured = {}
+
+    class CapturingCommunicate(FakeCommunicate):
+        def __init__(self, text, voice, **kwargs):
+            captured.update(kwargs)
+            super().__init__(text, voice)
+
+    monkeypatch.setattr(tts_track.edge_tts, "Communicate", CapturingCommunicate)
+
+    import asyncio
+    asyncio.run(tts_track._synthesize_chunk("你好", "zh-CN-XiaoxiaoNeural"))
+
+    assert captured.get("boundary") == "WordBoundary"
 
 
 # ---------------------------------------------------------------------------

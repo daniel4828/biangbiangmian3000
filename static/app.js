@@ -5506,7 +5506,13 @@ function _knowledgeFulltextHtml(ep, lang) {
     // Same whitelist sanitizer as the summary blocks: this text went
     // through Google Translate and the annotator, so it is escaped and only
     // <p>/<b>/<em>/<i>/<br> come back through.
-    return `<div id="knowledge-fulltext">${_summaryZhHtml(ft.text || '')}</div>`;
+    // #1104: cached fulltexts generated before text_to_paragraph_html()
+    // started splitting long transcripts into multiple <p>s are stuck as one
+    // giant paragraph — this button re-runs generation with force=1 so
+    // already-generated items aren't stuck that way forever.
+    return `
+      <button class="btn-secondary" onclick="doGenerateFulltext(true)">↻ Regenerate full text</button>
+      <div id="knowledge-fulltext">${_summaryZhHtml(ft.text || '')}</div>`;
   }
   // Never generated silently on open: for anything but a newsletter this is
   // a whole transcript to translate, and most items Daniel only reads the
@@ -5530,15 +5536,27 @@ async function _loadKnowledgeFulltext(episodeId, lang) {
   }
 }
 
-async function doGenerateFulltext() {
+async function doGenerateFulltext(force = false) {
   const ep = _knowledgeDetailEpisode;
   if (!ep || _knowledgeFulltextBusy) return;
   const lang = activeLang();
   _knowledgeFulltextBusy = true;
   _renderKnowledgeDetail(ep);
   try {
-    const data = await api('POST', `/api/podcast/episodes/${ep.id}/fulltext?lang=${encodeURIComponent(lang)}`);
+    const url = `/api/podcast/episodes/${ep.id}/fulltext?lang=${encodeURIComponent(lang)}${force ? '&force=1' : ''}`;
+    const data = await api('POST', url);
     _knowledgeFulltext = { episode_id: ep.id, lang, text: data.text, new_words: data.new_words || [] };
+    if (force) {
+      // The server just deleted the 'fulltext' read-along audio track for
+      // this episode/lang — its cues index into the OLD, unparagraphed
+      // source_text and no longer line up with the freshly regenerated
+      // markup. Clear the client's cached track descriptor too, so Read
+      // along shows "generate" instead of trying to play a track that's
+      // gone (see openKnowledgeItem's identical reset for why this is the
+      // right variable to touch, not _raPlayer).
+      _raTrack = null;
+      _raUpdateBar();
+    }
   } catch (e) {
     showError('Could not generate the full text: ' + (e.message || 'error'));
   } finally {
@@ -7270,21 +7288,49 @@ function _raJumpToFollow() {
   _raFollow = true;
   try { localStorage.setItem('readalongFollow', '1'); } catch (_) {}
   _raUpdateBar();
-  _raScrollToActive();
+  _raScrollToActive(true);
 }
 
-function _raScrollToActive() {
+// Anchor the highlighted cue near the top third of the viewport rather than
+// dead center — leaves room to see the next few sentences below, while a
+// sliver of already-read context above is enough to not feel jarring.
+const _RA_SCROLL_ANCHOR = 0.33;
+
+function _raScrollToActive(force = false) {
   const player = _raPlayer;
   if (player.activeIdx < 0 || !player.map) return;
   const cue = player.cues[player.activeIdx];
   if (!cue) return;
   const range = _raRangeForCue(player.map, cue);
   if (!range) return;
-  const node = range.startContainer.nodeType === Node.TEXT_NODE
-    ? range.startContainer.parentElement : range.startContainer;
-  if (!node || !node.scrollIntoView) return;
+  // In the full-text view the highlighted span's parent can be an entire
+  // <p> spanning thousands of characters — centering THAT means the active
+  // sentence lands wherever it happens to fall inside the paragraph, not
+  // where Daniel is actually reading. Scroll to the highlight's own
+  // bounding rect instead; scrollIntoView() on the parent is only a
+  // fallback for when the rect can't be measured (e.g. it spans a node
+  // that isn't laid out).
+  const rect = range.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) {
+    const node = range.startContainer.nodeType === Node.TEXT_NODE
+      ? range.startContainer.parentElement : range.startContainer;
+    if (!node || !node.scrollIntoView) return;
+    _raAutoScrolling = true;
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(() => { _raAutoScrolling = false; }, 600);
+    return;
+  }
+  // Don't fight the reader every single cue — only correct course once the
+  // highlight has actually drifted out of the comfortable reading band.
+  // _raJumpToFollow() passes force=true because there the user explicitly
+  // asked to jump back to where playback is.
+  const vh = window.innerHeight;
+  if (!force && rect.top >= vh * 0.15 && rect.bottom <= vh * 0.75) return;
   _raAutoScrolling = true;
-  node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  window.scrollTo({
+    top: Math.max(0, window.scrollY + rect.top - vh * _RA_SCROLL_ANCHOR),
+    behavior: 'smooth',
+  });
   setTimeout(() => { _raAutoScrolling = false; }, 600);
 }
 

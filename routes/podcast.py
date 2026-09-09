@@ -876,7 +876,7 @@ def get_fulltext(episode_id: int, lang: str = "zh"):
 
 
 @router.post("/api/podcast/episodes/{episode_id}/fulltext")
-def create_fulltext(episode_id: int, lang: str = "zh"):
+def create_fulltext(episode_id: int, lang: str = "zh", force: bool = False):
     """Generate the full-text reading version on request (#972).
 
     Synchronous: it is a chain of free Google Translate calls, seconds for a
@@ -884,11 +884,28 @@ def create_fulltext(episode_id: int, lang: str = "zh"):
     state to poll. On failure nothing is written — the same contract as
     every other rendition (#804): never store source-language text under a
     target language's name.
+
+    `force` (#1104) discards a cached fulltext and rebuilds it — used by the
+    detail page's "Regenerate full text" button for rows generated before
+    text_to_paragraph_html() started splitting into multiple <p>s. A
+    regenerated fulltext's TEXT no longer matches whatever read-along audio
+    track was built against the old, unparagraphed version — its cue char
+    offsets index into a source_text string that's now stale — so the
+    'fulltext' variant track (and its saved playback position) is deleted
+    too, forcing the frontend to rebuild it next time Read along is pressed.
     """
     if not database.get_episode(episode_id):
         raise HTTPException(404, "Episode not found")
     try:
-        result = knowledge.rendition.get_or_create_fulltext(episode_id, lang, generate=True)
+        result = knowledge.rendition.get_or_create_fulltext(
+            episode_id, lang, generate=True, force=force)
     except knowledge.rendition.RenditionError as e:
         raise HTTPException(502, str(e))
+    if force:
+        audio_paths = database.delete_audio_track("episode", episode_id, lang, "fulltext")
+        for audio_path in audio_paths:
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass  # cleanup best-effort — a successful regenerate must not 500 over this
     return {"status": "ready", **result}

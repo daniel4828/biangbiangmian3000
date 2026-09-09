@@ -188,6 +188,43 @@ def delete_audio_bookmark(bookmark_id: int) -> bool:
     return deleted
 
 
+def delete_audio_track(owner_kind: str, owner_id: int, lang: str, variant: str) -> list[str]:
+    """Delete a single (owner_kind, owner_id, lang, variant) track — used by
+    #1104's "Regenerate full text" flow, where only the fulltext rendition's
+    text changed and every OTHER variant/lang for the same owner (a summary
+    read-along, another language's fulltext) must be left untouched.
+
+    Returns the audio_path of the deleted row's mp3 if it's now safe to
+    unlink from disk (see _unreferenced_paths), else []. Also clears the
+    matching audio_progress row — a saved playback position pointing at text
+    that no longer exists is worse than no position at all. Deliberately
+    does NOT touch audio_bookmarks: those are moments Daniel chose to mark,
+    and a re-paginated transcript regenerating its audio shouldn't wipe out
+    something he did on purpose (contrast with delete_audio_tracks(), which
+    runs when the whole owner is gone and bookmarks genuinely have nothing
+    left to point at)."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT id, audio_path FROM audio_tracks
+           WHERE owner_kind = ? AND owner_id = ? AND lang = ? AND variant = ?""",
+        (owner_kind, owner_id, lang, variant),
+    ).fetchall()
+    safe_to_delete = _unreferenced_paths(conn, rows)
+    conn.execute(
+        """DELETE FROM audio_tracks
+           WHERE owner_kind = ? AND owner_id = ? AND lang = ? AND variant = ?""",
+        (owner_kind, owner_id, lang, variant),
+    )
+    conn.execute(
+        """DELETE FROM audio_progress
+           WHERE owner_kind = ? AND owner_id = ? AND lang = ? AND variant = ?""",
+        (owner_kind, owner_id, lang, variant),
+    )
+    conn.commit()
+    conn.close()
+    return safe_to_delete
+
+
 def delete_audio_tracks(owner_kind: str, owner_id: int) -> list[str]:
     """Delete every track belonging to (owner_kind, owner_id) — called when
     the owner itself is deleted. Returns the audio_path of every mp3 that is
