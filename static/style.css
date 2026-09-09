@@ -5841,8 +5841,18 @@ body.gloss-on .tap-word-gloss {
 
 /* Every other word's gloss (#1018) — layered in after the new-word pass
    once the full-text word list arrives async, same reveal mechanism as
-   .tap-word (#996) but not clickable: only new words get the tap panel
-   (★ List / ✓ Known), everything else is a glance-only translation. */
+   .tap-word (#996). Tappable too (#1110): a phone has no Ctrl key, so tapping
+   is the only way to ask about one single word there. The panel it opens has
+   no ★ List / ✓ Known (those are for new words) — just pinyin + gloss, plus
+   📖 Details when the word has an entry. Left visually unmarked on purpose:
+   almost every word in a text is one of these, and underlining them all would
+   underline the text. */
+.gloss-word {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.gloss-word:active { background: var(--hover-bg); }
+
 body.gloss-on .gloss-word {
   display: inline-flex;
   flex-direction: column;
