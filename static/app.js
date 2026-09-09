@@ -8372,7 +8372,7 @@ function _makeWordsTappable(root, glossText) {
         span.appendChild(document.createTextNode(match[0]));
         // The gloss rides along in the markup from the start (#996), hidden by
         // CSS. Building it on demand would mean re-walking the whole text every
-        // time Cmd is pressed — and it must appear in the same frame as the
+        // time Ctrl is pressed — and it must appear in the same frame as the
         // key, not after a reflow the eye can follow.
         const w = _wordTableWords[wordIdx];
         const gloss = w && (w.definition_de || w.definition || '');
@@ -8403,7 +8403,7 @@ function _makeWordsTappable(root, glossText) {
   if (!root.dataset.tapBound) {
     root.dataset.tapBound = '1';
     root.addEventListener('click', (e) => {
-      const span = e.target.closest?.('.tap-word, .known-word');
+      const span = e.target.closest?.('.tap-word, .gloss-word');
       if (!span) return;
       e.preventDefault();
       // #1049: the read-along player binds its own click-to-seek listener on
@@ -8491,7 +8491,10 @@ function _wrapAllWordGlosses(root, words) {
     const gloss = (w.definition_de || '').trim();
     // A word with an entry stays tappable even without a gloss — the entry
     // itself is the answer, and it is a better one than a machine translation.
-    if (!key || (!gloss && !w.word_id)) return;
+    // #1042 used to drop a word with no gloss and no entry. It is still worth
+    // wrapping (#1110): the panel shows its pinyin, and a word that opens
+    // nothing at all reads as "the app doesn't know this word".
+    if (!key) return;
     const k = isZh ? key : key.toLowerCase();
     if (index.has(k)) return;
     index.set(k, gloss);
@@ -8527,7 +8530,10 @@ function _wrapAllWordGlosses(root, words) {
       const span = document.createElement('span');
       const entry = _glossWordIndex.get(key);
       span.className = entry && entry.word_id ? 'gloss-word known-word' : 'gloss-word';
-      if (entry && entry.word_id) span.dataset.glossKey = key;
+      // Every word carries the key, entry or not (#1110): tapping any word
+      // must show its pinyin + gloss. Only the class differs, and with it
+      // whether the panel offers 📖 Details.
+      span.dataset.glossKey = key;
       span.appendChild(document.createTextNode(match[0]));
       const glossText = index.get(key);
       if (glossText) {
@@ -8552,9 +8558,11 @@ function _wrapAllWordGlosses(root, words) {
 // already in the DOM, so both triggers are one class on <body> — no re-render,
 // no reflow beyond the line height growing.
 //
-// Desktop: hold Cmd (or Ctrl on a keyboard without one) and everything is
-// glossed; release and it is gone. A held key is the right shape for it —
-// it is a glance, not a mode to remember to turn off.
+// Desktop: hold Ctrl and everything is glossed; release and it is gone.
+// A held key is the right shape for it — it is a glance, not a mode to
+// remember to turn off. Cmd is deliberately *not* a trigger any more (#1110):
+// on a Mac it is the modifier of every browser shortcut (Cmd+T/W/L/Tab), so
+// the text lit up on the way to doing something else.
 // Phone: swipe left across the text toggles it, swipe left again clears it.
 // A phone has no modifier key, and a tap is already taken by the popup.
 function _setGlossMode(on) {
@@ -8562,7 +8570,7 @@ function _setGlossMode(on) {
 }
 
 function _glossKeyIsModifier(e) {
-  return e.key === 'Meta' || e.key === 'Control';
+  return e.key === 'Control';
 }
 
 let _glossKeysBound = false;
@@ -8576,8 +8584,8 @@ function _bindGlossKeys() {
   document.addEventListener('keyup', (e) => {
     if (_glossKeyIsModifier(e)) _setGlossMode(false);
   });
-  // Cmd+Tab away and the keyup lands in the other window: without this the
-  // page would still be fully glossed when Daniel comes back.
+  // Switch windows while holding the key and the keyup lands in the other
+  // window: without this the page would still be fully glossed on return.
   window.addEventListener('blur', () => _setGlossMode(false));
 }
 
@@ -8652,16 +8660,20 @@ function _openWordActions(idx, anchor) {
   document.addEventListener('keydown', _wordActionsEscape);
 }
 
-// The panel for a word Daniel already has an entry for (#1042). Same shape as
-// _openWordActions above — word, pinyin, gloss, buttons — but the two actions
-// there (★ List / ✓ Known) make no sense for a word that is already in the
-// collection. What it offers instead is the entry itself: everything the app
-// has saved about the word (examples, hanzi breakdown, measure words,
-// synonyms, card state), rendered by the one existing detail page.
+// The panel for any word that is not new (#1042) — one he has an entry for,
+// or simply one the annotator did not flag. Same shape as _openWordActions
+// above — word, pinyin, gloss — but without ★ List / ✓ Known, which only make
+// sense for a new word. When there IS an entry it also offers the entry
+// itself: examples, hanzi breakdown, measure words, synonyms, card state,
+// rendered by the one existing detail page.
+//
+// A word with no entry still opens this panel (#1110): on a phone there is no
+// Ctrl to hold, so a tap is the only way to ask about one single word, and a
+// word that answers nothing at all reads as one the app failed to recognise.
 function _openKnownWordActions(key, anchor) {
   closeWordActions();
   const w = key && _glossWordIndex.get(key);
-  if (!w || !w.word_id) return;
+  if (!w) return;
   const gloss = w.definition_de || w.definition || '';
 
   const box = document.createElement('div');
@@ -8674,13 +8686,13 @@ function _openKnownWordActions(key, anchor) {
       <button class="word-actions-close" aria-label="Close">✕</button>
     </div>
     ${gloss ? `<p class="word-actions-gloss">${_escHtml(gloss)}</p>` : ''}
-    <div class="word-actions-buttons">
+    ${w.word_id ? `<div class="word-actions-buttons">
       <button class="word-table-btn" id="word-actions-detail">📖 Details</button>
-    </div>`;
+    </div>` : ''}`;
   document.body.appendChild(box);
 
   box.querySelector('.word-actions-close').onclick = closeWordActions;
-  box.querySelector('#word-actions-detail').onclick = () => {
+  if (w.word_id) box.querySelector('#word-actions-detail').onclick = () => {
     const id = w.word_id;
     closeWordActions();
     // #1077: a popup, not a page navigation — this word was just tapped
@@ -10713,7 +10725,7 @@ function revealAnswer() {
     document.getElementById('sentence-row-back').style.display = 'flex';
     document.getElementById('sentence-back').innerHTML = renderSentence();
     // #1077: the back is where the answer is already out, so every word in the
-    // sentence may as well be lookup-able — Cmd/swipe for the inline glosses,
+    // sentence may as well be lookup-able — Ctrl/swipe for the inline glosses,
     // a tap on a word he already has an entry for for the entry itself.
     // setWordTable([]) first: there is no word table on a card, and
     // _makeWordsTappable would otherwise wrap against whatever list the
