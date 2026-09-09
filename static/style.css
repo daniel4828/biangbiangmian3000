@@ -6319,18 +6319,30 @@ body.gloss-on .gloss-word {
    above every view. Hidden entirely (display:none, set from app.js) until
    playback has started at least once this session — same "no empty chip"
    rule #tasks-btn already follows a few rules up (#821). */
+/* #1105: a centered, floating bar — the Spotify shape Daniel asked for —
+   instead of the original edge-to-edge strip. A full-width bar puts its
+   buttons at opposite ends of a wide desktop window, far from where the eye
+   (and the mouse) actually is; a narrow floating pill keeps everything
+   together regardless of viewport width. */
 #mini-player {
   position: fixed;
-  left: 0; right: 0; bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(10px, env(safe-area-inset-bottom));
+  width: min(720px, calc(100% - 20px));
   /* Deliberately below the z-index:100+ tier every modal/overlay in this file
      uses (add-word-modal, sentence-question-overlay, fsrs-inspector, …) — a
      modal must always cover this bar, never sit behind it. Still comfortably
      above ordinary scrolling content (z-index: auto or single digits). */
   z-index: 90;
   background: var(--card);
-  border-top: 1px solid var(--border);
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, .10);
-  padding-bottom: env(safe-area-inset-bottom);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  /* Clips #mini-player-track's square corners to the bar's own rounding —
+     without this the progress strip at the top would poke square corners
+     out past the rounded card beneath it. */
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, .16);
 }
 #mini-player-track { height: 3px; background: var(--border); }
 #mini-player-fill {
@@ -6429,13 +6441,150 @@ body.gloss-on .gloss-word {
   overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px 10px 0 0;
+  /* #1105: the bar below is no longer flush with the viewport edge (it's a
+     floating pill now), so the panel's top corners get the same rounding as
+     its bottom ones instead of squaring off against a since-removed edge. */
+  border-radius: 10px;
   box-shadow: 0 -8px 24px rgba(0, 0, 0, .18);
   padding: 10px 12px;
   z-index: 40;
   text-align: left;
 }
 .mini-player-queue-clear { margin-top: 8px; width: 100%; }
+
+/* ── Full-screen "now playing" (#1105) ────────────────────────────────────
+   A second VIEW of _raPlayer (see app.js's own comment at the top of its
+   "Full-screen player" section) — not a second copy of playback state, just
+   a bigger place to look at the same one. */
+#ra-fullscreen {
+  position: fixed;
+  inset: 0;
+  /* Must sit above the mini player (z-index: 90, see above) since this is
+     opened FROM it, but strictly below .word-actions (z-index: 1200) — this
+     screen's whole reason for existing includes tapping words for the ★
+     List / ✓ Known panel, and that panel must never render underneath it. */
+  z-index: 95;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+#ra-fs-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: max(12px, env(safe-area-inset-top)) 14px 8px;
+}
+#ra-fs-collapse, #ra-fs-goto {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 6px 8px;
+  flex-shrink: 0;
+}
+#ra-fs-title {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#ra-fs-text {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 20px 24px;
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
+/* Spotify-lyrics-style dimming: read lines fade, the current one is full
+   brightness and bold. Plain class toggles rather than the CSS Custom
+   Highlight API this app uses elsewhere (see app.js's #1049 comment on
+   _raHighlight) — each line here is already its own DOM element, so there's
+   no cross-markup Range to worry about, unlike the detail-page text where a
+   cue can straddle a <b> boundary. */
+.ra-fs-line {
+  font-size: 22px;
+  line-height: 1.7;
+  margin: 0 0 14px;
+  cursor: pointer;
+  color: var(--muted);
+  opacity: .45;
+  transition: opacity .2s, color .2s;
+}
+.ra-fs-line.is-past { opacity: .3; }
+.ra-fs-line.is-active { opacity: 1; color: var(--text); font-weight: 600; }
+#ra-fs-foot {
+  flex-shrink: 0;
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 10px 20px max(16px, env(safe-area-inset-bottom));
+}
+#ra-fs-seek { width: 100%; }
+#ra-fs-times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+#ra-fs-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+#ra-fs-back, #ra-fs-fwd {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 4px;
+}
+#ra-fs-toggle {
+  width: 60px;
+  height: 60px;
+  border-radius: 999px;
+  font-size: 24px;
+  line-height: 1;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+/* Equivalents of .knowledge-tts-rate's look, written out fresh rather than
+   applying that class here — sharing it would mean this screen's future
+   tweaks risk leaking into the detail-page toolbar, and vice versa. */
+#ra-fs-rate, #ra-fs-sleep {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  padding: 4px 8px;
+}
+#ra-fs-sleep-remaining {
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+@media (max-width: 560px) {
+  .ra-fs-line { font-size: 19px; }
+  #ra-fs-text { padding-left: 14px; padding-right: 14px; }
+}
 
 /* ── Browse on phones (#827) ─────────────────────────────
    Browse had no mobile breakpoint at all: a 200px fixed sidebar next to

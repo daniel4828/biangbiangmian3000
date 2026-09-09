@@ -6676,13 +6676,20 @@ function _raSleepFire() {
 // _raOnTimeUpdate while a numeric timer is running, so the countdown text
 // actually counts down instead of only updating on the next play/pause.
 function _raUpdateSleepUI() {
-  ['readalong', 'mini-player'].forEach(prefix => {
-    const sel = document.getElementById(`${prefix}-sleep-select`);
+  // #1105: the full-screen player's pair doesn't follow the `${prefix}-
+  // sleep-select`/`${prefix}-sleep-remaining` naming the other two use (its
+  // ids are ra-fs-sleep / ra-fs-sleep-remaining in index.html) — mapped
+  // explicitly rather than renaming its ids to fit the pattern, since
+  // nothing else references them.
+  [['readalong', 'readalong-sleep-select', 'readalong-sleep-remaining'],
+   ['mini-player', 'mini-player-sleep-select', 'mini-player-sleep-remaining'],
+   ['ra-fs', 'ra-fs-sleep', 'ra-fs-sleep-remaining']].forEach(([, selId, remId]) => {
+    const sel = document.getElementById(selId);
     if (sel) {
-      if (!sel.options.length) sel.innerHTML = _raSleepOptionsHtml();  // mini player's select starts empty — see index.html
+      if (!sel.options.length) sel.innerHTML = _raSleepOptionsHtml();  // mini player's/full-screen's selects start empty — see index.html
       sel.value = _raSleepMode === 'end' ? 'end' : (_raSleepMode || '');
     }
-    const remaining = document.getElementById(`${prefix}-sleep-remaining`);
+    const remaining = document.getElementById(remId);
     if (!remaining) return;
     // No timer running -> no countdown text at all, not an empty chip (#821's
     // "hide the whole thing when there's nothing to show" rule, applied here).
@@ -6716,6 +6723,7 @@ function _raUpdateBar() {
   // change" logic.
   _raUpdateMiniPlayer();
   _raUpdateSleepUI();  // #1087
+  _raFsUpdate();  // #1105: the full-screen view's own repaint of the same state change
 }
 
 // #1078: jumping straight into the middle of a track without saying so would
@@ -7371,12 +7379,18 @@ function _raUpdateMiniPlayer() {
   // The bar is position:fixed, so without this it sits ON TOP of whatever is
   // at the bottom of the page — the last row of a list, the last button of a
   // form. Measured rather than hardcoded: the bar's real height includes
-  // env(safe-area-inset-bottom), which differs per device.
-  if (el) document.body.style.paddingBottom = visible ? `${el.offsetHeight}px` : '';
+  // env(safe-area-inset-bottom), which differs per device. +16 (#1105) is the
+  // gap the bar now floats above the viewport edge by (see #mini-player's
+  // `bottom` in style.css) — the bar itself no longer reaches the edge, so
+  // page content needs that same gap reserved underneath it too.
+  if (el) document.body.style.paddingBottom = visible ? `${el.offsetHeight + 16}px` : '';
   if (!visible) {
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.playbackState = 'none'; } catch (_) {}
     }
+    // #1105: an empty full-screen player is meaningless — same "nothing to
+    // show controls for" condition that hides the mini player itself.
+    if (_raFsOpen) _raCloseFullscreen();
     return;
   }
   if (el) {
@@ -7420,6 +7434,7 @@ function _raUpdateMiniProgress() {
   const durationMs = p.durationMs || ((_sharedAudio && isFinite(_sharedAudio.duration)) ? _sharedAudio.duration * 1000 : 0);
   const posMs = typeof p.lastMs === 'number' ? p.lastMs : 0;
   fill.style.width = durationMs > 0 ? `${Math.min(100, Math.max(0, posMs / durationMs * 100))}%` : '0%';
+  _raFsUpdateProgress();  // #1105: the same cheap per-tick repaint, for the full-screen seek bar
 }
 
 function _raMiniToggle() {
@@ -7456,6 +7471,265 @@ function _raOpenOwner(nav) {
   // second copy of this dispatch.
   if (nav.kind === 'episode') openKnowledgeItem(nav.id, nav.variant);
   else if (nav.kind === 'book_page') openBook(nav.bookId, nav.pageNo, nav.lang);
+}
+
+// ── Full-screen player (#1105) ──────────────────────────────────────────
+//
+// This is the THIRD view of _raPlayer (after the detail-page toolbar's
+// _raBarHtml and the persistent mini bar's _raUpdateMiniPlayer above) — not
+// a second copy of playback state, and every control here hands off to the
+// exact same functions those two already use (toggleReadalong via
+// _raMiniToggle, _raPlayAt, _raSetSleepTimer, setKnowledgeTtsRate). The only
+// genuinely new piece of state is which line is highlighted on THIS screen
+// and whether it's open at all.
+
+let _raFsOpen = false;
+let _raFsRenderedKey = '';   // _raPlayer.key when the lines below were last built — guards against rebuilding the whole line list on every ~4x/second tick
+let _raFsActiveIdx = -1;
+let _raFsSeeking = false;    // true while a pointer is down on #ra-fs-seek — see _raFsUpdateProgress
+let _raFsWordTableKey = '';  // _raPlayer.key whose words are currently loaded into the global word table, or '' if we haven't touched it
+
+function _raOpenFullscreen() {
+  if (!_raPlayer.key || !_raPlayer.audioUrl) return;  // nothing playing/loaded — nothing to show full-screen
+  const el = document.getElementById('ra-fullscreen');
+  if (!el) return;
+  el.style.display = 'flex';
+  _raFsOpen = true;
+  // Locks the page underneath from scrolling behind this full-bleed overlay
+  // — same reasoning as any other full-screen modal in this app.
+  document.body.style.overflow = 'hidden';
+  _raBindFsKeys();
+  _raFsRenderLines();
+  _raFsUpdate();
+  _raFsUpdateProgress();
+}
+
+function _raCloseFullscreen() {
+  const el = document.getElementById('ra-fullscreen');
+  if (el) el.style.display = 'none';
+  _raFsOpen = false;
+  document.body.style.overflow = '';
+  // #1105: if opening this screen borrowed the global word table from
+  // whatever detail page was open underneath, hand it back now — otherwise
+  // that page's own ★ List / ✓ Known buttons would keep pointing at OUR
+  // words after we've left. _raFsRenderLines() is the only place that ever
+  // sets _raFsWordTableKey, so an empty value here means it never touched
+  // the table and there's nothing to restore.
+  if (_raFsWordTableKey) {
+    const owner = { kind: _raPlayer.ownerKind, id: _raPlayer.ownerId,
+                    lang: _raPlayer.lang, variant: _raPlayer.variant };
+    _raFsWordTableKey = '';
+    _raRerenderBookmarkOwner(owner);
+  }
+}
+
+// "Open this item's page" — reuses _raMiniOpen's own dispatch (_raOpenOwner)
+// rather than a second copy of "turn a nav descriptor into a screen".
+function _raFsGoToItem() {
+  _raCloseFullscreen();
+  _raMiniOpen();
+}
+
+let _raFsKeysBound = false;
+
+function _raBindFsKeys() {
+  if (_raFsKeysBound) return;
+  _raFsKeysBound = true;
+  document.addEventListener('keydown', (e) => {
+    if (_raFsOpen && e.key === 'Escape') _raCloseFullscreen();
+  });
+}
+
+// Builds the one-line-per-cue text and wires up word-tapping — only when the
+// track has actually changed (_raFsRenderedKey guard), never on the timer
+// tick that drives highlighting.
+function _raFsRenderLines() {
+  const player = _raPlayer;
+  if (_raFsRenderedKey === player.key) return;
+  const container = document.getElementById('ra-fs-text');
+  if (!container) return;
+  // Only the CHILDREN are rebuilt — #ra-fs-text itself is a static element in
+  // index.html and never gets recreated, so the delegated click listener
+  // bound below (guarded by container.dataset.fsBound) stays valid across
+  // every track switch; re-binding it here would stack a second listener on
+  // the same node each time the track changes.
+  container.innerHTML = '';
+  player.cues.forEach((cue, idx) => {
+    const line = document.createElement('div');
+    line.className = 'ra-fs-line';
+    line.dataset.idx = String(idx);
+    // Built with textContent, not innerHTML — this text comes from a
+    // transcript/translation, never trusted markup (same rule as every
+    // other AI/scraped text in this app).
+    line.textContent = cue.text || '';
+    container.appendChild(line);
+  });
+  _raFsActiveIdx = -1;  // the old highlighted element no longer exists after the rebuild above
+
+  // #1105: this screen needs a tappable word list too. Reuse it if it's
+  // already loaded for this exact track+lang; otherwise fetch one — same
+  // "new-words" endpoint the detail pages use (#1006), not a second
+  // word-lookup path.
+  if (_raFsWordTableKey !== player.key) {
+    const fullText = player.cues.map(c => c.text || '').join('\n');
+    api('POST', '/api/new-words', { text: fullText, lang: player.lang, mode: 'new' })
+      .then(data => {
+        if (_raFsRenderedKey !== player.key) return;  // track changed again while this was in flight
+        setWordTable(data.words || [], player.lang);
+        _raFsWordTableKey = player.key;
+        _makeWordsTappable(container, fullText);
+      })
+      .catch(e => {
+        const hint = document.createElement('p');
+        hint.className = 'keymap-hint';
+        hint.textContent = 'Could not load the word list — tapping words is unavailable right now.';
+        container.insertBefore(hint, container.firstChild);
+      });
+  } else {
+    // Already the right table (e.g. reopening full-screen for the same
+    // track without navigating away) — still needs the tap spans wired up
+    // on this freshly rebuilt container.
+    _makeWordsTappable(container, player.cues.map(c => c.text || '').join('\n'));
+  }
+
+  if (!container.dataset.fsBound) {
+    container.dataset.fsBound = '1';
+    container.addEventListener('click', (e) => {
+      // Tapping a word looks up its meaning — it must never ALSO jump
+      // playback, same rule _raBindContainerClicks already enforces for the
+      // detail-page text.
+      if (e.target.closest && e.target.closest('.tap-word, .known-word, .gloss-word')) return;
+      const line = e.target.closest('.ra-fs-line');
+      if (!line) return;
+      _raPlayAt(Number(line.dataset.idx));
+    });
+  }
+
+  _raFsRenderedKey = player.key;
+}
+
+// Repaints title/toggle/rate/sleep controls and the active-line highlight —
+// called from _raUpdateBar, i.e. on every real state change (play/pause/seek/
+// stop/idx change), never from the raw timer tick.
+function _raFsUpdate() {
+  if (!_raFsOpen) return;
+  // The queue (#1084) can advance to a different item while this screen is
+  // open — the guard inside makes this a no-op for the common case where the
+  // track hasn't changed, so it's cheap enough to check on every repaint.
+  _raFsRenderLines();
+  const player = _raPlayer;
+  const title = document.getElementById('ra-fs-title');
+  if (title) title.textContent = player.title || '…';
+  const toggle = document.getElementById('ra-fs-toggle');
+  if (toggle) toggle.textContent = player.playing ? '⏸' : '▶';
+
+  const rate = document.getElementById('ra-fs-rate');
+  if (rate) {
+    if (!rate.options.length) {
+      rate.innerHTML = KNOWLEDGE_TTS_RATES.map(r => `<option value="${r}">${r}×</option>`).join('');
+    }
+    rate.value = String(_kTtsRate);
+  }
+  // The sleep <select>/countdown pair is filled by _raUpdateSleepUI's own
+  // ra-fs branch (see there) — not duplicated here.
+
+  _raFsSetActive(player.activeIdx);
+}
+
+// Highlights the active line and dims everything before it. Cheap on the
+// common case (idx unchanged -> early return, since this runs every tick via
+// _raOnTimeUpdate -> _raUpdateBar); when it DOES change, a single pass over
+// all lines is acceptable — the line count is the sentence count of one
+// article/chapter, i.e. low hundreds at most, not the tens of thousands a
+// per-tick full-table scan elsewhere in this file would be unacceptable for.
+function _raFsSetActive(idx) {
+  if (!_raFsOpen || idx === _raFsActiveIdx) return;
+  const container = document.getElementById('ra-fs-text');
+  if (container) {
+    const lines = container.children;
+    for (let i = 0; i < lines.length; i++) {
+      const el = lines[i];
+      el.classList.toggle('is-active', i === idx);
+      el.classList.toggle('is-past', i < idx);
+    }
+    if (idx >= 0 && lines[idx]) {
+      // Scrolls the CONTAINER, not the window — #ra-fs-text has its own
+      // overflow-y:auto (see style.css), unlike the detail-page's
+      // _raScrollToActive which scrolls the whole window.
+      const line = lines[idx];
+      const top = line.offsetTop - container.clientHeight * 0.33;
+      container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    }
+  }
+  _raFsActiveIdx = idx;
+}
+
+// Cheap per-tick repaint (seek bar position + elapsed/total text) — called
+// from _raUpdateMiniProgress, the same ~4x/second choke point the mini
+// player's fill bar already uses, rather than a second timer.
+function _raFsUpdateProgress() {
+  if (!_raFsOpen) return;
+  const player = _raPlayer;
+  const durationMs = player.durationMs || ((_sharedAudio && isFinite(_sharedAudio.duration)) ? _sharedAudio.duration * 1000 : 0);
+  const posMs = typeof player.lastMs === 'number' ? player.lastMs : 0;
+  const pos = document.getElementById('ra-fs-pos');
+  if (pos) pos.textContent = _raFormatMs(posMs);
+  const dur = document.getElementById('ra-fs-dur');
+  if (dur) dur.textContent = _raFormatMs(durationMs);
+  // Don't fight a finger that's mid-drag on the slider — see _raFsSeekInput.
+  if (_raFsSeeking) return;
+  const seek = document.getElementById('ra-fs-seek');
+  if (seek) seek.value = String(durationMs > 0 ? Math.min(1000, Math.max(0, Math.round(posMs / durationMs * 1000))) : 0);
+}
+
+let _raFsSeekTimer = null;
+
+function _raFsSeekInput(value) {
+  _raFsSeeking = true;
+  clearTimeout(_raFsSeekTimer);
+  // Commits the seek a beat after the finger stops moving, rather than on
+  // every input event (dragging fires this continuously) or waiting for a
+  // separate 'change' event this <input type=range> may not reliably send
+  // consistently across touch browsers.
+  _raFsSeekTimer = setTimeout(() => {
+    _raFsSeeking = false;
+    const durationMs = _raPlayer.durationMs ||
+      ((_sharedAudio && isFinite(_sharedAudio.duration)) ? _sharedAudio.duration * 1000 : 0);
+    if (durationMs > 0) _raSeekTo(Number(value) / 1000 * durationMs);
+  }, 150);
+}
+
+// Seeks the shared audio element to an absolute position, WITHOUT
+// re-fetching the file if it's already the one loaded — the general-purpose
+// counterpart _raPlayAt doesn't expose (it always seeks to a CUE boundary,
+// never an arbitrary ms). Used by both ±15s and the seek bar.
+function _raSeekTo(ms) {
+  const player = _raPlayer;
+  if (!player.audioUrl || !player.cues.length) return;
+  const durationMs = player.durationMs ||
+    ((_sharedAudio && isFinite(_sharedAudio.duration)) ? _sharedAudio.duration * 1000 : 0);
+  const clamped = Math.max(0, durationMs > 0 ? Math.min(ms, durationMs) : ms);
+  const idx = _raCueIndexForMs(player.cues, clamped);
+  const a = _sharedAudio;
+  // Only touch currentTime directly if the shared element is actually
+  // holding OUR audio right now (same check toggleReadalong uses to decide
+  // between "resume in place" and "load fresh") — otherwise something else
+  // preempted it since we last played, and the correct path is _raPlayAt,
+  // which reloads the right source and seeks after it's ready.
+  if (a && a.src && a.src === new URL(player.audioUrl, location.href).href) {
+    try { a.currentTime = clamped / 1000; } catch (_) {}
+    player.lastMs = clamped;
+    player.activeIdx = idx;
+    _raHighlight(idx);
+    _raUpdateBar();
+  } else {
+    _raPlayAt(idx, clamped);
+  }
+}
+
+function _raSeekBy(seconds) {
+  if (!_raPlayer.key) return;
+  _raSeekTo((_raPlayer.lastMs || 0) + seconds * 1000);
 }
 
 // ── Lock screen / headset / background controls (#1083, the other half of

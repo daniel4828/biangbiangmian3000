@@ -1505,7 +1505,10 @@
   </div>
   <div id="mini-player-track"><div id="mini-player-fill"></div></div>
   <div id="mini-player-row">
-    <button id="mini-player-title" onclick="_raMiniOpen()" title="Back to read-along"></button>
+    <!-- #1105: opens the full-screen "now playing" view, not the item's own
+         detail page — _raMiniOpen() (which still does that) is now reached
+         from a button INSIDE the full-screen view instead. -->
+    <button id="mini-player-title" onclick="_raOpenFullscreen()" title="Open player"></button>
     <!-- #1087: sleep timer — same two ids/functions as the detail toolbar's
          copy in app.js's _raBarHtml (_raSetSleepTimer/_raUpdateSleepUI), just
          a second place to reach them from. This <select> starts empty; its
@@ -1525,6 +1528,32 @@
     <button id="mini-player-queue-btn" onclick="_raToggleQueuePanel()" title="Up next"></button>
   </div>
   <div id="mini-player-note" style="display:none"></div>
+</div>
+
+<!-- #1105: full-screen "now playing" (the Spotify shape Daniel asked for).
+     A SECOND VIEW of _raPlayer, never a second copy of its state — same rule
+     the mini player above already follows (#1082). Hidden until
+     _raOpenFullscreen() shows it. -->
+<div id="ra-fullscreen" style="display:none">
+  <div id="ra-fs-head">
+    <button id="ra-fs-collapse" onclick="_raCloseFullscreen()" title="Close">⌄</button>
+    <div id="ra-fs-title"></div>
+    <button id="ra-fs-goto" onclick="_raFsGoToItem()" title="Open this item's page">↗</button>
+  </div>
+  <div id="ra-fs-text"></div>
+  <div id="ra-fs-foot">
+    <input type="range" id="ra-fs-seek" min="0" max="1000" value="0"
+           oninput="_raFsSeekInput(this.value)" title="Seek">
+    <div id="ra-fs-times"><span id="ra-fs-pos">0:00</span><span id="ra-fs-dur">0:00</span></div>
+    <div id="ra-fs-controls">
+      <select id="ra-fs-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed"></select>
+      <button id="ra-fs-back" onclick="_raSeekBy(-15)" title="Back 15 seconds">⏪ 15</button>
+      <button id="ra-fs-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
+      <button id="ra-fs-fwd" onclick="_raSeekBy(15)" title="Forward 15 seconds">15 ⏩</button>
+      <select id="ra-fs-sleep" onchange="_raSetSleepTimer(this.value)" title="Sleep timer"></select>
+    </div>
+    <span id="ra-fs-sleep-remaining" style="display:none"></span>
+  </div>
 </div>
 </body>
 </html>
