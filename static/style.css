@@ -5802,31 +5802,6 @@ table.fsrs-table td.ivl { font-weight: 700; }
 }
 .tap-word:active { background: var(--hover-bg); }
 
-/* Glosses under the hanzi (#996). Always in the markup, shown only while the
-   modifier key is held (desktop) or after a left swipe (phone) — see
-   _initGlossReveal(). The word becomes an inline-flex column only in that
-   state, so normal reading keeps the browser's own line breaking. */
-.tap-word-gloss { display: none; }
-body.gloss-on .tap-word {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  vertical-align: baseline;
-  line-height: 1.15;
-}
-body.gloss-on .tap-word-gloss {
-  display: block;
-  font-size: 0.6em;
-  font-weight: 400;
-  color: var(--muted);
-  /* A long German gloss must not stretch the line it sits in; the full text
-     is one tap away in the word panel. */
-  max-width: 12em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* A word Daniel already has an entry for (#1042). Tappable like .tap-word,
    but marked much more quietly: on a page he has studied, most words are in
    the collection, so the loud dotted-primary underline of a new word would
@@ -5853,12 +5828,24 @@ body.gloss-on .tap-word-gloss {
 }
 .gloss-word:active { background: var(--hover-bg); }
 
-body.gloss-on .gloss-word {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  vertical-align: baseline;
-  line-height: 1.15;
+/* #1111: gloss-on now shows one whole-block German translation instead of a
+   per-word gloss under every .tap-word/.gloss-word — a paragraph with more
+   than a few new words became an unreadable wall of tiny text. The
+   translation is rendered from a `data-gloss-tr` attribute (filled in lazily
+   by _ensureSentenceGlosses()) via ::after rather than a real DOM node:
+   read-along (#1049) builds its cue↔screen character map by walking this
+   container's TEXT NODES, and one extra text node in the middle of the
+   article would make the whole highlight silently stop matching.
+   Pseudo-element content is invisible to that walk and to textContent. */
+body.gloss-on [data-gloss-tr]::after {
+  content: attr(data-gloss-tr);
+  display: block;
+  font-size: .78em;
+  line-height: 1.45;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 4px;
+  white-space: pre-wrap;
 }
 
 .word-actions {

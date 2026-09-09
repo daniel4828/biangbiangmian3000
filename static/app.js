@@ -6683,6 +6683,12 @@ function _raDomIndex(root) {
   let domText = '';
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
+      // #1111 removed the only code that ever created .tap-word-gloss nodes
+      // (gloss-on now renders one whole-block translation from a CSS ::after,
+      // which is invisible to this walk by construction). The filter stays as
+      // a guard: anything that reintroduces inline gloss TEXT into a
+      // read-along container would silently break the alignment, and that is
+      // not a failure mode worth rediscovering.
       return (node.parentElement && node.parentElement.closest('.tap-word-gloss'))
         ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
     },
@@ -8246,9 +8252,10 @@ function doWordTableKnown(idx, extraBtn) {
 function _makeWordsTappable(root, glossText) {
   if (!root) return;
   // Captured before any DOM mutation below — the #1018 all-words fetch at
-  // the bottom needs the ORIGINAL text (mutating first would fold the
-  // hidden .tap-word-gloss text, already in the DOM per #996, into what
-  // gets sent for segmentation and double-count those words).
+  // the bottom needs the ORIGINAL text. Since #1111 there is no hidden gloss
+  // text node to worry about folding in any more (glosses render from a CSS
+  // ::after on the block, never as DOM text), but the mutation below still
+  // rewraps text into <span>s, so capturing textContent first is still right.
   //
   // The text sent for segmentation. Callers whose DOM is not the plain
   // sentence pass it explicitly — the listening hint (#1006) renders masked
@@ -8302,18 +8309,10 @@ function _makeWordsTappable(root, glossText) {
         span.className = 'tap-word';
         span.dataset.wordIdx = String(wordIdx);
         span.appendChild(document.createTextNode(match[0]));
-        // The gloss rides along in the markup from the start (#996), hidden by
-        // CSS. Building it on demand would mean re-walking the whole text every
-        // time Ctrl is pressed — and it must appear in the same frame as the
-        // key, not after a reflow the eye can follow.
-        const w = _wordTableWords[wordIdx];
-        const gloss = w && (w.definition_de || w.definition || '');
-        if (gloss) {
-          const g = document.createElement('span');
-          g.className = 'tap-word-gloss';
-          g.textContent = gloss;
-          span.appendChild(g);
-        }
+        // #1111: no more per-word gloss text node here — gloss-on now shows one
+        // whole-sentence German translation per block (see _ensureSentenceGlosses
+        // below), rendered from a CSS ::after so it never becomes a text node
+        // read-along's DOM walk or the segmentation call above would trip over.
         frag.appendChild(span);
         cursor = match.index + match[0].length;
       }
@@ -8467,13 +8466,9 @@ function _wrapAllWordGlosses(root, words) {
       // whether the panel offers 📖 Details.
       span.dataset.glossKey = key;
       span.appendChild(document.createTextNode(match[0]));
-      const glossText = index.get(key);
-      if (glossText) {
-        const g = document.createElement('span');
-        g.className = 'tap-word-gloss';
-        g.textContent = glossText;
-        span.appendChild(g);
-      }
+      // #1111: per-word gloss text node removed — see the matching note in
+      // _makeWordsTappable above. index.get(key) is still what feeds the tap
+      // panel's definition text, just not rendered inline any more.
       frag.appendChild(span);
       cursor = match.index + match[0].length;
     }
@@ -8497,8 +8492,106 @@ function _wrapAllWordGlosses(root, words) {
 // the text lit up on the way to doing something else.
 // Phone: swipe left across the text toggles it, swipe left again clears it.
 // A phone has no modifier key, and a tap is already taken by the popup.
+//
+// #1111: what "everything is glossed" shows changed from a per-word German
+// gloss under each word (a wall of tiny text once a paragraph has more than a
+// few new words) to one whole-block German translation, filled in lazily the
+// first time gloss-on is switched on.
 function _setGlossMode(on) {
   document.body.classList.toggle('gloss-on', !!on);
+  if (on) _ensureSentenceGlosses();
+}
+
+// Every container _initGlossReveal() has ever bound to — swipe-in views (book
+// page, knowledge detail, review cards) call it on each fresh render, so this
+// is how _ensureSentenceGlosses() below finds "every place on screen that
+// might need a translation" without each caller having to say so itself.
+let _glossRoots = new Set();
+
+// One translation per distinct (lang, text), same double-Map shape as
+// _allWordsCache/_allWordsResolved above: `_glossTrCache` holds the in-flight
+// promise (so the exact same sentence appearing in two roots at once — e.g.
+// the mini player and the full-screen view — is only ever requested once),
+// `_glossTrResolved` holds the answer ("" included) once it lands.
+let _glossTrCache = new Map();
+let _glossTrResolved = new Map();
+function _glossTrKey(lang, text) { return (lang || 'zh') + '\n' + text; }
+
+// Fires one batched request for `texts` and registers the (shared) resulting
+// promise under every text's cache key before returning — callers must add to
+// _glossTrCache synchronously, before awaiting anything, or two callers
+// racing on the same new text would each start their own request.
+function _fetchSentenceGlossBatch(texts, lang) {
+  const keys = texts.map(t => _glossTrKey(lang, t));
+  const promise = api('POST', '/api/translate-sentences', { texts, lang, target: 'de' })
+    .then(r => {
+      const translations = r.translations || [];
+      keys.forEach((k, i) => _glossTrResolved.set(k, translations[i] || ''));
+    })
+    .catch(e => {
+      // Reading-time convenience, not something that should interrupt
+      // reading. Drop the in-flight entries so the next gloss-on toggle
+      // simply tries again instead of being stuck on a failed promise.
+      console.warn('sentence gloss fetch failed', e);
+      keys.forEach(k => _glossTrCache.delete(k));
+    });
+  keys.forEach(k => _glossTrCache.set(k, promise));
+  return promise;
+}
+
+// The block-level elements sentence translation attaches to. Falls back to
+// the root itself for containers with no <p>/<li>/etc. of their own — e.g. a
+// review card front, which is often just a bare <div>.
+function _glossBlocksIn(root) {
+  const blocks = [...root.querySelectorAll('p, li, blockquote, h1, h2, h3, h4, .ra-fs-line')];
+  return blocks.length ? blocks : [root];
+}
+
+// Fetches and fills in `data-gloss-tr` for every registered gloss root that
+// still needs it. Reads block.textContent directly rather than anything
+// gloss-annotated: since #1111 there is no per-word gloss text node mixed
+// into it any more (translations render from a CSS ::after, see style.css),
+// so the plain text node walk is exactly the sentence as displayed.
+async function _ensureSentenceGlosses() {
+  for (const root of [..._glossRoots]) {
+    if (!root.isConnected) { _glossRoots.delete(root); continue; }
+    if (root.dataset.glossTrPending) continue;   // #1111: Ctrl keydown fires repeatedly
+
+    const blocks = _glossBlocksIn(root)
+      .filter(b => b.dataset.glossTr === undefined && b.textContent.trim());
+    if (!blocks.length) continue;
+
+    root.dataset.glossTrPending = '1';
+    try {
+      const keyOf = b => _glossTrKey(_wordTableLang, b.textContent);
+      // Every distinct text this pass still needs an answer for — a text
+      // already in flight (this root or another) is skipped here and picked
+      // up by the Promise.all below instead of being requested twice.
+      const newTexts = [];
+      const seen = new Set();
+      blocks.forEach(b => {
+        const key = keyOf(b);
+        if (_glossTrCache.has(key) || seen.has(key)) return;
+        seen.add(key);
+        newTexts.push(b.textContent);
+      });
+      if (newTexts.length) _fetchSentenceGlossBatch(newTexts, _wordTableLang);
+
+      await Promise.all(blocks.map(b => _glossTrCache.get(keyOf(b))).filter(Boolean));
+
+      blocks.forEach(b => {
+        // Empty string means translate_batch had nothing useful to say (see
+        // routes/knowledge.py) — leave data-gloss-tr unset so the ::after
+        // rule renders nothing instead of an empty block.
+        const tr = _glossTrResolved.get(keyOf(b));
+        if (tr) b.dataset.glossTr = tr;
+      });
+    } catch (e) {
+      console.warn('sentence gloss fetch failed', e);
+    } finally {
+      delete root.dataset.glossTrPending;
+    }
+  }
 }
 
 function _glossKeyIsModifier(e) {
@@ -8523,6 +8616,11 @@ function _bindGlossKeys() {
 
 function _initGlossReveal(root) {
   _bindGlossKeys();
+  // #1111: register this container so a later gloss-on toggle (Ctrl or swipe,
+  // from anywhere) knows to fill in its sentence translations. Added even on
+  // repeat calls (a Set, so re-adding is a no-op) — the early return just
+  // below is only about not double-binding the swipe listener.
+  _glossRoots.add(root);
   if (root.dataset.glossSwipeBound) return;
   root.dataset.glossSwipeBound = '1';
   let g = null;

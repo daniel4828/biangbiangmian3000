@@ -22,7 +22,9 @@ import knowledge.audio_upload
 import knowledge.files
 import knowledge.ingest
 import knowledge.youtube
+import languages
 import routes.story
+import translator
 from routes.utils import ai_disabled
 
 logger = logging.getLogger(__name__)
@@ -264,6 +266,69 @@ def _with_entry_ids(words: list[dict], lang: str) -> list[dict]:
         if wid:
             w["word_id"] = wid
     return words
+
+
+# ── Whole-sentence translation for the gloss-on overlay (#1111) ────────────
+# Companion to /api/new-words above: that endpoint answers "which words are
+# new", this one answers "what does this block say in German". Both exist so
+# the reading UI (knowledge reader, book reader, review cards, the full-screen
+# player) can offer language help without any AI spend — Google Translate via
+# translator.py, same as everything else under annotate/.
+
+
+class TranslateSentencesRequest(BaseModel):
+    texts: list[str]
+    lang: str = languages.DEFAULT_LANG
+    target: str = "de"
+
+
+_MAX_TRANSLATE_TEXTS = 300
+_MAX_TRANSLATE_CHARS = 40000
+
+
+@router.post("/api/translate-sentences")
+def translate_sentences(body: TranslateSentencesRequest):
+    """Batch-translate whole blocks (paragraphs/sentences) for the gloss-on
+    overlay (#1111), which replaced per-word glosses with a single German
+    translation under each block — a wall of tiny word-by-word glosses was
+    unreadable. Response length always matches `texts` length exactly.
+
+    Never a 500: a translation failure here is a lost convenience during
+    reading, not something that should interrupt it. But it must also never
+    hand back Chinese/French/etc. text disguised as German — see the
+    same-as-source check below, mirroring annotate/romance.py's _glosses().
+    """
+    texts = body.texts or []
+    if not texts:
+        return {"translations": []}
+    if len(texts) > _MAX_TRANSLATE_TEXTS:
+        raise HTTPException(400, f"too many texts (max {_MAX_TRANSLATE_TEXTS})")
+    if sum(len(t) for t in texts) > _MAX_TRANSLATE_CHARS:
+        raise HTTPException(400, f"total text too long (max {_MAX_TRANSLATE_CHARS} chars)")
+    if not languages.is_valid_lang(body.lang):
+        raise HTTPException(400, f"unknown lang: {body.lang}")
+
+    source = languages.get_lang_config(body.lang)["translator_source"]
+    try:
+        translated = translator.translate_batch(texts, target=body.target, source=source)
+    except Exception as e:
+        logger.warning("translate-sentences: batch translation failed — %s", e)
+        return {"translations": ["" for _ in texts]}
+
+    # translate_batch's contract on failure is "return the input unchanged"
+    # (see its docstring / annotate/romance.py's _glosses()) — so a translation
+    # that comes back identical to its source (modulo whitespace/case) means
+    # the call silently didn't happen, not that the text translates to itself.
+    # Passing that through would show Chinese/French text under a "German
+    # translation" label.
+    out = []
+    for src, tr in zip(texts, translated):
+        tr = (tr or "").strip()
+        if tr and tr.lower() != src.strip().lower():
+            out.append(tr)
+        else:
+            out.append("")
+    return {"translations": out}
 
 
 # ── Chat about a knowledge item (#945) ──────────────────────────────────────
