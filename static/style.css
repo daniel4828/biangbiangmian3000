@@ -5837,6 +5837,16 @@ table.fsrs-table td.ivl { font-weight: 700; }
    container's TEXT NODES, and one extra text node in the middle of the
    article would make the whole highlight silently stop matching.
    Pseudo-element content is invisible to that walk and to textContent. */
+/* While a batch is in flight the block shows a quiet placeholder instead of
+   nothing: on a phone "nothing appeared" and "still loading" look identical,
+   and that ambiguity is how #1111 got reported as simply broken. */
+body.gloss-on [data-gloss-busy]::after {
+  content: '…';
+  display: block;
+  font-size: .78em;
+  color: var(--muted);
+  margin-top: 4px;
+}
 body.gloss-on [data-gloss-tr]::after {
   content: attr(data-gloss-tr);
   display: block;

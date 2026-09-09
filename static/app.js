@@ -8499,7 +8499,9 @@ function _wrapAllWordGlosses(root, words) {
 // first time gloss-on is switched on.
 function _setGlossMode(on) {
   document.body.classList.toggle('gloss-on', !!on);
-  if (on) _ensureSentenceGlosses();
+  if (!on) return;
+  _glossErrorShown = false;   // a fresh gesture deserves a fresh answer, error included
+  _ensureSentenceGlosses();
 }
 
 // Every container _initGlossReveal() has ever bound to — swipe-in views (book
@@ -8517,10 +8519,20 @@ let _glossTrCache = new Map();
 let _glossTrResolved = new Map();
 function _glossTrKey(lang, text) { return (lang || 'zh') + '\n' + text; }
 
-// Fires one batched request for `texts` and registers the (shared) resulting
-// promise under every text's cache key before returning — callers must add to
-// _glossTrCache synchronously, before awaiting anything, or two callers
-// racing on the same new text would each start their own request.
+// One request never covers a whole article: the server caps a batch at 300
+// texts / 40000 chars (routes/knowledge.py), and even well under that cap a
+// single Google Translate round trip for an entire transcript takes long
+// enough that nothing would appear for many seconds. So the work is cut into
+// small batches, applied as each one lands, nearest-the-viewport first — the
+// paragraph he is actually looking at gets its translation in about a second
+// instead of after the whole article finished.
+const _GLOSS_BATCH_TEXTS = 40;
+const _GLOSS_BATCH_CHARS = 6000;
+
+// Fires one batched request and registers the (shared) resulting promise
+// under every text's cache key BEFORE returning — the registration has to be
+// synchronous, before anything is awaited, or two callers racing on the same
+// new text would each start their own request.
 function _fetchSentenceGlossBatch(texts, lang) {
   const keys = texts.map(t => _glossTrKey(lang, t));
   const promise = api('POST', '/api/translate-sentences', { texts, lang, target: 'de' })
@@ -8529,11 +8541,10 @@ function _fetchSentenceGlossBatch(texts, lang) {
       keys.forEach((k, i) => _glossTrResolved.set(k, translations[i] || ''));
     })
     .catch(e => {
-      // Reading-time convenience, not something that should interrupt
-      // reading. Drop the in-flight entries so the next gloss-on toggle
-      // simply tries again instead of being stuck on a failed promise.
-      console.warn('sentence gloss fetch failed', e);
+      // Drop the in-flight entries so the next gloss-on toggle simply tries
+      // again instead of being stuck forever on a rejected promise.
       keys.forEach(k => _glossTrCache.delete(k));
+      throw e;   // the caller reports it — see _ensureSentenceGlosses
     });
   keys.forEach(k => _glossTrCache.set(k, promise));
   return promise;
@@ -8547,49 +8558,89 @@ function _glossBlocksIn(root) {
   return blocks.length ? blocks : [root];
 }
 
+// Distance from the middle of the viewport, so the batches below start with
+// what is on screen. getBoundingClientRect() on a few hundred blocks once per
+// toggle is cheap; doing it per batch would not be.
+function _glossViewportDistance(el) {
+  const r = el.getBoundingClientRect();
+  return Math.abs((r.top + r.bottom) / 2 - window.innerHeight / 2);
+}
+
+// Only reported once per toggle even when several batches fail — one banner
+// answers "why is nothing appearing", ten answer it ten times.
+let _glossErrorShown = false;
+
 // Fetches and fills in `data-gloss-tr` for every registered gloss root that
-// still needs it. Reads block.textContent directly rather than anything
-// gloss-annotated: since #1111 there is no per-word gloss text node mixed
-// into it any more (translations render from a CSS ::after, see style.css),
-// so the plain text node walk is exactly the sentence as displayed.
+// still needs it. Reads block.textContent directly: since #1111 there is no
+// per-word gloss text node mixed into it any more (translations render from a
+// CSS ::after, see style.css), so the plain text is exactly the sentence as
+// displayed.
 async function _ensureSentenceGlosses() {
   for (const root of [..._glossRoots]) {
     if (!root.isConnected) { _glossRoots.delete(root); continue; }
-    if (root.dataset.glossTrPending) continue;   // #1111: Ctrl keydown fires repeatedly
+    if (root.dataset.glossTrPending) continue;   // Ctrl keydown fires repeatedly while held
 
-    const blocks = _glossBlocksIn(root)
-      .filter(b => b.dataset.glossTr === undefined && b.textContent.trim());
-    if (!blocks.length) continue;
+    // The text is captured HERE, once, together with its element. Recomputing
+    // the cache key from textContent after an await would silently look up a
+    // different key if anything re-rendered the block in the meantime.
+    const pending = _glossBlocksIn(root)
+      .filter(b => !b.dataset.glossTr && !b.dataset.glossBusy && b.textContent.trim())
+      .map(b => ({ el: b, text: b.textContent }))
+      .sort((a, b) => _glossViewportDistance(a.el) - _glossViewportDistance(b.el));
+    if (!pending.length) continue;
 
     root.dataset.glossTrPending = '1';
+    // Marks these blocks as taken so a second toggle (or another root sharing
+    // them) doesn't queue the same work again while it's in flight; the
+    // ::after rule shows a quiet placeholder for exactly this state, so a slow
+    // article looks like it's loading rather than like nothing happened.
+    pending.forEach(p => { p.el.dataset.glossBusy = '1'; });
     try {
-      const keyOf = b => _glossTrKey(_wordTableLang, b.textContent);
-      // Every distinct text this pass still needs an answer for — a text
-      // already in flight (this root or another) is skipped here and picked
-      // up by the Promise.all below instead of being requested twice.
-      const newTexts = [];
-      const seen = new Set();
-      blocks.forEach(b => {
-        const key = keyOf(b);
-        if (_glossTrCache.has(key) || seen.has(key)) return;
-        seen.add(key);
-        newTexts.push(b.textContent);
-      });
-      if (newTexts.length) _fetchSentenceGlossBatch(newTexts, _wordTableLang);
-
-      await Promise.all(blocks.map(b => _glossTrCache.get(keyOf(b))).filter(Boolean));
-
-      blocks.forEach(b => {
-        // Empty string means translate_batch had nothing useful to say (see
-        // routes/knowledge.py) — leave data-gloss-tr unset so the ::after
-        // rule renders nothing instead of an empty block.
-        const tr = _glossTrResolved.get(keyOf(b));
-        if (tr) b.dataset.glossTr = tr;
-      });
+      let batch = [], chars = 0;
+      const flush = async () => {
+        if (!batch.length) return;
+        const items = batch;
+        batch = []; chars = 0;
+        const texts = [];
+        const seen = new Set();
+        items.forEach(({ text }) => {
+          const key = _glossTrKey(_wordTableLang, text);
+          if (_glossTrCache.has(key) || seen.has(key)) return;
+          seen.add(key);
+          texts.push(text);
+        });
+        if (texts.length) _fetchSentenceGlossBatch(texts, _wordTableLang);
+        await Promise.all(items
+          .map(({ text }) => _glossTrCache.get(_glossTrKey(_wordTableLang, text)))
+          .filter(Boolean));
+        items.forEach(({ el, text }) => {
+          delete el.dataset.glossBusy;
+          // An empty answer means the server had nothing useful to say (see
+          // routes/knowledge.py's same-as-source check) — leave the attribute
+          // unset so ::after renders nothing at all, not an empty line.
+          const tr = _glossTrResolved.get(_glossTrKey(_wordTableLang, text));
+          if (tr) el.dataset.glossTr = tr;
+        });
+      };
+      for (const item of pending) {
+        if (batch.length >= _GLOSS_BATCH_TEXTS || chars + item.text.length > _GLOSS_BATCH_CHARS) {
+          await flush();
+        }
+        batch.push(item);
+        chars += item.text.length;
+      }
+      await flush();
     } catch (e) {
-      console.warn('sentence gloss fetch failed', e);
+      // Visible, not a console.warn: he pressed something and asked for this.
+      // A silent no-op on a phone is indistinguishable from a broken feature —
+      // which is exactly how #1111 was first reported.
+      if (!_glossErrorShown) {
+        _glossErrorShown = true;
+        showError('Could not load the sentence translations: ' + (e.message || 'error'));
+      }
     } finally {
       delete root.dataset.glossTrPending;
+      _glossBlocksIn(root).forEach(b => { delete b.dataset.glossBusy; });
     }
   }
 }
