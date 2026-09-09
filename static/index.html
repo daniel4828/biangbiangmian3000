@@ -1521,6 +1521,14 @@
   <div id="mini-player-note" style="display:none"></div>
 </div>
 
+<!-- #1117: the "show German translations" toggle (#1111's gloss-on mode).
+     Floating rather than parked in one toolbar because the same mode applies
+     in four different screens (review card, knowledge detail, book page, the
+     full-screen player) — one button reachable from all of them beats four
+     copies that can drift apart. Hidden by app.js whenever no readable
+     container is on screen. -->
+<button id="gloss-toggle-btn" style="display:none" onclick="toggleGlossMode()">译</button>
+
 <!-- #1105: full-screen "now playing" (the Spotify shape Daniel asked for).
      A SECOND VIEW of _raPlayer, never a second copy of its state — same rule
      the mini player above already follows (#1082). Hidden until
