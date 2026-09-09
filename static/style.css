@@ -5843,8 +5843,8 @@ table.fsrs-table td.ivl { font-weight: 700; }
    dialog still cover it. Sits above the mini player's own floating bar. */
 #gloss-toggle-btn {
   position: fixed;
-  left: max(12px, env(safe-area-inset-left));
-  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 64px);
+  left: max(8px, env(safe-area-inset-left));
+  bottom: max(8px, env(safe-area-inset-bottom));
   z-index: 96;
   width: 44px;
   height: 44px;
@@ -5863,6 +5863,19 @@ table.fsrs-table td.ivl { font-weight: 700; }
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
+}
+/* #1119: the corner is the right home for it, but the mini player's floating
+   bar lives in that same corner — lift it clear only while that bar is
+   actually on screen (body class set from _raUpdateMiniPlayer). */
+body.mini-player-visible #gloss-toggle-btn {
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 64px);
+}
+/* …except while the full-screen player is open, which covers the mini bar
+   entirely — back to the corner, where its own controls leave room. Must come
+   after the rule above to win: media queries and body classes add no
+   specificity of their own, source order decides. */
+body.ra-fullscreen-open #gloss-toggle-btn {
+  bottom: max(8px, env(safe-area-inset-bottom));
 }
 
 /* While a batch is in flight the block shows a quiet placeholder instead of
