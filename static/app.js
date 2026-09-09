@@ -7259,6 +7259,9 @@ function _raUpdateMiniPlayer() {
   const p = _raPlayer;
   const visible = !!(p.key && p.audioUrl && (p.playing || p.activeIdx >= 0 || p.queueNote));
   if (el) el.style.display = visible ? '' : 'none';
+  // #1119: the gloss toggle shares this corner — it reads this class to know
+  // whether it has to sit above the bar or can stay in the corner.
+  document.body.classList.toggle('mini-player-visible', visible);
   // The bar is position:fixed, so without this it sits ON TOP of whatever is
   // at the bottom of the page — the last row of a list, the last button of a
   // form. Measured rather than hardcoded: the bar's real height includes
@@ -7409,6 +7412,7 @@ function _raOpenFullscreen() {
   if (!el) return;
   el.style.display = 'flex';
   _raFsOpen = true;
+  document.body.classList.add('ra-fullscreen-open');   // #1119: this screen covers the mini bar, so the gloss toggle can use the corner
   // Locks the page underneath from scrolling behind this full-bleed overlay
   // — same reasoning as any other full-screen modal in this app.
   document.body.style.overflow = 'hidden';
@@ -7427,6 +7431,7 @@ function _raCloseFullscreen() {
   const el = document.getElementById('ra-fullscreen');
   if (el) el.style.display = 'none';
   _raFsOpen = false;
+  document.body.classList.remove('ra-fullscreen-open');
   document.body.style.overflow = '';
   // #1105: if opening this screen borrowed the global word table from
   // whatever detail page was open underneath, hand it back now — otherwise
