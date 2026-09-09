@@ -5581,7 +5581,23 @@ async function doGenerateFulltext(force = false) {
 // for that. Costs nothing to add: rate is the browser's audio.playbackRate
 // (#993), so no audio is ever regenerated for a new step.
 const KNOWLEDGE_TTS_RATES = [0.5, 0.6, 0.75, 1, 1.25, 1.5, 1.75, 2];
+// #1109: the full-screen player's rate control (see _raFsRateInput) is a
+// continuous slider, not this preset list — these are the two bounds it's
+// clamped to. Kept next to KNOWLEDGE_TTS_RATES since both describe the same
+// axis, just at two different granularities.
+const RATE_MIN = 0.5, RATE_MAX = 2;
 const _KTTS_CHUNK_MAX = 180;   // chars per request — one edge-tts round trip
+
+// #1109: the two <select>s below (the summary bar's and the read-along
+// toolbar's) both list KNOWLEDGE_TTS_RATES, but the full-screen slider can
+// leave _kTtsRate on a value that isn't one of those presets (e.g. 1.15) —
+// selecting that value on a <select> without a matching <option> silently
+// falls back to the first option, so the dropdown would then claim a speed
+// that isn't the real one. Union the current value in, sorted, deduped.
+function _ttsRateOptionsHtml() {
+  const rates = Array.from(new Set([...KNOWLEDGE_TTS_RATES, _kTtsRate])).sort((a, b) => a - b);
+  return rates.map(r => `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('');
+}
 // Two reading modes (#1017). 'plain' is the original behaviour; 'gloss' reads
 // the German definition of every word Daniel does not know yet, immediately
 // followed by the word itself, and then carries on with the sentence.
@@ -5591,7 +5607,10 @@ const KNOWLEDGE_TTS_MODES = { plain: 'Plain', gloss: '+ Vokabeln' };
 let _kTts = { key: '', chunks: [], idx: -1, playing: false, src: '' };
 let _kTtsRate = (() => {
   const v = parseFloat(localStorage.getItem('knowledgeTtsRate'));
-  return KNOWLEDGE_TTS_RATES.includes(v) ? v : 1;
+  // #1109: this used to require an exact preset match (KNOWLEDGE_TTS_RATES
+  // .includes(v)); the full-screen slider can now persist an arbitrary value
+  // like 1.15, which that check would silently reset to 1 on next launch.
+  return (Number.isFinite(v) && v >= RATE_MIN && v <= RATE_MAX) ? v : 1;
 })();
 let _kTtsMode = (() => {
   const v = localStorage.getItem('knowledgeTtsMode');
@@ -5786,8 +5805,7 @@ function _kTtsBarHtml(ep, lang) {
           `<option value="${v}"${v === _kTtsMode ? ' selected' : ''}>${label}</option>`).join('')}
       </select>
       <select class="knowledge-tts-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed">
-        ${KNOWLEDGE_TTS_RATES.map(r =>
-          `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('')}
+        ${_ttsRateOptionsHtml()}
       </select>
     </div>`;
 }
@@ -5873,12 +5891,17 @@ function setKnowledgeTtsMode(value) {
   if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
 }
 
+// #1109: used to require an exact match in KNOWLEDGE_TTS_RATES — fine for the
+// detail-page/mini-player <select>s, which only ever offer those presets, but
+// the full-screen player (#1109) hands this a continuous slider value, and
+// that check would silently drop anything like 1.15 on the floor.
 function setKnowledgeTtsRate(value) {
   const rate = parseFloat(value);
-  if (!KNOWLEDGE_TTS_RATES.includes(rate)) return;
-  _kTtsRate = rate;
-  try { localStorage.setItem('knowledgeTtsRate', String(rate)); } catch (_) {}
-  if (_sharedAudio) _sharedAudio.playbackRate = rate;   // takes effect mid-chunk
+  if (!Number.isFinite(rate)) return;
+  const clamped = Math.round(Math.min(RATE_MAX, Math.max(RATE_MIN, rate)) * 100) / 100;
+  _kTtsRate = clamped;
+  try { localStorage.setItem('knowledgeTtsRate', String(clamped)); } catch (_) {}
+  if (_sharedAudio) _sharedAudio.playbackRate = clamped;   // takes effect mid-chunk
   // #1083: the lock screen's scrubber math depends on playbackRate — keep it
   // in sync the moment the rate changes, not just on the next timeupdate tick.
   _raUpdateMediaSessionPosition();
@@ -6427,15 +6450,11 @@ function _raBarHtml(owner) {
       <button class="btn-secondary" id="readalong-toggle" onclick="toggleReadalong()">${player.playing ? '⏸ Pause' : '🎧 Read along'}</button>
       <button class="btn-secondary" id="readalong-stop" style="${player.activeIdx >= 0 ? '' : 'display:none'}" onclick="stopReadalong()">■</button>
       <select class="knowledge-tts-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed">
-        ${KNOWLEDGE_TTS_RATES.map(r =>
-          `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('')}
+        ${_ttsRateOptionsHtml()}
       </select>
       <button class="btn-secondary" id="readalong-follow-btn" style="${player.follow ? 'display:none' : ''}" onclick="_raJumpToFollow()">⤓ Follow</button>
       <button class="btn-secondary" onclick="raQueueAddCurrent()" title="Play this next after the current queue">+ Queue</button>
       <button class="btn-secondary" onclick="raAddBookmark()" title="Bookmark this moment (#1086)">☆</button>
-      <select class="knowledge-tts-rate" id="readalong-sleep-select" onchange="_raSetSleepTimer(this.value)"
-              title="Sleep timer (#1087): pause after N minutes, or after this item ends">${_raSleepOptionsHtml()}</select>
-      <span class="keymap-hint" id="readalong-sleep-remaining" style="display:none"></span>
     </div>
     <p class="keymap-hint readalong-note" id="readalong-note"></p>
     ${_raBookmarksHtml(owner)}
@@ -6593,119 +6612,6 @@ function _raSwitchTo(kind, id) {
   else _refreshBookReadalongBar(id);
 }
 
-// ── Sleep timer (#1087, the last #1081 sub-issue) ───────────────────────────
-//
-// Deliberately in-memory ONLY — not persisted to localStorage the way _raQueue
-// is. A sleep timer means "stop playback in N minutes, starting right now";
-// carrying that intent forward into the NEXT time the app happens to open
-// would silently mute audio he never asked to be muted THIS session. Every
-// other _ra* piece of state that IS persisted (progress, queue) describes
-// where something IS, not a one-shot instruction to act on soon — this is the
-// odd one out, and it stays memory-only for exactly that reason.
-let _raSleepMode = null;      // null (off) | 15|30|45|60 (minutes) | 'end' (stop when the current item ends)
-let _raSleepRemainingMs = 0;  // only meaningful while _raSleepMode is a number; counts down PLAYED audio time (see _raOnTimeUpdate), not wall-clock time — see the note there for why
-const _RA_SLEEP_OPTIONS = [15, 30, 45, 60];
-
-// Single source of truth for the <option> list so it only has to be written
-// once even though it appears in two different <select> elements (the
-// detail toolbar's, rebuilt fresh by _raBarHtml every render, and the mini
-// player's static one in index.html, populated lazily by _raUpdateSleepUI
-// below the first time it's touched). `selected` is baked in here so a
-// freshly-rendered toolbar select already shows the right value without a
-// separate follow-up write.
-function _raSleepOptionsHtml() {
-  const cur = String(_raSleepMode || '');
-  const opt = (value, label) => `<option value="${value}"${cur === value ? ' selected' : ''}>${label}</option>`;
-  return opt('', '💤') + _RA_SLEEP_OPTIONS.map(m => opt(String(m), `${m} min`)).join('') +
-    opt('end', 'Until this item ends');
-}
-
-// Shared by both entry points — the mini player's select and the detail
-// toolbar's select (see _raBarHtml) both call this exact function via their
-// onchange; neither has its own copy of "what does picking a duration mean".
-// Picking the placeholder option (value === '') is how re-opening either
-// select and choosing 💤 again cancels an active timer.
-function _raSetSleepTimer(value) {
-  if (!value) {
-    const wasOn = !!_raSleepMode;
-    _raSleepMode = null;
-    _raSleepRemainingMs = 0;
-    _raUpdateSleepUI();
-    if (wasOn) _raSetQueueNote('💤 Sleep timer cancelled');
-    return;
-  }
-  if (value === 'end') {
-    _raSleepMode = 'end';
-    _raSleepRemainingMs = 0;
-  } else {
-    const minutes = parseInt(value, 10);
-    if (!_RA_SLEEP_OPTIONS.includes(minutes)) return;  // an unexpected value from a stale/foreign <option> — do nothing rather than guess
-    _raSleepMode = minutes;
-    _raSleepRemainingMs = minutes * 60 * 1000;
-  }
-  _raUpdateSleepUI();
-}
-
-// Fired when the countdown reaches zero (from _raOnTimeUpdate) — NEVER for
-// 'end' mode, whose own stopping condition is the track's onended handler in
-// _raPlayAt. PAUSES, deliberately not stop()/_raStop(): #1078 already exists
-// so that a pause saves position, and falling asleep mid-book means tomorrow
-// he wants to pick up exactly where the timer caught him — activeIdx and the
-// highlighted sentence are left untouched so the screen still shows that spot
-// the next time this view opens. Must also NOT fall through into
-// _raAdvanceQueue — a timer that "expires" into the next chapter starting up
-// defeats the entire point of setting one.
-function _raSleepFire() {
-  const player = _raPlayer;
-  const a = _sharedAudio;
-  player.playing = false;
-  try { a && a.pause(); } catch (_) {}
-  if (a) player.lastMs = Math.max(0, Math.round((a.currentTime || 0) * 1000));
-  _raSleepMode = null;
-  _raSleepRemainingMs = 0;
-  _raSaveProgress(false);
-  _raUpdateBar();  // repaints the (now paused) toggle button, the mini player, and the sleep select/countdown via _raUpdateSleepUI below
-  _raSetQueueNote('💤 Sleep timer stopped playback');
-}
-
-// Repaints both possible sleep controls — getElementById simply misses for
-// whichever one isn't currently in the DOM (the toolbar's only exists while
-// its detail page is open; the mini player's is static and always present
-// once index.html has loaded, just possibly hidden). Called from _raUpdateBar
-// (state changes: play/pause/seek/stop) and, more cheaply, once per tick from
-// _raOnTimeUpdate while a numeric timer is running, so the countdown text
-// actually counts down instead of only updating on the next play/pause.
-function _raUpdateSleepUI() {
-  // #1105: the full-screen player's pair doesn't follow the `${prefix}-
-  // sleep-select`/`${prefix}-sleep-remaining` naming the other two use (its
-  // ids are ra-fs-sleep / ra-fs-sleep-remaining in index.html) — mapped
-  // explicitly rather than renaming its ids to fit the pattern, since
-  // nothing else references them.
-  [['readalong', 'readalong-sleep-select', 'readalong-sleep-remaining'],
-   ['mini-player', 'mini-player-sleep-select', 'mini-player-sleep-remaining'],
-   ['ra-fs', 'ra-fs-sleep', 'ra-fs-sleep-remaining']].forEach(([, selId, remId]) => {
-    const sel = document.getElementById(selId);
-    if (sel) {
-      if (!sel.options.length) sel.innerHTML = _raSleepOptionsHtml();  // mini player's/full-screen's selects start empty — see index.html
-      sel.value = _raSleepMode === 'end' ? 'end' : (_raSleepMode || '');
-    }
-    const remaining = document.getElementById(remId);
-    if (!remaining) return;
-    // No timer running -> no countdown text at all, not an empty chip (#821's
-    // "hide the whole thing when there's nothing to show" rule, applied here).
-    if (_raSleepMode === 'end') {
-      remaining.style.display = '';
-      remaining.textContent = '💤 until end';
-    } else if (typeof _raSleepMode === 'number') {
-      remaining.style.display = '';
-      remaining.textContent = `💤 ${_raFormatMs(Math.max(0, _raSleepRemainingMs))}`;
-    } else {
-      remaining.style.display = 'none';
-      remaining.textContent = '';
-    }
-  });
-}
-
 // Repaint just the controls — a full _renderKnowledgeDetail() on every
 // timeupdate tick would rebuild (and lose scroll position on) the whole
 // detail view several times a second.
@@ -6722,7 +6628,6 @@ function _raUpdateBar() {
   // repaint too — one choke point, not three copies of "when does this
   // change" logic.
   _raUpdateMiniPlayer();
-  _raUpdateSleepUI();  // #1087
   _raFsUpdate();  // #1105: the full-screen view's own repaint of the same state change
 }
 
@@ -7041,18 +6946,6 @@ function _raPlayAt(idx, exactMs) {
     if (player.map) _raHighlight(-1);
     _raUpdateBar();
     _raSaveProgress(true);  // #1078: reaching the end is unambiguously "finished"
-    // #1087: "listen to just this one item" sleep mode — its stopping
-    // condition IS this event, there's no countdown involved. Must NOT fall
-    // through into _raAdvanceQueue below: auto-advancing into the next
-    // chapter the instant the timer's condition is met would defeat the
-    // entire point of setting it. Progress is already saved above
-    // (finished=true), same as any other natural end.
-    if (_raSleepMode === 'end') {
-      _raSleepMode = null;
-      _raUpdateSleepUI();
-      _raSetQueueNote('💤 Sleep timer stopped playback');
-      return;
-    }
     _raAdvanceQueue();      // #1084: play the next queued item, if any
   };
   a.onerror = () => { if (seq === _playSeq) { player.playing = false; _raUpdateBar(); } };
@@ -7166,7 +7059,6 @@ function _raOnTimeUpdate() {
   const a = _sharedAudio;
   if (!a) return;
   const ms = a.currentTime * 1000;
-  const prevMs = player.lastMs;  // #1087: last tick's position, needed below to turn this into a played-time DELTA before it gets overwritten
   player.lastMs = ms;  // #1082: last known position — read back by toggleReadalong
                         // if something preempts the shared element before the
                         // next throttled save below lands.
@@ -7185,24 +7077,6 @@ function _raOnTimeUpdate() {
   // boundaries.
   _raUpdateMiniProgress();
   _raUpdateMediaSessionPosition();
-  // #1087: sleep timer countdown piggybacks on this existing ~4x/second tick
-  // instead of a dedicated setInterval — one less timer to ever leak, and it
-  // gets the "pauses when the audio pauses" behaviour for free: this whole
-  // function returns at the very top while !player.playing, so the countdown
-  // simply stops being touched the moment he pauses to go get water, and
-  // resumes counting the moment he presses play again. Deliberately counts
-  // PLAYED audio time (this delta), not wall-clock time — the alternative
-  // (a Date.now()-based countdown) would keep draining while paused, and
-  // finding the timer already expired after a two-minute pause is exactly the
-  // "why did it stop while I wasn't even listening" surprise this avoids.
-  // Delta is clamped so a big seek forward doesn't masquerade as minutes of
-  // actual listening and eat the timer in one tick.
-  if (typeof _raSleepMode === 'number') {
-    const deltaMs = (typeof prevMs === 'number' && ms > prevMs) ? Math.min(ms - prevMs, 2000) : 0;
-    _raSleepRemainingMs -= deltaMs;
-    _raUpdateSleepUI();
-    if (_raSleepRemainingMs <= 0) { _raSleepFire(); return; }
-  }
   // #1078: throttled to once per _RA_SAVE_INTERVAL_MS — this tick fires
   // ~4x/second, an unthrottled save here would be ~14k requests/hour on a
   // 90-minute podcast.
@@ -7479,7 +7353,7 @@ function _raOpenOwner(nav) {
 // _raBarHtml and the persistent mini bar's _raUpdateMiniPlayer above) — not
 // a second copy of playback state, and every control here hands off to the
 // exact same functions those two already use (toggleReadalong via
-// _raMiniToggle, _raPlayAt, _raSetSleepTimer, setKnowledgeTtsRate). The only
+// _raMiniToggle, _raPlayAt, setKnowledgeTtsRate). The only
 // genuinely new piece of state is which line is highlighted on THIS screen
 // and whether it's open at all.
 
@@ -7487,7 +7361,38 @@ let _raFsOpen = false;
 let _raFsRenderedKey = '';   // _raPlayer.key when the lines below were last built — guards against rebuilding the whole line list on every ~4x/second tick
 let _raFsActiveIdx = -1;
 let _raFsSeeking = false;    // true while a pointer is down on #ra-fs-seek — see _raFsUpdateProgress
+let _raFsRateDragging = false;  // true briefly while a finger is on #ra-fs-rate — see _raFsRateInput/_raFsUpdateRate
+let _raFsRateDragTimer = null;
 let _raFsWordTableKey = '';  // _raPlayer.key whose words are currently loaded into the global word table, or '' if we haven't touched it
+let _raFsSearchHome = null;  // {parent, nextSibling} of #header-search-wrap before we borrowed it — see _raFsMountSearch/_raFsUnmountSearch
+
+// #1109: this screen is position:fixed; inset:0 and sits above the app
+// header, so the header's multi-purpose search box (#header-search-wrap,
+// #1055) is unreachable while it's open. Rather than build a second search
+// box here — which would mean ⌘K, history, and every future tweak to #1055
+// having to know about two copies of the same element — the ONE element is
+// physically relocated into #ra-fs-search-slot for as long as this screen is
+// open, and put back exactly where it came from on close.
+function _raFsMountSearch() {
+  if (_raFsSearchHome) return;  // already moved — don't lose track of the real home by overwriting it
+  const el = document.getElementById('header-search-wrap');
+  const slot = document.getElementById('ra-fs-search-slot');
+  if (!el || !slot) return;  // search box is a nice-to-have here, not worth failing the player over
+  _raFsSearchHome = { parent: el.parentNode, nextSibling: el.nextSibling };
+  slot.appendChild(el);
+}
+
+function _raFsUnmountSearch() {
+  const home = _raFsSearchHome;
+  if (!home) return;
+  const el = document.getElementById('header-search-wrap');
+  _raFsSearchHome = null;
+  if (!el) return;
+  // insertBefore(el, home.nextSibling), not appendChild(home.parent) — the
+  // header row has other buttons after this one (#975's ⚙/⟳/↺), and
+  // appending to the end would silently reorder them.
+  home.parent.insertBefore(el, home.nextSibling);
+}
 
 function _raOpenFullscreen() {
   if (!_raPlayer.key || !_raPlayer.audioUrl) return;  // nothing playing/loaded — nothing to show full-screen
@@ -7498,6 +7403,7 @@ function _raOpenFullscreen() {
   // Locks the page underneath from scrolling behind this full-bleed overlay
   // — same reasoning as any other full-screen modal in this app.
   document.body.style.overflow = 'hidden';
+  _raFsMountSearch();
   _raBindFsKeys();
   _raFsRenderLines();
   _raFsUpdate();
@@ -7505,6 +7411,10 @@ function _raOpenFullscreen() {
 }
 
 function _raCloseFullscreen() {
+  // #1109: first thing, unconditionally — if anything below this line threw,
+  // the search box must not be left stranded inside a display:none screen,
+  // which would make it vanish from the whole app until next reload.
+  _raFsUnmountSearch();
   const el = document.getElementById('ra-fullscreen');
   if (el) el.style.display = 'none';
   _raFsOpen = false;
@@ -7608,7 +7518,37 @@ function _raFsRenderLines() {
   _raFsRenderedKey = player.key;
 }
 
-// Repaints title/toggle/rate/sleep controls and the active-line highlight —
+// #1109: the rate control here is a continuous <input type=range>, not the
+// fixed-step <select> the detail-page toolbar and mini player use. Every
+// change goes through the one function (setKnowledgeTtsRate) that already
+// clamps/persists/applies it to _sharedAudio — this is just the slider's
+// onchange wiring plus the drag guard below.
+function _raFsRateInput(value) {
+  setKnowledgeTtsRate(value);
+  _raFsRateDragging = true;
+  clearTimeout(_raFsRateDragTimer);
+  // Same debounce shape as _raFsSeekInput: a beat after the finger stops
+  // moving, this flag drops so _raFsUpdateRate resumes writing .value again.
+  _raFsRateDragTimer = setTimeout(() => { _raFsRateDragging = false; }, 150);
+  _raFsUpdateRate();  // the label must follow the finger; the guard above keeps it off the slider's own .value
+}
+
+// Syncs the slider + its label to _kTtsRate. Split out of _raFsUpdate so
+// _raFsRateInput can call it too (to refresh the label immediately while
+// dragging, without touching the slider's own .value mid-drag — see below).
+function _raFsUpdateRate() {
+  const label = document.getElementById('ra-fs-rate-label');
+  if (label) label.textContent = `${_kTtsRate}×`;
+  // Don't fight a finger that's mid-drag on the slider — same reasoning as
+  // _raFsUpdateProgress's _raFsSeeking guard on #ra-fs-seek. Rewriting
+  // .value here while the pointer is still down would make the thumb jump
+  // under the finger.
+  if (_raFsRateDragging) return;
+  const rate = document.getElementById('ra-fs-rate');
+  if (rate) rate.value = String(_kTtsRate);
+}
+
+// Repaints title/toggle/rate controls and the active-line highlight —
 // called from _raUpdateBar, i.e. on every real state change (play/pause/seek/
 // stop/idx change), never from the raw timer tick.
 function _raFsUpdate() {
@@ -7623,15 +7563,7 @@ function _raFsUpdate() {
   const toggle = document.getElementById('ra-fs-toggle');
   if (toggle) toggle.textContent = player.playing ? '⏸' : '▶';
 
-  const rate = document.getElementById('ra-fs-rate');
-  if (rate) {
-    if (!rate.options.length) {
-      rate.innerHTML = KNOWLEDGE_TTS_RATES.map(r => `<option value="${r}">${r}×</option>`).join('');
-    }
-    rate.value = String(_kTtsRate);
-  }
-  // The sleep <select>/countdown pair is filled by _raUpdateSleepUI's own
-  // ra-fs branch (see there) — not duplicated here.
+  _raFsUpdateRate();
 
   _raFsSetActive(player.activeIdx);
 }
