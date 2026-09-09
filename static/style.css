@@ -6372,25 +6372,6 @@ body.gloss-on .gloss-word {
   cursor: pointer;
   padding: 4px 0;
 }
-/* ── Sleep timer (#1087) ── mini player's copy of the pair of controls the
-   detail toolbar also has (see .knowledge-tts-rate for that one); both call
-   the same app.js functions, this is purely presentational duplication. */
-#mini-player-sleep-remaining {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-#mini-player-sleep-select {
-  flex-shrink: 0;
-  max-width: 64px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: none;
-  color: var(--muted);
-  padding: 4px 6px;
-}
 #mini-player-toggle, #mini-player-close {
   background: none;
   border: 1px solid var(--border);
@@ -6468,13 +6449,25 @@ body.gloss-on .gloss-word {
   display: flex;
   flex-direction: column;
 }
+/* #1109: two-row header now — the collapse/title/goto row plus the borrowed
+   app-header search box (#ra-fs-search-slot) below it. See app.js's
+   _raFsMountSearch/_raFsUnmountSearch for how #header-search-wrap gets
+   relocated in and out of the slot. */
 #ra-fs-head {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   flex-shrink: 0;
   padding: max(12px, env(safe-area-inset-top)) 14px 8px;
 }
+#ra-fs-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* No horizontal padding of its own — #ra-fs-head already pads both sides,
+   and doubling it would inset the search box past the row above it. */
+#ra-fs-search-slot { padding: 0 0 4px; }
 #ra-fs-collapse, #ra-fs-goto {
   background: none;
   border: none;
@@ -6538,6 +6531,7 @@ body.gloss-on .gloss-word {
 }
 #ra-fs-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 14px;
@@ -6562,28 +6556,33 @@ body.gloss-on .gloss-word {
   border: none;
   cursor: pointer;
 }
-/* Equivalents of .knowledge-tts-rate's look, written out fresh rather than
-   applying that class here — sharing it would mean this screen's future
-   tweaks risk leaking into the detail-page toolbar, and vice versa. */
-#ra-fs-rate, #ra-fs-sleep {
-  font-size: 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: none;
-  color: var(--muted);
-  padding: 4px 8px;
+/* #1109: continuous rate slider replacing the old fixed-step <select> —
+   see setKnowledgeTtsRate/_raFsUpdateRate in app.js. */
+#ra-fs-rate-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  max-width: 200px;
 }
-#ra-fs-sleep-remaining {
-  display: block;
-  text-align: center;
+#ra-fs-rate { flex: 1; min-width: 0; }
+#ra-fs-rate-label {
   font-size: 12px;
   color: var(--muted);
-  margin-top: 6px;
+  white-space: nowrap;
+  /* Fixed width so the row doesn't shuffle sideways as the number changes
+     while dragging (0.5× → 1.15× → 2×). */
+  min-width: 42px;
+  text-align: right;
 }
 
 @media (max-width: 560px) {
   .ra-fs-line { font-size: 19px; }
   #ra-fs-text { padding-left: 14px; padding-right: 14px; }
+  /* #ra-fs-controls lost a <select> and gained a slider that needs its own
+     row on a 390px screen, or it gets crushed to a few px wide. */
+  #ra-fs-rate-wrap { flex-basis: 100%; max-width: none; }
 }
 
 /* ── Browse on phones (#827) ─────────────────────────────

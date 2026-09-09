@@ -1509,15 +1509,6 @@
          detail page — _raMiniOpen() (which still does that) is now reached
          from a button INSIDE the full-screen view instead. -->
     <button id="mini-player-title" onclick="_raOpenFullscreen()" title="Open player"></button>
-    <!-- #1087: sleep timer — same two ids/functions as the detail toolbar's
-         copy in app.js's _raBarHtml (_raSetSleepTimer/_raUpdateSleepUI), just
-         a second place to reach them from. This <select> starts empty; its
-         options are filled in once by _raUpdateSleepUI() the first time it
-         runs, from the same _raSleepOptionsHtml() the toolbar's copy uses —
-         one list of durations, not two. -->
-    <span id="mini-player-sleep-remaining" class="mini-player-sleep-remaining" style="display:none"></span>
-    <select id="mini-player-sleep-select" class="mini-player-sleep-select"
-            onchange="_raSetSleepTimer(this.value)" title="Sleep timer"></select>
     <button id="mini-player-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
     <button id="mini-player-close" onclick="_raMiniClose()" title="Stop">✕</button>
   </div>
@@ -1536,9 +1527,15 @@
      _raOpenFullscreen() shows it. -->
 <div id="ra-fullscreen" style="display:none">
   <div id="ra-fs-head">
-    <button id="ra-fs-collapse" onclick="_raCloseFullscreen()" title="Close">⌄</button>
-    <div id="ra-fs-title"></div>
-    <button id="ra-fs-goto" onclick="_raFsGoToItem()" title="Open this item's page">↗</button>
+    <div id="ra-fs-head-row">
+      <button id="ra-fs-collapse" onclick="_raCloseFullscreen()" title="Close">⌄</button>
+      <div id="ra-fs-title"></div>
+      <button id="ra-fs-goto" onclick="_raFsGoToItem()" title="Open this item's page">↗</button>
+    </div>
+    <!-- #1109: the app header's multi-purpose search box (#1055) is MOVED here
+         while this screen is open (see app.js's _raFsMountSearch) — the one
+         element, relocated, never a second copy of it. -->
+    <div id="ra-fs-search-slot"></div>
   </div>
   <div id="ra-fs-text"></div>
   <div id="ra-fs-foot">
@@ -1546,13 +1543,18 @@
            oninput="_raFsSeekInput(this.value)" title="Seek">
     <div id="ra-fs-times"><span id="ra-fs-pos">0:00</span><span id="ra-fs-dur">0:00</span></div>
     <div id="ra-fs-controls">
-      <select id="ra-fs-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed"></select>
+      <!-- #1109: continuous slider, not the earlier fixed-rate <select> —
+           see setKnowledgeTtsRate/_raFsUpdateRate in app.js for why the
+           value can now be anything in [0.5, 2], not just a preset. -->
+      <div id="ra-fs-rate-wrap">
+        <input type="range" id="ra-fs-rate" min="0.5" max="2" step="0.05"
+               oninput="_raFsRateInput(this.value)" title="Playback speed">
+        <span id="ra-fs-rate-label">1×</span>
+      </div>
       <button id="ra-fs-back" onclick="_raSeekBy(-15)" title="Back 15 seconds">⏪ 15</button>
       <button id="ra-fs-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
       <button id="ra-fs-fwd" onclick="_raSeekBy(15)" title="Forward 15 seconds">15 ⏩</button>
-      <select id="ra-fs-sleep" onchange="_raSetSleepTimer(this.value)" title="Sleep timer"></select>
     </div>
-    <span id="ra-fs-sleep-remaining" style="display:none"></span>
   </div>
 </div>
 </body>
