@@ -164,8 +164,6 @@
               <div class="meta-play-group">
                 <button id="meta-play-btn" class="play-icon-btn play-icon-sm" onclick="playSentence()" style="display:none" title="Play audio">🔊</button>
                 <span class="listen-counter listen-counter-meta" id="listen-counter-meta" style="display:none"></span>
-                <select id="review-tts-rate" class="knowledge-tts-rate" onchange="setReviewTtsRate(this.value)" style="display:none" title="Playback speed"></select>
-                <button class="hint-save-btn" id="review-rate-save-btn" onclick="saveReviewTtsRateDefault()" style="display:none" title="Save as default">☆</button>
               </div>
               <div id="card-timer" style="display:none"></div>
               <div id="card-mode-badge" style="display:none"></div>
@@ -180,6 +178,17 @@
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- 语速（#1123）：正面和背面共用同一行，所以放在 card-meta-row
+               外面而不是塞进 .meta-play-group —— 那里每一面都要各显示一次。
+               步进 0.05，因为 Daniel 要的是 0.9 这种下拉框给不了的值。 -->
+          <div id="review-rate-row" class="listen-hint-slider-row" style="display:none">
+            <span class="listen-hint-label">Speed</span>
+            <input type="range" id="review-rate-slider" min="0.5" max="2" step="0.05" value="1"
+                   oninput="onReviewRateSlider(this.value)">
+            <span class="listen-hint-pct" id="review-rate-pct">1×</span>
+            <button class="hint-save-btn" id="review-rate-save-btn" onclick="saveReviewTtsRateDefault()" title="Save as default">☆</button>
           </div>
 
           <!-- Front side (content varies by category) -->
@@ -805,7 +814,7 @@
 
 <div id="word-tip" style="display:none"></div>
 <script src="/static/shared.js?v=6"></script>
-<script src="/static/app.js?v=25"></script>
+<script src="/static/app.js?v=26"></script>
 
 <!-- Edit card modal -->
 <div id="edit-modal-overlay" onclick="closeEditCard()" style="display:none"></div>
