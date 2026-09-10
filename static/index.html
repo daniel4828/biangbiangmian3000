@@ -164,6 +164,8 @@
               <div class="meta-play-group">
                 <button id="meta-play-btn" class="play-icon-btn play-icon-sm" onclick="playSentence()" style="display:none" title="Play audio">🔊</button>
                 <span class="listen-counter listen-counter-meta" id="listen-counter-meta" style="display:none"></span>
+                <select id="review-tts-rate" class="knowledge-tts-rate" onchange="setReviewTtsRate(this.value)" style="display:none" title="Playback speed"></select>
+                <button class="hint-save-btn" id="review-rate-save-btn" onclick="saveReviewTtsRateDefault()" style="display:none" title="Save as default">☆</button>
               </div>
               <div id="card-timer" style="display:none"></div>
               <div id="card-mode-badge" style="display:none"></div>

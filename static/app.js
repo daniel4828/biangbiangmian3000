@@ -5597,10 +5597,11 @@ const _KTTS_CHUNK_MAX = 180;   // chars per request — one edge-tts round trip
 // selecting that value on a <select> without a matching <option> silently
 // falls back to the first option, so the dropdown would then claim a speed
 // that isn't the real one. Union the current value in, sorted, deduped.
-function _ttsRateOptionsHtml() {
-  const rates = Array.from(new Set([...KNOWLEDGE_TTS_RATES, _kTtsRate])).sort((a, b) => a - b);
-  return rates.map(r => `<option value="${r}"${r === _kTtsRate ? ' selected' : ''}>${r}×</option>`).join('');
+function _rateOptionsHtml(current) {
+  const rates = Array.from(new Set([...KNOWLEDGE_TTS_RATES, current])).sort((a, b) => a - b);
+  return rates.map(r => `<option value="${r}"${r === current ? ' selected' : ''}>${r}×</option>`).join('');
 }
+function _ttsRateOptionsHtml() { return _rateOptionsHtml(_kTtsRate); }
 // Two reading modes (#1017). 'plain' is the original behaviour; 'gloss' reads
 // the German definition of every word Daniel does not know yet, immediately
 // followed by the word itself, and then carries on with the sentence.
@@ -10598,6 +10599,8 @@ function showFront() {
 
   // Listening: play button lives in the card header (same spot as on the back)
   document.getElementById('meta-play-btn').style.display = isListening ? 'flex' : 'none';
+  _resetReviewTtsRate();
+  _setReviewRateVisible(isListening);
   _listenCount = 0;
   _updateListenCounters();
 
@@ -10770,6 +10773,7 @@ function revealAnswer() {
   // Back of card = answer revealed, so audio is fine for every mode (including
   // creating, where the front deliberately hides it to avoid leaking the answer).
   document.getElementById('meta-play-btn').style.display = 'flex';
+  _setReviewRateVisible(true);
   _updateListenCounters();
 
   // Pre-load pinyin in background (shown blurred until p is pressed).
@@ -14809,6 +14813,7 @@ function _playStoryAtIdx(idx) {
   a.onended = () => { if (seq === _playSeq) _playStoryAtIdx(idx + 1); };
   a.onerror = () => { if (seq === _playSeq) _playStoryAtIdx(idx + 1); };
   a.src = _storyAudioUrl(idx);
+  a.playbackRate = _reviewTtsRate;
   a.play().catch(() => { if (seq === _playSeq) _playStoryAtIdx(idx + 1); });
 }
 
@@ -15103,6 +15108,58 @@ async function enrichCard() {
 // ── TTS ─────────────────────────────────────────────────────────────────────
 let _listenCount = 0;
 
+// 复习的语速和知识库/听读的语速是两个独立设置（#1121）：听一小时播客的
+// 速度和逐句学新词的速度不是一回事，共用一个值会让两边互相打架。
+// 走浏览器的 audio.playbackRate，不用 edge-tts 的 rate —— 后者会让同一段
+// 文字按每个速度各存一份 mp3（缓存键是文本），改速度还要重新生成（#993）。
+//
+// 持久化方式与 Word bank 的 Tiles 滑块、听力提示滑块一致（☆/★ 模式）：
+// 改动只影响当前这张卡，按 ☆ 才把它存成下一张卡的默认值。原因同那两处——
+// 复习时随手调一下速度（比如这句话太快听不清）不该悄悄改变以后每张卡的行为。
+let _reviewTtsRate = _reviewTtsRateDefault();
+
+function _reviewTtsRateDefault() {
+  const v = parseFloat(localStorage.getItem('reviewTtsRate'));
+  return (Number.isFinite(v) && v >= RATE_MIN && v <= RATE_MAX) ? v : 1;
+}
+
+function setReviewTtsRate(value) {
+  const rate = parseFloat(value);
+  if (!Number.isFinite(rate)) return;
+  const clamped = Math.round(Math.min(RATE_MAX, Math.max(RATE_MIN, rate)) * 100) / 100;
+  _reviewTtsRate = clamped;   // 只改内存，不写 localStorage —— 只对这张卡生效
+  // 共享的 <audio> 元素可能正被听读播放器或分块朗读占着（它们各有各的
+  // 速度设置），那时候绝不能顺手改掉它们的速度。
+  if (_sharedAudio && !_raPlayer.playing && !_kTts.playing) {
+    _sharedAudio.playbackRate = clamped;   // 正在播的这句立刻生效
+  }
+  _updateReviewRateStar();
+}
+
+function saveReviewTtsRateDefault() {
+  try { localStorage.setItem('reviewTtsRate', String(_reviewTtsRate)); } catch (_) {}
+  _updateReviewRateStar();
+}
+
+// 当前速度是否等于已存的默认值，决定 ☆/★。
+function _updateReviewRateStar() {
+  const btn = document.getElementById('review-rate-save-btn');
+  if (!btn) return;
+  const isSaved = _reviewTtsRate === _reviewTtsRateDefault();
+  btn.textContent = isSaved ? '★' : '☆';
+  btn.classList.toggle('saved', isSaved);
+}
+
+// 把下拉框的选项和当前值同步过来。选项含当前值，即便它不是预设之一
+// （别处的连续滑块可能存过 1.15 这种值）。
+function _syncReviewRateSelect() {
+  const el = document.getElementById('review-tts-rate');
+  if (!el) return;
+  el.innerHTML = _rateOptionsHtml(_reviewTtsRate);
+  el.value = String(_reviewTtsRate);
+  _updateReviewRateStar();
+}
+
 function _updateListenCounters() {
   const label = _listenCount > 0 ? `×${_listenCount}` : '';
   const show  = _listenCount > 0;
@@ -15112,6 +15169,25 @@ function _updateListenCounters() {
     el.textContent = label;
     el.style.display = show ? 'inline-block' : 'none';
   });
+}
+
+// 速度下拉框和它的 ☆/★ 按钮永远和 🔊 按钮同进同出：能听才有必要选速度。
+function _setReviewRateVisible(visible) {
+  const el = document.getElementById('review-tts-rate');
+  const btn = document.getElementById('review-rate-save-btn');
+  if (el) el.style.display = visible ? 'inline-block' : 'none';
+  if (btn) btn.style.display = visible ? 'inline-block' : 'none';
+  if (visible) _syncReviewRateSelect();
+}
+
+// 把速度拉回已存的默认值，同 _initWordBankSlider() 的行为——当场调的值不跟到
+// 下一张卡，只有按 ☆ 才会。**每张卡一次，不是每一面一次**：挂在 showFront()
+// 上而不是 _setReviewRateVisible() 里，否则在正面调慢的速度会在翻面时被悄悄
+// 重置。正面隐藏控件的类别（reading/creating）也要重置，不然速度会从上一张
+// 卡漏过来。
+function _resetReviewTtsRate() {
+  _reviewTtsRate = _reviewTtsRateDefault();
+  _syncReviewRateSelect();
 }
 
 // TTS URL for `text` in `lang`.
@@ -15171,6 +15247,7 @@ function playSentence() {
   // immutable-cached, so setting .src replays instantly once the mp3 is cached.
   const a = _getAudioEl();
   a.src = url;
+  a.playbackRate = _reviewTtsRate;
   a.play().catch(() => {});
 }
 
