@@ -194,6 +194,8 @@ const KEYMAP_DEFAULTS = {
   undo:           'z',
   'hint-minus':   'a',
   'hint-plus':    's',
+  'rate-minus':   '-',
+  'rate-plus':    '+',
   'story-modal':  'x',
   // shared (review card-back + word-detail page)
   examples:       'e',
@@ -243,6 +245,8 @@ const KEYMAP_ACTIONS = [
   { id: 'undo',         label: 'Undo last review',             scope: 'review' },
   { id: 'hint-minus',   label: 'Listening hint −',             scope: 'review' },
   { id: 'hint-plus',    label: 'Listening hint +',             scope: 'review' },
+  { id: 'rate-minus',   label: 'Audio speed −',                scope: 'review' },
+  { id: 'rate-plus',    label: 'Audio speed +',                scope: 'review' },
   { id: 'story-modal',  label: 'Open summary (full story)',    scope: 'review' },
 
   { id: 'examples',       label: 'Toggle examples',            scope: 'shared' },
@@ -14813,6 +14817,7 @@ function _playStoryAtIdx(idx) {
   a.onended = () => { if (seq === _playSeq) _playStoryAtIdx(idx + 1); };
   a.onerror = () => { if (seq === _playSeq) _playStoryAtIdx(idx + 1); };
   a.src = _storyAudioUrl(idx);
+  a.defaultPlaybackRate = _reviewTtsRate;   // 换 src 会触发 load，load 会把 playbackRate 重置成 defaultPlaybackRate
   a.playbackRate = _reviewTtsRate;
   a.play().catch(() => { if (seq === _playSeq) _playStoryAtIdx(idx + 1); });
 }
@@ -15133,7 +15138,7 @@ function setReviewTtsRate(value) {
   if (_sharedAudio && !_raPlayer.playing && !_kTts.playing) {
     _sharedAudio.playbackRate = clamped;   // 正在播的这句立刻生效
   }
-  _updateReviewRateStar();
+  _syncReviewRateUI();
 }
 
 function saveReviewTtsRateDefault() {
@@ -15150,15 +15155,23 @@ function _updateReviewRateStar() {
   btn.classList.toggle('saved', isSaved);
 }
 
-// 把下拉框的选项和当前值同步过来。选项含当前值，即便它不是预设之一
-// （别处的连续滑块可能存过 1.15 这种值）。
-function _syncReviewRateSelect() {
-  const el = document.getElementById('review-tts-rate');
-  if (!el) return;
-  el.innerHTML = _rateOptionsHtml(_reviewTtsRate);
-  el.value = String(_reviewTtsRate);
+// 把滑块和数值标签同步到 _reviewTtsRate。
+function _syncReviewRateUI() {
+  const slider = document.getElementById('review-rate-slider');
+  if (slider) slider.value = String(_reviewTtsRate);
+  const pct = document.getElementById('review-rate-pct');
+  if (pct) pct.textContent = `${_reviewTtsRate}×`;
   _updateReviewRateStar();
 }
+
+// 快捷键的一步 = 滑块的一步（0.05）。走 setReviewTtsRate，所以 clamp、
+// 星标、滑块位置、正在播的音频全都自动跟上。
+const REVIEW_RATE_STEP = 0.05;
+function nudgeReviewTtsRate(delta) {
+  setReviewTtsRate(_reviewTtsRate + delta);
+}
+
+function onReviewRateSlider(value) { setReviewTtsRate(value); }
 
 function _updateListenCounters() {
   const label = _listenCount > 0 ? `×${_listenCount}` : '';
@@ -15171,13 +15184,11 @@ function _updateListenCounters() {
   });
 }
 
-// 速度下拉框和它的 ☆/★ 按钮永远和 🔊 按钮同进同出：能听才有必要选速度。
+// 语速行和 🔊 按钮同进同出：能听才有必要选速度。
 function _setReviewRateVisible(visible) {
-  const el = document.getElementById('review-tts-rate');
-  const btn = document.getElementById('review-rate-save-btn');
-  if (el) el.style.display = visible ? 'inline-block' : 'none';
-  if (btn) btn.style.display = visible ? 'inline-block' : 'none';
-  if (visible) _syncReviewRateSelect();
+  const row = document.getElementById('review-rate-row');
+  if (row) row.style.display = visible ? 'flex' : 'none';
+  if (visible) _syncReviewRateUI();
 }
 
 // 把速度拉回已存的默认值，同 _initWordBankSlider() 的行为——当场调的值不跟到
@@ -15187,7 +15198,7 @@ function _setReviewRateVisible(visible) {
 // 卡漏过来。
 function _resetReviewTtsRate() {
   _reviewTtsRate = _reviewTtsRateDefault();
-  _syncReviewRateSelect();
+  _syncReviewRateUI();
 }
 
 // TTS URL for `text` in `lang`.
@@ -15247,6 +15258,7 @@ function playSentence() {
   // immutable-cached, so setting .src replays instantly once the mp3 is cached.
   const a = _getAudioEl();
   a.src = url;
+  a.defaultPlaybackRate = _reviewTtsRate;   // 换 src 会触发 load，load 会把 playbackRate 重置成 defaultPlaybackRate
   a.playbackRate = _reviewTtsRate;
   a.play().catch(() => {});
 }
@@ -17089,6 +17101,10 @@ document.addEventListener('keydown', async e => {
       e.preventDefault(); _adjustListenHintSlider(-1);
     } else if (e.key === _key('hint-plus')) {
       e.preventDefault(); _adjustListenHintSlider(1);
+    } else if (e.key === _key('rate-minus')) {
+      e.preventDefault(); nudgeReviewTtsRate(-REVIEW_RATE_STEP);
+    } else if (e.key === _key('rate-plus')) {
+      e.preventDefault(); nudgeReviewTtsRate(REVIEW_RATE_STEP);
     } else if (e.key === _key('story-modal')) {
       e.preventDefault();
       const _storyOpen = document.getElementById('story-modal-overlay')?.style.display !== 'none';
