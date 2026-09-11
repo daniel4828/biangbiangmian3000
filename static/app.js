@@ -5356,19 +5356,22 @@ function closeKnowledgeDetail() {
   goBack();
 }
 
-// A very short German TL;DR, derived from summary_de at render time (#971).
+// A very short TL;DR, derived from a summary's lead sentences at render time
+// (#971), in whatever language that summary is.
 //
 // No new column and no extra AI call: the summary prompt (#567) already
 // requires summary_de to be <p> paragraphs whose FIRST sentence is wrapped in
 // <b> and summarises that paragraph. Stringing those lead sentences together
 // is the TL;DR, and it works retroactively on every item already in the
-// database instead of only on ones summarised from now on.
+// database instead of only on ones summarised from now on. summary_zh (#708)
+// and every rendition derived from summary_de (#804) keep that same <p>/<b>
+// shape, which is why the caller can hand any of them to this function.
 //
 // Pre-#708 summaries are plain text with no <b> at all — those fall back to
 // the first two sentences of the text. Returns '' when neither yields
 // anything, so the caller can drop the block entirely.
-function _knowledgeTldrDe(summaryDe) {
-  const raw = (summaryDe || '').trim();
+function _knowledgeTldrText(summaryHtml) {
+  const raw = (summaryHtml || '').trim();
   if (!raw) return '';
   // Parsed, never injected: the result is escaped again before it reaches the
   // page, same rule as _summaryZhHtml — AI-written text never carries markup.
@@ -5385,19 +5388,37 @@ function _knowledgeTldrDe(summaryDe) {
   if (leads.length) return leads.join(' ');
   const plain = (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
   if (!plain) return '';
-  const sentences = plain.match(/[^.!?]+[.!?]+/g);
+  // CJK full stops count as sentence ends too: since #1125 this fallback also
+  // runs on Chinese summaries, and /[.!?]/ alone would return the whole text.
+  const sentences = plain.match(/[^.!?。！？]+[.!?。！？]+/g);
   return sentences ? sentences.slice(0, 2).join(' ').trim() : plain.slice(0, 300);
 }
 
 // Open by default: a TL;DR nobody sees is pointless. The toggle is remembered
 // so Daniel can fold it away for good once he stops wanting it.
 function _knowledgeTldrHtml(ep) {
-  const text = _knowledgeTldrDe(ep.summary_de);
+  // #1125: the gist is read in the language the page is being read in, not in
+  // German. #971 kept it German on the grounds that it is what he decides by
+  // — but the gloss button (#1111/#1117) now puts the German one keypress
+  // away on any block, so there is no reason for this one to opt out of the
+  // reading language. Falls back to summary_de when the reading language's
+  // side is missing (old rows, a rendition that failed or isn't built yet):
+  // a German gist beats no gist.
+  const lang = activeLang();
+  const source = (lang === 'zh' ? ep.summary_zh : (ep.rendition || {}).summary)
+    || ep.summary_de;
+  const text = _knowledgeTldrText(source);
   if (!text) return '';
   const open = localStorage.getItem('knowledgeTldrOpen') === '0' ? '' : ' open';
+  // The id is what gets this block into the gloss/tap-word list at the detail
+  // view's render (see the _makeWordsTappable call there) — without it the 译
+  // button did nothing here, which on a phone is indistinguishable from a
+  // broken button. It sits on the <p>, not on the <details>: the label
+  // "Kurzfassung" is chrome, and a root with no <p> inside it is exactly the
+  // case _glossBlocksIn() falls back to treating as one block.
   return `<details class="knowledge-tldr" onclick="setTimeout(_rememberKnowledgeTldr, 0)"${open}>
       <summary>Kurzfassung</summary>
-      <p>${_escHtml(text)}</p>
+      <p id="knowledge-tldr">${_escHtml(text)}</p>
     </details>`;
 }
 
@@ -5454,8 +5475,6 @@ function _knowledgeSummaryHtml(ep) {
        ${ep.summary_zh ? `<div id="podcast-summary-zh">${_summaryZhHtml(ep.summary_zh)}</div>` : ''}
        <div id="podcast-summary-de">${ep.summary_de || ''}</div>`;
   }
-  // The TL;DR stays German in every language (#971): the block below is the
-  // rendition Daniel reads for practice, this is the gist he reads to decide.
   return _knowledgeTldrHtml(ep) + (ep.rendition
     // Same whitelist sanitizer the zh summary uses: the rendition text
     // passed through Google Translate and the annotator, so it gets
@@ -7850,7 +7869,7 @@ function _renderKnowledgeDetail(ep) {
   // #967: only the summary/rendition blocks, not the transcript below — the
   // word list was extracted from the summary, and the bilingual transcript
   // columns are for reading along, not for picking words out of.
-  ['podcast-summary-zh', 'podcast-summary-de', 'podcast-summary-rendition', 'knowledge-fulltext']
+  ['knowledge-tldr', 'podcast-summary-zh', 'podcast-summary-de', 'podcast-summary-rendition', 'knowledge-fulltext']
     .forEach(id => _makeWordsTappable(document.getElementById(id)));
   // #1049: must run AFTER _makeWordsTappable() above — it inserts the
   // .tap-word spans the read-along map has to walk around (see
