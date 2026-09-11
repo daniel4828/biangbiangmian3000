@@ -37,3 +37,6 @@ thinking fast and slow/
 speech/
 plans/
 *.pdf
+
+# 语言错误日志（#1129）：每个对话一个文件，含 Daniel 的原话，不进公开仓库
+language-log/
