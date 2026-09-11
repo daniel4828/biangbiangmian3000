@@ -3639,9 +3639,11 @@ a.nav-btn { text-decoration: none; }
 }
 #podcast-summary-de { line-height: 1.6; color: var(--text); }
 
-/* Kurzfassung (#971): the German lead sentences of summary_de, foldable, at
-   the very top of the summary block. Deliberately quieter than the summary it
-   sits above — it is a decision aid, not the reading material. */
+/* Kurzfassung (#971): the lead sentences of the summary being read, foldable,
+   at the very top of the summary block. Deliberately quieter than the summary
+   it sits above — it is a gist, not the reading material. Since #1125 it is in
+   the reading language, so it carries inline annotations like the summary does
+   and answers the 译 button. */
 .knowledge-tldr {
   margin: 0 0 12px;
   padding: 8px 12px;
