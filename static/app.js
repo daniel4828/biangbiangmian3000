@@ -5817,6 +5817,15 @@ function _kTtsSync(ep, lang) {
   return _kTts.chunks;
 }
 
+// #1135: the only call site left (_audioBarHtml) only ever reaches this
+// while _kTts.idx >= 0 — i.e. this bar is now only ever rendered mid-chunk
+// or paused. The `_kTts.idx < 0` half of the ternaries below (the old idle
+// "🔊 Listen" / "N parts" row with its own mode+speed dropdowns) is dead
+// code: nothing can land on it anymore. Left as-is rather than trimmed,
+// because _kTtsSync's memoized rebuild can legitimately reset idx back to
+// -1 mid-call (a different item's stale chunks get discarded here — see
+// _audioBarHtml's comment), so this function still needs to cope with idx
+// being -1 for one render even though nothing calls it wanting that state.
 function _kTtsBarHtml(ep, lang) {
   const chunks = _kTtsSync(ep, lang);
   if (!chunks.length) return '';
@@ -6331,12 +6340,17 @@ function _scheduleListenPoll(episodeId, owner) {
   }, 4000);
 }
 
-// Never silently "nothing happens" (CLAUDE.md's rule for this feature):
-// every branch below is a distinct, visible state — no-op is not one of them.
-function _knowledgeListenBarHtml(ep) {
-  if (!ep.audio_url || !ep.transcript_zh) return '';  // this item has nothing "Listen" can build from
-  const owner = _raOwnerForEpisodeListen(ep);
-  if (_raTrackFor(owner)) return '';  // already built — the normal read-along bar below shows the player
+// #1135: only the "busy" half of what used to be _knowledgeListenBarHtml —
+// the idle "press to build" button it used to render is gone, folded into
+// the merged mode dropdown in _audioIdleBarHtml below. This keeps the
+// building/error states (which must still preempt everything else — CLAUDE.md's
+// "never silently nothing happens" rule for this feature) as their own query,
+// independent of the chunked reader and the read-along player.
+// `lang` reproduces the isZh gate the old call site applied before this ever
+// ran — the sync it reports on is hardcoded to lang='zh' (see
+// _raOwnerForEpisodeListen), so it has nothing to say on other language tabs.
+function _listenBusyBarHtml(ep, lang) {
+  if (lang !== 'zh' || !ep.audio_url || !ep.transcript_zh) return '';
   if (_listenBuildingId === ep.id) {
     // Progress (#1100) is optional — data.detail only shows up once the
     // build has actually reported something. Keep the plain "正在同步…"
@@ -6352,9 +6366,7 @@ function _knowledgeListenBarHtml(ep) {
       <button class="btn-secondary" onclick="doStartListen(${ep.id})">Retry</button>
     </div>`;
   }
-  return `<div class="readalong-bar">
-    <button class="btn-secondary" onclick="doStartListen(${ep.id})">🎧 Listen</button>
-  </div>`;
+  return '';
 }
 
 async function doStartListen(episodeId) {
@@ -6455,17 +6467,19 @@ function _raBarHtml(owner) {
     }
     // #1133: an episode with its own recording must never be offered a
     // synthetic voice alongside it — Daniel only ever wants the real audio.
-    // _knowledgeListenBarHtml (rendered immediately above this bar, see
-    // _renderKnowledgeDetail) already owns "build a track from the real
-    // recording" for this exact (episode, fulltext) slot, so this isn't
-    // leaving a hole: that bar covers it. Guard against a stale
-    // _knowledgeDetailEpisode (e.g. mid-navigation) by checking its id first.
+    // #1135: unreachable through the one call site that renders episodes now
+    // (_audioBarHtml only reaches _raBarHtml once a track already exists —
+    // see its own comment), because the merged idle control's dropdown
+    // already excludes "Synthetic voice" whenever a real recording exists
+    // (_audioModeOptions). Left in place as a second line of defense in case
+    // _raBarHtml is ever called directly for this owner again before a track
+    // exists. Guard against a stale _knowledgeDetailEpisode (e.g.
+    // mid-navigation) by checking its id first.
     //
-    // Only lang 'zh': _knowledgeListenBarHtml/_raOwnerForEpisodeListen are
-    // hardcoded to that language (transcript_zh is the correct-text side of
-    // the alignment), so it is the only slot a real recording can occupy. A
-    // French/Spanish full text is a translation nobody ever recorded — TTS
-    // is the only way to hear it and stays on offer there.
+    // Only lang 'zh': a real recording can only ever occupy that exact slot
+    // (transcript_zh is the correct-text side of the alignment) — a
+    // French/Spanish full text is a translation nobody ever recorded, so TTS
+    // stays on offer there.
     if (owner.kind === 'episode' && owner.variant === 'fulltext' && owner.lang === 'zh' &&
         _knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id &&
         _knowledgeDetailEpisode.audio_url) {
@@ -6504,6 +6518,120 @@ function _raBarHtml(owner) {
     <p class="keymap-hint readalong-note" id="readalong-note"></p>
     ${_raBookmarksHtml(owner)}
   </div>`;
+}
+
+// ── One "Listen" row (#1135) ─────────────────────────────────────────────
+// Before this issue, a knowledge item's detail page stacked three separate
+// rows — _kTtsBarHtml (chunked synthetic reading), _knowledgeListenBarHtml
+// (build from the item's own recording, #1074) and _raBarHtml (the
+// read-along player, #1048) — one under the other, and two of the three
+// idle buttons were both labeled "Listen". _audioBarHtml is the single
+// function _renderKnowledgeDetail calls now. It changes nothing about how
+// any of those three actually play: whichever one is already building,
+// erroring, or playing is handed off to untouched; only the true idle state
+// (nothing built, nothing playing) gets the new merged control below.
+function _audioBarHtml(ep, lang) {
+  const busy = _listenBusyBarHtml(ep, lang);
+  if (busy) return busy;
+  // Resync the chunked reader to the (episode, lang, view, mode) actually on
+  // screen before reading _kTts.idx — otherwise a stale idx>=0 left over
+  // from an item navigated away from mid-playback would be misread as "this
+  // item is playing". _kTtsSync is what stops that stale playback the
+  // moment its key no longer matches (see its own comment) — this call is
+  // also what makes opening a different item silently stop the old one's
+  // chunked reading, exactly as it already did before this issue.
+  const chunks = _kTtsSync(ep, lang);
+  if (_kTts.idx >= 0) return _kTtsBarHtml(ep, lang);
+  const raOwner = _raOwnerForEpisode(ep, lang);
+  if (_raTrackFor(raOwner)) return _raBarHtml(raOwner);
+  // Not known yet this session: fire the same cheap lookup _raBarHtml itself
+  // used to fire (see its own _raTrackChecked branch) so a track built in an
+  // earlier session is discovered instead of forever showing the idle
+  // dropdown below. Fire-and-forget — _raLoadTrack re-renders on its own
+  // once it lands.
+  if (!_raTrackChecked(raOwner)) _raLoadTrack(raOwner);
+  if (!chunks.length) return '';  // nothing on screen this item can read at all
+  return _audioIdleBarHtml(ep, lang);
+}
+
+// What "Listen" can build from this exact (episode, lang, view) slot. Order
+// is the default preference: a real recording beats a synthetic one.
+function _audioModeOptions(ep, lang) {
+  // Same guard #1133 already applies to the read-along "generate" button:
+  // an item with its own recording must never be offered a synthetic voice
+  // instead. Only the zh/Full text slot can ever hold a real recording —
+  // transcript_zh is the correct-text side of the alignment (#1074).
+  const hasOriginal = lang === 'zh' && _knowledgeView === 'fulltext' &&
+                       !!ep.audio_url && !!ep.transcript_zh;
+  return hasOriginal
+    ? [['original', 'Original audio'], ['gloss', 'Voice + glosses']]
+    : [['voice', 'Synthetic voice'], ['gloss', 'Voice + glosses']];
+}
+
+// Falls back to the first available option when the stored choice no longer
+// applies here (e.g. last picked "Original audio" while on Full text, now
+// looking at the Summary tab, which never has one) — never an empty or
+// broken <select>.
+function _knowledgeAudioMode(ep, lang) {
+  const opts = _audioModeOptions(ep, lang).map(([v]) => v);
+  let stored = null;
+  try { stored = localStorage.getItem('knowledgeAudioMode'); } catch (_) {}
+  return opts.includes(stored) ? stored : opts[0];
+}
+
+// A new key (not knowledgeTtsMode, which is the chunked reader's own
+// plain/gloss setting and means something different — "how much of the
+// chunked reading includes glosses" vs "which of the three players to use
+// at all"). Reusing the old key would make the two settings fight each
+// other's re-renders.
+function setKnowledgeAudioMode(value) {
+  try { localStorage.setItem('knowledgeAudioMode', value); } catch (_) {}
+  if (_knowledgeDetailEpisode) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+}
+
+// The merged idle control: one button, one dropdown. No speed, no Follow, no
+// Queue, no bookmark star — nothing is playing yet, so none of them have
+// anything to act on. Only reached once _audioBarHtml has already confirmed
+// there is text to read and nothing is currently building or playing.
+function _audioIdleBarHtml(ep, lang) {
+  const opts = _audioModeOptions(ep, lang);
+  const mode = _knowledgeAudioMode(ep, lang);
+  return `
+    <div class="readalong-bar">
+      <div class="knowledge-tts-bar">
+        <button class="btn-secondary" id="audio-listen-btn" onclick="doAudioListen(${ep.id})">🎧 Listen</button>
+        <select class="knowledge-tts-rate" onchange="setKnowledgeAudioMode(this.value)" title="How to listen">
+          ${opts.map(([v, label]) => `<option value="${v}"${v === mode ? ' selected' : ''}>${label}</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+}
+
+// Dispatches the single "🎧 Listen" button to whichever of the three
+// underlying players the dropdown currently points at.
+function doAudioListen(episodeId) {
+  const ep = _knowledgeDetailEpisode;
+  if (!ep || ep.id !== episodeId) return;
+  const lang = activeLang();
+  const mode = _knowledgeAudioMode(ep, lang);
+  if (mode === 'original') {
+    doStartListen(episodeId);
+  } else if (mode === 'voice') {
+    const owner = _raOwnerForEpisode(ep, lang);
+    doGenerateReadalong(owner.kind, owner.id, owner.lang, owner.variant,
+      document.getElementById('audio-listen-btn'));
+  } else {  // 'gloss'
+    // Switch the chunked reader into gloss mode first (if it wasn't already)
+    // and resync its chunks for the new mode before playing — otherwise
+    // toggleKnowledgeTts() below would start reading whatever chunks were
+    // last built for 'plain'.
+    if (_kTtsMode !== 'gloss') {
+      _kTtsMode = 'gloss';
+      try { localStorage.setItem('knowledgeTtsMode', 'gloss'); } catch (_) {}
+    }
+    _kTtsSync(ep, lang);
+    toggleKnowledgeTts();
+  }
 }
 
 // ── Bookmarks (#1086, scoped down from the #1081 umbrella — no chapters, see
@@ -7924,9 +8052,7 @@ function _renderKnowledgeDetail(ep) {
       ${_knowledgeEditOpen ? _knowledgeEditFormHtml(ep) : ''}
       <div style="margin:4px 0 10px">${links}</div>
       ${_knowledgeViewTabs(ep)}
-      ${_kTtsBarHtml(ep, lang)}
-      ${isZh ? _knowledgeListenBarHtml(ep) : ''}
-      ${_raBarHtml(_raOwnerForEpisode(ep, lang))}
+      ${_audioBarHtml(ep, lang)}
       ${_knowledgeView === 'fulltext' ? _knowledgeFulltextHtml(ep, lang) : summaryBlock}
     </div>
     <div class="keymap-panel">
