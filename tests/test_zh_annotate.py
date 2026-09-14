@@ -12,7 +12,12 @@ module actually relies on.
 
 import pytest
 
+import translator
 import zh_annotate
+
+# The autouse fixture below stubs _gloss_de_many for every test in this file;
+# the batching tests at the bottom need the real one back.
+_REAL_GLOSS_DE_MANY = zh_annotate._gloss_de_many
 
 
 @pytest.fixture
@@ -30,7 +35,10 @@ def stub_io(monkeypatch, collection):
     monkeypatch.setattr(zh_annotate, "_translation_cache", {})
     monkeypatch.setattr(zh_annotate, "_known_words",
                         lambda words: collection & set(words))
-    monkeypatch.setattr(zh_annotate, "_gloss_de", lambda w: f"DE:{w}")
+    # #1140: the single choke point for word glosses is the BATCH helper —
+    # one request for every word of the text, not one request per word.
+    monkeypatch.setattr(zh_annotate, "_gloss_de_many",
+                        lambda words: {w: f"DE:{w}" for w in words})
 
 
 def test_hsk5_word_outside_collection_is_annotated():
@@ -78,7 +86,7 @@ def test_non_annotated_text_is_returned_unchanged():
 
 def test_annotation_falls_back_to_pinyin_when_translation_fails(monkeypatch):
     """Google Translate being down must cost the gloss, not the annotation."""
-    monkeypatch.setattr(zh_annotate, "_gloss_de", lambda w: "")
+    monkeypatch.setattr(zh_annotate, "_gloss_de_many", lambda words: {})
     out = zh_annotate.annotate_zh_summary("对就业的影响。")
     assert "就业（jiùyè）" in out
 
@@ -220,3 +228,60 @@ def test_strip_inline_glosses_is_idempotent_and_empty_safe():
     assert zh_annotate.strip_inline_glosses(once) == once
     assert zh_annotate.strip_inline_glosses("") == ""
     assert zh_annotate.strip_inline_glosses(None) is None
+
+
+# --- one batched request, no negative caching (#1140) ------------------------
+# Regression: the read-along screen sends a FULL transcript to /api/new-words,
+# and the gloss lookup fired one Google request per new word. Hundreds of
+# sequential requests get throttled, every gloss comes back empty — and the ""
+# was cached for the life of the process, so the words stayed untranslated
+# until the next deploy. The whole-block 译 button, hitting the same endpoint
+# from the same IP right after, died with it.
+
+def test_glosses_are_fetched_in_one_batched_request(monkeypatch):
+    calls = []
+
+    def fake_batch(texts, **kwargs):
+        calls.append(list(texts))
+        return [f"DE:{t}" for t in texts]
+
+    monkeypatch.setattr(zh_annotate, "_gloss_de_many", _REAL_GLOSS_DE_MANY)
+    monkeypatch.setattr(zh_annotate, "_translation_cache", {})
+    monkeypatch.setattr(translator, "translate_batch", fake_batch)
+
+    out = zh_annotate.extract_new_words("这集讨论对就业的影响，也说到硅谷和量子计算。")
+
+    assert len(out) > 1, "本测试需要不止一个生词才有意义"
+    assert len(calls) == 1, f"每个生词一次请求正是 #1140 的病根，实际发了 {len(calls)} 次"
+    assert all(w["definition_de"] == f"DE:{w['word']}" for w in out)
+
+
+def test_failed_gloss_lookup_is_not_cached(monkeypatch):
+    """一次被限流不能把这个词永久标成"没有释义"——进程要到下次部署才重启。"""
+    monkeypatch.setattr(zh_annotate, "_gloss_de_many", _REAL_GLOSS_DE_MANY)
+    monkeypatch.setattr(zh_annotate, "_translation_cache", {})
+    # translate_batch 的失败契约是原样返回输入
+    monkeypatch.setattr(translator, "translate_batch", lambda texts, **kw: list(texts))
+
+    first = zh_annotate.extract_new_words("这集讨论对就业的影响。")
+    assert [w["definition_de"] for w in first] == [""] * len(first)
+
+    monkeypatch.setattr(translator, "translate_batch",
+                        lambda texts, **kw: [f"DE:{t}" for t in texts])
+    second = zh_annotate.extract_new_words("这集讨论对就业的影响。")
+    assert [w["definition_de"] for w in second] == [f"DE:{w['word']}" for w in second]
+
+
+def test_successful_gloss_is_cached(monkeypatch):
+    calls = []
+    monkeypatch.setattr(zh_annotate, "_gloss_de_many", _REAL_GLOSS_DE_MANY)
+    monkeypatch.setattr(zh_annotate, "_translation_cache", {})
+
+    def fake_batch(texts, **kwargs):
+        calls.append(list(texts))
+        return [f"DE:{t}" for t in texts]
+
+    monkeypatch.setattr(translator, "translate_batch", fake_batch)
+    zh_annotate.extract_new_words("这集讨论对就业的影响。")
+    zh_annotate.extract_new_words("这集讨论对就业的影响。")
+    assert len(calls) == 1, "成功的答案要记住，不能每次重问"

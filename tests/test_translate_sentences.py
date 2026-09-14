@@ -84,3 +84,41 @@ def test_too_many_texts_is_rejected(tmp_db):
         "texts": ["x"] * 301, "lang": "zh", "target": "de",
     })
     assert r.status_code == 400, r.text
+
+
+# ── "nothing came back" must say so (#1140) ─────────────────────────────────
+# Regression: a throttled endpoint returned "" for every block, the reader
+# cached those empties and the 译 button became a permanent no-op with no
+# explanation anywhere. The endpoint still never 500s — it reports.
+
+def test_all_empty_translations_are_reported_as_an_error(tmp_db):
+    """整批一个都没翻出来 = 端点在拒绝我们，不是"这段翻译成它自己"。"""
+    with patch.object(translator, "translate_batch",
+                      side_effect=lambda texts, **kw: list(texts)):
+        r = client.post("/api/translate-sentences", json={
+            "texts": ["这是第一段。", "这是第二段。"], "lang": "zh", "target": "de"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["translations"] == ["", ""]
+    assert body.get("error"), "前端要靠它显示原因，而不是静静地什么都不做"
+
+
+def test_exception_is_reported_as_an_error_too(tmp_db):
+    with patch.object(translator, "translate_batch", side_effect=RuntimeError("boom")):
+        r = client.post("/api/translate-sentences", json={
+            "texts": ["这是第一段。"], "lang": "zh", "target": "de"})
+    assert r.status_code == 200
+    assert r.json().get("error")
+
+
+def test_partial_success_is_not_an_error(tmp_db):
+    """有一段翻出来了就不算失败——另一段可能本来就没什么可译的。"""
+    def fake_batch(texts, **kwargs):
+        return [f"de:{texts[0]}"] + list(texts[1:])
+
+    with patch.object(translator, "translate_batch", side_effect=fake_batch):
+        r = client.post("/api/translate-sentences", json={
+            "texts": ["这是第一段。", "这是第二段。"], "lang": "zh", "target": "de"})
+    body = r.json()
+    assert body["translations"][0].startswith("de:")
+    assert "error" not in body

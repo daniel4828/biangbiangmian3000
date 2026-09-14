@@ -8800,6 +8800,14 @@ function _fetchSentenceGlossBatch(texts, lang) {
   const keys = texts.map(t => _glossTrKey(lang, t));
   const promise = api('POST', '/api/translate-sentences', { texts, lang, target: 'de' })
     .then(r => {
+      // #1140: an `error` means the translation endpoint gave us nothing (it
+      // never 500s — see routes/knowledge.py). Throwing here does two things
+      // a silent empty answer did not: the banner below tells him WHY the 译
+      // button did nothing, and the keys are dropped from the cache instead
+      // of being remembered as "" — which used to make every later press of
+      // the button a no-op for the rest of the page's life, long after the
+      // endpoint had recovered.
+      if (r.error) throw new Error(r.error);
       const translations = r.translations || [];
       keys.forEach((k, i) => _glossTrResolved.set(k, translations[i] || ''));
     })
@@ -8981,6 +8989,12 @@ function _openWordActions(idx, anchor) {
   if (!w) return;
   const word = w.word || w.word_zh || '';
   const gloss = w.definition_de || w.definition || '';
+  // #1140: word + pinyin and nothing else used to be indistinguishable from
+  // "this word has no meaning worth showing"; it actually meant the gloss
+  // lookup had failed server-side. Say so.
+  const glossHtml = gloss
+    ? `<p class="word-actions-gloss">${_escHtml(gloss)}</p>`
+    : `<p class="word-actions-gloss word-actions-gloss-missing">keine Übersetzung</p>`;
 
   const box = document.createElement('div');
   box.className = 'word-actions';
@@ -8991,7 +9005,7 @@ function _openWordActions(idx, anchor) {
       ${w.pinyin ? `<span class="word-actions-pinyin">${_escHtml(w.pinyin)}</span>` : ''}
       <button class="word-actions-close" aria-label="Close">✕</button>
     </div>
-    ${gloss ? `<p class="word-actions-gloss">${_escHtml(gloss)}</p>` : ''}
+    ${glossHtml}
     <div class="word-actions-buttons">
       <button class="word-table-btn" id="word-actions-add">★ List</button>
       <button class="word-table-btn" id="word-actions-known">✓ Known</button>
@@ -9024,6 +9038,11 @@ function _openKnownWordActions(key, anchor) {
   const w = key && _glossWordIndex.get(key);
   if (!w) return;
   const gloss = w.definition_de || w.definition || '';
+  // Same as _openWordActions above (#1140): an empty gloss is a failed
+  // lookup far more often than a word with nothing to say.
+  const glossHtml = gloss
+    ? `<p class="word-actions-gloss">${_escHtml(gloss)}</p>`
+    : `<p class="word-actions-gloss word-actions-gloss-missing">keine Übersetzung</p>`;
 
   const box = document.createElement('div');
   box.className = 'word-actions';
@@ -9034,7 +9053,7 @@ function _openKnownWordActions(key, anchor) {
       ${w.pinyin ? `<span class="word-actions-pinyin">${_escHtml(w.pinyin)}</span>` : ''}
       <button class="word-actions-close" aria-label="Close">✕</button>
     </div>
-    ${gloss ? `<p class="word-actions-gloss">${_escHtml(gloss)}</p>` : ''}
+    ${glossHtml}
     ${w.word_id ? `<div class="word-actions-buttons">
       <button class="word-table-btn" id="word-actions-detail">📖 Details</button>
     </div>` : ''}`;

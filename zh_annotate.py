@@ -142,23 +142,51 @@ def pinyin_of(text: str) -> str:
         return ""
 
 
+def _gloss_de_many(words: list[str]) -> dict[str, str]:
+    """German glosses for many words in ONE batched request (#1140).
+
+    🔴 This is the only place that asks Google for a word gloss. It used to be
+    one HTTP request per word (_gloss_de below, in a loop over every new word
+    of the text), which was tolerable for a summary but not for what the
+    read-along screen sends: the full transcript of an 18-minute podcast has
+    hundreds of new words, so one tap produced hundreds of sequential requests
+    to the free endpoint. Google throttles long before the end of that burst —
+    and then EVERY gloss comes back empty, including the whole-block
+    translations (/api/translate-sentences) issued right after from the same
+    IP. That is exactly how it was reported: "neither the paragraphs nor the
+    single words translate any more".
+
+    🔴 A failed lookup is never cached. The old code wrote "" into
+    _translation_cache on failure, so one throttled burst poisoned every word
+    for the lifetime of the process — and the server only restarts on a
+    deploy. Only real answers are remembered; a miss is retried next time.
+
+    Best-effort like the rest of this module: on failure every word simply has
+    no gloss (pinyin alone), never a wrong one."""
+    wanted = list(dict.fromkeys(w for w in words if w))
+    missing = [w for w in wanted if w not in _translation_cache]
+    if missing:
+        try:
+            import translator
+            # translate_batch's failure contract is "hand the input back
+            # unchanged", so a result equal to its word means no translation
+            # happened — not cached, see above.
+            translated = translator.translate_batch(missing, target="de", source="zh-CN")
+            for w, t in zip(missing, translated):
+                t = (t or "").strip()
+                if t and t != w:
+                    _translation_cache[w] = t
+        except Exception as e:
+            logger.warning("zh_annotate: batch translation failed for %d words — %s",
+                           len(missing), e)
+    return {w: _translation_cache.get(w, "") for w in wanted}
+
+
 def _gloss_de(word: str) -> str:
-    """German gloss via Google Translate, memoized for the process. Returns ""
-    when translation is unavailable or hands back the input unchanged (which is
-    what translator.translate_zh does on failure) — the caller then annotates
-    with pinyin alone instead of printing "就业（jiùyè - 就业）"."""
-    if word in _translation_cache:
-        return _translation_cache[word]
-    gloss = ""
-    try:
-        import translator
-        result = (translator.translate_zh(word, target="de") or "").strip()
-        if result and result != word:
-            gloss = result
-    except Exception as e:
-        logger.warning("zh_annotate: translation failed for %r — %s", word, e)
-    _translation_cache[word] = gloss
-    return gloss
+    """One word's German gloss — a batch of one. Returns "" when translation
+    is unavailable, so the caller annotates with pinyin alone instead of
+    printing "就业（jiùyè - 就业）"."""
+    return _gloss_de_many([word]).get(word, "")
 
 
 def _segment(text: str) -> list[tuple[str, str]]:
@@ -216,11 +244,14 @@ def extract_new_words(text: str) -> list[dict]:
             return []
         words = _new_words_from_pairs(pairs)
         hsk = _hsk_levels()
+        # One batched request for the whole text (#1140), not one per word:
+        # the read-along screen sends a full transcript through here.
+        glosses = _gloss_de_many(words)
         return [
             {
                 "word": w,
                 "pinyin": pinyin_of(w),
-                "definition_de": _gloss_de(w),
+                "definition_de": glosses.get(w, ""),
                 "hsk": hsk.get(w),
             }
             for w in words
@@ -256,15 +287,9 @@ def extract_all_words(text: str) -> list[dict]:
                 words.append(w)
         if not words:
             return []
-        missing = [w for w in words if w not in _translation_cache]
-        if missing:
-            import translator
-            translated = translator.translate_batch(missing, target="de", source="zh-CN")
-            for w, t in zip(missing, translated):
-                t = (t or "").strip()
-                _translation_cache[w] = t if t and t != w else ""
+        glosses = _gloss_de_many(words)
         return [
-            {"word": w, "pinyin": pinyin_of(w), "definition_de": _translation_cache.get(w, "")}
+            {"word": w, "pinyin": pinyin_of(w), "definition_de": glosses.get(w, "")}
             for w in words
         ]
     except Exception as e:
@@ -290,6 +315,9 @@ def annotate_zh_summary(text: str) -> str:
         new_words = set(_new_words_from_pairs(pairs))
         if not new_words:
             return text
+        # Every gloss in one request before the loop (#1140) — the loop used
+        # to call _gloss_de() per word, i.e. one HTTP request per word.
+        glosses = _gloss_de_many(sorted(new_words))
         out, done = [], set()
         for word, _pos in pairs:
             out.append(word)
@@ -297,7 +325,7 @@ def annotate_zh_summary(text: str) -> str:
                 continue
             done.add(word)
             py = pinyin_of(word)
-            gloss = _gloss_de(word)
+            gloss = glosses.get(word, "")
             if not py and not gloss:
                 continue
             note = f"{py} - {gloss}" if py and gloss else (py or gloss)

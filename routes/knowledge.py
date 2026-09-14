@@ -313,7 +313,7 @@ def translate_sentences(body: TranslateSentencesRequest):
         translated = translator.translate_batch(texts, target=body.target, source=source)
     except Exception as e:
         logger.warning("translate-sentences: batch translation failed — %s", e)
-        return {"translations": ["" for _ in texts]}
+        return {"translations": ["" for _ in texts], "error": str(e) or "translation failed"}
 
     # translate_batch's contract on failure is "return the input unchanged"
     # (see its docstring / annotate/romance.py's _glosses()) — so a translation
@@ -328,6 +328,14 @@ def translate_sentences(body: TranslateSentencesRequest):
             out.append(tr)
         else:
             out.append("")
+
+    # Nothing came back for ANY text of a non-empty batch: that is the
+    # endpoint refusing us (#1140), not a page that happens to translate to
+    # itself. Said out loud so the reader can show "translation unavailable"
+    # instead of a button that silently does nothing — which is precisely how
+    # this was reported.
+    if any(t.strip() for t in texts) and not any(out):
+        return {"translations": out, "error": "no translation came back"}
     return {"translations": out}
 
 

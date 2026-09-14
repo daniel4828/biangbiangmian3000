@@ -471,7 +471,8 @@ def _no_real_translation(monkeypatch):
     each new word's German gloss — stub that one choke point (same pattern
     as tests/test_zh_annotate.py) so this suite never reaches a real network
     service."""
-    monkeypatch.setattr(zh_annotate, "_gloss_de", lambda w: f"DE:{w}")
+    monkeypatch.setattr(zh_annotate, "_gloss_de_many",
+                        lambda words: {w: f"DE:{w}" for w in words})
 
 
 def _make_video_episode(transcript: str) -> tuple[int, dict]:

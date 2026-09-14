@@ -229,3 +229,41 @@ def test_translate_zh_still_fails_fast(monkeypatch):
 
     assert translator.translate_zh("Hallo", target="fr", source="de") == "Hallo"
     assert len(calls) == 1
+
+
+# ── 失败块的逐句重试必须有上限（#1140）──────────────────────────────────────
+# 背景：一块失败往往是因为免费端点在限流我们（生词标注曾对一整篇转录逐词
+# 请求，几百个请求打下去必被限）。这时再逐句重试等于朝着同一个拒绝多发几十
+# 次请求，限流更久、还要等好几分钟。
+
+def test_item_fallback_stops_after_repeated_failures(monkeypatch):
+    fake = FakeTranslator()
+
+    def always_fail(text: str) -> str:
+        raise RuntimeError("429 rate limited")
+
+    fake.translate = always_fail  # type: ignore[method-assign]
+    monkeypatch.setattr(translator, "_load", lambda source, target: fake)
+    calls: list[str] = []
+    monkeypatch.setattr(translator, "translate_zh",
+                        lambda text, target, source: (calls.append(text), text)[1])
+
+    texts = [f"第{i}句" for i in range(40)]
+    out = translator.translate_batch(texts, target="de")
+
+    assert out == texts, "失败契约不变：原样返回"
+    assert len(calls) <= translator._ITEM_FALLBACK_MAX_MISSES, \
+        f"逐句重试必须刹车，实际发了 {len(calls)} 次"
+
+
+def test_item_fallback_still_rescues_one_bad_sentence(monkeypatch):
+    """整块失败只是因为其中一句超长时，其余句子照样要救回来。"""
+    fake = FakeTranslator()
+    _patch(monkeypatch, fake)
+    huge = "字" * 6000
+    texts = [huge] + [f"第{i}句" for i in range(10)]
+
+    out = translator.translate_batch(texts, target="de")
+
+    assert out[0] == huge          # 这一句救不了
+    assert out[1:] == ["de:" + t for t in texts[1:]]   # 其余全部翻出来了

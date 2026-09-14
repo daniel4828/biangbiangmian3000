@@ -189,6 +189,10 @@ def translate_zh(text: str, target: str = "en", source: str = "zh-CN") -> str:
 # site; #756 moved it in here so every caller gets it).
 _CHUNK_CHAR_BUDGET = 4500
 
+# How many sentences of a failed chunk may miss in a row before the rest of
+# that chunk is given up on — see _translate_chunk's fallback loop.
+_ITEM_FALLBACK_MAX_MISSES = 3
+
 
 def _translate_chunk(t, texts: list[str], target: str, source: str,
                      on_item=None) -> list[str]:
@@ -206,9 +210,32 @@ def _translate_chunk(t, texts: list[str], target: str, source: str,
     except Exception as e:
         logger.warning("translator: batch error (source=%s, target=%s) — %s", source, target, e)
 
+    # Per-sentence retry, but bounded (#1140). When the chunk failed because
+    # the free endpoint is refusing us (rate limit after a burst, a temporary
+    # block), retrying every sentence of the chunk one by one fires dozens
+    # more requests into exactly that refusal — it deepens the throttling and
+    # costs minutes. After a few consecutive misses the rest of the chunk is
+    # handed back unchanged, which is translate_batch's documented failure
+    # contract anyway. A chunk that failed for a LOCAL reason (one over-long
+    # text in it) still gets fully rescued: the other sentences succeed, so
+    # the counter never reaches the limit.
     out = []
-    for text in texts:
-        out.append(translate_zh(text, target, source))
+    misses = 0
+    for i, text in enumerate(texts):
+        if misses >= _ITEM_FALLBACK_MAX_MISSES:
+            logger.warning("translator: giving up on the remaining %d sentences of this "
+                           "chunk after %d consecutive failures (source=%s, target=%s)",
+                           len(texts) - i, misses, source, target)
+            for rest in texts[i:]:
+                out.append(rest)
+                if on_item:
+                    on_item()
+            break
+        translated = translate_zh(text, target, source)
+        # translate_zh returns the input on failure — that is what a miss
+        # looks like from here.
+        misses = misses + 1 if (translated == text and text.strip()) else 0
+        out.append(translated)
         if on_item:
             on_item()
     return out
