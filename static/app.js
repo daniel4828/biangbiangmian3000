@@ -1014,6 +1014,9 @@ function showView(name) {
   // also puts that element's display back under this function's control.
   if (document.body.classList.contains('wd-popup')) closeWordDetailPopup();
   _currentView = name;
+  // #1137: the calendar/evolution tooltip is a direct child of <body>, so it
+  // survives every view switch on its own. Clear it on any navigation.
+  hcalHideTip();
   if (name === 'done') _renderDoneHint();
   if (name === 'done' && _sessionReviewedCount > 0) _triggerClapAnimation();
   // Leaving the knowledge view (#502, generalized #653): stop the episode-list
@@ -18131,7 +18134,19 @@ function _hcalTip() {
   if (!t) { t = document.createElement('div'); t.id = 'hcal-tip'; t.className = 'hcal-tip'; document.body.appendChild(t); }
   return t;
 }
+// True only where a pointer can actually hover (mouse / trackpad). On a phone
+// iOS synthesises mouseenter on tap but fires mouseleave only when some *other*
+// element is tapped — and the tap itself rebuilds the grid (hcalSelectDay →
+// _hcalRender), so the element that would have fired it no longer exists. The
+// tooltip then hangs on <body> forever, over every view, and `pointer-events:
+// none` means it cannot even be tapped away (#1137). Touch gets the click-
+// through detail panel instead, which is the better answer there anyway.
+function _hcalHoverCapable() {
+  return !window.matchMedia || window.matchMedia('(hover: hover)').matches;
+}
+
 function hcalShowTip(ev, date) {
+  if (!_hcalHoverCapable()) return;
   const t = _hcalTip();
   t.innerHTML = _hcalTipHtml(date);
   t.style.display = 'block';
@@ -18379,7 +18394,7 @@ function _evoRender() {
 }
 
 function evoMove(ev) {
-  if (!_evoCalc) return;
+  if (!_evoCalc || !_hcalHoverCapable()) return;
   const svg = ev.currentTarget;
   const r = svg.getBoundingClientRect();
   const { dates, series, n } = _evoCalc;
