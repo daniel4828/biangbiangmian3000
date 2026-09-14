@@ -6453,6 +6453,24 @@ function _raBarHtml(owner) {
       _raLoadTrack(owner);
       return '';
     }
+    // #1133: an episode with its own recording must never be offered a
+    // synthetic voice alongside it — Daniel only ever wants the real audio.
+    // _knowledgeListenBarHtml (rendered immediately above this bar, see
+    // _renderKnowledgeDetail) already owns "build a track from the real
+    // recording" for this exact (episode, fulltext) slot, so this isn't
+    // leaving a hole: that bar covers it. Guard against a stale
+    // _knowledgeDetailEpisode (e.g. mid-navigation) by checking its id first.
+    //
+    // Only lang 'zh': _knowledgeListenBarHtml/_raOwnerForEpisodeListen are
+    // hardcoded to that language (transcript_zh is the correct-text side of
+    // the alignment), so it is the only slot a real recording can occupy. A
+    // French/Spanish full text is a translation nobody ever recorded — TTS
+    // is the only way to hear it and stays on offer there.
+    if (owner.kind === 'episode' && owner.variant === 'fulltext' && owner.lang === 'zh' &&
+        _knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id &&
+        _knowledgeDetailEpisode.audio_url) {
+      return '';
+    }
     return `<div class="readalong-bar">
       <button class="btn-secondary" onclick="doGenerateReadalong('${owner.kind}', ${owner.id}, '${owner.lang}', '${owner.variant}', this)">🎧 Generate read-along</button>
     </div>`;
@@ -6730,12 +6748,52 @@ function _raDomIndex(root) {
   return { segments, domText };
 }
 
+// Bracket-group vocabulary gloss detection — mirrors audio/__init__.py's
+// _should_strip()/_BRACKET_RE exactly (same shape, same CJK range) so the
+// frontend and backend agree on what counts as "our own annotation" rather
+// than a parenthetical a human actually wrote, like "(ca. 12:30)".
+const _RA_ANNOTATION_CJK_RE = /[一-鿿㐀-䶿豈-﫿]/;
+
+function _raShouldStripAnnotation(bracketGroup) {
+  let inner = bracketGroup.trim();
+  if (inner && '(（'.includes(inner[0]) && ')）'.includes(inner[inner.length - 1])) {
+    inner = inner.slice(1, -1);
+  }
+  return inner.indexOf(' - ') !== -1 || _RA_ANNOTATION_CJK_RE.test(inner);
+}
+
+// If a #638/#1001-style inline gloss "词（pīnyīn - Definition）" starts at (or
+// one space before) domText[di], returns the domText index just past it;
+// otherwise -1. Brackets never nest (same assumption as the Python side), so
+// finding the next close of either width is enough. NOTE: as of #1001,
+// Romance-language rendering (annotate/romance.py) no longer inserts inline
+// glosses at all — new words surface only via the tap/Cmd-hold gloss UI, not
+// in the text itself — so this only matters for Chinese today. If that ever
+// changes, re-check whether " (Gloss)" romance glosses satisfy this rule
+// (they wouldn't: no CJK, no ' - ') and update _should_strip on both sides
+// together, not just here.
+function _raAnnotationSpanAt(domText, di) {
+  let i = di;
+  if (domText[i] === ' ') i++;
+  const open = domText[i];
+  if (open !== '(' && open !== '（') return -1;
+  for (let j = i + 1; j < domText.length; j++) {
+    const ch = domText[j];
+    if (ch === ')' || ch === '）') {
+      return _raShouldStripAnnotation(domText.slice(di, j + 1)) ? j + 1 : -1;
+    }
+    if (ch === '(' || ch === '（') return -1; // nested open — not our shape, bail
+  }
+  return -1; // unterminated
+}
+
 // Whitespace-insensitive two-pointer alignment of `src` (source_text) against
 // `domText` (see _raDomIndex). Both index arrays are built in the same pass:
 // srcToDom[i] = "src position i begins at this domText offset", and vice
-// versa. A genuine character mismatch (not just a whitespace-run
-// difference) means the rendered text has drifted from what was sent to the
-// aligner — we bail with null rather than guess, per #1049's contract.
+// versa. A genuine character mismatch (not just a whitespace-run difference,
+// and not one of our own inline glosses — see _raAnnotationSpanAt) means the
+// rendered text has drifted from what was sent to the aligner — we bail with
+// null rather than guess, per #1049's contract.
 function _raAlignSrcToDom(src, domText) {
   const isWs = (ch) => ch !== undefined && /[\s　]/.test(ch);
   const n = src.length, m = domText.length;
@@ -6747,6 +6805,20 @@ function _raAlignSrcToDom(src, domText) {
     domToSrc[di] = si;
     if (isWs(src[si])) { si++; continue; }
     while (di < m && isWs(domText[di])) { di++; domToSrc[di] = si; }
+    if (di < m && domText[di] !== src[si]) {
+      const spanEnd = _raAnnotationSpanAt(domText, di);
+      if (spanEnd > di) {
+        // The gloss belongs entirely to src[si] — nothing in source_text
+        // corresponds to it, so every dom position it spans maps back to the
+        // same src offset. Loop back to the top rather than duplicating the
+        // whitespace-skip/compare logic: srcToDom[si] gets overwritten with
+        // the post-gloss `di` on the next pass, which is the position this
+        // src char actually corresponds to.
+        for (let d = di; d < spanEnd; d++) domToSrc[d] = si;
+        di = spanEnd;
+        continue;
+      }
+    }
     if (di >= m || domText[di] !== src[si]) return null;
     si++; di++;
   }

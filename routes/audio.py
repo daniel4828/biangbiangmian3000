@@ -177,12 +177,37 @@ def create_track(owner_kind: str | None = None, owner_id: int | None = None,
     seconds up to tens of seconds depending on text length — with a 409
     guard so two requests for the same track don't race each other into two
     edge-tts runs and two writes.
+
+    #1133: an episode's own recording and a synthetic TTS voice for the same
+    text write to the exact same cache key — (episode, id, lang, 'fulltext')
+    — so whichever finishes first would permanently shadow the other. The
+    frontend already hides the "Generate read-along" button once an episode
+    has audio_url (see static/app.js's _raBarHtml), but a hidden button is
+    not a guarantee: this is the actual door. Real recordings only ever come
+    through POST /api/podcast/episodes/{id}/listen, never through here.
+
+    Scoped to lang == DEFAULT_LANG because that is the ONLY slot the Listen
+    path ever writes (routes/podcast.py hardcodes lang='zh' — transcript_zh
+    is the correct-text side of the alignment). A French or Spanish full
+    text is a *translation* of that transcript with no recording of anyone
+    reading it aloud, so TTS is the only way to hear it and must stay
+    allowed — blocking it there would take away the feature rather than
+    protect anything.
     """
     owner_kind, owner_id, lang, variant = _validate(owner_kind, owner_id, lang, variant)
 
     cached = database.get_audio_track(owner_kind, owner_id, lang, variant)
     if cached:
         return _track_payload(cached)
+
+    if owner_kind == "episode" and variant == "fulltext" and lang == DEFAULT_LANG:
+        episode = database.get_episode(owner_id)
+        if episode and episode.get("audio_url"):
+            raise HTTPException(
+                status_code=400,
+                detail='This item has its own audio — use "Listen" '
+                       "(POST /api/podcast/episodes/{id}/listen) instead of "
+                       "generating a synthetic voice.")
 
     key = (owner_kind, owner_id, lang, variant)
     with _building_lock:

@@ -9,9 +9,8 @@ import sqlite3
 import threading
 from xml.etree import ElementTree
 
-import audio
 import database
-import knowledge.audio_fetch
+import knowledge.listen
 import knowledge.rendition
 import podcast
 from fastapi import APIRouter, HTTPException, Query
@@ -52,11 +51,13 @@ _LISTEN_ERRORS: dict[int, str] = {}
 # never left over from a previous run.
 _LISTEN_PROGRESS: dict[int, str] = {}
 
-# Where a "Listen" download's mp3 lives, kept (not cleaned up after the
-# align) so a rebuild never has to download it a second time. Same parent
-# knowledge/ingest.py's _AUDIOBOOK_AUDIO_DIR uses for downloaded audiobook
-# audio — one place on disk for "source audio fetched for local processing".
-_LISTEN_AUDIO_DIR = os.path.join("data", "audio", "source")
+# The actual download+align+save logic lives in knowledge/listen.py (#1133
+# part 3) so the auto-process crawl path (podcast.py's _maybe_prepare_listen)
+# can share it instead of duplicating it. _LISTEN_AUDIO_DIR is re-exported
+# here (not redefined) purely so existing tests/callers that reach for
+# routes.podcast._LISTEN_AUDIO_DIR keep working — there is exactly one
+# definition, in knowledge/listen.py.
+_LISTEN_AUDIO_DIR = knowledge.listen._LISTEN_AUDIO_DIR
 
 
 @router.post("/api/podcast/check")
@@ -477,9 +478,7 @@ def _listen_track_payload(track: dict) -> dict:
 
 
 def _listen_thread(episode_id: int) -> None:
-    """Background body for POST .../listen (#1074): download the episode's
-    own audio, align it against its already-correct transcript
-    (audio/anchored.py), and save the resulting track.
+    """Background body for POST .../listen (#1074).
 
     🔴 This runs IMMEDIATELY in a background thread, never queued into
     database.audio_jobs (the table scripts/audio_worker.py drains only
@@ -488,55 +487,21 @@ def _listen_thread(episode_id: int) -> None:
     keyboard" — but here Daniel himself just clicked "Listen" and is sitting
     there waiting for the result. Contrast with knowledge/audio_upload.py's
     audiobooks, which ARE queued — those are hours long and nobody is
-    waiting on them synchronously.
+    waiting on them synchronously. (The auto-process crawl path,
+    podcast.py's _maybe_prepare_listen, calls the same underlying build —
+    knowledge.listen.build_and_save — synchronously from an unattended cron
+    run instead; no thread, no task registry, since nobody is watching.)
 
-    Cloud first, local as a fallback (#1100) — NOT prefer_local=True as this
-    started out. "There's no HTTP request open waiting on it" (the original
-    reasoning for defaulting to the free local path) was backwards: Daniel is
-    sitting there waiting BECAUSE this bypasses the audio_jobs queue in the
-    first place, which is exactly the situation that calls for the fast
-    path, not the free one. Measured on the same 11-minute episode: cloud
-    (OpenAI whisper-1) ~30s and ~$0.07; local whisper.cpp's fast model ~5min
-    and $0. Since anchored.py only keeps the ASR step's TIMESTAMPS (the
-    known-correct transcript replaces its text via difflib), cloud's slightly
-    lower accuracy costs nothing here. If cloud ASR fails outright (no
-    OPENAI_API_KEY/GROQ_API_KEY configured, or a transient API error), this
-    falls back to local rather than failing the whole click — but that
-    fallback is reported (_LISTEN_PROGRESS, surfaced by GET .../listen), not
-    silent: going from ~30s to ~5min without a word said about it is exactly
-    the kind of surprise this codebase doesn't allow.
-
-    Never writes a half-built track: any failure (download or alignment)
-    just records the reason in _LISTEN_ERRORS and leaves audio_tracks
-    untouched, exactly as audio.build_track's own callers are required to.
+    The actual download+align+save work (and the cloud-first/local-fallback
+    reasoning behind it) lives in knowledge.listen.build_and_save — this
+    function's only remaining job is the stuff specific to being watched
+    live: the #821 task indicator, and the _LISTEN_* in-memory registries
+    GET .../listen polls while the build runs.
     """
     task_id = f"listen:{episode_id}"
     tasks.register(task_id, "audio", f"Syncing audio · episode {episode_id}",
                    "Downloading audio…")
     try:
-        episode = database.get_episode(episode_id)
-        if not episode:
-            _LISTEN_ERRORS[episode_id] = "Episode no longer exists"
-            return
-        audio_url = (episode.get("audio_url") or "").strip()
-        transcript = (episode.get("transcript_zh") or "").strip()
-        if not audio_url or not transcript:
-            # Guarded again here (already checked by the route before the
-            # thread was spawned) in case the episode changed underneath us
-            # between the check and the thread actually starting.
-            _LISTEN_ERRORS[episode_id] = "Missing audio_url or transcript"
-            return
-
-        ext = os.path.splitext(audio_url.split("?")[0])[1] or ".mp3"
-        filename = f"episode-{episode_id}{ext}"
-        try:
-            local_path = knowledge.audio_fetch.download_episode_audio(
-                audio_url, _LISTEN_AUDIO_DIR, filename)
-        except knowledge.audio_fetch.AudioFetchError as e:
-            logger.warning("podcast: listen download failed for episode %s: %s", episode_id, e)
-            _LISTEN_ERRORS[episode_id] = str(e)
-            return
-
         def _on_progress(msg: str) -> None:
             # 🔴 `msg` must only ever be a chunk counter/timestamp (see
             # audio.build_track's on_progress docstring) — never transcript
@@ -544,37 +509,11 @@ def _listen_thread(episode_id: int) -> None:
             _LISTEN_PROGRESS[episode_id] = msg
             tasks.update(task_id, msg)
 
-        tasks.register(task_id, "audio", f"Syncing audio · episode {episode_id}",
-                       "Transcribing + aligning (cloud, usually under a minute)…")
-        try:
-            track = audio.build_track(text=transcript, audio_path=local_path,
-                                      lang="zh", prefer_local=False, on_progress=_on_progress)
-        except audio.AudioTrackError as cloud_err:
-            logger.warning(
-                "podcast: listen cloud ASR failed for episode %s (%s) — falling back to local "
-                "whisper.cpp (roughly 10x slower)", episode_id, cloud_err)
-            fallback_msg = "云端转录失败，改用本地转录（会慢很多）…"
-            _LISTEN_PROGRESS[episode_id] = fallback_msg
-            tasks.update(task_id, fallback_msg)
-            try:
-                track = audio.build_track(text=transcript, audio_path=local_path,
-                                          lang="zh", prefer_local=True, on_progress=_on_progress)
-            except audio.AudioTrackError as local_err:
-                logger.warning(
-                    "podcast: listen local fallback also failed for episode %s: %s",
-                    episode_id, local_err)
-                _LISTEN_ERRORS[episode_id] = (
-                    f"Cloud ASR failed ({cloud_err}); local fallback also failed: {local_err}")
-                return
-
-        database.save_audio_track(
-            "episode", episode_id, "zh", "fulltext",
-            track.audio_path, track.duration_ms,
-            [c.to_dict() for c in track.cues],
-            track.source, track.voice, source_text=track.source_text,
-        )
-        logger.info("podcast: listen track ready for episode %s (%d cues, source=%s)",
-                   episode_id, len(track.cues), track.source)
+        # knowledge.listen.build_and_save logs its own success line — no need
+        # to duplicate it here.
+        knowledge.listen.build_and_save(episode_id, on_progress=_on_progress)
+    except knowledge.listen.ListenError as e:
+        _LISTEN_ERRORS[episode_id] = str(e)
     except Exception as e:
         logger.error("podcast: listen build failed for episode %s: %s", episode_id, e)
         _LISTEN_ERRORS[episode_id] = str(e)

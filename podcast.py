@@ -2123,6 +2123,78 @@ def _maybe_prepare_fulltext(episode_id: int, kind: str) -> None:
                        episode_id, e)
 
 
+# Auto "Listen" (#1133 part 3) only runs for feeds under this length — every
+# auto-processed episode downloads tens of MB of audio and pays for a
+# duration-billed cloud ASR call (~$0.36/hour worst case, OpenAI whisper-1).
+# A manual click on "Listen" has no such ceiling (see knowledge/listen.py's
+# only caller besides this one, routes/podcast.py's start_listen) because
+# Daniel himself asked for that one and is the one paying for it with his
+# own wait; something that runs unattended for every auto-process feed needs
+# a cap so a three-hour interview show doesn't silently rack up cost every
+# single morning.
+_AUTO_LISTEN_MAX_MINUTES = 90
+
+
+def _maybe_prepare_listen(episode_id: int) -> None:
+    """Auto-build the read-along "Listen" track for a just-summarized episode
+    (#1133 part 3), but only for feeds that opted into full automation.
+
+    Reuses `podcast_feeds.auto_process` rather than adding a second toggle —
+    Daniel decided "on" should mean the whole pipeline (transcribe +
+    summarize + listen), not one more checkbox to remember to also flip.
+
+    Failure is logged and swallowed, exactly like _maybe_prepare_fulltext
+    above: listening is an extra, and an episode whose summary succeeded
+    must not be marked failed because a download or alignment hiccupped.
+    The 🎧 Listen button on the detail page is always still there as a
+    manual fallback.
+    """
+    try:
+        episode = database.get_episode(episode_id)
+        if not episode:
+            return
+        if not (episode.get("audio_url") or "").strip():
+            logger.debug("podcast: auto-listen skipped for %s (no audio_url)", episode_id)
+            return
+        if not (episode.get("transcript_zh") or "").strip():
+            logger.debug("podcast: auto-listen skipped for %s (no transcript)", episode_id)
+            return
+
+        # channel_id stores the source feed's URL (see
+        # database.get_feed_by_url's docstring) — this is the only place
+        # that says "yes, keep going without being asked".
+        feed = database.get_feed_by_url(episode.get("channel_id") or "")
+        if not feed or not feed.get("auto_process"):
+            return
+
+        if database.get_audio_track("episode", episode_id, "zh", "fulltext"):
+            return  # already built (e.g. Daniel clicked "Listen" himself first)
+
+        # Missing duration_seconds isn't rejected — most feeds do carry
+        # itunes:duration, and refusing to auto-listen just because one
+        # episode's metadata is thin would silently disable the feature for
+        # that source far more often than it would protect against cost.
+        duration = episode.get("duration_seconds")
+        if duration and duration > _AUTO_LISTEN_MAX_MINUTES * 60:
+            logger.info("podcast: auto-listen skipped for %s (%.0f min > %d min cap)",
+                       episode_id, duration / 60, _AUTO_LISTEN_MAX_MINUTES)
+            return
+
+        import knowledge.listen
+        import knowledge.rendition
+        from languages import DEFAULT_LANG
+
+        # Full text first: it's what actually shows on screen while
+        # listening, and if it fails there is no point downloading audio and
+        # paying for ASR for a track nobody could read along with anyway.
+        knowledge.rendition.get_or_create_fulltext(episode_id, DEFAULT_LANG, generate=True)
+        knowledge.listen.build_and_save(episode_id)
+        logger.info("podcast: auto-listen track built for episode %s", episode_id)
+    except Exception as e:
+        logger.warning("podcast: auto-listen for episode %s failed (skipped): %s",
+                       episode_id, e)
+
+
 def _process_episode(episode_id: int, video: dict, detail_level: str, summary: dict) -> None:
     """Process one already-inserted episode end-to-end: transcript -> AI
     summary -> HSK word filter -> Spotify link -> store -> email. Shared by
@@ -2272,6 +2344,13 @@ def _process_episode(episode_id: int, video: dict, detail_level: str, summary: d
                 # signal-cli hiccup must not downgrade a successfully
                 # summarized episode to 'error' either.
                 logger.warning("podcast: Signal notification failed for %s: %s", video["video_id"], e)
+
+            # Last on purpose (#1133 part 3): downloading the episode's own
+            # audio + cloud ASR alignment takes tens of seconds to a few
+            # minutes. Notifications go out first so the morning email/Signal
+            # message isn't held up waiting for this — "Listen" support
+            # finishes filling in quietly afterwards.
+            _maybe_prepare_listen(episode_id)
         except Exception as e:
             logger.error("podcast: episode %s failed: %s", video["video_id"], e)
             database.update_episode(episode_id, status="error", error=str(e))
