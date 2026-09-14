@@ -284,7 +284,6 @@ def test_item_fallback_still_rescues_one_bad_sentence(monkeypatch):
 _SORRY_PAGE = ('<html><head><title>Sorry...</title></head><body>'
                '<div>Our systems have detected unusual traffic</div></body></html>')
 _GTX_JSON = '[[["Bonjour le monde.","Hallo Welt.",null,null,1]],null,"de"]'
-_MS_JSON = '[{"translations":[{"text":"Bonjour le monde.","to":"fr"}]}]'
 
 
 def _route(monkeypatch, handlers: dict):
@@ -305,7 +304,6 @@ def _route(monkeypatch, handlers: dict):
         raise AssertionError(f"没有为这个地址准备响应：{url}")
 
     monkeypatch.setattr(translator, "_translators", {})
-    monkeypatch.setattr(translator, "_ms_token", {"value": "", "issued_at": 0.0})
     monkeypatch.setattr(translator.urllib.request, "urlopen", _open)
     return seen
 
@@ -320,55 +318,11 @@ def test_blocked_mobile_page_falls_through_to_the_json_endpoint(monkeypatch):
     assert any("translate_a/single" in c["url"] for c in seen)
 
 
-def test_both_google_doors_blocked_falls_through_to_microsoft(monkeypatch):
-    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
-                                "translate_a/single": _SORRY_PAGE,
-                                "edge.microsoft.com": "header.payload.signature",
-                                "cognitive": _MS_JSON})
-
-    out = translator.translate_strict("Hallo Welt.", target="fr", source="de")
-
-    assert out == "Bonjour le monde."
-    ms = [c for c in seen if "cognitive" in c["url"]][0]
-    assert ms["auth"] == "Bearer header.payload.signature"
-    assert "zh" not in ms["url"] and "from=de" in ms["url"] and "to=fr" in ms["url"]
-
-
-def test_microsoft_sends_one_element_per_line_and_keeps_the_line_count(monkeypatch):
-    """批量翻译靠换行切分结果。微软这条路把行数交给协议本身保证，不靠端点
-    恰好保留换行。"""
-    three = '[{"translations":[{"text":"un","to":"fr"}]},' \
-            '{"translations":[{"text":"deux","to":"fr"}]},' \
-            '{"translations":[{"text":"trois","to":"fr"}]}]'
-    seen = _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
-                                "translate_a/single": OSError("blocked"),
-                                "edge.microsoft.com": "a.b.c",
-                                "cognitive": three})
-
-    out = translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
-
-    assert out == "un\ndeux\ntrois"
-    body = [c for c in seen if "cognitive" in c["url"]][0]["body"]
-    assert body.count('"Text"') == 3
-
-
-def test_chinese_is_sent_to_microsoft_as_zh_Hans(monkeypatch):
-    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
-                                "translate_a/single": _SORRY_PAGE,
-                                "edge.microsoft.com": "a.b.c",
-                                "cognitive": '[{"translations":[{"text":"Hallo","to":"de"}]}]'})
-
-    translator.translate_strict("你好", target="de", source="zh-CN")
-
-    assert "from=zh-Hans" in [c for c in seen if "cognitive" in c["url"]][0]["url"]
-
-
 def test_error_names_every_transport_that_failed(monkeypatch):
     """报错就是诊断：到底是被拦了、还是格式变了，只能从这句话里看出来。"""
     _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
                          "translate_a/single": _SORRY_PAGE,
-                         "edge.microsoft.com": OSError("connection reset"),
-                         "cognitive": _SORRY_PAGE})
+                         "deepseek": OSError("unused")})
 
     with pytest.raises(Exception) as exc:
         translator.translate_strict("Hallo", target="fr", source="de")
@@ -411,8 +365,7 @@ def test_deepseek_is_the_last_resort_and_keeps_the_line_count(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
     monkeypatch.setattr(ai, "_call_api", fake_call)
     _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
-                         "translate_a/single": OSError("blocked"),
-                         "edge.microsoft.com": OSError("blocked")})
+                         "translate_a/single": OSError("blocked")})
 
     out = translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
 
@@ -429,8 +382,7 @@ def test_deepseek_line_count_mismatch_is_a_failure_not_a_guess(monkeypatch):
     monkeypatch.setattr(ai, "_call_api",
                         lambda *a, **kw: "un\ndeux\ntrois\nquatre")
     _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
-                         "translate_a/single": OSError("blocked"),
-                         "edge.microsoft.com": OSError("blocked")})
+                         "translate_a/single": OSError("blocked")})
 
     with pytest.raises(Exception) as exc:
         translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
@@ -440,8 +392,7 @@ def test_deepseek_line_count_mismatch_is_a_failure_not_a_guess(monkeypatch):
 def test_deepseek_is_skipped_without_a_key(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
-                         "translate_a/single": OSError("blocked"),
-                         "edge.microsoft.com": OSError("blocked")})
+                         "translate_a/single": OSError("blocked")})
 
     with pytest.raises(Exception) as exc:
         translator.translate_strict("Hallo", target="fr", source="de")
@@ -455,8 +406,7 @@ def test_a_throttled_door_is_skipped_for_a_while_with_its_reason(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
     monkeypatch.setattr(ai, "_call_api", lambda *a, **kw: "Bonjour")
     seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
-                                "translate_a/single": _SORRY_PAGE,
-                                "edge.microsoft.com": OSError("nope")})
+                                "translate_a/single": _SORRY_PAGE})
 
     t = translator._load("de", "fr")
     assert t.translate("Hallo") == "Bonjour"
@@ -467,3 +417,30 @@ def test_a_throttled_door_is_skipped_for_a_while_with_its_reason(monkeypatch):
         "被限流的门在冷却期内一次都不该再敲"
     left, reason = translator._cooldown_left("google-mobile")
     assert left > 0 and "Sorry..." in reason, "冷却也要带着原因，否则诊断就丢了"
+
+
+def test_the_preference_expires_so_the_free_door_gets_another_chance(monkeypatch):
+    """谷歌答的是 429（限流，会过去），而最后那条要花钱——一旦"记住"是永久的，
+    免费通道恢复之后我们还会一直付钱。"""
+    import ai
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    monkeypatch.setattr(ai, "_call_api", lambda *a, **kw: "Bonjour")
+    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
+                                "translate_a/single": _SORRY_PAGE})
+
+    t = translator._load("de", "fr")
+    assert t.translate("Hallo") == "Bonjour"      # 免费门全拒 → 落到 deepseek
+    assert t.preferred == "deepseek"
+
+    # 冷却和偏好都到期之后，谷歌恢复了
+    monkeypatch.setattr(translator, "_cooldowns", {})
+    t.preferred_until = 0
+    seen.clear()
+    _route(monkeypatch, {"translate.google.com/m": _PAGE})   # 重新布线：谷歌能用了
+    t2 = translator._load("de", "fr")
+    t2.preferred, t2.preferred_until = "deepseek", 0
+    out = t2.translate("Hallo Welt.\nDanke.")
+
+    assert out == "Bonjour le monde.\nMerci.", "偏好过期后要重新从最上面走一遍"
+    assert t2.preferred == "google-mobile"

@@ -1,8 +1,9 @@
 """
 Source language → target language translation over free, key-less endpoints.
 
-Three transports are tried in order (#1140): Google's mobile page, Google's
-translate_a/single JSON endpoint, and Microsoft's key-less Edge translator.
+Three transports are tried in order: Google's mobile page, Google's
+translate_a/single JSON endpoint (#1140), and — last, because it is the only
+one that costs money — the app's own DeepSeek key (#1144).
 🔴 One transport is not enough: Google blocks datacenter IPs, and when it
 starts doing so EVERY translation in the app goes quiet at once — inline word
 glosses, the 译 overlay, knowledge renditions, book pages. That is exactly how
@@ -49,20 +50,12 @@ _GOOGLE_URL = "https://translate.google.com/m"
 # answers with something that has no result container (a consent page, a
 # "Sorry..." block page).
 _GOOGLE_JSON_URL = "https://translate.googleapis.com/translate_a/single"
-# Microsoft's key-less translator, the one Edge's own page translation uses:
-# a short-lived JWT from the first URL authorizes the second. No account, no
-# key, and — the reason it is here — a different company's IP policy.
-_MS_AUTH_URL = "https://edge.microsoft.com/translate/auth"
-# 🔴 The `api-edge` host, not plain `api.` — the latter wants a paid Azure
-# subscription key and does not accept the Edge token at all (#1142 shipped the
-# wrong one and got HTTP 404 on the server).
-_MS_TRANSLATE_URL = "https://api-edge.cognitive.microsofttranslator.com/translate"
-# Microsoft serves the auth endpoint to its own browser; a Chrome UA gets a 404.
-_EDGE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0")
-# The token is good for ~10 minutes; refreshed a little early.
-_MS_TOKEN_TTL_SECONDS = 480
-_ms_token: dict = {"value": "", "issued_at": 0.0}
+# 🔴 Microsoft's key-less Edge translator was tried here as a third free door
+# (#1142/#1144) and removed again (#1146): its auth endpoint
+# (edge.microsoft.com/translate/auth) answers 404 from this server whatever
+# User-Agent it is asked with, so the door was pure noise in the diagnosis —
+# one more red line in the self-test and a wasted round trip before the door
+# that does work. A door that cannot open is not a fallback.
 # 🔴 Not a politeness header — the entire feature depends on it. Google serves
 # `python-requests/…` a JS-only page with no result container, which is exactly
 # what broke every translation in the app (#890). Keep a real browser UA here.
@@ -143,67 +136,6 @@ def _google_json(text: str, source: str, target: str) -> str:
     if not out.strip():
         raise RuntimeError("empty JSON reply")
     return out
-
-
-def _ms_lang(code: str) -> str:
-    """Microsoft's language codes. Chinese is the only one that differs from
-    what languages.py stores ("zh-CN" → "zh-Hans")."""
-    c = (code or "").lower()
-    if c.startswith("zh"):
-        return "zh-Hant" if ("tw" in c or "hant" in c or "hk" in c) else "zh-Hans"
-    return c.split("-")[0]
-
-
-def _ms_auth_token() -> str:
-    now = time.time()
-    if _ms_token["value"] and now - _ms_token["issued_at"] < _MS_TOKEN_TTL_SECONDS:
-        return _ms_token["value"]
-    try:
-        token = _http(_MS_AUTH_URL, headers={"User-Agent": _EDGE_UA}).strip()
-    except Exception as e:
-        # Which of the two calls failed is the whole diagnosis — a bare
-        # "HTTP 404" left #1142 unable to tell a wrong URL from a wrong token.
-        raise RuntimeError(f"auth step: {e}") from None
-    if not token or "." not in token:
-        raise RuntimeError("auth step: no JWT in the reply")
-    _ms_token.update(value=token, issued_at=now)
-    return token
-
-
-def _microsoft(text: str, source: str, target: str) -> str:
-    """Transport 3: Microsoft's key-less Edge translator.
-
-    🔴 Sends one array element PER LINE and rejoins them with newlines. The batching
-    above packs many sentences into one request separated by newlines and
-    splits the answer back apart by line, which with the Google transports
-    rests on the endpoint preserving line breaks. Here the line structure is
-    carried by the protocol itself, so it cannot drift."""
-    lines = text.split("\n")
-    payload = json.dumps([{"Text": line or " "} for line in lines]).encode("utf-8")
-    params = urllib.parse.urlencode({"api-version": "3.0",
-                                     "from": _ms_lang(source), "to": _ms_lang(target)})
-    token = _ms_auth_token()
-    try:
-        body = _http(f"{_MS_TRANSLATE_URL}?{params}", data=payload,
-                     headers={"Content-Type": "application/json; charset=utf-8",
-                              "User-Agent": _EDGE_UA,
-                              "Authorization": f"Bearer {token}"})
-    except Exception as e:
-        raise RuntimeError(f"translate step: {e}") from None
-    try:
-        data = json.loads(body)
-    except ValueError:
-        raise RuntimeError(f"not JSON (page title: {_page_title(body)!r})") from None
-    if not isinstance(data, list) or len(data) != len(lines):
-        raise RuntimeError(f"expected {len(lines)} results, got "
-                           f"{len(data) if isinstance(data, list) else type(data).__name__}")
-    out = []
-    for item in data:
-        try:
-            out.append(item["translations"][0]["text"])
-        except (KeyError, IndexError, TypeError):
-            raise RuntimeError("unexpected result shape") from None
-    return "\n".join(out)
 
 
 # Human-readable names for the AI transport's prompt. Anything not listed
@@ -299,7 +231,6 @@ def _page_title(body: str) -> str:
 _TRANSPORTS = (
     ("google-mobile", _google_mobile),
     ("google-json", _google_json),
-    ("microsoft-edge", _microsoft),
     ("deepseek", _deepseek),
 )
 
@@ -307,6 +238,10 @@ _TRANSPORTS = (
 # second later costs a round trip, gets the same answer, and keeps the counter
 # that produced the ban warm. Skipped for a while instead (#1144).
 _THROTTLE_COOLDOWN_SECONDS = 900
+
+# How long a proven transport stays the first choice before the list is walked
+# from the top again — see _WebTranslator's docstring.
+_PREFERENCE_TTL_SECONDS = 1800
 # name → (skip until, why it was skipped). The reason travels with the
 # cooldown so the diagnosis ("Sorry...", "429") survives into every later
 # error message — a bare "skipped" would hide exactly what one needs to know.
@@ -338,20 +273,30 @@ class _WebTranslator:
     below did not have to change.
 
     Walks _TRANSPORTS until one answers, and then REMEMBERS which one (#1140):
-    when Google is blocking this server, paying two failed requests before
-    every single translation would make a reading page take minutes. The
-    preference is per language pair and is dropped again the moment its
-    transport fails, so a temporary outage does not pin the app to a worse
-    endpoint forever."""
+    when Google is blocking this server, paying a failed request before every
+    single translation would make a reading page take minutes. The preference
+    is per language pair and is dropped the moment its transport fails.
+
+    🔴 It also EXPIRES (#1146). Google's refusal is a 429 — a rate limit that
+    lifts once the burst that caused it stops — while the last door in the
+    list costs money. A permanent preference would quietly keep paying for
+    the rest of the process's life, long after the free one recovered. So
+    every half hour the list is walked from the top again; the cost of that
+    is one failed request, and only when the free doors are still shut."""
 
     def __init__(self, source: str, target: str):
         self.source = source
         self.target = target
         self.preferred: str | None = None
+        self.preferred_until: float = 0.0
 
     def translate(self, text: str) -> str:
         if not text.strip():
             return text
+        if self.preferred and time.time() > self.preferred_until:
+            logger.info("translator: re-checking the free transports (was using %s)",
+                        self.preferred)
+            self.preferred = None
         order = sorted(_TRANSPORTS, key=lambda t: t[0] != self.preferred)
         errors = []
         for name, fn in order:
@@ -374,7 +319,8 @@ class _WebTranslator:
                 if self.preferred != name:
                     logger.info("translator: using %s (source=%s, target=%s)",
                                 name, self.source, self.target)
-                    self.preferred = name
+                self.preferred = name
+                self.preferred_until = time.time() + _PREFERENCE_TTL_SECONDS
                 return out
             errors.append(f"{name}: empty answer")
         raise RuntimeError(f"every translation transport failed — {'; '.join(errors)}")
