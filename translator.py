@@ -53,7 +53,13 @@ _GOOGLE_JSON_URL = "https://translate.googleapis.com/translate_a/single"
 # a short-lived JWT from the first URL authorizes the second. No account, no
 # key, and — the reason it is here — a different company's IP policy.
 _MS_AUTH_URL = "https://edge.microsoft.com/translate/auth"
-_MS_TRANSLATE_URL = "https://api.cognitive.microsofttranslator.com/translate"
+# 🔴 The `api-edge` host, not plain `api.` — the latter wants a paid Azure
+# subscription key and does not accept the Edge token at all (#1142 shipped the
+# wrong one and got HTTP 404 on the server).
+_MS_TRANSLATE_URL = "https://api-edge.cognitive.microsofttranslator.com/translate"
+# Microsoft serves the auth endpoint to its own browser; a Chrome UA gets a 404.
+_EDGE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0")
 # The token is good for ~10 minutes; refreshed a little early.
 _MS_TOKEN_TTL_SECONDS = 480
 _ms_token: dict = {"value": "", "issued_at": 0.0}
@@ -152,9 +158,14 @@ def _ms_auth_token() -> str:
     now = time.time()
     if _ms_token["value"] and now - _ms_token["issued_at"] < _MS_TOKEN_TTL_SECONDS:
         return _ms_token["value"]
-    token = _http(_MS_AUTH_URL).strip()
+    try:
+        token = _http(_MS_AUTH_URL, headers={"User-Agent": _EDGE_UA}).strip()
+    except Exception as e:
+        # Which of the two calls failed is the whole diagnosis — a bare
+        # "HTTP 404" left #1142 unable to tell a wrong URL from a wrong token.
+        raise RuntimeError(f"auth step: {e}") from None
     if not token or "." not in token:
-        raise RuntimeError("no auth token from the Edge translator")
+        raise RuntimeError("auth step: no JWT in the reply")
     _ms_token.update(value=token, issued_at=now)
     return token
 
@@ -171,9 +182,14 @@ def _microsoft(text: str, source: str, target: str) -> str:
     payload = json.dumps([{"Text": line or " "} for line in lines]).encode("utf-8")
     params = urllib.parse.urlencode({"api-version": "3.0",
                                      "from": _ms_lang(source), "to": _ms_lang(target)})
-    body = _http(f"{_MS_TRANSLATE_URL}?{params}", data=payload,
-                 headers={"Content-Type": "application/json; charset=utf-8",
-                          "Authorization": f"Bearer {_ms_auth_token()}"})
+    token = _ms_auth_token()
+    try:
+        body = _http(f"{_MS_TRANSLATE_URL}?{params}", data=payload,
+                     headers={"Content-Type": "application/json; charset=utf-8",
+                              "User-Agent": _EDGE_UA,
+                              "Authorization": f"Bearer {token}"})
+    except Exception as e:
+        raise RuntimeError(f"translate step: {e}") from None
     try:
         data = json.loads(body)
     except ValueError:
@@ -188,6 +204,64 @@ def _microsoft(text: str, source: str, target: str) -> str:
         except (KeyError, IndexError, TypeError):
             raise RuntimeError("unexpected result shape") from None
     return "\n".join(out)
+
+
+# Human-readable names for the AI transport's prompt. Anything not listed
+# goes in as the raw code — the models understand "fr" perfectly well.
+_LANG_NAMES = {"zh-CN": "Chinese", "zh": "Chinese", "de": "German",
+               "en": "English", "fr": "French", "es": "Spanish"}
+
+
+def _deepseek(text: str, source: str, target: str) -> str:
+    """Last resort: the app's own AI account (#1144).
+
+    Every transport above is somebody else's free tier, reachable only as long
+    as they tolerate this server's IP — and when they stop, ALL reading help
+    dies at once (that is #1140/#1142, twice in one day: Google answering 429
+    to both of its doors). This one runs on Daniel's own DeepSeek key, so it
+    cannot be taken away, and it is only ever reached after the free doors
+    have refused: roughly $0.002 for a whole article, logged under
+    purpose="translate_fallback" so it shows up in /api/costs like everything
+    else.
+
+    Skipped entirely when AI is switched off (offline mode, DISABLE_AI) or no
+    key is configured — an offline laptop must not sit here waiting on a
+    network call."""
+    import os
+
+    try:
+        from routes.utils import ai_disabled
+        if ai_disabled():
+            raise RuntimeError("AI is disabled on this instance")
+    except ImportError:
+        pass
+    if not os.environ.get("DEEPSEEK_API_KEY"):
+        raise RuntimeError("no DEEPSEEK_API_KEY configured")
+
+    import ai
+
+    lines = text.split("\n")
+    src = _LANG_NAMES.get(source, source)
+    tgt = _LANG_NAMES.get(target, target)
+    prompt = (
+        f"Translate the following {src} text into {tgt}.\n"
+        f"The text has exactly {len(lines)} lines. Reply with exactly {len(lines)} "
+        "lines: one translation per input line, in the same order.\n"
+        "No numbering, no commentary, no markdown, no blank lines added or removed. "
+        "Keep any HTML tags exactly as they are.\n\n"
+        f"{text}"
+    )
+    out = ai._call_api(ai.DEFAULT_MODEL, [{"role": "user", "content": prompt}],
+                       4096, purpose="translate_fallback")
+    out = (out or "").strip("\n")
+    got = out.split("\n")
+    if len(got) != len(lines):
+        # Never guess which line went where: the batcher above splits the
+        # answer by line and would silently pair sentences with the wrong
+        # translations. A mismatch is a failure, and its per-item fallback
+        # (one line per request) gets it right.
+        raise RuntimeError(f"expected {len(lines)} lines, got {len(got)}")
+    return out
 
 
 class _TitleParser(HTMLParser):
@@ -226,7 +300,36 @@ _TRANSPORTS = (
     ("google-mobile", _google_mobile),
     ("google-json", _google_json),
     ("microsoft-edge", _microsoft),
+    ("deepseek", _deepseek),
 )
+
+# A door that answered 429/403 is throttling this machine; asking it again a
+# second later costs a round trip, gets the same answer, and keeps the counter
+# that produced the ban warm. Skipped for a while instead (#1144).
+_THROTTLE_COOLDOWN_SECONDS = 900
+# name → (skip until, why it was skipped). The reason travels with the
+# cooldown so the diagnosis ("Sorry...", "429") survives into every later
+# error message — a bare "skipped" would hide exactly what one needs to know.
+_cooldowns: dict[str, tuple[float, str]] = {}
+
+
+def _is_throttled_error(e: Exception) -> bool:
+    code = getattr(e, "code", None)
+    if code in (403, 429):
+        return True
+    text = str(e)
+    return "429" in text or "Too Many Requests" in text or "Sorry..." in text
+
+
+def _cooldown_left(name: str) -> tuple[int, str]:
+    """(seconds left, reason) for a door being skipped; (0, "") when it is
+    free to try again."""
+    until, reason = _cooldowns.get(name, (0.0, ""))
+    left = int(until - time.time())
+    if left > 0:
+        return left, reason
+    _cooldowns.pop(name, None)
+    return 0, ""
 
 
 class _WebTranslator:
@@ -252,10 +355,18 @@ class _WebTranslator:
         order = sorted(_TRANSPORTS, key=lambda t: t[0] != self.preferred)
         errors = []
         for name, fn in order:
+            left, reason = _cooldown_left(name)
+            if left:
+                errors.append(f"{name}: skipped for {left}s after — {reason}")
+                continue
             try:
                 out = fn(text, self.source, self.target)
             except Exception as e:
                 errors.append(f"{name}: {e}")
+                if _is_throttled_error(e):
+                    _cooldowns[name] = (time.time() + _THROTTLE_COOLDOWN_SECONDS, str(e))
+                    logger.warning("translator: %s is throttling us, skipping it for %d min",
+                                   name, _THROTTLE_COOLDOWN_SECONDS // 60)
                 if self.preferred == name:
                     self.preferred = None
                 continue
@@ -480,6 +591,11 @@ def selftest(text: str = "你好，世界。", source: str = "zh-CN",
     for name, fn in _TRANSPORTS:
         started = time.time()
         entry = {"transport": name, "ok": False, "ms": 0}
+        # The self-test asks the door itself, cooldown or not — its whole job
+        # is to report the door's real state.
+        cooling, _reason = _cooldown_left(name)
+        if cooling:
+            entry["cooldown_seconds"] = cooling
         try:
             out = (fn(text, source, target) or "").strip()
             entry["ok"] = bool(out)

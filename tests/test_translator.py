@@ -174,6 +174,9 @@ def test_missing_result_container_returns_original_for_translate_zh(monkeypatch)
 def _no_retry_delay(monkeypatch):
     """重试的退避对测试只是纯等待。"""
     monkeypatch.setattr(translator, "_STRICT_RETRY_DELAY_SECONDS", 0)
+    # 限流冷却是模块级状态（#1144）：不清掉，上一个测试里那个"被拦"的通道
+    # 会在下一个测试里被直接跳过，失败信息看着毫不相干。
+    monkeypatch.setattr(translator, "_cooldowns", {})
 
 
 def _fake_urlopen_sequence(bodies: list, calls: list):
@@ -388,3 +391,79 @@ def test_the_working_transport_is_remembered(monkeypatch):
     assert first_round == 2
     assert len(seen) == 3, "第二句应该直接走已经证明可用的那条通道"
     assert "translate_a/single" in seen[-1]["url"]
+
+
+# ── 自家 AI 兜底 + 限流冷却（#1144）─────────────────────────────────────────
+# 线上实测：谷歌两扇门都答 429，微软那条 URL 写错了 404 —— 免费通道全是
+# 别人家的宽容，说没就没，而一没全应用的阅读辅助同时静音。最后一条走
+# Daniel 自己的 DeepSeek key，别人拿不走。
+
+def test_deepseek_is_the_last_resort_and_keeps_the_line_count(monkeypatch):
+    import ai
+
+    seen: dict = {}
+
+    def fake_call(model, messages, max_tokens, purpose, **kw):
+        seen["purpose"] = purpose
+        seen["prompt"] = messages[0]["content"]
+        return "un\ndeux\ntrois"
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    monkeypatch.setattr(ai, "_call_api", fake_call)
+    _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
+                         "translate_a/single": OSError("blocked"),
+                         "edge.microsoft.com": OSError("blocked")})
+
+    out = translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
+
+    assert out == "un\ndeux\ntrois"
+    assert seen["purpose"] == "translate_fallback", "要能在 /api/costs 里看到这笔钱"
+    assert "3 lines" in seen["prompt"], "行数必须写进提示词——批量结果是按行切开的"
+
+
+def test_deepseek_line_count_mismatch_is_a_failure_not_a_guess(monkeypatch):
+    """行数对不上就绝不能把译文按位置塞给句子——那会张冠李戴。"""
+    import ai
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    monkeypatch.setattr(ai, "_call_api",
+                        lambda *a, **kw: "un\ndeux\ntrois\nquatre")
+    _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
+                         "translate_a/single": OSError("blocked"),
+                         "edge.microsoft.com": OSError("blocked")})
+
+    with pytest.raises(Exception) as exc:
+        translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
+    assert "expected 3 lines" in str(exc.value)
+
+
+def test_deepseek_is_skipped_without_a_key(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
+                         "translate_a/single": OSError("blocked"),
+                         "edge.microsoft.com": OSError("blocked")})
+
+    with pytest.raises(Exception) as exc:
+        translator.translate_strict("Hallo", target="fr", source="de")
+    assert "DEEPSEEK_API_KEY" in str(exc.value)
+
+
+def test_a_throttled_door_is_skipped_for_a_while_with_its_reason(monkeypatch):
+    """429 的门再敲一次只会拿到同样的答案，还把封禁计数养热。"""
+    import ai
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    monkeypatch.setattr(ai, "_call_api", lambda *a, **kw: "Bonjour")
+    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
+                                "translate_a/single": _SORRY_PAGE,
+                                "edge.microsoft.com": OSError("nope")})
+
+    t = translator._load("de", "fr")
+    assert t.translate("Hallo") == "Bonjour"
+    google_calls = len([c for c in seen if "google" in c["url"]])
+    t.translate("Hallo")
+
+    assert len([c for c in seen if "google" in c["url"]]) == google_calls, \
+        "被限流的门在冷却期内一次都不该再敲"
+    left, reason = translator._cooldown_left("google-mobile")
+    assert left > 0 and "Sorry..." in reason, "冷却也要带着原因，否则诊断就丢了"

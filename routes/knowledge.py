@@ -13,6 +13,7 @@ ingestion path per source type, see that module's docstring for why.
 import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import ai
@@ -352,9 +353,14 @@ def translate_selftest(lang: str = languages.DEFAULT_LANG, text: str = "你好�
         raise HTTPException(400, f"unknown lang: {lang}")
     source = languages.get_lang_config(lang)["translator_source"]
     results = translator.selftest(text=text, source=source, target="de")
-    return {"source": source, "target": "de", "text": text,
-            "working": [r["transport"] for r in results if r["ok"]],
-            "results": results}
+    # charset spelled out (#1144): read on a phone, the Chinese sample text
+    # came back as mojibake because the browser guessed the encoding — which
+    # looks like the bug being diagnosed rather than the diagnosis.
+    return JSONResponse(
+        {"source": source, "target": "de", "text": text,
+         "working": [r["transport"] for r in results if r["ok"]],
+         "results": results},
+        media_type="application/json; charset=utf-8")
 
 
 # ── Chat about a knowledge item (#945) ──────────────────────────────────────
