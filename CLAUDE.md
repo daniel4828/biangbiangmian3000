@@ -248,6 +248,9 @@ Daniel 的每条消息，连同 AI 生成的纠正，自动追加进 `language-l
 │                          #   🔴 一条通道不够：谷歌拦机房 IP 时全应用的翻译同时静音（词释义/译 按钮/rendition/书页），
 │                          #   而每个调用方都优雅降级，从外面看就像应用有 bug。通道成功后记住它（按语言对），失败即忘。
 │                          #   微软那条按行发数组元素、按行拼回来——行数由协议保证，不靠端点恰好保留换行。
+│                          #   **最后一条是自家 DeepSeek**（#1144，`purpose="translate_fallback"`，一篇约 $0.002，进 /api/costs）：
+│                          #   前三条都是别人家的免费额度，说没就没——线上实测谷歌两扇门齐答 429。AI 关闭/离线/无 key 时跳过。
+│                          #   答 429/403 的门进 15 分钟冷却（连原因一起记，诊断不会被"skipped"盖掉）。
 │                          #   `GET /api/translate-selftest` 逐条通道自检，报错里带拦截页标题（诊断就是那一句）
 ├── tts.py                 # edge-tts 封装（离线模式下只读缓存，#612）
 ├── routes/dictionary.py   # AI 词典 API（#746）：/api/dict/lookup + 历史；结果存 dict_queries（database/dictionary.py）
