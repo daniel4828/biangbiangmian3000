@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import openai as openai_sdk
 
 import audio
+import knowledge.listen as listen_mod  # #1133: Listen's download+align seam lives here now
 import audio.anchored as anchored
 import audio.asr_cloud as asr_cloud
 import audio.asr_local as asr_local
@@ -1069,8 +1070,8 @@ def test_listen_returns_existing_track_without_downloading_or_aligning(tmp_db, m
     def fail(*a, **kw):
         raise AssertionError("must not download/align when a track already exists")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fail)
-    monkeypatch.setattr(podcast_routes.audio, "build_track", fail)
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fail)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fail)
 
     resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
 
@@ -1131,8 +1132,8 @@ def test_listen_success_downloads_then_aligns_via_cloud_by_default_and_saves_tra
                     word_cues=[], source="anchored", voice=None,
                     source_text="今天天气很好。")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
-    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track)
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fake_build_track)
 
     resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
     assert resp.status_code == 200, resp.text
@@ -1178,8 +1179,8 @@ def test_listen_falls_back_to_local_when_cloud_asr_fails(tmp_db, tmp_path, monke
                     word_cues=[], source="anchored", voice=None,
                     source_text="今天天气很好。")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
-    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track)
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fake_build_track)
 
     resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
     assert resp.status_code == 200, resp.text
@@ -1207,8 +1208,8 @@ def test_listen_fallback_failure_reports_both_reasons_not_just_the_last(
             raise audio.AudioTrackError("cloud boom")
         raise audio.AudioTrackError("local boom")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
-    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track_fails_both)
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fake_build_track_fails_both)
 
     client.post(f"/api/podcast/episodes/{episode_id}/listen")
     _wait_for_listen_to_settle(episode_id)
@@ -1245,8 +1246,8 @@ def test_listen_on_progress_callback_reaches_the_status_endpoint(tmp_db, tmp_pat
                     word_cues=[], source="anchored", voice=None,
                     source_text="今天天气很好。")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
-    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track)
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fake_build_track)
 
     try:
         resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
@@ -1272,7 +1273,46 @@ def test_listen_building_status_omits_detail_when_nothing_reported_yet(
         tmp_db, tmp_path, monkeypatch):
     """No progress callback has fired yet -> 'building' with no `detail` key
     at all, so the frontend keeps its own static "正在同步…" instead of
-    rendering a blank line."""
+    rendering a blank line.
+
+    Blocks inside the DOWNLOAD, not the alignment: "nothing reported yet" is
+    precisely the download phase (#1133 made knowledge.listen report
+    "Transcribing + aligning…" the moment the download returns, so the quiet
+    window ends there). Holding the alignment instead would race the
+    now-instant fake download and pass or fail depending on which thread won.
+    """
+    episode_id = _make_listen_episode()
+    ready_to_finish = threading.Event()
+
+    def fake_download(url, dest_dir, filename):
+        ready_to_finish.wait(timeout=5)
+        return str(tmp_path / "downloaded.mp3")
+
+    def fake_build_track(*, text=None, audio_path=None, lang="zh",
+                         prefer_local=False, should_abort=None, on_progress=None,
+                         provider=None):
+        return Track(audio_path=audio_path, duration_ms=1000, cues=[], word_cues=[],
+                    source="anchored", voice=None, source_text="今天天气很好。")
+
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fake_build_track)
+
+    try:
+        client.post(f"/api/podcast/episodes/{episode_id}/listen")
+        status = client.get(f"/api/podcast/episodes/{episode_id}/listen")
+        body = status.json()
+        assert body["status"] == "building"
+        assert "detail" not in body
+    finally:
+        ready_to_finish.set()
+        _wait_for_listen_to_settle(episode_id)
+
+
+def test_listen_reports_transcribing_once_the_download_finishes(tmp_db, tmp_path, monkeypatch):
+    """#1133: the moment the download returns, the status must stop saying
+    "Downloading audio…". Without this the #821 header indicator and the
+    Listen bar both sit on the download line for the entire ASR run — which
+    on a long episode is minutes of what reads as a stuck download."""
     episode_id = _make_listen_episode()
     ready_to_finish = threading.Event()
 
@@ -1286,15 +1326,20 @@ def test_listen_building_status_omits_detail_when_nothing_reported_yet(
         return Track(audio_path=audio_path, duration_ms=1000, cues=[], word_cues=[],
                     source="anchored", voice=None, source_text="今天天气很好。")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
-    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track)
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fake_build_track)
 
     try:
         client.post(f"/api/podcast/episodes/{episode_id}/listen")
-        status = client.get(f"/api/podcast/episodes/{episode_id}/listen")
-        body = status.json()
-        assert body["status"] == "building"
-        assert "detail" not in body
+        # The build thread is parked inside fake_build_track, which it can only
+        # have reached after the progress line was reported — so poll for it
+        # rather than assuming this thread lost the race.
+        for _ in range(100):
+            body = client.get(f"/api/podcast/episodes/{episode_id}/listen").json()
+            if body.get("detail"):
+                break
+            time.sleep(0.05)
+        assert "Transcribing" in body.get("detail", ""), body
     finally:
         ready_to_finish.set()
         _wait_for_listen_to_settle(episode_id)
@@ -1313,8 +1358,8 @@ def test_listen_alignment_failure_writes_no_track_and_status_is_readable(
     def fake_build_track_fails(**kwargs):
         raise audio.AudioTrackError("simulated: alignment coverage too low")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio", fake_download)
-    monkeypatch.setattr(podcast_routes.audio, "build_track", fake_build_track_fails)
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio", fake_download)
+    monkeypatch.setattr(listen_mod.audio, "build_track", fake_build_track_fails)
 
     resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
     assert resp.status_code == 200
@@ -1337,7 +1382,7 @@ def test_listen_download_failure_also_writes_no_track(tmp_db, monkeypatch):
     def fake_download_fails(url, dest_dir, filename):
         raise audio_fetch.AudioFetchError("simulated: download failed")
 
-    monkeypatch.setattr(podcast_routes.knowledge.audio_fetch, "download_episode_audio",
+    monkeypatch.setattr(listen_mod.knowledge.audio_fetch, "download_episode_audio",
                         fake_download_fails)
 
     resp = client.post(f"/api/podcast/episodes/{episode_id}/listen")
