@@ -242,15 +242,18 @@ Daniel 的每条消息，连同 AI 生成的纠正，自动追加进 `language-l
 │                          #   pdf.py（pypdf，按页抽文字层+记真实页码，不做 OCR）、paginate.py（定长切页）、
 │                          #   __init__.py 的 ingest_file() 是唯一入库入口
 ├── zh_annotate.py         # 生词标注（#638，零 AI）：HSK 表+词库+jieba+pypinyin+谷歌翻译
-├── translator.py          # 翻译（免费端点，纯标准库，无密钥）：**三条通道依次降级**（#1140）——谷歌 /m 网页
-│                          #   （UA 必须伪装成浏览器，#890）→ 谷歌 translate_a/single JSON → 微软 Edge 免密钥
-│                          #   （edge.microsoft.com 取 JWT + api.cognitive.microsofttranslator.com）。
-│                          #   🔴 一条通道不够：谷歌拦机房 IP 时全应用的翻译同时静音（词释义/译 按钮/rendition/书页），
-│                          #   而每个调用方都优雅降级，从外面看就像应用有 bug。通道成功后记住它（按语言对），失败即忘。
-│                          #   微软那条按行发数组元素、按行拼回来——行数由协议保证，不靠端点恰好保留换行。
-│                          #   **最后一条是自家 DeepSeek**（#1144，`purpose="translate_fallback"`，一篇约 $0.002，进 /api/costs）：
-│                          #   前三条都是别人家的免费额度，说没就没——线上实测谷歌两扇门齐答 429。AI 关闭/离线/无 key 时跳过。
-│                          #   答 429/403 的门进 15 分钟冷却（连原因一起记，诊断不会被"skipped"盖掉）。
+├── translator.py          # 翻译：**三条通道依次降级**——谷歌 /m 网页（UA 必须伪装成浏览器，#890）→
+│                          #   谷歌 translate_a/single JSON（#1140）→ **自家 DeepSeek**（#1144）
+│                          #   🔴 一条通道不够：谷歌拦/限流机房 IP 时全应用的翻译同时静音（词释义/译 按钮/rendition/
+│                          #   书页），而每个调用方都优雅降级，从外面看就像应用有 bug。2026-09-14 一天内全灭两次。
+│                          #   DeepSeek 那条排最后，是唯一不看别人脸色的（`purpose="translate_fallback"`，一篇约
+│                          #   $0.002，进 /api/costs）；AI 关闭/离线/无 key 时跳过；**行数对不上一律判失败**，
+│                          #   绝不按位置把译文塞给句子。批量结果是按行切开的，这一条不能松
+│                          #   通道成功后记住它（按语言对），失败即忘，**且 30 分钟过期**（#1146）——谷歌答的是 429，
+│                          #   限流会过去，永久偏好等于恢复之后还一直付钱
+│                          #   答 429/403 的门进 15 分钟冷却，**原因跟着冷却一起记**，否则后面的报错只剩 "skipped"
+│                          #   微软 Edge 免密钥那条试过又删了（#1142→#1146）：auth 端点 404，换 UA 也一样，
+│                          #   留着只是自检里多一行红字 + 每次多一个白跑的往返。**开不了的门不是后备**
 │                          #   `GET /api/translate-selftest` 逐条通道自检，报错里带拦截页标题（诊断就是那一句）
 ├── tts.py                 # edge-tts 封装（离线模式下只读缓存，#612）
 ├── routes/dictionary.py   # AI 词典 API（#746）：/api/dict/lookup + 历史；结果存 dict_queries（database/dictionary.py）
@@ -1032,7 +1035,7 @@ POST /api/knowledge/add-file                          → multipart：file（.tx
 GET    /api/knowledge/{episode_id}/chat               → 该素材的对话（#945）：{model, messages[{id,role,content,model,created_at}]}；没聊过是空数组不是 404；素材不存在 404
 POST   /api/knowledge/{episode_id}/chat               → body {message, model?} → 追加一轮，返回刚存的两条消息；AI 失败 500 且**库里什么都不写**（半截对话比报错更糟）；没转录也没摘要 400；AI 关闭 400
 DELETE /api/knowledge/{episode_id}/chat               → 清空该素材的对话；没有对话返回 404（不假装成功）
-GET  /api/translate-selftest[?lang=zh&text=]          → 翻译通道自检（#1140）：逐条通道各问一次，返回 {working:[通道名], results:[{transport,ok,ms,result|error}]}
+GET  /api/translate-selftest[?lang=zh&text=]          → 翻译通道自检（#1142）：逐条通道各问一次，返回 {working:[通道名], results:[{transport,ok,ms,result|error,cooldown_seconds?}]}
                                                        翻译全线静音时开这个页面——拦截页标题就在 error 里；lang 非法 → 400
 POST /api/new-words                                   → body {text, lang?='zh', mode?='new'|'all'} → {words:[{word,pinyin,definition_de,hsk}]}（#1006）
                                                        只调 `annotate.annotate_summary()`（mode='new'，只调用方：复习听力提示滑块的中间档、与阅读模式同一个判定）不写第二套生词判定；空文本返回空表不算错误
