@@ -1,6 +1,13 @@
 """
-Source language → target language translation using Google Translate's free
-mobile endpoint (https://translate.google.com/m).
+Source language → target language translation over free, key-less endpoints.
+
+Three transports are tried in order (#1140): Google's mobile page, Google's
+translate_a/single JSON endpoint, and Microsoft's key-less Edge translator.
+🔴 One transport is not enough: Google blocks datacenter IPs, and when it
+starts doing so EVERY translation in the app goes quiet at once — inline word
+glosses, the 译 overlay, knowledge renditions, book pages. That is exactly how
+this module failed twice now (#890 by User-Agent, #1140 by IP), each time
+looking like an application bug rather than a blocked request.
 
 The source language is configurable (defaults to Chinese, "zh-CN") so this module
 can also translate other learner languages (e.g. French) into German.
@@ -20,6 +27,7 @@ Standard library only — no `deep-translator`, no `beautifulsoup4`.
 Requires internet access (VPN recommended in China).
 """
 import concurrent.futures
+import json
 import logging
 import time
 import urllib.parse
@@ -37,6 +45,18 @@ _translators: dict[tuple[str, str], object] = {}
 _REQUEST_TIMEOUT_SECONDS = 90
 
 _GOOGLE_URL = "https://translate.google.com/m"
+# Same service, different door: a plain JSON API. Reached when the mobile page
+# answers with something that has no result container (a consent page, a
+# "Sorry..." block page).
+_GOOGLE_JSON_URL = "https://translate.googleapis.com/translate_a/single"
+# Microsoft's key-less translator, the one Edge's own page translation uses:
+# a short-lived JWT from the first URL authorizes the second. No account, no
+# key, and — the reason it is here — a different company's IP policy.
+_MS_AUTH_URL = "https://edge.microsoft.com/translate/auth"
+_MS_TRANSLATE_URL = "https://api.cognitive.microsofttranslator.com/translate"
+# The token is good for ~10 minutes; refreshed a little early.
+_MS_TOKEN_TTL_SECONDS = 480
+_ms_token: dict = {"value": "", "issued_at": 0.0}
 # 🔴 Not a politeness header — the entire feature depends on it. Google serves
 # `python-requests/…` a JS-only page with no result container, which is exactly
 # what broke every translation in the app (#890). Keep a real browser UA here.
@@ -71,33 +91,186 @@ class _ResultParser(HTMLParser):
             self.result = (self.result or "") + data
 
 
-class _GoogleWebTranslator:
+def _http(url: str, *, data: bytes | None = None, headers: dict | None = None) -> str:
+    req = urllib.request.Request(url, data=data,
+                                 headers={"User-Agent": _BROWSER_UA, **(headers or {})})
+    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_SECONDS) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def _google_mobile(text: str, source: str, target: str) -> str:
+    """Transport 1: the mobile page, scraped. Longest-serving one, and the
+    only one that ever worked from Daniel's laptop behind a VPN in China."""
+    params = urllib.parse.urlencode({"sl": source, "tl": target, "q": text})
+    body = _http(f"{_GOOGLE_URL}?{params}")
+    parser = _ResultParser()
+    parser.feed(body)
+    parser.close()
+    if parser.result is None:
+        # Never return the input as if it were a translation: translate_zh
+        # deliberately falls back to the original, translate_strict must
+        # raise, and both need this to be an error to tell them apart. The
+        # page title goes into the message because it is the whole diagnosis:
+        # "Sorry..." is Google blocking this IP (#1140), an empty title is
+        # the JS-only page of #890.
+        raise RuntimeError(f"no result container (page title: {_page_title(body)!r})")
+    return parser.result
+
+
+def _google_json(text: str, source: str, target: str) -> str:
+    """Transport 2: translate_a/single, the JSON API the old Google Translate
+    widgets use. POST, not GET — a chunk is up to 4500 characters and that is
+    past what a URL should carry."""
+    params = urllib.parse.urlencode({"client": "gtx", "sl": source, "tl": target, "dt": "t"})
+    payload = urllib.parse.urlencode({"q": text}).encode("utf-8")
+    body = _http(f"{_GOOGLE_JSON_URL}?{params}", data=payload,
+                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        data = json.loads(body)
+    except ValueError:
+        raise RuntimeError(f"not JSON (page title: {_page_title(body)!r})") from None
+    # [[[translated, original, …], [translated, original, …], …], …]
+    segments = data[0] if isinstance(data, list) and data and isinstance(data[0], list) else None
+    if not segments:
+        raise RuntimeError("no segments in the JSON reply")
+    out = "".join(seg[0] for seg in segments if isinstance(seg, list) and seg and seg[0])
+    if not out.strip():
+        raise RuntimeError("empty JSON reply")
+    return out
+
+
+def _ms_lang(code: str) -> str:
+    """Microsoft's language codes. Chinese is the only one that differs from
+    what languages.py stores ("zh-CN" → "zh-Hans")."""
+    c = (code or "").lower()
+    if c.startswith("zh"):
+        return "zh-Hant" if ("tw" in c or "hant" in c or "hk" in c) else "zh-Hans"
+    return c.split("-")[0]
+
+
+def _ms_auth_token() -> str:
+    now = time.time()
+    if _ms_token["value"] and now - _ms_token["issued_at"] < _MS_TOKEN_TTL_SECONDS:
+        return _ms_token["value"]
+    token = _http(_MS_AUTH_URL).strip()
+    if not token or "." not in token:
+        raise RuntimeError("no auth token from the Edge translator")
+    _ms_token.update(value=token, issued_at=now)
+    return token
+
+
+def _microsoft(text: str, source: str, target: str) -> str:
+    """Transport 3: Microsoft's key-less Edge translator.
+
+    🔴 Sends one array element PER LINE and rejoins them with newlines. The batching
+    above packs many sentences into one request separated by newlines and
+    splits the answer back apart by line, which with the Google transports
+    rests on the endpoint preserving line breaks. Here the line structure is
+    carried by the protocol itself, so it cannot drift."""
+    lines = text.split("\n")
+    payload = json.dumps([{"Text": line or " "} for line in lines]).encode("utf-8")
+    params = urllib.parse.urlencode({"api-version": "3.0",
+                                     "from": _ms_lang(source), "to": _ms_lang(target)})
+    body = _http(f"{_MS_TRANSLATE_URL}?{params}", data=payload,
+                 headers={"Content-Type": "application/json; charset=utf-8",
+                          "Authorization": f"Bearer {_ms_auth_token()}"})
+    try:
+        data = json.loads(body)
+    except ValueError:
+        raise RuntimeError(f"not JSON (page title: {_page_title(body)!r})") from None
+    if not isinstance(data, list) or len(data) != len(lines):
+        raise RuntimeError(f"expected {len(lines)} results, got "
+                           f"{len(data) if isinstance(data, list) else type(data).__name__}")
+    out = []
+    for item in data:
+        try:
+            out.append(item["translations"][0]["text"])
+        except (KeyError, IndexError, TypeError):
+            raise RuntimeError("unexpected result shape") from None
+    return "\n".join(out)
+
+
+class _TitleParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title = ""
+        self._in = False
+
+    def handle_starttag(self, tag, attrs):
+        self._in = tag == "title"
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in = False
+
+    def handle_data(self, data):
+        if self._in:
+            self.title += data
+
+
+def _page_title(body: str) -> str:
+    """The <title> of whatever came back instead of a translation — this one
+    string is usually the entire diagnosis, so it travels in the error."""
+    try:
+        p = _TitleParser()
+        p.feed(body[:4000])
+        p.close()
+        return p.title.strip()[:80]
+    except Exception:
+        return ""
+
+
+# Order matters: Google first (it has served this app all along and handles
+# Chinese best), Microsoft as the way out when Google refuses this machine.
+_TRANSPORTS = (
+    ("google-mobile", _google_mobile),
+    ("google-json", _google_json),
+    ("microsoft-edge", _microsoft),
+)
+
+
+class _WebTranslator:
     """Minimal stand-in for deep-translator's GoogleTranslator: one
     `.translate(text)` method, so the timeout wrapper and the batching helpers
-    below did not have to change."""
+    below did not have to change.
+
+    Walks _TRANSPORTS until one answers, and then REMEMBERS which one (#1140):
+    when Google is blocking this server, paying two failed requests before
+    every single translation would make a reading page take minutes. The
+    preference is per language pair and is dropped again the moment its
+    transport fails, so a temporary outage does not pin the app to a worse
+    endpoint forever."""
 
     def __init__(self, source: str, target: str):
         self.source = source
         self.target = target
+        self.preferred: str | None = None
 
     def translate(self, text: str) -> str:
         if not text.strip():
             return text
-        params = urllib.parse.urlencode({"sl": self.source, "tl": self.target, "q": text})
-        req = urllib.request.Request(f"{_GOOGLE_URL}?{params}",
-                                     headers={"User-Agent": _BROWSER_UA})
-        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_SECONDS) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-        parser = _ResultParser()
-        parser.feed(body)
-        parser.close()
-        if parser.result is None:
-            # Never return the input as if it were a translation: translate_zh
-            # deliberately falls back to the original, translate_strict must
-            # raise, and both need this to be an error to tell them apart.
-            raise RuntimeError(
-                f"no translation in Google's reply (source={self.source}, target={self.target})")
-        return parser.result
+        order = sorted(_TRANSPORTS, key=lambda t: t[0] != self.preferred)
+        errors = []
+        for name, fn in order:
+            try:
+                out = fn(text, self.source, self.target)
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+                if self.preferred == name:
+                    self.preferred = None
+                continue
+            if out and out.strip():
+                if self.preferred != name:
+                    logger.info("translator: using %s (source=%s, target=%s)",
+                                name, self.source, self.target)
+                    self.preferred = name
+                return out
+            errors.append(f"{name}: empty answer")
+        raise RuntimeError(f"every translation transport failed — {'; '.join(errors)}")
+
+
+# The old name, kept because it reads as "the Google one" in existing logs.
+_GoogleWebTranslator = _WebTranslator
 
 
 def _translate_with_timeout(t, text: str) -> str:
@@ -123,8 +296,8 @@ def _load(source: str, target: str) -> object | None:
         logger.error("translator: missing language (source=%r, target=%r)", source, target)
         _translators[key] = None
         return None
-    _translators[key] = _GoogleWebTranslator(source, target)
-    logger.info("translator: Google web translator ready (source=%s, target=%s)", source, target)
+    _translators[key] = _WebTranslator(source, target)
+    logger.info("translator: web translator ready (source=%s, target=%s)", source, target)
     return _translators[key]
 
 
@@ -292,6 +465,32 @@ def translate_batch(texts: list[str], target: str = "en", source: str = "zh-CN",
         _translate_and_report(chunk)
 
     return out
+
+
+def selftest(text: str = "你好，世界。", source: str = "zh-CN",
+             target: str = "de") -> list[dict]:
+    """Ask every transport the same tiny question and report what each said.
+
+    Exists because this module's two outages (#890, #1140) were both invisible
+    from the outside: every caller degrades politely, so a blocked endpoint
+    looks exactly like an application bug. Three requests, no state touched —
+    open /api/translate-selftest and the answer names the broken door.
+    """
+    results = []
+    for name, fn in _TRANSPORTS:
+        started = time.time()
+        entry = {"transport": name, "ok": False, "ms": 0}
+        try:
+            out = (fn(text, source, target) or "").strip()
+            entry["ok"] = bool(out)
+            entry["result"] = out[:200]
+            if not out:
+                entry["error"] = "empty answer"
+        except Exception as e:
+            entry["error"] = str(e)[:300]
+        entry["ms"] = int((time.time() - started) * 1000)
+        results.append(entry)
+    return results
 
 
 # Legacy aliases kept for any callers that used the old API

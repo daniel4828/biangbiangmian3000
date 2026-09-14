@@ -201,7 +201,7 @@ def test_strict_retries_a_transient_failure(monkeypatch):
     out = translator.translate_strict("Hallo Welt.\nDanke.", target="fr", source="de")
 
     assert out == "Bonjour le monde.\nMerci."
-    assert len(calls) == 2
+    assert len(calls) > 1, "一次网络抖动必须重试，不能直接抛给上层"
 
 
 def test_strict_retries_an_empty_result(monkeypatch):
@@ -210,7 +210,7 @@ def test_strict_retries_an_empty_result(monkeypatch):
     calls = _fresh_sequence(monkeypatch, [empty, _PAGE])
 
     assert translator.translate_strict("Hallo", target="fr", source="de").strip()
-    assert len(calls) == 2
+    assert len(calls) > 1
 
 
 def test_strict_gives_up_after_the_last_attempt(monkeypatch):
@@ -220,15 +220,19 @@ def test_strict_gives_up_after_the_last_attempt(monkeypatch):
         translator.translate_strict("Hallo", target="fr", source="de")
 
     assert "connection reset" in str(exc.value), "要保留最后一次失败的原因"
-    assert len(calls) == translator._STRICT_ATTEMPTS
+    # #1140 起每次尝试会依次走完几条通道，所以不再是"尝试次数 = 请求数"，
+    # 但仍然必须有上限——不能没完没了地重试。
+    assert translator._STRICT_ATTEMPTS <= len(calls) <= \
+        translator._STRICT_ATTEMPTS * (len(translator._TRANSPORTS) + 1)
 
 
 def test_translate_zh_still_fails_fast(monkeypatch):
     # 吞异常返回原文的契约不变，也不该为它重试三次（调用点极多）。
+    # 几条通道各试一次是可以的（#1140），但绝不进 _STRICT_ATTEMPTS 那个循环。
     calls = _fresh_sequence(monkeypatch, [OSError("connection reset")])
 
     assert translator.translate_zh("Hallo", target="fr", source="de") == "Hallo"
-    assert len(calls) == 1
+    assert len(calls) <= len(translator._TRANSPORTS) + 1
 
 
 # ── 失败块的逐句重试必须有上限（#1140）──────────────────────────────────────
@@ -267,3 +271,120 @@ def test_item_fallback_still_rescues_one_bad_sentence(monkeypatch):
 
     assert out[0] == huge          # 这一句救不了
     assert out[1:] == ["de:" + t for t in texts[1:]]   # 其余全部翻出来了
+
+
+# ── 多通道降级（#1140）────────────────────────────────────────────────────────
+# 背景：谷歌开始拦机房 IP（/m 返回 "Sorry..." 拦截页），于是全应用的翻译
+# 同时静音——行内词释义、译 按钮、知识库 rendition、书籍页面。只有一条通道
+# 的模块必然会有这一天，#890 那次（User-Agent）已经演过一遍。
+
+_SORRY_PAGE = ('<html><head><title>Sorry...</title></head><body>'
+               '<div>Our systems have detected unusual traffic</div></body></html>')
+_GTX_JSON = '[[["Bonjour le monde.","Hallo Welt.",null,null,1]],null,"de"]'
+_MS_JSON = '[{"translations":[{"text":"Bonjour le monde.","to":"fr"}]}]'
+
+
+def _route(monkeypatch, handlers: dict):
+    """按 URL 子串分派的 urlopen 桩；值是响应体字符串或要抛的异常。
+    记录每次请求的 (url, body, headers)。"""
+    seen: list = []
+
+    def _open(req, timeout=None):
+        url = req.full_url
+        seen.append({"url": url,
+                     "body": (req.data or b"").decode("utf-8"),
+                     "auth": req.get_header("Authorization")})
+        for needle, answer in handlers.items():
+            if needle in url:
+                if isinstance(answer, Exception):
+                    raise answer
+                return io.BytesIO(answer.encode("utf-8"))
+        raise AssertionError(f"没有为这个地址准备响应：{url}")
+
+    monkeypatch.setattr(translator, "_translators", {})
+    monkeypatch.setattr(translator, "_ms_token", {"value": "", "issued_at": 0.0})
+    monkeypatch.setattr(translator.urllib.request, "urlopen", _open)
+    return seen
+
+
+def test_blocked_mobile_page_falls_through_to_the_json_endpoint(monkeypatch):
+    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
+                                "translate_a/single": _GTX_JSON})
+
+    out = translator.translate_strict("Hallo Welt.", target="fr", source="de")
+
+    assert out == "Bonjour le monde."
+    assert any("translate_a/single" in c["url"] for c in seen)
+
+
+def test_both_google_doors_blocked_falls_through_to_microsoft(monkeypatch):
+    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
+                                "translate_a/single": _SORRY_PAGE,
+                                "edge.microsoft.com": "header.payload.signature",
+                                "cognitive": _MS_JSON})
+
+    out = translator.translate_strict("Hallo Welt.", target="fr", source="de")
+
+    assert out == "Bonjour le monde."
+    ms = [c for c in seen if "cognitive" in c["url"]][0]
+    assert ms["auth"] == "Bearer header.payload.signature"
+    assert "zh" not in ms["url"] and "from=de" in ms["url"] and "to=fr" in ms["url"]
+
+
+def test_microsoft_sends_one_element_per_line_and_keeps_the_line_count(monkeypatch):
+    """批量翻译靠换行切分结果。微软这条路把行数交给协议本身保证，不靠端点
+    恰好保留换行。"""
+    three = '[{"translations":[{"text":"un","to":"fr"}]},' \
+            '{"translations":[{"text":"deux","to":"fr"}]},' \
+            '{"translations":[{"text":"trois","to":"fr"}]}]'
+    seen = _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
+                                "translate_a/single": OSError("blocked"),
+                                "edge.microsoft.com": "a.b.c",
+                                "cognitive": three})
+
+    out = translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
+
+    assert out == "un\ndeux\ntrois"
+    body = [c for c in seen if "cognitive" in c["url"]][0]["body"]
+    assert body.count('"Text"') == 3
+
+
+def test_chinese_is_sent_to_microsoft_as_zh_Hans(monkeypatch):
+    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
+                                "translate_a/single": _SORRY_PAGE,
+                                "edge.microsoft.com": "a.b.c",
+                                "cognitive": '[{"translations":[{"text":"Hallo","to":"de"}]}]'})
+
+    translator.translate_strict("你好", target="de", source="zh-CN")
+
+    assert "from=zh-Hans" in [c for c in seen if "cognitive" in c["url"]][0]["url"]
+
+
+def test_error_names_every_transport_that_failed(monkeypatch):
+    """报错就是诊断：到底是被拦了、还是格式变了，只能从这句话里看出来。"""
+    _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
+                         "translate_a/single": _SORRY_PAGE,
+                         "edge.microsoft.com": OSError("connection reset"),
+                         "cognitive": _SORRY_PAGE})
+
+    with pytest.raises(Exception) as exc:
+        translator.translate_strict("Hallo", target="fr", source="de")
+
+    message = str(exc.value)
+    assert "google-mobile" in message and "google-json" in message
+    assert "Sorry..." in message, "拦截页的标题就是全部诊断，必须带出来"
+
+
+def test_the_working_transport_is_remembered(monkeypatch):
+    """谷歌在拦这台机器时，每句话之前都白付两次失败请求会让阅读页面变成分钟级。"""
+    seen = _route(monkeypatch, {"translate.google.com/m": _SORRY_PAGE,
+                                "translate_a/single": _GTX_JSON})
+
+    t = translator._load("de", "fr")
+    t.translate("Hallo Welt.")
+    first_round = len(seen)
+    t.translate("Hallo Welt.")
+
+    assert first_round == 2
+    assert len(seen) == 3, "第二句应该直接走已经证明可用的那条通道"
+    assert "translate_a/single" in seen[-1]["url"]

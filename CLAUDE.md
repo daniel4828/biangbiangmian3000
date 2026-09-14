@@ -242,7 +242,13 @@ Daniel 的每条消息，连同 AI 生成的纠正，自动追加进 `language-l
 │                          #   pdf.py（pypdf，按页抽文字层+记真实页码，不做 OCR）、paginate.py（定长切页）、
 │                          #   __init__.py 的 ingest_file() 是唯一入库入口
 ├── zh_annotate.py         # 生词标注（#638，零 AI）：HSK 表+词库+jieba+pypinyin+谷歌翻译
-├── translator.py          # 翻译（Google Translate 免费网页端点，纯标准库；UA 必须伪装成浏览器，#890）
+├── translator.py          # 翻译（免费端点，纯标准库，无密钥）：**三条通道依次降级**（#1140）——谷歌 /m 网页
+│                          #   （UA 必须伪装成浏览器，#890）→ 谷歌 translate_a/single JSON → 微软 Edge 免密钥
+│                          #   （edge.microsoft.com 取 JWT + api.cognitive.microsofttranslator.com）。
+│                          #   🔴 一条通道不够：谷歌拦机房 IP 时全应用的翻译同时静音（词释义/译 按钮/rendition/书页），
+│                          #   而每个调用方都优雅降级，从外面看就像应用有 bug。通道成功后记住它（按语言对），失败即忘。
+│                          #   微软那条按行发数组元素、按行拼回来——行数由协议保证，不靠端点恰好保留换行。
+│                          #   `GET /api/translate-selftest` 逐条通道自检，报错里带拦截页标题（诊断就是那一句）
 ├── tts.py                 # edge-tts 封装（离线模式下只读缓存，#612）
 ├── routes/dictionary.py   # AI 词典 API（#746）：/api/dict/lookup + 历史；结果存 dict_queries（database/dictionary.py）
 ├── review_notify.py       # 复习收尾提醒（#701）：去重 + 发信，判定在 database.due_notification_status()
@@ -1023,6 +1029,8 @@ POST /api/knowledge/add-file                          → multipart：file（.tx
 GET    /api/knowledge/{episode_id}/chat               → 该素材的对话（#945）：{model, messages[{id,role,content,model,created_at}]}；没聊过是空数组不是 404；素材不存在 404
 POST   /api/knowledge/{episode_id}/chat               → body {message, model?} → 追加一轮，返回刚存的两条消息；AI 失败 500 且**库里什么都不写**（半截对话比报错更糟）；没转录也没摘要 400；AI 关闭 400
 DELETE /api/knowledge/{episode_id}/chat               → 清空该素材的对话；没有对话返回 404（不假装成功）
+GET  /api/translate-selftest[?lang=zh&text=]          → 翻译通道自检（#1140）：逐条通道各问一次，返回 {working:[通道名], results:[{transport,ok,ms,result|error}]}
+                                                       翻译全线静音时开这个页面——拦截页标题就在 error 里；lang 非法 → 400
 POST /api/new-words                                   → body {text, lang?='zh', mode?='new'|'all'} → {words:[{word,pinyin,definition_de,hsk}]}（#1006）
                                                        只调 `annotate.annotate_summary()`（mode='new'，只调用方：复习听力提示滑块的中间档、与阅读模式同一个判定）不写第二套生词判定；空文本返回空表不算错误
                                                        mode='all'（#1018）→ `annotate.all_words()`：不按"是否生词"过滤，返回文本里**全部**切分出来的词（含已认识的），零 AI，翻译走 `translator.translate_batch()`

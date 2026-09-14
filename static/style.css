@@ -327,6 +327,21 @@ main.browse-open {
   font-size: 14px;
   display: none;
 }
+/* #1140: while the full-screen player is open the banner is somewhere far up
+   the page, behind a fixed overlay — so a reported failure (e.g. the 译 button
+   finding no translation) was literally invisible, and the feature just looked
+   dead. z-index 97 is above the player (95) and its 译 button (96), below the
+   modal tier. */
+body.ra-fullscreen-open #error-banner {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  z-index: 97;
+  margin: 0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+}
+
 /* Info variant (amber, non-alarming): e.g. fell back to words-only mode */
 #error-banner.notice {
   background: #fffbeb;

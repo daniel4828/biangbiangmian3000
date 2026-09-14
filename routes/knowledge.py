@@ -339,6 +339,24 @@ def translate_sentences(body: TranslateSentencesRequest):
     return {"translations": out}
 
 
+@router.get("/api/translate-selftest")
+def translate_selftest(lang: str = languages.DEFAULT_LANG, text: str = "你好，世界。"):
+    """Which translation transport actually works from this machine (#1140).
+
+    Open it in the browser when reading help goes quiet everywhere at once —
+    it names the failing door and quotes what came back instead (a "Sorry..."
+    block page, a consent page, a changed format). Both times this module went
+    down, that one line was the whole diagnosis and nothing in the UI carried
+    it."""
+    if not languages.is_valid_lang(lang):
+        raise HTTPException(400, f"unknown lang: {lang}")
+    source = languages.get_lang_config(lang)["translator_source"]
+    results = translator.selftest(text=text, source=source, target="de")
+    return {"source": source, "target": "de", "text": text,
+            "working": [r["transport"] for r in results if r["ok"]],
+            "results": results}
+
+
 # ── Chat about a knowledge item (#945) ──────────────────────────────────────
 # Follow-up questions about the material Daniel just read, saved so they are
 # still there next time he opens the item. The context is rebuilt from

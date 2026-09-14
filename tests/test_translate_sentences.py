@@ -122,3 +122,28 @@ def test_partial_success_is_not_an_error(tmp_db):
     body = r.json()
     assert body["translations"][0].startswith("de:")
     assert "error" not in body
+
+
+# ── 翻译通道自检（#1140）────────────────────────────────────────────────────
+# 这个模块坏过两次（#890 User-Agent、#1140 谷歌拦机房 IP），两次都从外面看
+# 不出来：每个调用方都优雅降级，于是端点被拦和应用有 bug 长得一模一样。
+
+def test_selftest_reports_each_transport(tmp_db):
+    def fake_selftest(text="x", source="zh-CN", target="de"):
+        return [{"transport": "google-mobile", "ok": False, "ms": 120,
+                 "error": "no result container (page title: 'Sorry...')"},
+                {"transport": "google-json", "ok": False, "ms": 90, "error": "not JSON"},
+                {"transport": "microsoft-edge", "ok": True, "ms": 210, "result": "Hallo"}]
+
+    with patch.object(translator, "selftest", side_effect=fake_selftest):
+        r = client.get("/api/translate-selftest")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["working"] == ["microsoft-edge"]
+    assert len(body["results"]) == 3
+    assert "Sorry..." in body["results"][0]["error"], "拦截页的标题就是诊断本身"
+
+
+def test_selftest_rejects_an_unknown_language(tmp_db):
+    assert client.get("/api/translate-selftest?lang=xx").status_code == 400
