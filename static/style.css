@@ -7040,6 +7040,8 @@ body.gloss-on [data-gloss-tr]::after {
 /* #1084: always visible (not a hover affordance) — this row layout has no
    pointer-hover guarantee on the phone this app is mostly used on. */
 .listening-row-queue-btn { flex-shrink: 0; font-size: 12px; padding: 4px 8px; }
+/* #1174: the ▶ replaces the old static kind icon — same slot, now a button. */
+.listening-row-play-btn { width: 36px; height: 36px; padding: 0; border-radius: 50%; flex-shrink: 0; font-size: 16px; }
 
 .arch-session-words { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; }
 .arch-word {
