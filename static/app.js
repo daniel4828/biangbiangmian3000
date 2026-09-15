@@ -7952,27 +7952,59 @@ function setReadalongSkipSeconds(value) {
   _raUpdateMediaSession();
 }
 
-// Cue indices that begin a paragraph. Paragraphs exist only in source_text —
-// the rendered DOM's <p> boundaries are whitespace the aligner deliberately
-// ignores (see _raAlignSrcToDom), so this reads the gap between one cue's
-// end and the next cue's start and asks whether a newline fell in it.
+// Cue indices that begin a block — the unit the page is visibly laid out in
+// (one <p> of source text with its translation under it).
 //
-// ASR-only tracks (asr_cloud/asr_local) build source_text as " ".join(cues):
-// no newlines at all, so this returns a single start and the caller hides
-// the paragraph buttons rather than offering two that do nothing (#1083).
-let _raParaCache = { key: '', starts: [] };
+// Read from the rendered DOM when the alignment map exists: each cue's Range
+// starts inside some <p>, and a cue whose <p> differs from the previous
+// cue's starts a new block. That is BY DEFINITION the split Daniel sees,
+// whatever produced it — for podcast transcripts it's rendition.py's
+// 260-char sentence-bounded typesetting, which never appears in
+// source_text at all (the transcript has no newlines; #1152's first
+// version looked for them and found nothing, so the buttons stayed hidden).
+//
+// The result is cached per track and KEPT once it has >1 entry: the map is
+// torn down when the detail page goes away (see the `.map = null` sites),
+// but the block structure of a track doesn't change, and the full-screen
+// player still wants to jump by it. Without a map — a fresh load from the
+// mini player, say — fall back to source_text newlines, which is right for
+// TTS tracks (their text came through _summary_to_plain_text, which puts
+// "\n\n" at every </p>) and merely empty for ASR-only ones.
+let _raParaCache = { key: '', starts: [], fromDom: false, mapTried: false };
 
 function _raParagraphStarts() {
   const player = _raPlayer;
-  if (_raParaCache.key === player.key) return _raParaCache.starts;
-  const src = player.sourceText || '';
-  const starts = [];
-  player.cues.forEach((cue, i) => {
-    if (i === 0) { starts.push(0); return; }
-    const prev = player.cues[i - 1];
-    if (src.slice(prev.char_end, cue.char_start).includes('\n')) starts.push(i);
-  });
-  _raParaCache = { key: player.key, starts };
+  const c = _raParaCache;
+  // Recompute only when a map has appeared since the cached (map-less)
+  // answer — this runs on every _raFsUpdate, and walking every cue's Range
+  // each time would be a few hundred Range constructions per state change.
+  if (c.key === player.key && (c.fromDom || c.mapTried || !player.map)) return c.starts;
+  let starts = [];
+  let fromDom = false;
+  const mapTried = !!player.map;
+  if (player.map) {
+    let lastBlock = null;
+    player.cues.forEach((cue, i) => {
+      const range = _raRangeForCue(player.map, cue);
+      const node = range && range.startContainer;
+      const el = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
+      const block = el && el.closest ? el.closest('p, li, h1, h2, h3, h4, blockquote') : null;
+      if (i === 0 || (block && block !== lastBlock)) starts.push(i);
+      if (block) lastBlock = block;
+    });
+    fromDom = true;
+  }
+  if (starts.length <= 1) {
+    const src = player.sourceText || '';
+    starts = [];
+    player.cues.forEach((cue, i) => {
+      if (i === 0) { starts.push(0); return; }
+      const prev = player.cues[i - 1];
+      if (src.slice(prev.char_end, cue.char_start).includes('\n')) starts.push(i);
+    });
+    fromDom = false;
+  }
+  _raParaCache = { key: player.key, starts, fromDom, mapTried };
   return starts;
 }
 
@@ -8869,7 +8901,7 @@ function _wrapAllWordGlosses(root, words) {
 // already in the DOM, so both triggers are one class on <body> — no re-render,
 // no reflow beyond the line height growing.
 //
-// Desktop: hold Ctrl and everything is glossed; release and it is gone.
+// Desktop: hold Option (Alt) and everything is glossed; release and it is gone.
 // A held key is the right shape for it — it is a glance, not a mode to
 // remember to turn off. Cmd is deliberately *not* a trigger any more (#1110):
 // on a Mac it is the modifier of every browser shortcut (Cmd+T/W/L/Tab), so
@@ -8890,7 +8922,7 @@ function _setGlossMode(on) {
 }
 
 // #1117: a visible button, because on a phone the left-swipe simply does not
-// fire — reported as "works on the computer with Ctrl, does nothing on the
+// fire — reported as "works on the computer with the modifier key, does nothing on the
 // phone". Whichever touch heuristic is eating it (the 90px threshold, the
 // axis lock, Safari's own edge-swipe), a gesture that is the ONLY way to
 // reach a feature and works only sometimes is not a way to reach it at all.
@@ -9000,7 +9032,7 @@ let _glossErrorShown = false;
 async function _ensureSentenceGlosses() {
   for (const root of [..._glossRoots]) {
     if (!root.isConnected) { _glossRoots.delete(root); continue; }
-    if (root.dataset.glossTrPending) continue;   // Ctrl keydown fires repeatedly while held
+    if (root.dataset.glossTrPending) continue;   // Option keydown fires repeatedly while held
 
     // The text is captured HERE, once, together with its element. Recomputing
     // the cache key from textContent after an await would silently look up a
@@ -9068,7 +9100,9 @@ async function _ensureSentenceGlosses() {
 }
 
 function _glossKeyIsModifier(e) {
-  return e.key === 'Control';
+  // #1161: Option (Alt) on the Mac — Daniel's machine. Reported as e.key 'Alt'
+  // on both platforms; 'AltGraph' is a different key and deliberately not here.
+  return e.key === 'Alt';
 }
 
 let _glossKeysBound = false;
@@ -9089,7 +9123,7 @@ function _bindGlossKeys() {
 
 function _initGlossReveal(root) {
   _bindGlossKeys();
-  // #1111: register this container so a later gloss-on toggle (Ctrl or swipe,
+  // #1111: register this container so a later gloss-on toggle (Option or swipe,
   // from anywhere) knows to fill in its sentence translations. Added even on
   // repeat calls (a Set, so re-adding is a no-op) — the early return just
   // below is only about not double-binding the swipe listener.
@@ -9187,7 +9221,7 @@ function _openWordActions(idx, anchor) {
 // the word as known, so marking it again would do nothing.
 //
 // A word with no entry still opens this panel (#1110): on a phone there is no
-// Ctrl to hold, so a tap is the only way to ask about one single word, and a
+// Option to hold, so a tap is the only way to ask about one single word, and a
 // word that answers nothing at all reads as one the app failed to recognise.
 function _openKnownWordActions(key, anchor) {
   closeWordActions();
@@ -11257,7 +11291,7 @@ function revealAnswer() {
     document.getElementById('sentence-row-back').style.display = 'flex';
     document.getElementById('sentence-back').innerHTML = renderSentence();
     // #1077: the back is where the answer is already out, so every word in the
-    // sentence may as well be lookup-able — Ctrl/swipe for the inline glosses,
+    // sentence may as well be lookup-able — Option/swipe for the inline glosses,
     // a tap on a word he already has an entry for for the entry itself.
     // setWordTable([]) first: there is no word table on a card, and
     // _makeWordsTappable would otherwise wrap against whatever list the
