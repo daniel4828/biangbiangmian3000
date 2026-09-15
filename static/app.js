@@ -7687,7 +7687,23 @@ function _raBindFsKeys() {
   if (_raFsKeysBound) return;
   _raFsKeysBound = true;
   document.addEventListener('keydown', (e) => {
-    if (_raFsOpen && e.key === 'Escape') _raCloseFullscreen();
+    if (!_raFsOpen) return;
+    if (e.key === 'Escape') { _raCloseFullscreen(); return; }
+    // #1109 moves the app's search box INTO this screen, so "is a field
+    // focused" is not hypothetical here — without this guard, typing "sad"
+    // into it would skip the audio around instead of searching.
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''))) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;   // leave browser/OS shortcuts alone
+    // ←/→ the seconds jump, s/d the block jump (#1155). Both mirror the
+    // buttons exactly — same functions, so they can't drift apart.
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === 'ArrowLeft') _raSeekBy(-_raSkipSeconds);
+    else if (key === 'ArrowRight') _raSeekBy(_raSkipSeconds);
+    else if (key === 's') _raSkipParagraph(-1);
+    else if (key === 'd') _raSkipParagraph(1);
+    else return;
+    e.preventDefault();   // ←/→ would otherwise scroll the line list sideways
   });
 }
 
@@ -7914,8 +7930,12 @@ function _raSeekBy(seconds) {
 //
 //  - N seconds: the amount is now a setting (default 10). It used to be a
 //    hard-wired 15 that nobody could change.
-//  - one sentence: a cue IS a sentence, so this is just ±1 in player.cues.
-//  - one paragraph: derived from source_text (see _raParagraphStarts).
+//  - one block: the unit the translation itself is laid out in — one source
+//    paragraph plus its rendition underneath. Derived from source_text (see
+//    _raParagraphStarts). A per-SENTENCE jump lived here briefly (#1152) and
+//    was removed in #1155: two grains of jump on one row, when the page is
+//    visibly organised in exactly one of them, is a choice nobody wanted to
+//    make mid-listen.
 const RA_SKIP_CHOICES = [5, 10, 15, 30, 60];
 let _raSkipSeconds = (() => {
   const v = parseInt(localStorage.getItem('readalongSkipSeconds'), 10);
@@ -7965,15 +7985,6 @@ function _raCurrentIdx() {
   return Math.max(0, _raCueIndexForMs(player.cues, player.lastMs || 0));
 }
 
-function _raSkipSentence(dir) {
-  const player = _raPlayer;
-  if (!player.key) return;
-  const cur = _raCurrentIdx();
-  if (cur < 0) return;
-  const next = Math.min(player.cues.length - 1, Math.max(0, cur + dir));
-  _raSeekTo(player.cues[next].start_ms);
-}
-
 // Back jumps to the START of the current paragraph unless we're already
 // sitting on it — the familiar "previous track" behaviour, and the one that
 // makes "I missed that paragraph, play it again" a single press.
@@ -7998,8 +8009,8 @@ function _raSkipParagraph(dir) {
 function _raFsUpdateSkip() {
   const back = document.getElementById('ra-fs-back');
   const fwd = document.getElementById('ra-fs-fwd');
-  if (back) { back.textContent = `⏪ ${_raSkipSeconds}`; back.title = `Back ${_raSkipSeconds} seconds`; }
-  if (fwd) { fwd.textContent = `${_raSkipSeconds} ⏩`; fwd.title = `Forward ${_raSkipSeconds} seconds`; }
+  if (back) { back.textContent = `⏪ ${_raSkipSeconds}`; back.title = `Back ${_raSkipSeconds} seconds (←)`; }
+  if (fwd) { fwd.textContent = `${_raSkipSeconds} ⏩`; fwd.title = `Forward ${_raSkipSeconds} seconds (→)`; }
   const sel = document.getElementById('ra-fs-skip');
   if (sel && sel.value !== String(_raSkipSeconds)) sel.value = String(_raSkipSeconds);
   const hasParagraphs = _raParagraphStarts().length > 1;
