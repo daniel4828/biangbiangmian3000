@@ -6604,7 +6604,7 @@ body.gloss-on [data-gloss-tr]::after {
   gap: 14px;
   margin-top: 10px;
 }
-#ra-fs-back, #ra-fs-fwd {
+#ra-fs-back, #ra-fs-fwd, .ra-fs-jump {
   background: none;
   border: none;
   color: var(--muted);
@@ -6634,6 +6634,16 @@ body.gloss-on [data-gloss-tr]::after {
   max-width: 200px;
 }
 #ra-fs-rate { flex: 1; min-width: 0; }
+/* #1152: the "how many seconds" picker sits with the rate slider rather than
+   in the button row — it is a setting, not a transport control. */
+#ra-fs-skip-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#ra-fs-skip { font-size: 12px; padding: 2px 4px; }
 #ra-fs-rate-label {
   font-size: 12px;
   color: var(--muted);
@@ -6650,6 +6660,10 @@ body.gloss-on [data-gloss-tr]::after {
   /* #ra-fs-controls lost a <select> and gained a slider that needs its own
      row on a 390px screen, or it gets crushed to a few px wide. */
   #ra-fs-rate-wrap { flex-basis: 100%; max-width: none; }
+  /* #1152: seven transport controls in one row on a 390px screen — tighten
+     the gap rather than let them wrap into a ragged second line. */
+  #ra-fs-controls { gap: 8px; }
+  #ra-fs-back, #ra-fs-fwd, .ra-fs-jump { padding: 6px 2px; font-size: 12px; }
 }
 
 /* ── Browse on phones (#827) ─────────────────────────────
