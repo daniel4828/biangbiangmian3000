@@ -6509,7 +6509,7 @@ function _raBarHtml(owner) {
   return `<div class="readalong-bar">
     <div class="readalong-resume keymap-hint" id="readalong-resume">${_raResumeBannerHtml(player)}</div>
     <div class="knowledge-tts-bar">
-      <button class="btn-secondary" id="readalong-toggle" onclick="toggleReadalong()">${player.playing ? '⏸ Pause' : '🎧 Read along'}</button>
+      <button class="btn-secondary" id="readalong-toggle" onclick="toggleReadalong()">${_raToggleLabel(player)}</button>
       <button class="btn-secondary" id="readalong-stop" style="${player.activeIdx >= 0 ? '' : 'display:none'}" onclick="stopReadalong()">■</button>
       <select class="knowledge-tts-rate" onchange="setKnowledgeTtsRate(this.value)" title="Playback speed">
         ${_ttsRateOptionsHtml()}
@@ -6795,7 +6795,7 @@ function _raUpdateBar() {
   const btn = document.getElementById('readalong-toggle');
   const stop = document.getElementById('readalong-stop');
   const follow = document.getElementById('readalong-follow-btn');
-  if (btn) btn.textContent = _raPlayer.playing ? '⏸ Pause' : '🎧 Read along';
+  if (btn) btn.textContent = _raToggleLabel(_raPlayer);
   if (stop) stop.style.display = _raPlayer.activeIdx >= 0 ? '' : 'none';
   if (follow) follow.style.display = _raPlayer.follow ? 'none' : '';
   // #1082: every caller of _raUpdateBar (play, pause, seek, stop, the idx
@@ -6807,6 +6807,16 @@ function _raUpdateBar() {
   _raFsUpdate();  // #1105: the full-screen view's own repaint of the same state change
 }
 
+// #1172: the button says what the click will do — "Continue from 3:21"
+// while a saved position is still on offer, plain "Read along" otherwise.
+function _raToggleLabel(player) {
+  if (player.playing) return '⏸ Pause';
+  if (player.resumeMs && !player.resumeConsumed && player.activeIdx < 0) {
+    return `▶ Continue from ${_raFormatMs(player.resumeMs)}`;
+  }
+  return '🎧 Read along';
+}
+
 // #1078: jumping straight into the middle of a track without saying so would
 // be startling — this banner is the "say so explicitly" half of that,
 // _raStartOver is the escape hatch. Gone the instant playback actually starts
@@ -6814,8 +6824,7 @@ function _raUpdateBar() {
 // ordinary click.
 function _raResumeBannerHtml(player) {
   if (!player.resumeMs || player.resumeConsumed || player.activeIdx >= 0) return '';
-  return `⏱ Continuing from ${_raFormatMs(player.resumeMs)}` +
-    `<button class="btn-secondary" style="margin-left:8px;padding:2px 8px" onclick="_raStartOver()">⏮ Start over</button>`;
+  return `<button class="btn-secondary" style="padding:2px 8px" onclick="_raStartOver()">⏮ Start over</button>`;
 }
 
 function _raFormatMs(ms) {
@@ -6835,6 +6844,7 @@ function _raStartOver() {
   _raPlayer.resumeConsumed = true;
   const el = document.getElementById('readalong-resume');
   if (el) el.innerHTML = _raResumeBannerHtml(_raPlayer);
+  _raUpdateBar();
 }
 
 const _RA_MAP_REASON_TEXT = {
