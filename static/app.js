@@ -8848,7 +8848,10 @@ function _wrapAllWordGlosses(root, words) {
 function _setGlossMode(on) {
   document.body.classList.toggle('gloss-on', !!on);
   _updateGlossToggleBtn();
-  if (!on) return;
+  // Turning it off by ANY route (button, swipe, key) drops the pin (#1170):
+  // a pinned-but-hidden state would make the next Option press behave in a
+  // way nothing on screen explains.
+  if (!on) { _glossPinned = false; return; }
   _glossErrorShown = false;   // a fresh gesture deserves a fresh answer, error included
   _ensureSentenceGlosses();
 }
@@ -9039,18 +9042,39 @@ function _glossKeyIsModifier(e) {
 
 let _glossKeysBound = false;
 
+// #1170: a quick double-tap of the modifier pins the glosses on, so a long
+// read does not mean a thumb on Option for ten minutes. The hold-to-glance
+// behaviour is unchanged; pinning is only the second tap landing within
+// _GLOSS_DOUBLE_TAP_MS of the first release. One more tap while pinned
+// unpins (hidden again on release).
+const _GLOSS_DOUBLE_TAP_MS = 400;
+let _glossPinned = false;
+let _glossLastKeyUp = 0;
+let _glossPinJustSet = false;   // the press that pinned is still held — its release must not unpin
+
 function _bindGlossKeys() {
   if (_glossKeysBound) return;
   _glossKeysBound = true;
   document.addEventListener('keydown', (e) => {
-    if (_glossKeyIsModifier(e)) _setGlossMode(true);
+    if (!_glossKeyIsModifier(e)) return;
+    // Held modifiers auto-repeat keydown; only the first press of a tap counts.
+    if (e.repeat) return;
+    if (!_glossPinned && performance.now() - _glossLastKeyUp <= _GLOSS_DOUBLE_TAP_MS) {
+      _glossPinned = true;
+      _glossPinJustSet = true;
+    }
+    _setGlossMode(true);
   });
   document.addEventListener('keyup', (e) => {
-    if (_glossKeyIsModifier(e)) _setGlossMode(false);
+    if (!_glossKeyIsModifier(e)) return;
+    _glossLastKeyUp = performance.now();
+    if (_glossPinJustSet) { _glossPinJustSet = false; return; }   // release of the pinning tap
+    _setGlossMode(false);   // plain glance, or one more tap while pinned → unpin
   });
   // Switch windows while holding the key and the keyup lands in the other
   // window: without this the page would still be fully glossed on return.
-  window.addEventListener('blur', () => _setGlossMode(false));
+  // A pinned page stays pinned — he asked for it to stay.
+  window.addEventListener('blur', () => { if (!_glossPinned) _setGlossMode(false); });
 }
 
 function _initGlossReveal(root) {
