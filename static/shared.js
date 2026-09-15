@@ -256,8 +256,9 @@ async function addWordViaAi(wordZh, day, onUpdate, lang) {
       onUpdate('error', 'could not be imported — check the logs');
       return;
     }
+    // 4th arg (#1149): the new entry's id, so a caller can open it right away.
     onUpdate('done', day === 'list' ? '★ added to your list' : `✓ ${result.deck_path}`,
-             result.deck_path);
+             result.deck_path, job.summary.word_id);
     refreshDecks();
   };
   setTimeout(poll, 1500);

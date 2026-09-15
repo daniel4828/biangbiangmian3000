@@ -325,16 +325,19 @@ def _generate_and_import_word(word_zh: str, lang: str, deck_id: int,
     # nothing and leave the cards behind in the daily deck.
     imported_words = result.get("imported_words") or []
     stored_word = imported_words[0] if imported_words else word_zh
-    if to_list and result.get("imported"):
+    # The entry's id goes back in the summary (#1149): the tap-a-word popup
+    # opens the freshly generated entry as soon as it lands, and looking it
+    # up client-side by the typed string would miss a normalised headword.
+    entry = database.get_word_by_zh(stored_word) if result.get("imported") else None
+    if to_list and entry:
         # Only now do the freshly created cards exist to move (#677).
-        entry = database.get_word_by_zh(stored_word)
-        if entry:
-            database.stage_word_in_saved(
-                entry["id"], database.get_or_create_saved_deck(lang))
+        database.stage_word_in_saved(
+            entry["id"], database.get_or_create_saved_deck(lang))
     if result.get("imported") and not to_list:
         # New cards due today must reach queues built earlier (#728).
         queue_mgr.invalidate()
-    return {**result, "word_zh": stored_word}
+    return {**result, "word_zh": stored_word,
+            "word_id": entry["id"] if entry else None}
 
 
 @router.post("/api/add-word-ai")

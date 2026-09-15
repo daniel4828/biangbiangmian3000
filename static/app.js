@@ -8463,6 +8463,28 @@ function doWordTableKnown(idx, extraBtn) {
   _markKnownFromDict(_wordTableWords[idx], btns, idx);
 }
 
+// ✨ Generate entry in the tap panel (#1149): the ★ List add, then the
+// entry opens itself once it lands. On success the word gets its id so a
+// second tap on the same word offers 📖 Details instead of generating again.
+function _generateEntryFromDict(w, btn) {
+  const wordZh = w.word || w.word_zh || '';
+  if (!wordZh) return;
+  _setWordBtns([btn], '…', { disabled: true });
+  addWordViaAi(wordZh, 'list', (state, text, _deckPath, wordId) => {
+    if (state === 'idle') {
+      _setWordBtns([btn], '✨ Generate entry', { disabled: false, error: false, done: false });
+      return;
+    }
+    _setWordBtns([btn], text, { disabled: state !== 'error', error: state === 'error',
+                                done: state === 'done' });
+    if (state === 'done' && wordId) {
+      w.word_id = wordId;
+      closeWordActions();
+      openWordDetailPopup(wordId);
+    }
+  }, _wordTableLang);
+}
+
 // Same split as _addWordFromDict (#1149): the gloss-word panel marks a word
 // known without a table row behind it. `rowIdx` is only for greying the
 // table row when there is one.
@@ -9042,10 +9064,12 @@ function _openWordActions(idx, anchor) {
 // above — word, pinyin, gloss. When there IS an entry it offers the entry
 // itself: examples, hanzi breakdown, measure words, synonyms, card state,
 // rendered by the one existing detail page. When there is NO entry it offers
-// ★ List / ✓ Known just like a new word (#1149): the annotator skipping a
-// word (baseline list, HSK 1-4) is a heuristic, not his verdict — he still
-// meets words there he wants to save or to mark known for good. Same two
-// pipelines as the word table (#643), never a second copy.
+// ✨ Generate entry (#1149, Daniel 2026-09-15): the annotator skipping a word
+// (baseline list, HSK 1-4) is a heuristic, not his verdict — a machine gloss
+// is often not enough and he wants the proper entry. That is the ★ List add
+// (#643, same pipeline: full AI entry, staged in Saved) followed by opening
+// the entry as soon as it exists. No ✓ Known here: the app already treats
+// the word as known, so marking it again would do nothing.
 //
 // A word with no entry still opens this panel (#1110): on a phone there is no
 // Ctrl to hold, so a tap is the only way to ask about one single word, and a
@@ -9073,17 +9097,14 @@ function _openKnownWordActions(key, anchor) {
     ${glossHtml}
     <div class="word-actions-buttons">${w.word_id
       ? `<button class="word-table-btn" id="word-actions-detail">📖 Details</button>`
-      : `<button class="word-table-btn" id="word-actions-add">★ List</button>
-         <button class="word-table-btn" id="word-actions-known">✓ Known</button>`}
+      : `<button class="word-table-btn" id="word-actions-generate">✨ Generate entry</button>`}
     </div>`;
   document.body.appendChild(box);
 
   box.querySelector('.word-actions-close').onclick = closeWordActions;
   if (!w.word_id) {
-    const addBtn = box.querySelector('#word-actions-add');
-    const knownBtn = box.querySelector('#word-actions-known');
-    addBtn.onclick = () => _addWordFromDict(w, [addBtn]);
-    knownBtn.onclick = () => _markKnownFromDict(w, [knownBtn]);
+    const genBtn = box.querySelector('#word-actions-generate');
+    genBtn.onclick = () => _generateEntryFromDict(w, genBtn);
   }
   if (w.word_id) box.querySelector('#word-actions-detail').onclick = () => {
     const id = w.word_id;
