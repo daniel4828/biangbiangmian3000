@@ -9149,8 +9149,9 @@ function _openWordActions(idx, anchor) {
 // (baseline list, HSK 1-4) is a heuristic, not his verdict — a machine gloss
 // is often not enough and he wants the proper entry. That is the ★ List add
 // (#643, same pipeline: full AI entry, staged in Saved) followed by opening
-// the entry as soon as it exists. No ✓ Known here: the app already treats
-// the word as known, so marking it again would do nothing.
+// the entry as soon as it exists. ★ List sits next to it: same add, no popup
+// afterwards. No ✓ Known here: the app already treats the word as known, so
+// marking it again would do nothing.
 //
 // A word with no entry still opens this panel (#1110): on a phone there is no
 // Option to hold, so a tap is the only way to ask about one single word, and a
@@ -9178,13 +9179,21 @@ function _openKnownWordActions(key, anchor) {
     ${glossHtml}
     <div class="word-actions-buttons">${w.word_id
       ? `<button class="word-table-btn" id="word-actions-detail">📖 Details</button>`
-      : `<button class="word-table-btn" id="word-actions-generate">✨ Generate entry</button>`}
+      : `<button class="word-table-btn" id="word-actions-add">★ List</button>
+         <button class="word-table-btn" id="word-actions-generate">✨ Generate entry</button>`}
     </div>`;
   document.body.appendChild(box);
 
   box.querySelector('.word-actions-close').onclick = closeWordActions;
   if (!w.word_id) {
+    const addBtn = box.querySelector('#word-actions-add');
     const genBtn = box.querySelector('#word-actions-generate');
+    // Both run the very same add (#643); ★ List stays in the popup with the
+    // usual "★ added to your list", ✨ goes on to open the entry. Daniel
+    // 2026-09-15: ★ List is how he says "I do NOT know this word" — and once
+    // it is in the collection the annotator stops treating it as a baseline
+    // word, so that is exactly what happens.
+    addBtn.onclick = () => _addWordFromDict(w, [addBtn]);
     genBtn.onclick = () => _generateEntryFromDict(w, genBtn);
   }
   if (w.word_id) box.querySelector('#word-actions-detail').onclick = () => {
