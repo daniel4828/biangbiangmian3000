@@ -110,6 +110,8 @@ def test_new_word_lands_in_todays_deck_due_today(tmp_db):
     entry = database.get_word_by_zh("生态")
     assert entry is not None
     assert entry["pinyin"] == "shēngtài"
+    # #1149: the tap-a-word popup opens the new entry straight from the summary
+    assert result["job"]["summary"]["word_id"] == entry["id"]
     assert entry["definition_de"] == "Ökologie / Ökosystem"
 
     today = database.anki_today().isoformat()
