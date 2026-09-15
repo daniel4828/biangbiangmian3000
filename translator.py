@@ -30,6 +30,7 @@ Requires internet access (VPN recommended in China).
 import concurrent.futures
 import json
 import logging
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -175,25 +176,78 @@ def _deepseek(text: str, source: str, target: str) -> str:
     lines = text.split("\n")
     src = _LANG_NAMES.get(source, source)
     tgt = _LANG_NAMES.get(target, target)
-    prompt = (
-        f"Translate the following {src} text into {tgt}.\n"
-        f"The text has exactly {len(lines)} lines. Reply with exactly {len(lines)} "
-        "lines: one translation per input line, in the same order.\n"
-        "No numbering, no commentary, no markdown, no blank lines added or removed. "
-        "Keep any HTML tags exactly as they are.\n\n"
-        f"{text}"
-    )
-    out = ai._call_api(ai.DEFAULT_MODEL, [{"role": "user", "content": prompt}],
-                       4096, purpose="translate_fallback")
-    out = (out or "").strip("\n")
-    got = out.split("\n")
-    if len(got) != len(lines):
+    # #1159: number every line and match the answer BY NUMBER, in sub-batches
+    # of _DEEPSEEK_LINES_PER_CALL. The first version handed the model a whole
+    # 4500-character chunk and demanded "exactly N lines" — for a word list
+    # that is close to a thousand lines, which no model reproduces exactly
+    # (and 4096 output tokens cannot even hold), so every batch failed and
+    # the caller's per-line rescue fired ~1000 single-line calls instead.
+    # Numbering keeps the one rule that matters (never pair a translation
+    # with a line by position) while making a dropped or merged line a
+    # per-line problem instead of a whole-batch one.
+    out: list[str | None] = [None] * len(lines)
+    for offset in range(0, len(lines), _DEEPSEEK_LINES_PER_CALL):
+        batch = lines[offset:offset + _DEEPSEEK_LINES_PER_CALL]
+        got = _deepseek_numbered(ai, batch, src, tgt)
+        missing = [i for i in range(len(batch)) if i not in got]
+        if missing:
+            # One more, narrower ask for just the lines that came back
+            # wrong. A second miss on a line is a real failure below.
+            retry = _deepseek_numbered(ai, [batch[i] for i in missing], src, tgt)
+            for j, i in enumerate(missing):
+                if j in retry:
+                    got[i] = retry[j]
+        for i, line in enumerate(batch):
+            if i in got:
+                out[offset + i] = got[i]
+    done = sum(1 for o in out if o is not None)
+    if done != len(lines):
         # Never guess which line went where: the batcher above splits the
         # answer by line and would silently pair sentences with the wrong
         # translations. A mismatch is a failure, and its per-item fallback
         # (one line per request) gets it right.
-        raise RuntimeError(f"expected {len(lines)} lines, got {len(got)}")
-    return out
+        raise RuntimeError(f"expected {len(lines)} lines, got {done}")
+    return "\n".join(out)  # type: ignore[arg-type]
+
+
+# Lines per DeepSeek call (#1159). Small enough that a full batch of German
+# fits comfortably in the 4096-token reply budget and the model keeps count.
+_DEEPSEEK_LINES_PER_CALL = 40
+
+# "12<TAB>text" is what we ask for; "12. text" / "12: text" / "12) text" are
+# what models produce when they ignore the tab. A line that starts with a
+# bare number and a space ("2024 wurde …") matches none of these on purpose.
+_NUMBERED_LINE_RE = re.compile(r"^\s*(\d+)(?:\t|[.:)）]\s*)(.*)$")
+
+
+def _deepseek_numbered(ai, batch: list[str], src: str, tgt: str) -> dict[int, str]:
+    """One numbered call; returns {0-based index: translation} for the lines
+    the model answered with a usable number. Anything unparseable is simply
+    absent — the caller decides what to do about gaps."""
+    numbered = "\n".join(f"{i + 1}\t{line}" for i, line in enumerate(batch))
+    prompt = (
+        f"Translate the following {src} text into {tgt}.\n"
+        f"There are {len(batch)} numbered lines. Reply with the same {len(batch)} "
+        "lines: the same number, a TAB, then the translation of that line only.\n"
+        "Do not merge, split, skip or reorder lines. No commentary, no markdown. "
+        "Keep any HTML tags exactly as they are.\n\n"
+        f"{numbered}"
+    )
+    out = ai._call_api(ai.DEFAULT_MODEL, [{"role": "user", "content": prompt}],
+                       4096, purpose="translate_fallback") or ""
+    got: dict[int, str] = {}
+    for raw in out.split("\n"):
+        m = _NUMBERED_LINE_RE.match(raw)
+        if not m:
+            continue
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(batch) and idx not in got:
+            got[idx] = m.group(2).strip()
+    # A one-line ask answered without its number is still unambiguous — and
+    # that is exactly how models tend to answer a single line.
+    if not got and len(batch) == 1 and out.strip() and "\n" not in out.strip():
+        got[0] = out.strip()
+    return got
 
 
 class _TitleParser(HTMLParser):

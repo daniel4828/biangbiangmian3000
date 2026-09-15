@@ -360,7 +360,7 @@ def test_deepseek_is_the_last_resort_and_keeps_the_line_count(monkeypatch):
     def fake_call(model, messages, max_tokens, purpose, **kw):
         seen["purpose"] = purpose
         seen["prompt"] = messages[0]["content"]
-        return "un\ndeux\ntrois"
+        return "1\tun\n2\tdeux\n3\ttrois"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
     monkeypatch.setattr(ai, "_call_api", fake_call)
@@ -371,22 +371,78 @@ def test_deepseek_is_the_last_resort_and_keeps_the_line_count(monkeypatch):
 
     assert out == "un\ndeux\ntrois"
     assert seen["purpose"] == "translate_fallback", "要能在 /api/costs 里看到这笔钱"
-    assert "3 lines" in seen["prompt"], "行数必须写进提示词——批量结果是按行切开的"
+    assert "3 numbered lines" in seen["prompt"], "行数必须写进提示词——批量结果是按行切开的"
+    assert "1\teins" in seen["prompt"], "#1159：每行带编号，答案按编号对回去"
 
 
 def test_deepseek_line_count_mismatch_is_a_failure_not_a_guess(monkeypatch):
-    """行数对不上就绝不能把译文按位置塞给句子——那会张冠李戴。"""
+    """行数对不上就绝不能把译文按位置塞给句子——那会张冠李戴。
+    #1159 起：模型漏了一行，补问一次；补问还漏，才整批判失败。"""
     import ai
 
+    calls = []
+
+    def fake_call(model, messages, max_tokens, purpose, **kw):
+        prompt = messages[0]["content"]
+        calls.append(prompt)
+        # 整批问：漏了第 2 行；补问只问那一行：什么都不答
+        return "1\tun\n3\ttrois" if "3 numbered" in prompt else ""
+
     monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
-    monkeypatch.setattr(ai, "_call_api",
-                        lambda *a, **kw: "un\ndeux\ntrois\nquatre")
+    monkeypatch.setattr(ai, "_call_api", fake_call)
     _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
                          "translate_a/single": OSError("blocked")})
 
     with pytest.raises(Exception) as exc:
         translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
-    assert "expected 3 lines" in str(exc.value)
+    assert "expected 3 lines, got 2" in str(exc.value)
+    assert "1\tzwei" in calls[1] and "eins" not in calls[1], "补问只问漏掉的那一行"
+
+
+def test_deepseek_gap_is_refilled_by_number_not_by_position(monkeypatch):
+    """#1159：模型把第 2 行漏了，第 3 行的译文不能被塞到第 2 行去。"""
+    import ai
+
+    calls = []
+
+    def fake_call(model, messages, max_tokens, purpose, **kw):
+        prompt = messages[0]["content"]
+        calls.append(prompt)
+        return "1\tun\n3\ttrois" if "3 numbered" in prompt else "1\tdeux"
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    monkeypatch.setattr(ai, "_call_api", fake_call)
+    _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
+                         "translate_a/single": OSError("blocked")})
+
+    out = translator.translate_strict("eins\nzwei\ndrei", target="fr", source="de")
+    assert out == "un\ndeux\ntrois"
+
+
+def test_deepseek_splits_a_big_batch_into_small_numbered_calls(monkeypatch):
+    """#1159：线上一块 4500 字里有 978 行（词表），一次要模型正好输出 978 行
+    它做不到，4096 个输出 token 也装不下。分成 ≤40 行的小批。"""
+    import ai
+
+    sizes = []
+
+    def fake_call(model, messages, max_tokens, purpose, **kw):
+        body = messages[0]["content"].split("\n\n", 1)[1]
+        rows = body.split("\n")
+        sizes.append(len(rows))
+        return "\n".join(f"{r.split(chr(9))[0]}\tT{r.split(chr(9))[1]}" for r in rows)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "x")
+    monkeypatch.setattr(ai, "_call_api", fake_call)
+    monkeypatch.setattr(translator, "_CHUNK_CHAR_BUDGET", 100000)
+    _route(monkeypatch, {"translate.google.com/m": OSError("blocked"),
+                         "translate_a/single": OSError("blocked")})
+
+    words = [f"w{i}" for i in range(95)]
+    out = translator.translate_batch(words, target="fr", source="de")
+
+    assert out == [f"Tw{i}" for i in range(95)]
+    assert sizes == [40, 40, 15]
 
 
 def test_deepseek_is_skipped_without_a_key(monkeypatch):
