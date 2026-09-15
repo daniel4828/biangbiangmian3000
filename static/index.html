@@ -1583,16 +1583,15 @@
           <option value="60">60s</option>
         </select>
       </div>
-      <!-- #1152: paragraph/sentence jumps. Both are hidden-or-honest: the
-           paragraph pair is removed entirely on tracks whose source_text has
-           no paragraph breaks (ASR-only ones) — see _raFsUpdateSkip. -->
-      <button id="ra-fs-para-back" class="ra-fs-jump" onclick="_raSkipParagraph(-1)" title="Previous paragraph">◀ ¶</button>
-      <button id="ra-fs-sent-back" class="ra-fs-jump" onclick="_raSkipSentence(-1)" title="Previous sentence">◀ S</button>
+      <!-- #1152/#1155: jump one BLOCK — the same unit the translation is
+           laid out in (one source paragraph + its rendition underneath).
+           Removed entirely on tracks whose source_text has no paragraph
+           breaks (ASR-only ones) — see _raFsUpdateSkip. -->
+      <button id="ra-fs-para-back" class="ra-fs-jump" onclick="_raSkipParagraph(-1)" title="Previous block (s)">◀ ¶</button>
       <button id="ra-fs-back" onclick="_raSeekBy(-_raSkipSeconds)" title="Back 10 seconds">⏪ 10</button>
       <button id="ra-fs-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
       <button id="ra-fs-fwd" onclick="_raSeekBy(_raSkipSeconds)" title="Forward 10 seconds">10 ⏩</button>
-      <button id="ra-fs-sent-fwd" class="ra-fs-jump" onclick="_raSkipSentence(1)" title="Next sentence">S ▶</button>
-      <button id="ra-fs-para-fwd" class="ra-fs-jump" onclick="_raSkipParagraph(1)" title="Next paragraph">¶ ▶</button>
+      <button id="ra-fs-para-fwd" class="ra-fs-jump" onclick="_raSkipParagraph(1)" title="Next block (d)">¶ ▶</button>
     </div>
   </div>
 </div>
