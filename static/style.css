@@ -7000,6 +7000,17 @@ body.gloss-on [data-gloss-tr]::after {
 }
 .arch-tab:hover { border-color: var(--muted); }
 .arch-tab-on { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+/* Listening shelf sort dropdown (#1157) — sits after the tabs, shared by all
+   three (Listening/Finished/All), so it lives outside the tab buttons. */
+.listening-sort {
+  margin-left: 8px;
+  padding: 6px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+}
 
 .arch-row { cursor: pointer; align-items: center; gap: 10px; }
 .arch-cat { font-size: 18px; width: 26px; text-align: center; flex-shrink: 0; }
@@ -7065,8 +7076,13 @@ body.gloss-on [data-gloss-tr]::after {
 
 @media (max-width: 700px) {
   .arch-head { align-items: flex-start; }
-  .arch-tabs { width: 100%; }
+  .arch-tabs { width: 100%; flex-wrap: wrap; }
   .arch-tab { flex: 1; text-align: center; }
+  /* Own row under the tabs rather than squeezing in beside them — same
+     reasoning as #988's .podcast-row-meta fix: cramming a control into a
+     row that's already full-width on narrow screens pushes something else
+     to near-zero width instead of wrapping. */
+  .listening-sort { flex: 1 1 100%; margin-left: 0; margin-top: 6px; }
 }
 
 /* ── Dictionary result popup (#1055) ────────────────────

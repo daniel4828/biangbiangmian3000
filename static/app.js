@@ -19916,11 +19916,20 @@ function toggleArchiveSession(startedAt) {
 // list. Deliberately thin: the actual playback (and the navigation to reach
 // it) is 100% reused from the existing read-along machinery (_raOpenOwner) —
 // this view's only job is to list rows and point at them.
-const _listeningState = { status: 'listening', items: null, error: null };
+let _listeningInitialSort = 'recent';
+try { _listeningInitialSort = localStorage.getItem('listeningSort') || 'recent'; } catch (e) {}
+const _listeningState = { status: 'listening', sort: _listeningInitialSort, items: null, error: null };
 const _LISTENING_TABS = [
   { key: 'listening', label: 'Listening' },
   { key: 'finished',  label: 'Finished' },
   { key: 'all',       label: 'All' },
+];
+// Sort options shared by all three tabs above (#1157) — Daniel wants to
+// browse the whole shelf by publish date, not just "recently listened".
+const _LISTENING_SORTS = [
+  { key: 'recent', label: 'Recent' },
+  { key: 'date',   label: 'Date' },
+  { key: 'title',  label: 'Title' },
 ];
 const _LISTENING_KIND_ICON = {
   podcast: '\u{1F3A7}', video: '\u{1F3AC}', article: '\u{1F4C4}',
@@ -19935,12 +19944,20 @@ async function openListeningShelf(status) {
   _listeningState.error = null;
   _renderListeningShelf();
   try {
-    const r = await api('GET', `/api/audio/library?status=${_listeningState.status}`);
+    const r = await api('GET', `/api/audio/library?status=${_listeningState.status}&sort=${_listeningState.sort}`);
     _listeningState.items = r.items;
   } catch (e) {
     _listeningState.error = e.message;
   }
   if (_currentView === 'listening') _renderListeningShelf();
+}
+
+// Sort choice is shared across all three tabs, so switching it just
+// re-opens the current tab rather than resetting to 'listening'.
+function setListeningSort(key) {
+  _listeningState.sort = key;
+  try { localStorage.setItem('listeningSort', key); } catch (e) {}
+  openListeningShelf();
 }
 
 // mm:ss under an hour, h:mm:ss past it — "已听 42:13 / 1:47:20".
@@ -19958,10 +19975,14 @@ function _renderListeningShelf() {
   const tabs = _LISTENING_TABS.map(t =>
     `<button class="arch-tab${_listeningState.status === t.key ? ' arch-tab-on' : ''}"
              onclick="openListeningShelf('${t.key}')">${t.label}</button>`).join('');
+  const sortOptions = _LISTENING_SORTS.map(s =>
+    `<option value="${s.key}"${_listeningState.sort === s.key ? ' selected' : ''}>${s.label}</option>`).join('');
   const head = `<div class="arch-head">
       <div class="arch-title"><h2>\u{1F3A7} Listening</h2>
         <span class="arch-sub">Everything with a read-along track</span></div>
-      <div class="arch-tabs">${tabs}</div>
+      <div class="arch-tabs">${tabs}
+        <select class="listening-sort" onchange="setListeningSort(this.value)">${sortOptions}</select>
+      </div>
     </div>`;
   if (_listeningState.error) {
     box.innerHTML = head + `<div class="browse-empty">Could not load: ${_escHtml(_listeningState.error)}</div>`;
@@ -19988,6 +20009,8 @@ function _listeningRowHtml(item, idx) {
   const time = item.duration_ms > 0
     ? `${_fmtHMS(item.position_ms)} / ${_fmtHMS(item.duration_ms)}`
     : _fmtHMS(item.position_ms);
+  const dateSpan = item.published_at
+    ? `<span>${_escHtml(String(item.published_at).slice(0, 10))}</span>` : '';
   // The variant rides along for episodes (#1085): a 'fulltext' track opened
   // on the summary tab would show a "generate read-along" button for a track
   // that already exists — a click that looks like it did nothing.
@@ -20000,7 +20023,7 @@ function _listeningRowHtml(item, idx) {
     <div class="ss-main">
       <div class="arch-row-title">${_escHtml(item.title)}</div>
       <div class="listening-row-bar"><div class="listening-row-fill" style="width:${pct}%"></div></div>
-      <div class="ss-meta"><span>${_escHtml(time)}</span></div>
+      <div class="ss-meta"><span>${_escHtml(time)}</span>${dateSpan}</div>
     </div>
     <button class="btn-secondary listening-row-queue-btn"
             onclick="event.stopPropagation(); raQueueAddFromShelf(${idx})"
