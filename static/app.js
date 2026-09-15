@@ -8369,8 +8369,14 @@ async function doPodcastNotify(channel) {
 // from the text does not leave a still-clickable "★ List" in the table below
 // suggesting nothing happened.
 function doWordTableAdd(idx, extraBtn) {
-  const w = _wordTableWords[idx];
   const btns = [document.getElementById(`word-table-add-${idx}`), extraBtn].filter(Boolean);
+  _addWordFromDict(_wordTableWords[idx], btns);
+}
+
+// The add itself, keyed on the word dict rather than a table index (#1149):
+// the tap panel over a word the annotator did NOT flag has no table row to
+// point at, but goes through this very same path — one add pipeline (#643).
+function _addWordFromDict(w, btns) {
   if (!w || !btns.length) return;
   const wordZh = w.word || w.word_zh || '';
   if (!wordZh) return;
@@ -8453,8 +8459,14 @@ function wordTableHtml(emptyHint) {
 // so making the row vanish would suggest the word is gone from the page when
 // it plainly isn't. What actually changes is the NEXT summary.
 function doWordTableKnown(idx, extraBtn) {
-  const w = _wordTableWords[idx];
   const btns = [document.getElementById(`word-table-known-${idx}`), extraBtn].filter(Boolean);
+  _markKnownFromDict(_wordTableWords[idx], btns, idx);
+}
+
+// Same split as _addWordFromDict (#1149): the gloss-word panel marks a word
+// known without a table row behind it. `rowIdx` is only for greying the
+// table row when there is one.
+function _markKnownFromDict(w, btns, rowIdx) {
   if (!w || !btns.length) return;
   const wordZh = w.word || w.word_zh || '';
   if (!wordZh) return;
@@ -8463,7 +8475,9 @@ function doWordTableKnown(idx, extraBtn) {
   // lang (#804): known_words is per-language — see markWordKnown's docstring.
   markWordKnown(wordZh, _wordTableLang).then(() => {
     _setWordBtns(btns, '✓ marked known', { done: true });
-    document.getElementById(`word-table-row-${idx}`)?.classList.add('podcast-word-known');
+    if (rowIdx !== undefined) {
+      document.getElementById(`word-table-row-${rowIdx}`)?.classList.add('podcast-word-known');
+    }
   }).catch(e => {
     // only a failure is worth retrying
     _setWordBtns(btns, e.message || 'failed', { disabled: false, error: true, done: false });
@@ -9025,10 +9039,13 @@ function _openWordActions(idx, anchor) {
 
 // The panel for any word that is not new (#1042) — one he has an entry for,
 // or simply one the annotator did not flag. Same shape as _openWordActions
-// above — word, pinyin, gloss — but without ★ List / ✓ Known, which only make
-// sense for a new word. When there IS an entry it also offers the entry
+// above — word, pinyin, gloss. When there IS an entry it offers the entry
 // itself: examples, hanzi breakdown, measure words, synonyms, card state,
-// rendered by the one existing detail page.
+// rendered by the one existing detail page. When there is NO entry it offers
+// ★ List / ✓ Known just like a new word (#1149): the annotator skipping a
+// word (baseline list, HSK 1-4) is a heuristic, not his verdict — he still
+// meets words there he wants to save or to mark known for good. Same two
+// pipelines as the word table (#643), never a second copy.
 //
 // A word with no entry still opens this panel (#1110): on a phone there is no
 // Ctrl to hold, so a tap is the only way to ask about one single word, and a
@@ -9054,12 +9071,20 @@ function _openKnownWordActions(key, anchor) {
       <button class="word-actions-close" aria-label="Close">✕</button>
     </div>
     ${glossHtml}
-    ${w.word_id ? `<div class="word-actions-buttons">
-      <button class="word-table-btn" id="word-actions-detail">📖 Details</button>
-    </div>` : ''}`;
+    <div class="word-actions-buttons">${w.word_id
+      ? `<button class="word-table-btn" id="word-actions-detail">📖 Details</button>`
+      : `<button class="word-table-btn" id="word-actions-add">★ List</button>
+         <button class="word-table-btn" id="word-actions-known">✓ Known</button>`}
+    </div>`;
   document.body.appendChild(box);
 
   box.querySelector('.word-actions-close').onclick = closeWordActions;
+  if (!w.word_id) {
+    const addBtn = box.querySelector('#word-actions-add');
+    const knownBtn = box.querySelector('#word-actions-known');
+    addBtn.onclick = () => _addWordFromDict(w, [addBtn]);
+    knownBtn.onclick = () => _markKnownFromDict(w, [knownBtn]);
+  }
   if (w.word_id) box.querySelector('#word-actions-detail').onclick = () => {
     const id = w.word_id;
     closeWordActions();
