@@ -6160,7 +6160,11 @@ function raPlayFromShelf(idx) {
     _renderListeningShelf();
     return;
   }
-  _raPlayOwnerNow(owner).then(() => _renderListeningShelf());
+  // Daniel asked for the full-screen read-along to open straight away —
+  // pressing ▶ on the shelf means "listen now", and that screen is where
+  // listening happens. Only after the track actually started (true);
+  // opening it over a skipped item would show an empty player.
+  _raPlayOwnerNow(owner).then((ok) => { _renderListeningShelf(); if (ok) _raOpenFullscreen(); });
 }
 
 function raQueueRemoveAt(idx) {

@@ -7041,7 +7041,18 @@ body.gloss-on [data-gloss-tr]::after {
    pointer-hover guarantee on the phone this app is mostly used on. */
 .listening-row-queue-btn { flex-shrink: 0; font-size: 12px; padding: 4px 8px; }
 /* #1174: the ▶ replaces the old static kind icon — same slot, now a button. */
-.listening-row-play-btn { width: 36px; height: 36px; padding: 0; border-radius: 50%; flex-shrink: 0; font-size: 16px; }
+/* Same solid disc as the full-screen player's #ra-fs-toggle, just smaller.
+   `flex: 0 0 auto` + align-self override .btn-secondary's `flex: 1`, which
+   was stretching it into a tall oval. */
+.listening-row-play-btn {
+  flex: 0 0 auto; align-self: center;
+  width: 40px; height: 40px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: none;
+  background: var(--primary); color: #fff;
+  font-size: 16px; line-height: 1;
+}
+.listening-row-done .listening-row-play-btn { background: var(--border); color: var(--text); }
 
 .arch-session-words { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; }
 .arch-word {
