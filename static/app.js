@@ -7704,8 +7704,8 @@ function _raBindFsKeys() {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (key === 'ArrowLeft') _raSeekBy(-_raSkipSeconds);
     else if (key === 'ArrowRight') _raSeekBy(_raSkipSeconds);
-    else if (key === 's') _raSkipParagraph(-1);
-    else if (key === 'd') _raSkipParagraph(1);
+    else if (key === 's') _raSkipSentence(-1);
+    else if (key === 'd') _raSkipSentence(1);
     else return;
     e.preventDefault();   // ←/→ would otherwise scroll the line list sideways
   });
@@ -7825,7 +7825,7 @@ function _raFsUpdate() {
   if (toggle) toggle.textContent = player.playing ? '⏸' : '▶';
 
   _raFsUpdateRate();
-  _raFsUpdateSkip();   // #1152: labels follow the setting, paragraph buttons follow the track
+  _raFsUpdateSkip();   // #1152: labels follow the setting
 
   _raFsSetActive(player.activeIdx);
 }
@@ -7934,12 +7934,9 @@ function _raSeekBy(seconds) {
 //
 //  - N seconds: the amount is now a setting (default 10). It used to be a
 //    hard-wired 15 that nobody could change.
-//  - one block: the unit the translation itself is laid out in — one source
-//    paragraph plus its rendition underneath. Derived from source_text (see
-//    _raParagraphStarts). A per-SENTENCE jump lived here briefly (#1152) and
-//    was removed in #1155: two grains of jump on one row, when the page is
-//    visibly organised in exactly one of them, is a choice nobody wanted to
-//    make mid-listen.
+//  - one sentence: a cue IS a sentence, so this is just ±1 in player.cues.
+//    (#1152 had this AND a paragraph jump; #1155 kept only the paragraph one;
+//    #1167 settled on the sentence — one grain, the one he actually uses.)
 const RA_SKIP_CHOICES = [5, 10, 15, 30, 60];
 let _raSkipSeconds = (() => {
   const v = parseInt(localStorage.getItem('readalongSkipSeconds'), 10);
@@ -7956,62 +7953,6 @@ function setReadalongSkipSeconds(value) {
   _raUpdateMediaSession();
 }
 
-// Cue indices that begin a block — the unit the page is visibly laid out in
-// (one <p> of source text with its translation under it).
-//
-// Read from the rendered DOM when the alignment map exists: each cue's Range
-// starts inside some <p>, and a cue whose <p> differs from the previous
-// cue's starts a new block. That is BY DEFINITION the split Daniel sees,
-// whatever produced it — for podcast transcripts it's rendition.py's
-// 260-char sentence-bounded typesetting, which never appears in
-// source_text at all (the transcript has no newlines; #1152's first
-// version looked for them and found nothing, so the buttons stayed hidden).
-//
-// The result is cached per track and KEPT once it has >1 entry: the map is
-// torn down when the detail page goes away (see the `.map = null` sites),
-// but the block structure of a track doesn't change, and the full-screen
-// player still wants to jump by it. Without a map — a fresh load from the
-// mini player, say — fall back to source_text newlines, which is right for
-// TTS tracks (their text came through _summary_to_plain_text, which puts
-// "\n\n" at every </p>) and merely empty for ASR-only ones.
-let _raParaCache = { key: '', starts: [], fromDom: false, mapTried: false };
-
-function _raParagraphStarts() {
-  const player = _raPlayer;
-  const c = _raParaCache;
-  // Recompute only when a map has appeared since the cached (map-less)
-  // answer — this runs on every _raFsUpdate, and walking every cue's Range
-  // each time would be a few hundred Range constructions per state change.
-  if (c.key === player.key && (c.fromDom || c.mapTried || !player.map)) return c.starts;
-  let starts = [];
-  let fromDom = false;
-  const mapTried = !!player.map;
-  if (player.map) {
-    let lastBlock = null;
-    player.cues.forEach((cue, i) => {
-      const range = _raRangeForCue(player.map, cue);
-      const node = range && range.startContainer;
-      const el = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
-      const block = el && el.closest ? el.closest('p, li, h1, h2, h3, h4, blockquote') : null;
-      if (i === 0 || (block && block !== lastBlock)) starts.push(i);
-      if (block) lastBlock = block;
-    });
-    fromDom = true;
-  }
-  if (starts.length <= 1) {
-    const src = player.sourceText || '';
-    starts = [];
-    player.cues.forEach((cue, i) => {
-      if (i === 0) { starts.push(0); return; }
-      const prev = player.cues[i - 1];
-      if (src.slice(prev.char_end, cue.char_start).includes('\n')) starts.push(i);
-    });
-    fromDom = false;
-  }
-  _raParaCache = { key: player.key, starts, fromDom, mapTried };
-  return starts;
-}
-
 // Where we are in cue terms right now. activeIdx is -1 before the first play
 // and after a stop; the saved/last position is the honest answer then.
 function _raCurrentIdx() {
@@ -8021,27 +7962,19 @@ function _raCurrentIdx() {
   return Math.max(0, _raCueIndexForMs(player.cues, player.lastMs || 0));
 }
 
-// Back jumps to the START of the current paragraph unless we're already
-// sitting on it — the familiar "previous track" behaviour, and the one that
-// makes "I missed that paragraph, play it again" a single press.
-function _raSkipParagraph(dir) {
+// One cue is one sentence (#1167 — the block-level jump #1155 put here was
+// the wrong grain; Daniel wants "that sentence again", not "that paragraph").
+function _raSkipSentence(dir) {
   const player = _raPlayer;
   if (!player.key) return;
-  const starts = _raParagraphStarts();
-  if (starts.length < 2) return;
   const cur = _raCurrentIdx();
   if (cur < 0) return;
-  let pos = 0;
-  for (let i = 0; i < starts.length; i++) if (starts[i] <= cur) pos = i;
-  const target = dir < 0
-    ? (starts[pos] === cur ? starts[Math.max(0, pos - 1)] : starts[pos])
-    : starts[Math.min(starts.length - 1, pos + 1)];
-  _raSeekTo(player.cues[target].start_ms);
+  const next = Math.min(player.cues.length - 1, Math.max(0, cur + dir));
+  _raSeekTo(player.cues[next].start_ms);
 }
 
-// Labels + visibility of the whole skip row. Called from _raFsUpdate (every
-// real state change, so a queue advance to a track without paragraphs is
-// picked up) and from setReadalongSkipSeconds.
+// Labels of the ±seconds buttons follow the setting. Called from _raFsUpdate
+// and from setReadalongSkipSeconds.
 function _raFsUpdateSkip() {
   const back = document.getElementById('ra-fs-back');
   const fwd = document.getElementById('ra-fs-fwd');
@@ -8049,11 +7982,6 @@ function _raFsUpdateSkip() {
   if (fwd) { fwd.textContent = `${_raSkipSeconds} ⏩`; fwd.title = `Forward ${_raSkipSeconds} seconds (→)`; }
   const sel = document.getElementById('ra-fs-skip');
   if (sel && sel.value !== String(_raSkipSeconds)) sel.value = String(_raSkipSeconds);
-  const hasParagraphs = _raParagraphStarts().length > 1;
-  for (const id of ['ra-fs-para-back', 'ra-fs-para-fwd']) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = hasParagraphs ? '' : 'none';
-  }
 }
 
 // ── Lock screen / headset / background controls (#1083, the other half of
