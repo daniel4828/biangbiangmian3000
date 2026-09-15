@@ -444,26 +444,46 @@ def audio_disk_usage(owner_kind: str, owner_id: int) -> int:
 # owner kind, in one screen instead of buried inside the knowledge list.
 # ---------------------------------------------------------------------------
 
-def list_listening(limit: int = 100) -> list[dict]:
+# Whitelisted ORDER BY fragments for list_listening() (#1157) — this gets
+# spliced straight into SQL, so it can never be user-controlled text. Unknown
+# `sort` values fall back to "recent" rather than 400ing (same rule as
+# #936's EPISODE_SORTS): a stale bookmark with an old sort value should still
+# show the shelf, not error out.
+LISTENING_SORTS = {
+    "recent": "has_progress DESC, pr.updated_at DESC, t.created_at DESC",
+    # Undated rows sort last regardless of direction — "no date" isn't a
+    # point in time, flipping order shouldn't bury it the other way.
+    "date": "published_at IS NULL ASC, published_at DESC, t.created_at DESC",
+    "title": "title_sort COLLATE NOCASE ASC, t.created_at DESC",
+}
+
+
+def list_listening(limit: int = 100, sort: str = "recent") -> list[dict]:
     """Every audio_tracks row (an item that HAS a read-along track) left-
     joined against its audio_progress row (only present once he's actually
     pressed play), with the title resolved in the same query — one JOIN, not
     an N+1 lookup per row.
 
-    Ordering: rows with a saved position come first, most recently listened
-    first (updated_at DESC); tracks nobody has ever opened come after, most
-    recently generated first. "Has progress" is a real column
-    (`has_progress`, 0/1) rather than relying on NULL-ordering quirks across
-    SQLite versions.
+    `sort` (#1157) picks the ORDER BY via the LISTENING_SORTS whitelist:
+      - "recent" (default): rows with a saved position come first, most
+        recently listened first (updated_at DESC); tracks nobody has ever
+        opened come after, most recently generated first. "Has progress" is
+        a real column (`has_progress`, 0/1) rather than relying on
+        NULL-ordering quirks across SQLite versions.
+      - "date": by the item's publish date (episode) or the book's
+        created_at, newest first; undated rows sort last.
+      - "title": alphabetical, case-insensitive.
+    Unknown values fall back to "recent".
 
     Orphan rows — a track whose owner (episode or book page) was deleted
     without its audio_tracks row being cleaned up — get a readable
     placeholder title ("episode #123") instead of NULL, so a stale row is
     still visible (and deletable) rather than rendering as a blank line.
     """
+    order_by = LISTENING_SORTS.get(sort, LISTENING_SORTS["recent"])
     conn = get_db()
     rows = conn.execute(
-        """SELECT
+        f"""SELECT
                t.owner_kind, t.owner_id, t.lang, t.variant,
                t.duration_ms, t.created_at AS track_created_at,
                COALESCE(pr.position_ms, 0) AS position_ms,
@@ -475,7 +495,9 @@ def list_listening(limit: int = 100) -> list[dict]:
                bk.title                    AS book_title,
                bk.author                   AS book_author,
                bp.book_id                  AS book_id,
-               bp.page_no                  AS page_no
+               bp.page_no                  AS page_no,
+               COALESCE(ep.published_at, bk.created_at) AS published_at,
+               COALESCE(ep.title, bk.title)             AS title_sort
            FROM audio_tracks t
            LEFT JOIN audio_progress pr
                ON pr.owner_kind = t.owner_kind AND pr.owner_id = t.owner_id
@@ -486,7 +508,7 @@ def list_listening(limit: int = 100) -> list[dict]:
                ON t.owner_kind = 'book_page' AND bp.id = t.owner_id
            LEFT JOIN books bk
                ON bp.book_id = bk.id
-           ORDER BY has_progress DESC, pr.updated_at DESC, t.created_at DESC
+           ORDER BY {order_by}
            LIMIT ?""",
         (limit,),
     ).fetchall()
@@ -519,6 +541,7 @@ def list_listening(limit: int = 100) -> list[dict]:
             "kind": kind,
             "book_id": row["book_id"],
             "page_no": row["page_no"],
+            "published_at": row["published_at"],
         })
     return out
 

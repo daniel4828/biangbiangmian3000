@@ -287,7 +287,7 @@ _LIBRARY_STATUSES = ("listening", "finished", "all")
 
 
 @router.get("/api/audio/library")
-def get_library(status: str | None = None):
+def get_library(status: str | None = None, sort: str | None = None):
     """The listening shelf (#1085) — every item that has a read-along track,
     across episodes and book pages, in one list.
 
@@ -297,10 +297,14 @@ def get_library(status: str | None = None):
     'finished' = finished=1, 'all'/anything unrecognized = no filter — same
     "unknown value falls back to default, never 400" rule #936 set for the
     episode list's sort/order params. A stale bookmarked filter should still
-    show *something*, not an error page."""
+    show *something*, not an error page.
+
+    `sort` (#1157) is passed straight to database.list_listening(), which
+    applies the same whitelist-with-fallback rule — an unrecognized value
+    quietly becomes "recent" rather than 400ing."""
     if status not in _LIBRARY_STATUSES:
         status = "all"
-    items = database.list_listening()
+    items = database.list_listening(sort=sort or "recent")
     if status == "listening":
         items = [i for i in items if i["position_ms"] > 0 and not i["finished"]]
     elif status == "finished":

@@ -1778,6 +1778,56 @@ def test_list_listening_orphan_track_gets_readable_placeholder_title(tmp_db):
     assert "999999" in row["title"]
 
 
+def test_list_listening_sort_by_date_newest_first_nulls_last(tmp_db):
+    """#1157: sort='date' orders by the item's own publish date (not
+    listening activity), newest first, with undated items pushed to the
+    end regardless of direction."""
+    newer_id = database.create_pending_episode(
+        video_id="listening-sort-newer", channel_id=None, title="Newer",
+        published_at="2026-09-10", youtube_url="https://example.com/newer",
+        audio_url="https://example.com/newer.mp3", kind="podcast")
+    database.save_audio_track("episode", newer_id, "zh", "fulltext",
+                              "data/audio/newer.mp3", 10_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+
+    older_id = database.create_pending_episode(
+        video_id="listening-sort-older", channel_id=None, title="Older",
+        published_at="2026-09-01", youtube_url="https://example.com/older",
+        audio_url="https://example.com/older.mp3", kind="podcast")
+    database.save_audio_track("episode", older_id, "zh", "fulltext",
+                              "data/audio/older.mp3", 10_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+
+    undated_id = database.create_pending_episode(
+        video_id="listening-sort-undated", channel_id=None, title="Undated",
+        published_at=None, youtube_url="https://example.com/undated",
+        audio_url="https://example.com/undated.mp3", kind="podcast")
+    database.save_audio_track("episode", undated_id, "zh", "fulltext",
+                              "data/audio/undated.mp3", 10_000, _dummy_cue(),
+                              "tts", "zh-CN-XiaoxiaoNeural")
+
+    items = database.list_listening(sort="date")
+    ids_in_order = [i["owner_id"] for i in items
+                    if i["owner_id"] in (newer_id, older_id, undated_id)]
+    assert ids_in_order == [newer_id, older_id, undated_id]
+
+
+def test_list_listening_unknown_sort_falls_back_to_recent(tmp_db):
+    _episode_with_progress("listening-sort-bogus", "Whatever", 10_000, False)
+    items = database.list_listening(sort="bogus")
+    assert isinstance(items, list)
+    assert len(items) >= 1
+
+
+def test_library_endpoint_accepts_sort(tmp_db):
+    _episode_with_progress("listening-sort-endpoint", "Whatever", 10_000, False)
+    resp = client.get("/api/audio/library", params={"status": "all", "sort": "date"})
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) >= 1
+    assert "published_at" in items[0]
+
+
 # ---------------------------------------------------------------------------
 # 20. Audio bookmarks (#1086, scoped down from the #1081 umbrella — no
 #     chapters, see schema.sql's audio_bookmarks comment): GET/POST/DELETE
