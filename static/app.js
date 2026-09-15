@@ -7805,6 +7805,7 @@ function _raFsUpdate() {
   if (toggle) toggle.textContent = player.playing ? '⏸' : '▶';
 
   _raFsUpdateRate();
+  _raFsUpdateSkip();   // #1152: labels follow the setting, paragraph buttons follow the track
 
   _raFsSetActive(player.activeIdx);
 }
@@ -7905,6 +7906,109 @@ function _raSeekBy(seconds) {
   _raSeekTo((_raPlayer.lastMs || 0) + seconds * 1000);
 }
 
+// ── Skip controls (#1152) ─────────────────────────────────────────────────
+//
+// Three grains of "jump", all of them routed through _raSeekTo above — so
+// none of them reloads the audio or changes the play/pause state, exactly
+// like the seek bar and the ±seconds buttons that were here first.
+//
+//  - N seconds: the amount is now a setting (default 10). It used to be a
+//    hard-wired 15 that nobody could change.
+//  - one sentence: a cue IS a sentence, so this is just ±1 in player.cues.
+//  - one paragraph: derived from source_text (see _raParagraphStarts).
+const RA_SKIP_CHOICES = [5, 10, 15, 30, 60];
+let _raSkipSeconds = (() => {
+  const v = parseInt(localStorage.getItem('readalongSkipSeconds'), 10);
+  return RA_SKIP_CHOICES.includes(v) ? v : 10;
+})();
+
+function setReadalongSkipSeconds(value) {
+  const v = parseInt(value, 10);
+  if (!RA_SKIP_CHOICES.includes(v)) return;   // an unknown value would persist and then silently reset on next launch
+  _raSkipSeconds = v;
+  try { localStorage.setItem('readalongSkipSeconds', String(v)); } catch (_) {}
+  _raFsUpdateSkip();
+  // #1083: the lock screen's own ±buttons use this same number.
+  _raUpdateMediaSession();
+}
+
+// Cue indices that begin a paragraph. Paragraphs exist only in source_text —
+// the rendered DOM's <p> boundaries are whitespace the aligner deliberately
+// ignores (see _raAlignSrcToDom), so this reads the gap between one cue's
+// end and the next cue's start and asks whether a newline fell in it.
+//
+// ASR-only tracks (asr_cloud/asr_local) build source_text as " ".join(cues):
+// no newlines at all, so this returns a single start and the caller hides
+// the paragraph buttons rather than offering two that do nothing (#1083).
+let _raParaCache = { key: '', starts: [] };
+
+function _raParagraphStarts() {
+  const player = _raPlayer;
+  if (_raParaCache.key === player.key) return _raParaCache.starts;
+  const src = player.sourceText || '';
+  const starts = [];
+  player.cues.forEach((cue, i) => {
+    if (i === 0) { starts.push(0); return; }
+    const prev = player.cues[i - 1];
+    if (src.slice(prev.char_end, cue.char_start).includes('\n')) starts.push(i);
+  });
+  _raParaCache = { key: player.key, starts };
+  return starts;
+}
+
+// Where we are in cue terms right now. activeIdx is -1 before the first play
+// and after a stop; the saved/last position is the honest answer then.
+function _raCurrentIdx() {
+  const player = _raPlayer;
+  if (!player.cues.length) return -1;
+  if (player.activeIdx >= 0) return player.activeIdx;
+  return Math.max(0, _raCueIndexForMs(player.cues, player.lastMs || 0));
+}
+
+function _raSkipSentence(dir) {
+  const player = _raPlayer;
+  if (!player.key) return;
+  const cur = _raCurrentIdx();
+  if (cur < 0) return;
+  const next = Math.min(player.cues.length - 1, Math.max(0, cur + dir));
+  _raSeekTo(player.cues[next].start_ms);
+}
+
+// Back jumps to the START of the current paragraph unless we're already
+// sitting on it — the familiar "previous track" behaviour, and the one that
+// makes "I missed that paragraph, play it again" a single press.
+function _raSkipParagraph(dir) {
+  const player = _raPlayer;
+  if (!player.key) return;
+  const starts = _raParagraphStarts();
+  if (starts.length < 2) return;
+  const cur = _raCurrentIdx();
+  if (cur < 0) return;
+  let pos = 0;
+  for (let i = 0; i < starts.length; i++) if (starts[i] <= cur) pos = i;
+  const target = dir < 0
+    ? (starts[pos] === cur ? starts[Math.max(0, pos - 1)] : starts[pos])
+    : starts[Math.min(starts.length - 1, pos + 1)];
+  _raSeekTo(player.cues[target].start_ms);
+}
+
+// Labels + visibility of the whole skip row. Called from _raFsUpdate (every
+// real state change, so a queue advance to a track without paragraphs is
+// picked up) and from setReadalongSkipSeconds.
+function _raFsUpdateSkip() {
+  const back = document.getElementById('ra-fs-back');
+  const fwd = document.getElementById('ra-fs-fwd');
+  if (back) { back.textContent = `⏪ ${_raSkipSeconds}`; back.title = `Back ${_raSkipSeconds} seconds`; }
+  if (fwd) { fwd.textContent = `${_raSkipSeconds} ⏩`; fwd.title = `Forward ${_raSkipSeconds} seconds`; }
+  const sel = document.getElementById('ra-fs-skip');
+  if (sel && sel.value !== String(_raSkipSeconds)) sel.value = String(_raSkipSeconds);
+  const hasParagraphs = _raParagraphStarts().length > 1;
+  for (const id of ['ra-fs-para-back', 'ra-fs-para-fwd']) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = hasParagraphs ? '' : 'none';
+  }
+}
+
 // ── Lock screen / headset / background controls (#1083, the other half of
 // #1081) ─────────────────────────────────────────────────────────────────
 //
@@ -7940,12 +8044,12 @@ function _raUpdateMediaSession() {
   navigator.mediaSession.setActionHandler('seekbackward', (details) => {
     const a = _sharedAudio;
     if (!a) return;
-    try { a.currentTime = Math.max(0, a.currentTime - (details.seekOffset || 10)); } catch (_) {}
+    try { a.currentTime = Math.max(0, a.currentTime - (details.seekOffset || _raSkipSeconds)); } catch (_) {}
   });
   navigator.mediaSession.setActionHandler('seekforward', (details) => {
     const a = _sharedAudio;
     if (!a || !isFinite(a.duration)) return;
-    try { a.currentTime = Math.min(a.duration, a.currentTime + (details.seekOffset || 10)); } catch (_) {}
+    try { a.currentTime = Math.min(a.duration, a.currentTime + (details.seekOffset || _raSkipSeconds)); } catch (_) {}
   });
   navigator.mediaSession.setActionHandler('seekto', (details) => {
     const a = _sharedAudio;
