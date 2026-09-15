@@ -6126,19 +6126,41 @@ function raQueueAddCurrent() {
               variant: _raPlayer.variant, title: _raPlayer.title, nav: _raPlayer.nav });
 }
 
+// Turns a /api/audio/library row into the {kind, id, lang, variant,
+// containerId, title, nav} owner shape — the one definition of "what is this
+// shelf row" shared by "+ Queue" and the ▶ play button below. Mirrors exactly
+// what _openListeningItem already does to turn the same row into a `nav`.
+function _raShelfOwner(item) {
+  return item.owner_kind === 'book_page'
+    ? { kind: 'book_page', id: item.owner_id, lang: item.lang, variant: item.variant,
+        containerId: _raContainerId('book_page', item.variant, item.lang),
+        title: item.title, nav: { kind: 'book_page', bookId: item.book_id, pageNo: item.page_no, lang: item.lang } }
+    : { kind: 'episode', id: item.owner_id, lang: item.lang, variant: item.variant,
+        containerId: _raContainerId('episode', item.variant, item.lang),
+        title: item.title, nav: { kind: 'episode', id: item.owner_id, variant: item.variant } };
+}
+
 // "+ Queue" on a Listening-shelf row (#1085's list) — the row itself was
 // never synced into _raPlayer, so the owner has to be rebuilt from the
-// /api/audio/library item at that index, mirroring exactly what
-// _openListeningItem already does to turn the same row into a `nav`.
+// /api/audio/library item at that index.
 function raQueueAddFromShelf(idx) {
   const item = _listeningState.items && _listeningState.items[idx];
   if (!item) return;
-  const owner = item.owner_kind === 'book_page'
-    ? { kind: 'book_page', id: item.owner_id, lang: item.lang, variant: item.variant,
-        title: item.title, nav: { kind: 'book_page', bookId: item.book_id, pageNo: item.page_no, lang: item.lang } }
-    : { kind: 'episode', id: item.owner_id, lang: item.lang, variant: item.variant,
-        title: item.title, nav: { kind: 'episode', id: item.owner_id, variant: item.variant } };
-  raQueueAdd(owner);
+  raQueueAdd(_raShelfOwner(item));
+}
+
+// #1174: the shelf's ▶ — play (or pause/resume if it's already the active
+// player) without leaving the shelf; the mini player takes over from here.
+function raPlayFromShelf(idx) {
+  const item = _listeningState.items && _listeningState.items[idx];
+  if (!item) return;
+  const owner = _raShelfOwner(item);
+  if (_raIsActive(owner) && _raPlayer.activeIdx >= 0) {
+    toggleReadalong();
+    _renderListeningShelf();
+    return;
+  }
+  _raPlayOwnerNow(owner).then(() => _renderListeningShelf());
 }
 
 function raQueueRemoveAt(idx) {
@@ -7223,6 +7245,53 @@ function _raPlayAt(idx, exactMs) {
   if (player.follow) _raScrollToActive();
 }
 
+// #1174: load this owner's track and start it right here, honouring the
+// saved position (#1078) — no navigation. Shared by the queue advance
+// (_raAdvanceQueue) and the shelf's ▶ button so "play this now" has one
+// definition. Resolves false (with a visible queue note) when the owner
+// has no ready track yet.
+async function _raPlayOwnerNow(owner) {
+  let data;
+  try {
+    data = await api('GET', `/api/audio/track?owner_kind=${owner.kind}&owner_id=${owner.id}` +
+      `&lang=${encodeURIComponent(owner.lang)}&variant=${encodeURIComponent(owner.variant)}`);
+  } catch (e) {
+    data = { status: 'absent' };
+  }
+  if (data.status !== 'ready') {
+    _raSetQueueNote(`Skipped ${owner.title || 'an item'}: no read-along track yet`);
+    return false;
+  }
+  // Same shape _raLoadTrack builds — keeping _raTrack in sync means a
+  // detail page for this exact owner, opened right after, sees the track
+  // as already resolved instead of re-fetching it.
+  _raTrack = { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
+              status: 'ready', track_id: data.track_id, audio_url: data.audio_url,
+              cues: data.cues || [], source_text: data.source_text || '', duration_ms: data.duration_ms || 0 };
+  await _raLoadProgress(owner);
+  const player = _raSync(owner, _raTrack);
+  // Honour the saved position here too, exactly as toggleReadalong does
+  // (#1078): _raLoadProgress was just called, so playing something already
+  // half-listened-to and then restarting it from zero would throw away the
+  // very state that feature exists to keep. _raSync only sets resumeMs for
+  // an unfinished item past the first few seconds, so a finished one still
+  // correctly starts at 0.
+  if (player.resumeMs && !player.resumeConsumed) {
+    player.resumeConsumed = true;
+    _raPlayAt(Math.max(_raCueIndexForMs(player.cues, player.resumeMs), 0), player.resumeMs);
+  } else {
+    _raPlayAt(0);
+  }
+  // Repaint whichever detail view happens to be open for this owner — same
+  // idiom _raLoadTrack/doStartListen use after landing a track.
+  if (owner.kind === 'episode') {
+    if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id) _renderKnowledgeDetail(_knowledgeDetailEpisode);
+  } else if (owner.kind === 'book_page') {
+    _refreshBookReadalongBar(owner.id);
+  }
+  return true;
+}
+
 // #1084: called when the current track reaches its natural end, or when
 // Daniel presses "next" (lock screen / a future mini-player button — see
 // _raSkipToNext). Walks the queue in order; an entry whose track isn't ready
@@ -7239,45 +7308,7 @@ async function _raAdvanceQueue() {
     const owner = { kind: next.kind, id: next.id, lang: next.lang, variant: next.variant,
                     containerId: _raContainerId(next.kind, next.variant, next.lang),
                     title: next.title, nav: next.nav };
-    let data;
-    try {
-      data = await api('GET', `/api/audio/track?owner_kind=${owner.kind}&owner_id=${owner.id}` +
-        `&lang=${encodeURIComponent(owner.lang)}&variant=${encodeURIComponent(owner.variant)}`);
-    } catch (e) {
-      data = { status: 'absent' };
-    }
-    if (data.status !== 'ready') {
-      _raSetQueueNote(`Skipped ${owner.title || 'an item'}: no read-along track yet`);
-      continue;
-    }
-    // Same shape _raLoadTrack builds — keeping _raTrack in sync means a
-    // detail page for this exact owner, opened right after, sees the track
-    // as already resolved instead of re-fetching it.
-    _raTrack = { owner_kind: owner.kind, owner_id: owner.id, lang: owner.lang, variant: owner.variant,
-                status: 'ready', track_id: data.track_id, audio_url: data.audio_url,
-                cues: data.cues || [], source_text: data.source_text || '', duration_ms: data.duration_ms || 0 };
-    await _raLoadProgress(owner);
-    const player = _raSync(owner, _raTrack);
-    // Honour the saved position here too, exactly as toggleReadalong does
-    // (#1078): _raLoadProgress was just called, so queueing something already
-    // half-listened-to and then restarting it from zero would throw away the
-    // very state that feature exists to keep. _raSync only sets resumeMs for
-    // an unfinished item past the first few seconds, so a finished one still
-    // correctly starts at 0.
-    if (player.resumeMs && !player.resumeConsumed) {
-      player.resumeConsumed = true;
-      _raPlayAt(Math.max(_raCueIndexForMs(player.cues, player.resumeMs), 0), player.resumeMs);
-    } else {
-      _raPlayAt(0);
-    }
-    // Repaint whichever detail view happens to be open for this owner — same
-    // idiom _raLoadTrack/doStartListen use after landing a track.
-    if (owner.kind === 'episode') {
-      if (_knowledgeDetailEpisode && _knowledgeDetailEpisode.id === owner.id) _renderKnowledgeDetail(_knowledgeDetailEpisode);
-    } else if (owner.kind === 'book_page') {
-      _refreshBookReadalongBar(owner.id);
-    }
-    return;
+    if (await _raPlayOwnerNow(owner)) return;
   }
   _raSetQueueNote('Queue empty — playback finished');
 }
@@ -19951,10 +19982,6 @@ const _LISTENING_SORTS = [
   { key: 'date',   label: 'Date' },
   { key: 'title',  label: 'Title' },
 ];
-const _LISTENING_KIND_ICON = {
-  podcast: '\u{1F3A7}', video: '\u{1F3AC}', article: '\u{1F4C4}',
-  newsletter: '\u{1F4F0}', audiobook: '\u{1F3A7}', book: '\u{1F4DA}',
-};
 
 async function openListeningShelf(status) {
   if (status) _listeningState.status = status;
@@ -20023,7 +20050,12 @@ function _renderListeningShelf() {
 }
 
 function _listeningRowHtml(item, idx) {
-  const icon = _LISTENING_KIND_ICON[item.kind] || '\u{1F3A7}';
+  const owner = _raShelfOwner(item);
+  const playing = _raIsActive(owner) && _raPlayer.playing;
+  const glyph = playing ? '⏸' : (item.finished ? '✓' : '▶');
+  const playTitle = playing ? 'Pause'
+    : item.finished ? 'Play again from the start'
+    : `Continue from ${_fmtHMS(item.position_ms)}`;
   const pct = item.duration_ms > 0
     ? Math.min(100, Math.max(0, item.position_ms / item.duration_ms * 100)) : 0;
   const time = item.duration_ms > 0
@@ -20039,7 +20071,8 @@ function _listeningRowHtml(item, idx) {
     : `'episode',${item.owner_id},null,null,'${item.lang}','${item.variant}'`;
   return `<div class="bw-row arch-row${item.finished ? ' listening-row-done' : ''}"
                onclick="_openListeningItem(${nav})">
-    <div class="arch-cat">${item.finished ? '✓' : icon}</div>
+    <button class="btn-secondary listening-row-play-btn" title="${_escHtml(playTitle)}"
+            onclick="event.stopPropagation(); raPlayFromShelf(${idx})">${glyph}</button>
     <div class="ss-main">
       <div class="arch-row-title">${_escHtml(item.title)}</div>
       <div class="listening-row-bar"><div class="listening-row-fill" style="width:${pct}%"></div></div>
