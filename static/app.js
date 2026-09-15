@@ -7695,8 +7695,12 @@ function _raBindFsKeys() {
     const t = e.target;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''))) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;   // leave browser/OS shortcuts alone
-    // ←/→ the seconds jump, s/d the block jump (#1155). Both mirror the
-    // buttons exactly — same functions, so they can't drift apart.
+    // ←/→ the seconds jump, s/d the block jump (#1155), Space play/pause
+    // (#1165). All mirror the buttons exactly — same functions, so they can't
+    // drift apart. Space is bound HERE and not globally on purpose: it is
+    // "reveal answer" in review, play in the story modal, and plain page
+    // scrolling everywhere else.
+    if (e.code === 'Space') { toggleReadalong(); e.preventDefault(); return; }
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (key === 'ArrowLeft') _raSeekBy(-_raSkipSeconds);
     else if (key === 'ArrowRight') _raSeekBy(_raSkipSeconds);
