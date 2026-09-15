@@ -9042,10 +9042,11 @@ function _openWordActions(idx, anchor) {
 // above — word, pinyin, gloss. When there IS an entry it offers the entry
 // itself: examples, hanzi breakdown, measure words, synonyms, card state,
 // rendered by the one existing detail page. When there is NO entry it offers
-// ★ List / ✓ Known just like a new word (#1149): the annotator skipping a
-// word (baseline list, HSK 1-4) is a heuristic, not his verdict — he still
-// meets words there he wants to save or to mark known for good. Same two
-// pipelines as the word table (#643), never a second copy.
+// ★ List (#1149): the annotator skipping a word (baseline list, HSK 1-4) is a
+// heuristic, not his verdict — he still meets words there he wants to save.
+// No ✓ Known here: the app already treats the word as known, so marking it
+// again would do nothing (Daniel, 2026-09-15). Same add pipeline as the word
+// table (#643), never a second copy.
 //
 // A word with no entry still opens this panel (#1110): on a phone there is no
 // Ctrl to hold, so a tap is the only way to ask about one single word, and a
@@ -9073,17 +9074,14 @@ function _openKnownWordActions(key, anchor) {
     ${glossHtml}
     <div class="word-actions-buttons">${w.word_id
       ? `<button class="word-table-btn" id="word-actions-detail">📖 Details</button>`
-      : `<button class="word-table-btn" id="word-actions-add">★ List</button>
-         <button class="word-table-btn" id="word-actions-known">✓ Known</button>`}
+      : `<button class="word-table-btn" id="word-actions-add">★ List</button>`}
     </div>`;
   document.body.appendChild(box);
 
   box.querySelector('.word-actions-close').onclick = closeWordActions;
   if (!w.word_id) {
     const addBtn = box.querySelector('#word-actions-add');
-    const knownBtn = box.querySelector('#word-actions-known');
     addBtn.onclick = () => _addWordFromDict(w, [addBtn]);
-    knownBtn.onclick = () => _markKnownFromDict(w, [knownBtn]);
   }
   if (w.word_id) box.querySelector('#word-actions-detail').onclick = () => {
     const id = w.word_id;
