@@ -8869,7 +8869,7 @@ function _wrapAllWordGlosses(root, words) {
 // already in the DOM, so both triggers are one class on <body> — no re-render,
 // no reflow beyond the line height growing.
 //
-// Desktop: hold Ctrl and everything is glossed; release and it is gone.
+// Desktop: hold Option (Alt) and everything is glossed; release and it is gone.
 // A held key is the right shape for it — it is a glance, not a mode to
 // remember to turn off. Cmd is deliberately *not* a trigger any more (#1110):
 // on a Mac it is the modifier of every browser shortcut (Cmd+T/W/L/Tab), so
@@ -8890,7 +8890,7 @@ function _setGlossMode(on) {
 }
 
 // #1117: a visible button, because on a phone the left-swipe simply does not
-// fire — reported as "works on the computer with Ctrl, does nothing on the
+// fire — reported as "works on the computer with the modifier key, does nothing on the
 // phone". Whichever touch heuristic is eating it (the 90px threshold, the
 // axis lock, Safari's own edge-swipe), a gesture that is the ONLY way to
 // reach a feature and works only sometimes is not a way to reach it at all.
@@ -9000,7 +9000,7 @@ let _glossErrorShown = false;
 async function _ensureSentenceGlosses() {
   for (const root of [..._glossRoots]) {
     if (!root.isConnected) { _glossRoots.delete(root); continue; }
-    if (root.dataset.glossTrPending) continue;   // Ctrl keydown fires repeatedly while held
+    if (root.dataset.glossTrPending) continue;   // Option keydown fires repeatedly while held
 
     // The text is captured HERE, once, together with its element. Recomputing
     // the cache key from textContent after an await would silently look up a
@@ -9068,7 +9068,9 @@ async function _ensureSentenceGlosses() {
 }
 
 function _glossKeyIsModifier(e) {
-  return e.key === 'Control';
+  // #1161: Option (Alt) on the Mac — Daniel's machine. Reported as e.key 'Alt'
+  // on both platforms; 'AltGraph' is a different key and deliberately not here.
+  return e.key === 'Alt';
 }
 
 let _glossKeysBound = false;
@@ -9089,7 +9091,7 @@ function _bindGlossKeys() {
 
 function _initGlossReveal(root) {
   _bindGlossKeys();
-  // #1111: register this container so a later gloss-on toggle (Ctrl or swipe,
+  // #1111: register this container so a later gloss-on toggle (Option or swipe,
   // from anywhere) knows to fill in its sentence translations. Added even on
   // repeat calls (a Set, so re-adding is a no-op) — the early return just
   // below is only about not double-binding the swipe listener.
@@ -9187,7 +9189,7 @@ function _openWordActions(idx, anchor) {
 // the word as known, so marking it again would do nothing.
 //
 // A word with no entry still opens this panel (#1110): on a phone there is no
-// Ctrl to hold, so a tap is the only way to ask about one single word, and a
+// Option to hold, so a tap is the only way to ask about one single word, and a
 // word that answers nothing at all reads as one the app failed to recognise.
 function _openKnownWordActions(key, anchor) {
   closeWordActions();
@@ -11257,7 +11259,7 @@ function revealAnswer() {
     document.getElementById('sentence-row-back').style.display = 'flex';
     document.getElementById('sentence-back').innerHTML = renderSentence();
     // #1077: the back is where the answer is already out, so every word in the
-    // sentence may as well be lookup-able — Ctrl/swipe for the inline glosses,
+    // sentence may as well be lookup-able — Option/swipe for the inline glosses,
     // a tap on a word he already has an entry for for the entry itself.
     // setWordTable([]) first: there is no word table on a card, and
     // _makeWordsTappable would otherwise wrap against whatever list the
