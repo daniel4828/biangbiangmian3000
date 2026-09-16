@@ -905,6 +905,29 @@ CREATE TABLE IF NOT EXISTS dict_queries (
 CREATE INDEX IF NOT EXISTS idx_dict_queries_created ON dict_queries(created_at DESC);
 
 -- ---------------------------------------------------------------------------
+-- Sentence-block translation cache (#1177): the read-along full-screen "译"
+-- toggle asks routes/knowledge.py's translate_sentences() to gloss every
+-- block with a German translation. Without a cache, re-opening the same
+-- article/chapter — or two readers of the same knowledge item — pays for the
+-- same Google Translate round trip every time. Keyed on the exact source
+-- text (a hash, since text can be long), not on any episode/book id: the
+-- same sentence appearing in two places should hit the same cache row.
+-- Only successful, non-empty translations are stored — an empty result means
+-- the source-language check in translate_sentences() rejected it as
+-- same-as-source, and remembering that would be wrong to reuse if the
+-- translator later recovers.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sentence_translations (
+    lang        TEXT NOT NULL,     -- source reading language (zh/fr/es)
+    target      TEXT NOT NULL,     -- 'de'
+    text_hash   TEXT NOT NULL,     -- sha256 of the exact source text
+    text        TEXT NOT NULL,
+    translation TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (lang, target, text_hash)
+);
+
+-- ---------------------------------------------------------------------------
 -- Book reader (#836): a whole German/English book, read page by page in the
 -- language Daniel is studying. Each page is translated with Google Translate
 -- and annotated by the same pipeline the knowledge base uses
