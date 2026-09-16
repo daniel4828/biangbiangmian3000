@@ -1,4 +1,5 @@
 import logging
+import math
 import sqlite3
 from datetime import date, datetime, time, timedelta
 from languages import DEFAULT_LANG
@@ -660,7 +661,8 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     future / preset, each on its own connection) into a fixed handful of grouped
     queries — this was the dominant cost of /api/today for aggregate decks with
     many leaves (issue #513: ~1300 queries for a 111-leaf deck)."""
-    zero = {"new": 0, "learning": 0, "review": 0, "learning_future": 0, "learning_soon": 0}
+    zero = {"new": 0, "learning": 0, "review": 0, "learning_future": 0, "learning_soon": 0,
+            "learning_soon_first_min": None, "learning_soon_last_min": None}
     result = {did: dict(zero) for did in deck_ids}
     if not deck_ids:
         return result
@@ -671,7 +673,8 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
         return result
 
     today = anki_today().isoformat()
-    now = datetime.now().isoformat(timespec="seconds")
+    now_dt = datetime.now()
+    now = now_dt.isoformat(timespec="seconds")
     presets = _get_presets_bulk(active_ids, category)
 
     conn = get_db()
@@ -723,7 +726,7 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     learning_future = {r["deck_id"]: r["cnt"] for r in learning_future_rows}
 
     learning_soon_rows = conn.execute(
-        f"""SELECT deck_id, COUNT(*) AS cnt FROM cards
+        f"""SELECT deck_id, COUNT(*) AS cnt, MIN(due) AS first_due, MAX(due) AS last_due FROM cards
             WHERE deck_id IN ({ph}) AND category = ?
               AND state IN ('learning', 'relearn')
               AND {_learning_due_soon_sql('')}
@@ -733,6 +736,7 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
         active_ids + [category, now, _tomorrow_cutoff(), today],
     ).fetchall()
     learning_soon = {r["deck_id"]: r["cnt"] for r in learning_soon_rows}
+    learning_soon_due = {r["deck_id"]: (r["first_due"], r["last_due"]) for r in learning_soon_rows}
     conn.close()
 
     for did in active_ids:
@@ -751,12 +755,15 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
         review = sum(1 for r in rows if r["state"] == "review" and not _is_learning(r))
         new_avail = sum(1 for r in rows if r["state"] == "new")
 
+        first_due, last_due = learning_soon_due.get(did, (None, None))
         result[did] = {
             "new": min(new_avail, new_remaining),
             "learning": learning,
             "review": review,
             "learning_future": learning_future.get(did, 0),
             "learning_soon": learning_soon.get(did, 0),
+            "learning_soon_first_min": _minutes_until(first_due, now_dt),
+            "learning_soon_last_min": _minutes_until(last_due, now_dt),
         }
     return result
 
@@ -764,9 +771,11 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
 def count_due(deck_id: int, category: str) -> dict:
     """Returns {new, learning, review} counts for deck badge display."""
     if deck_id in get_locked_deck_ids():
-        return {"new": 0, "learning": 0, "review": 0, "learning_future": 0, "learning_soon": 0}
+        return {"new": 0, "learning": 0, "review": 0, "learning_future": 0, "learning_soon": 0,
+                "learning_soon_first_min": None, "learning_soon_last_min": None}
     today = anki_today().isoformat()
-    now = datetime.now().isoformat(timespec="seconds")
+    now_dt = datetime.now()
+    now = now_dt.isoformat(timespec="seconds")
     preset = get_preset_for_deck(deck_id, category)
     new_limit = preset["new_per_day"]
 
@@ -809,15 +818,16 @@ def count_due(deck_id: int, category: str) -> dict:
         (deck_id, category, now, today, today),
     ).fetchone()[0]
 
-    learning_soon = conn.execute(
-        f"""SELECT COUNT(*) FROM cards
+    soon_row = conn.execute(
+        f"""SELECT COUNT(*) AS cnt, MIN(due) AS first_due, MAX(due) AS last_due FROM cards
            WHERE deck_id = ? AND category = ?
              AND state IN ('learning', 'relearn')
              AND {_learning_due_soon_sql('')}
              AND deleted_at IS NULL
              AND (buried_until IS NULL OR buried_until < ?)""",
         (deck_id, category, now, _tomorrow_cutoff(), today),
-    ).fetchone()[0]
+    ).fetchone()
+    learning_soon = soon_row["cnt"]
 
     conn.close()
     return {
@@ -826,6 +836,8 @@ def count_due(deck_id: int, category: str) -> dict:
         "review": review,
         "learning_future": learning_future,
         "learning_soon": learning_soon,
+        "learning_soon_first_min": _minutes_until(soon_row["first_due"], now_dt),
+        "learning_soon_last_min": _minutes_until(soon_row["last_due"], now_dt),
     }
 
 
@@ -1043,6 +1055,28 @@ def _learning_due_soon_sql(prefix: str = "c.") -> str:
     return f"(instr({d}, 'T') > 0 AND {d} > ? AND {d} < ?)"
 
 
+def _minutes_until(due_iso: str | None, now: datetime) -> int | None:
+    """距 `now` 的整分钟数，向上取整，最小 0；`due_iso` 为 None 时返回 None（#1182）。
+
+    `now` 必须由调用方传入——本模块的 `datetime` 会被测试 monkeypatch 成固定时间，
+    这里绝不能自己再调一次 `datetime.now()`，否则冻结时间的测试会读到真实时钟。
+    """
+    if due_iso is None:
+        return None
+    due_dt = datetime.fromisoformat(due_iso)
+    return max(0, math.ceil((due_dt - now).total_seconds() / 60))
+
+
+def _combine_soon_minutes(pairs: list[tuple]) -> tuple:
+    """把多组 (first_min, last_min) 合并成一组——聚合到父牌组/多牌组求和时用。
+
+    first 取全体非 None 值中的最小，last 取最大；全是 None 就还是 None。
+    """
+    firsts = [f for f, _ in pairs if f is not None]
+    lasts = [l for _, l in pairs if l is not None]
+    return (min(firsts) if firsts else None, max(lasts) if lasts else None)
+
+
 def _tomorrow_cutoff() -> str:
     """The moment the current Anki day ends, as a full ISO datetime."""
     return datetime.combine(
@@ -1196,9 +1230,12 @@ def count_due_by_category(root_deck_id: int, lang: str | None = None) -> dict:
     for category, cat_deck_ids in ids_by_category.items():
         per_deck = _count_due_bulk(cat_deck_ids, category)
         agg = {"new": 0, "learning": 0, "review": 0, "learning_soon": 0}
+        soon_pairs = []
         for c in per_deck.values():
             for k in agg:
                 agg[k] += c.get(k, 0)
+            soon_pairs.append((c.get("learning_soon_first_min"), c.get("learning_soon_last_min")))
+        agg["learning_soon_first_min"], agg["learning_soon_last_min"] = _combine_soon_minutes(soon_pairs)
         result[category] = agg
 
     # Apply root deck's per-category new cap (Anki parent-deck behaviour)
@@ -1316,10 +1353,13 @@ def count_due_multi(deck_ids: list[int], category: str, *, root_deck_id: int | N
     """Aggregate due counts across multiple decks."""
     total = {"new": 0, "learning": 0, "review": 0, "learning_soon": 0}
     per_deck = _count_due_bulk(deck_ids, category)
+    soon_pairs = []
     for deck_id in deck_ids:
         c = per_deck.get(deck_id, {})
         for k in total:
             total[k] += c.get(k, 0)
+        soon_pairs.append((c.get("learning_soon_first_min"), c.get("learning_soon_last_min")))
+    total["learning_soon_first_min"], total["learning_soon_last_min"] = _combine_soon_minutes(soon_pairs)
 
     if root_deck_id is not None and len(deck_ids) > 1:
         root_preset = get_preset_for_deck(root_deck_id, category)
@@ -1347,20 +1387,25 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
     locked = get_locked_deck_ids()
     leaf_pairs = [(d, c) for d, c in leaf_pairs if d not in locked]
     if not leaf_pairs:
-        return {"new": 0, "learning": 0, "review": 0, "learning_soon": 0}
+        return {"new": 0, "learning": 0, "review": 0, "learning_soon": 0,
+                "learning_soon_first_min": None, "learning_soon_last_min": None}
 
     today = anki_today().isoformat()
-    now = datetime.now().isoformat(timespec="seconds")
+    now_dt = datetime.now()
+    now = now_dt.isoformat(timespec="seconds")
     conn = get_db()
 
     preset = get_preset_for_deck(leaf_pairs[0][0])
     if not preset.get("bury_siblings", 1):
         conn.close()
         total = {"new": 0, "learning": 0, "review": 0, "learning_soon": 0}
+        soon_pairs = []
         for deck_id, cat in leaf_pairs:
             c = count_due(deck_id, cat)
             for k in total:
                 total[k] += c.get(k, 0)
+            soon_pairs.append((c.get("learning_soon_first_min"), c.get("learning_soon_last_min")))
+        total["learning_soon_first_min"], total["learning_soon_last_min"] = _combine_soon_minutes(soon_pairs)
         return total
 
     cat_rank_map = {"listening": 0, "reading": 1, "creating": 2}
@@ -1401,19 +1446,26 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
 
     # Cards coming back later today (#844). Deduped by word for the same reason
     # the counts above are: one word must not inflate a parent badge three times.
+    # (min/max due aren't deduped by word — the earliest/latest timestamp among
+    # matching cards doesn't care whether its word also has a sibling card.)
     soon_count = 0
+    soon_first_min = None
+    soon_last_min = None
     if leaf_pairs:
         pair_clause = " OR ".join("(deck_id = ? AND category = ?)" for _ in leaf_pairs)
         pair_params = [v for pair in leaf_pairs for v in pair]
-        soon_count = conn.execute(
-            f"""SELECT COUNT(DISTINCT word_id) FROM cards
+        soon_row = conn.execute(
+            f"""SELECT COUNT(DISTINCT word_id) AS cnt, MIN(due) AS first_due, MAX(due) AS last_due FROM cards
                WHERE ({pair_clause})
                  AND state IN ('learning', 'relearn')
                  AND {_learning_due_soon_sql('')}
                  AND deleted_at IS NULL
                  AND (buried_until IS NULL OR buried_until < ?)""",
             (*pair_params, now, _tomorrow_cutoff(), today),
-        ).fetchone()[0]
+        ).fetchone()
+        soon_count = soon_row["cnt"]
+        soon_first_min = _minutes_until(soon_row["first_due"], now_dt)
+        soon_last_min = _minutes_until(soon_row["last_due"], now_dt)
 
     conn.close()
 
@@ -1439,6 +1491,8 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
         "learning": learning_count,
         "review": review_count,
         "learning_soon": soon_count,
+        "learning_soon_first_min": soon_first_min,
+        "learning_soon_last_min": soon_last_min,
     }
 
 
@@ -1506,7 +1560,8 @@ def count_unfinished(scope: str = "unfinished", lang: str | None = None) -> dict
     # A 'review' card whose interval hasn't reached its deck's learned_interval
     # is still "learning" — same classification as count_due().
     thresholds: dict[int, int] = {}
-    counts = {"new": 0, "learning": 0, "review": 0, "learning_soon": 0}
+    counts = {"new": 0, "learning": 0, "review": 0, "learning_soon": 0,
+              "learning_soon_first_min": None, "learning_soon_last_min": None}
     for r in rows:
         if r["state"] == "new":
             counts["new"] += 1
@@ -1524,16 +1579,24 @@ def count_unfinished(scope: str = "unfinished", lang: str | None = None) -> dict
         else:
             counts["review"] += 1
     # scope='all' already counts the whole Anki day, so its `learning` includes
-    # the cards coming back later today — reporting them again would double up.
+    # the cards coming back later today — reporting them again would double up
+    # (and the two minute fields stay None, same as `learning_soon` staying 0).
     if scope != "all":
-        counts["learning_soon"] = _count_unfinished_learning_soon(lang)
+        cnt, first_min, last_min = _count_unfinished_learning_soon(lang)
+        counts["learning_soon"] = cnt
+        counts["learning_soon_first_min"] = first_min
+        counts["learning_soon_last_min"] = last_min
     return counts
 
 
-def _count_unfinished_learning_soon(lang: str | None = None) -> int:
+def _count_unfinished_learning_soon(lang: str | None = None) -> tuple:
     """Learning/relearn cards on the unfinished virtual deck that come back
     later today (#844) — same locked-deck / disabled-category filters as
-    _unfinished_where(), which only ever matches cards due right now."""
+    _unfinished_where(), which only ever matches cards due right now.
+
+    Returns (count, first_min, last_min) — the latter two straight from
+    _minutes_until(), None when count is 0.
+    """
     lock_clause, lock_params = _locked_exclusion()
     clause = (
         f"state IN ('learning', 'relearn') AND {_learning_due_soon_sql('')} "
@@ -1542,12 +1605,16 @@ def _count_unfinished_learning_soon(lang: str | None = None) -> int:
         + lock_clause
         + f" AND NOT {_CATEGORY_DISABLED_SQL}"
     )
-    params = [datetime.now().isoformat(timespec="seconds"), _tomorrow_cutoff(), *lock_params]
+    now_dt = datetime.now()
+    params = [now_dt.isoformat(timespec="seconds"), _tomorrow_cutoff(), *lock_params]
     lang_clause, params = _lang_subquery_clause(lang, params)
     conn = get_db()
-    n = conn.execute(f"SELECT COUNT(*) FROM cards WHERE {clause}{lang_clause}", params).fetchone()[0]
+    row = conn.execute(
+        f"SELECT COUNT(*) AS cnt, MIN(due) AS first_due, MAX(due) AS last_due FROM cards WHERE {clause}{lang_clause}",
+        params,
+    ).fetchone()
     conn.close()
-    return n
+    return row["cnt"], _minutes_until(row["first_due"], now_dt), _minutes_until(row["last_due"], now_dt)
 
 
 def get_unfinished_deck_categories(scope: str = "unfinished", lang: str | None = None) -> list[dict]:
@@ -1871,7 +1938,8 @@ def count_due_all_decks() -> dict:
     {(deck_id, category): all_suspended_bool}.
     """
     today = anki_today().isoformat()
-    now = datetime.now().isoformat(timespec="seconds")
+    now_dt = datetime.now()
+    now = now_dt.isoformat(timespec="seconds")
     today_end = (anki_today() + timedelta(days=1)).isoformat()
 
     conn = get_db()
@@ -1909,7 +1977,7 @@ def count_due_all_decks() -> dict:
     # 2b. Of those, the ones coming back before tomorrow's cutoff (#844) — the
     #     Again cards the badge must show, unlike the 1d/3d steps.
     soon_rows = conn.execute(
-        f"""SELECT deck_id, category, COUNT(*) AS cnt
+        f"""SELECT deck_id, category, COUNT(*) AS cnt, MIN(due) AS first_due, MAX(due) AS last_due
            FROM cards
            WHERE state IN ('learning', 'relearn')
              AND {_learning_due_soon_sql('')}
@@ -1964,12 +2032,16 @@ def count_due_all_decks() -> dict:
     conn.close()
 
     # Build counts dict
+    def _new_count_entry() -> dict:
+        return {"new_raw": 0, "learning": 0, "review": 0,
+                "learning_future": 0, "learning_soon": 0,
+                "learning_soon_first_min": None, "learning_soon_last_min": None}
+
     counts: dict[tuple, dict] = {}
     for row in due_rows:
         key = (row["deck_id"], row["category"])
         if key not in counts:
-            counts[key] = {"new_raw": 0, "learning": 0, "review": 0,
-                           "learning_future": 0, "learning_soon": 0}
+            counts[key] = _new_count_entry()
         s = row["state"]
         if s in ("learning", "relearn"):
             counts[key]["learning"] += row["cnt"]
@@ -1981,16 +2053,16 @@ def count_due_all_decks() -> dict:
     for row in future_rows:
         key = (row["deck_id"], row["category"])
         if key not in counts:
-            counts[key] = {"new_raw": 0, "learning": 0, "review": 0,
-                           "learning_future": 0, "learning_soon": 0}
+            counts[key] = _new_count_entry()
         counts[key]["learning_future"] = row["cnt"]
 
     for row in soon_rows:
         key = (row["deck_id"], row["category"])
         if key not in counts:
-            counts[key] = {"new_raw": 0, "learning": 0, "review": 0,
-                           "learning_future": 0, "learning_soon": 0}
+            counts[key] = _new_count_entry()
         counts[key]["learning_soon"] = row["cnt"]
+        counts[key]["learning_soon_first_min"] = _minutes_until(row["first_due"], now_dt)
+        counts[key]["learning_soon_last_min"] = _minutes_until(row["last_due"], now_dt)
 
     new_today: dict[tuple, int] = {
         (r["deck_id"], r["category"]): r["cnt"] for r in new_today_rows
@@ -2014,6 +2086,8 @@ def count_due_all_decks() -> dict:
             c["review"] = 0
             c["learning_future"] = 0
             c["learning_soon"] = 0
+            c["learning_soon_first_min"] = None
+            c["learning_soon_last_min"] = None
         limit = new_limits.get(key, 20)
         done = new_today.get(key, 0)
         c["new"] = min(c.pop("new_raw", 0), max(0, limit - done))

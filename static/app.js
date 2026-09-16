@@ -994,14 +994,30 @@ function _triggerClapAnimation() {
 // many Again cards are still pending when the queue runs dry (#844).
 let _lastCounts = null;
 
+// m <= 0 → "不到 1 分钟"，否则 "约 N 分钟"（#1182）。
+function _fmtSoonMinutes(m) {
+  return m <= 0 ? '不到 1 分钟' : `约 ${m} 分钟`;
+}
+
 function _renderDoneHint() {
   const el = document.getElementById('done-soon-hint');
   if (!el) return;
   const n = _lastCounts?.learning_soon || 0;
   el.style.display = n > 0 ? '' : 'none';
-  el.textContent = n > 0
-    ? `还有 ${n} 张卡在学习步骤里，稍后会回来。`
-    : '';
+  if (n <= 0) {
+    el.textContent = '';
+    return;
+  }
+  const first = _lastCounts?.learning_soon_first_min;
+  const last = _lastCounts?.learning_soon_last_min;
+  // 旧服务端或字段缺失时退回原句，不猜时间。
+  if (typeof first !== 'number' || typeof last !== 'number') {
+    el.textContent = `还有 ${n} 张卡在学习步骤里，稍后会回来。`;
+    return;
+  }
+  el.textContent = (n === 1 || first === last)
+    ? `还有 ${n} 张卡在学习步骤里，${_fmtSoonMinutes(first)}后回来。`
+    : `还有 ${n} 张卡在学习步骤里，第一张${_fmtSoonMinutes(first)}后回来，最后一张${_fmtSoonMinutes(last)}后。`;
 }
 
 function showView(name) {

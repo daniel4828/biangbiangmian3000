@@ -424,7 +424,7 @@ def submit_review(card_id: int, rating: int, user_response: str | None = None,
     # normal review submit stays fast (issue #452).
     if logger.isEnabledFor(logging.DEBUG):
         cat_totals = {
-            c: sum(database.count_due(deck_id, c).values())
+            c: sum(v for v in database.count_due(deck_id, c).values() if isinstance(v, int))
             for c in ("listening", "reading", "creating")
         }
         logger.info(
