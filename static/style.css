@@ -6604,6 +6604,13 @@ body.gloss-on [data-gloss-tr]::after {
   gap: 14px;
   margin-top: 10px;
 }
+/* #1186: the Step toggle lit while sentence-step mode is on — same look as
+   the 译 toggle's on-state so "this is switched on" reads the same way. */
+#ra-fs-step.is-on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
 #ra-fs-back, #ra-fs-fwd, .ra-fs-jump {
   background: none;
   border: none;

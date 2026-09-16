@@ -1583,6 +1583,10 @@
           <option value="60">60s</option>
         </select>
       </div>
+      <!-- #1186: sentence-step mode — playback pauses at the end of every
+           sentence; ▶ then plays the next one. State/label written by
+           _raFsUpdateStep(). -->
+      <button id="ra-fs-step" class="ra-fs-jump" onclick="toggleReadalongStep()" title="Pause after every sentence; ▶ plays the next one">Step</button>
       <!-- #1152/#1167: one cue is one sentence — jump by it. -->
       <button id="ra-fs-sent-back" class="ra-fs-jump" onclick="_raSkipSentence(-1)" title="Previous sentence (s)">◀ S</button>
       <button id="ra-fs-back" onclick="_raSeekBy(-_raSkipSeconds)" title="Back 10 seconds">⏪ 10</button>
