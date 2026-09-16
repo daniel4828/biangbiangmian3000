@@ -100,6 +100,60 @@ def test_due_notification_still_sees_only_cards_due_now(deck_with_three_shapes):
     assert status["ready"] is False, "还有卡稍后回来时不该发提醒"
 
 
+@pytest.fixture
+def deck_with_two_soon_cards(frozen_noon):
+    """一个牌组两张「稍后回来」的学习卡（3 分钟后 / 25 分钟后），外加一张已到期
+    和一张明天的卡，用来验证 first/last 分钟数（#1182）。"""
+    deck_id = database.get_or_create_deck("TwoSoonDeck")
+    _card(deck_id, "已到期", "2026-08-16T11:50:00")
+    _card(deck_id, "三分钟后", "2026-08-16T12:03:00", state="relearn")
+    _card(deck_id, "二十五分钟后", "2026-08-16T12:25:00", state="learning")
+    _card(deck_id, "明天", "2026-08-17")
+    return deck_id
+
+
+def test_first_and_last_minutes(deck_with_two_soon_cards):
+    """「第一张几分钟后回来、最后一张几分钟后回来」的分钟数（#1182）。"""
+    c = database.count_due(deck_with_two_soon_cards, "listening")
+    assert c["learning_soon"] == 2
+    assert c["learning_soon_first_min"] == 3
+    assert c["learning_soon_last_min"] == 25
+
+
+def test_bulk_and_multi_agree_on_minutes(deck_with_two_soon_cards):
+    """count_due_multi / count_due_all_decks 的分钟数必须与 count_due 一致（#1182）。"""
+    single = database.count_due(deck_with_two_soon_cards, "listening")
+
+    all_counts, _ = database.count_due_all_decks()
+    bulk = all_counts[(deck_with_two_soon_cards, "listening")]
+    assert bulk["learning_soon_first_min"] == single["learning_soon_first_min"]
+    assert bulk["learning_soon_last_min"] == single["learning_soon_last_min"]
+
+    multi = database.count_due_multi([deck_with_two_soon_cards], "listening")
+    assert multi["learning_soon_first_min"] == single["learning_soon_first_min"]
+    assert multi["learning_soon_last_min"] == single["learning_soon_last_min"]
+
+
+def test_no_soon_cards_means_none(frozen_noon):
+    """没有稍后回来的卡时，两个分钟字段必须是 None，不是 0。"""
+    deck_id = database.get_or_create_deck("NoSoonDeck")
+    _card(deck_id, "已到期", "2026-08-16T11:50:00")
+    _card(deck_id, "明天", "2026-08-17")
+    c = database.count_due(deck_id, "listening")
+    assert c["learning_soon"] == 0
+    assert c["learning_soon_first_min"] is None
+    assert c["learning_soon_last_min"] is None
+
+
+def test_minutes_round_up(frozen_noon):
+    """不足一分钟也要向上取整成 1 分钟，不能显示「0 分钟后」。"""
+    deck_id = database.get_or_create_deck("RoundUpDeck")
+    _card(deck_id, "半分钟后", "2026-08-16T12:00:30", state="relearn")
+    c = database.count_due(deck_id, "listening")
+    assert c["learning_soon_first_min"] == 1
+    assert c["learning_soon_last_min"] == 1
+
+
 def test_cross_day_step_does_not_block_the_reminder(frozen_noon):
     """1d/3d 步骤的卡到期在明天，不该算进 later_today —— 否则提醒几乎永远发不出去。
 

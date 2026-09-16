@@ -91,7 +91,11 @@ def _lang_switch_preset(deck_id: int, lang: str | None, create: bool = False) ->
 def _attach_counts(flat_decks: list) -> None:
     """Compute due counts for all decks using bulk queries (O(1) DB round-trips)."""
     all_counts, susp_flags = database.count_due_all_decks()
-    empty = {"new": 0, "learning": 0, "review": 0, "learning_future": 0, "learning_soon": 0}
+    empty = {"new": 0, "learning": 0, "review": 0, "learning_future": 0, "learning_soon": 0,
+             "learning_soon_first_min": None, "learning_soon_last_min": None}
+    # These two are minute-offsets, not counts — summing them across leaves is
+    # meaningless, they get combined separately (min of firsts, max of lasts).
+    sum_keys = ("new", "learning", "review", "learning_future", "learning_soon")
 
     for deck in flat_decks:
         if not deck.get("children"):
@@ -107,12 +111,17 @@ def _attach_counts(flat_decks: list) -> None:
         if deck.get("children"):
             pairs = _leaf_pairs(deck)
             if pairs:
-                merged: dict = {"new": 0, "learning": 0, "review": 0,
-                                "learning_future": 0, "learning_soon": 0}
+                merged: dict = dict(empty)
+                soon_pairs = []
                 for did, cat in pairs:
                     c = all_counts.get((did, cat), empty)
-                    for k in merged:
+                    for k in sum_keys:
                         merged[k] += c.get(k, 0)
+                    soon_pairs.append((c.get("learning_soon_first_min"), c.get("learning_soon_last_min")))
+                firsts = [f for f, _ in soon_pairs if f is not None]
+                lasts = [l for _, l in soon_pairs if l is not None]
+                merged["learning_soon_first_min"] = min(firsts) if firsts else None
+                merged["learning_soon_last_min"] = max(lasts) if lasts else None
                 deck["counts"] = merged
                 # all_suspended = every leaf's category is fully suspended
                 deck["deck_all_suspended"] = all(
@@ -195,7 +204,8 @@ def get_decks(unfinished_scope: str = "unfinished", lang: str | None = None):
             deck["locked"] = True
             deck["unlock_date"] = locked[deck["id"]]
     unfinished = database.count_unfinished(unfinished_scope, lang=lang)
-    if sum(unfinished.values()) > 0:
+    # #1182 起 counts 里多了两个分钟偏移量（可能是 None），求和只看整数计数。
+    if sum(v for v in unfinished.values() if isinstance(v, int)) > 0:
         tree.insert(0, {
             "id": "unfinished",
             "name": "Unfinished Cards",
