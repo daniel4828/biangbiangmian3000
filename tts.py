@@ -13,6 +13,10 @@ Cache strategy: persistent files in data/tts/<sha256(text)>.mp3
   - No size limit (mp3 files are ~30–100 KB each)
   - Small in-memory set tracks which paths we've verified this process,
     to skip the os.path.exists call for hot items
+  - Per-path single-flight lock (#1181): concurrent requests for the same
+    uncached sentence (e.g. the frontend's bulk fetch racing preload_all_async)
+    serialize on one generation instead of two coroutines racing to write the
+    same tmp file and rename it out from under each other
 """
 
 import asyncio
@@ -21,6 +25,8 @@ import logging
 import os
 import subprocess
 import threading
+import uuid
+import weakref
 
 import edge_tts
 
@@ -58,12 +64,37 @@ class NotCachedOffline(Exception):
     """Offline mode + cache miss — the audio simply doesn't exist here (#612)."""
 
 
+# Per-event-loop map of path → generation lock (#1181). preload() runs its own
+# asyncio.run() in a background thread, i.e. a separate event loop from the
+# one serving requests — an asyncio.Lock created on one loop raises if awaited
+# on another, so locks must never be shared across loops. Keying the outer map
+# by the running loop (via a WeakKeyDictionary so it's cleaned up when a loop
+# is discarded) keeps each loop's locks isolated.
+_gen_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = \
+    weakref.WeakKeyDictionary()
+
+
+def _lock_for(path: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    locks = _gen_locks.setdefault(loop, {})
+    lock = locks.get(path)
+    if lock is None:
+        lock = locks[path] = asyncio.Lock()
+    return lock
+
+
 async def _ensure_cached(text: str, voice: str = VOICE) -> str:
     """Return path to mp3 for text, generating via edge-tts if not on disk.
 
     In offline mode a cache miss raises NotCachedOffline instead: opening an
     edge-tts WebSocket with no network would hang until its timeout and stall
     the request, so a miss has to fail immediately.
+
+    Concurrent callers for the same uncached text serialize on a per-path
+    lock (#1181) — otherwise two coroutines generating the same sentence at
+    once (e.g. the frontend's bulk tts-file fetch racing preload_all_async)
+    share one tmp filename and race each other's save()/rename(), and the
+    loser finds its tmp file already moved out from under it.
     """
     path = _cache_path(text, voice)
     if path in _hot or os.path.exists(path):
@@ -74,24 +105,36 @@ async def _ensure_cached(text: str, voice: str = VOICE) -> str:
         logger.info("tts  offline cache MISS %r — no audio available", text[:30])
         raise NotCachedOffline(text)
 
-    os.makedirs(TTS_CACHE_DIR, exist_ok=True)
-    tmp = path + ".tmp"
-    logger.debug("tts  generating %r → %s", text[:30], os.path.basename(path))
-    communicate = edge_tts.Communicate(text, voice)
-    try:
-        await communicate.save(tmp)
-        if not os.path.exists(tmp):
-            raise RuntimeError("edge-tts produced no output")
-        os.replace(tmp, path)   # atomic: no partial files visible to readers
-    except Exception:
+    loop = asyncio.get_running_loop()
+    lock = _lock_for(path)
+    async with lock:
+        # Re-check now that we hold the lock — an earlier waiter may have
+        # just finished generating this exact file.
+        if path in _hot or os.path.exists(path):
+            _hot.add(path)
+            _gen_locks.get(loop, {}).pop(path, None)
+            return path
+
+        os.makedirs(TTS_CACHE_DIR, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        logger.debug("tts  generating %r → %s", text[:30], os.path.basename(path))
+        communicate = edge_tts.Communicate(text, voice)
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    _hot.add(path)
-    logger.debug("tts  cached     %s", os.path.basename(path))
-    return path
+            await communicate.save(tmp)
+            if not os.path.exists(tmp):
+                raise RuntimeError("edge-tts produced no output")
+            os.replace(tmp, path)   # atomic: no partial files visible to readers
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            _gen_locks.get(loop, {}).pop(path, None)
+            raise
+        _hot.add(path)
+        _gen_locks.get(loop, {}).pop(path, None)
+        logger.debug("tts  cached     %s", os.path.basename(path))
+        return path
 
 
 _TTS_CONCURRENCY = 12   # max parallel edge-tts connections
