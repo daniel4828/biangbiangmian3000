@@ -298,6 +298,13 @@ def translate_sentences(body: TranslateSentencesRequest):
     reading, not something that should interrupt it. But it must also never
     hand back Chinese/French/etc. text disguised as German — see the
     same-as-source check below, mirroring annotate/romance.py's _glosses().
+
+    #1177: results are cached in sentence_translations, keyed on the exact
+    source text — re-opening the same article, or a second reader hitting the
+    same sentence from a different track, must not pay for Google Translate
+    twice. Only the cache MISSES go to translate_batch(); hits are spliced
+    back in by the final loop below so the response order always matches
+    `texts` regardless of which texts were already known.
     """
     texts = body.texts or []
     if not texts:
@@ -309,34 +316,48 @@ def translate_sentences(body: TranslateSentencesRequest):
     if not languages.is_valid_lang(body.lang):
         raise HTTPException(400, f"unknown lang: {body.lang}")
 
-    source = languages.get_lang_config(body.lang)["translator_source"]
-    try:
-        translated = translator.translate_batch(texts, target=body.target, source=source)
-    except Exception as e:
-        logger.warning("translate-sentences: batch translation failed — %s", e)
-        return {"translations": ["" for _ in texts], "error": str(e) or "translation failed"}
+    cached = database.get_sentence_translations(texts, body.lang, body.target)
+    # Dict, not a list: several equal texts in one request must only be
+    # translated once, and order is restored from `texts` at the very end
+    # regardless of how this dict iterates.
+    to_translate = list(dict.fromkeys(t for t in texts if t not in cached))
 
-    # translate_batch's contract on failure is "return the input unchanged"
-    # (see its docstring / annotate/romance.py's _glosses()) — so a translation
-    # that comes back identical to its source (modulo whitespace/case) means
-    # the call silently didn't happen, not that the text translates to itself.
-    # Passing that through would show Chinese/French text under a "German
-    # translation" label.
-    out = []
-    for src, tr in zip(texts, translated):
-        tr = (tr or "").strip()
-        if tr and tr.lower() != src.strip().lower():
-            out.append(tr)
-        else:
-            out.append("")
+    fresh: dict[str, str] = {}
+    error: str | None = None
+    if to_translate:
+        source = languages.get_lang_config(body.lang)["translator_source"]
+        try:
+            translated = translator.translate_batch(to_translate, target=body.target, source=source)
+        except Exception as e:
+            logger.warning("translate-sentences: batch translation failed — %s", e)
+            translated = None
+            error = str(e) or "translation failed"
 
-    # Nothing came back for ANY text of a non-empty batch: that is the
-    # endpoint refusing us (#1140), not a page that happens to translate to
-    # itself. Said out loud so the reader can show "translation unavailable"
-    # instead of a button that silently does nothing — which is precisely how
-    # this was reported.
-    if any(t.strip() for t in texts) and not any(out):
-        return {"translations": out, "error": "no translation came back"}
+        if translated is not None:
+            # translate_batch's contract on failure is "return the input
+            # unchanged" (see its docstring / annotate/romance.py's
+            # _glosses()) — so a translation that comes back identical to its
+            # source (modulo whitespace/case) means the call silently didn't
+            # happen, not that the text translates to itself. Passing that
+            # through would show Chinese/French text under a "German
+            # translation" label.
+            for src, tr in zip(to_translate, translated):
+                tr = (tr or "").strip()
+                fresh[src] = tr if tr and tr.lower() != src.strip().lower() else ""
+
+            # Nothing came back for ANY text that needed translating: that is
+            # the endpoint refusing us (#1140), not a batch that happens to
+            # translate to itself. Only judged on `to_translate` — cache hits
+            # already proved the endpoint works, so they must not be thrown
+            # away just because this round's fresh calls all failed.
+            if any(t.strip() for t in to_translate) and not any(fresh.values()):
+                error = "no translation came back"
+
+            database.save_sentence_translations(fresh, body.lang, body.target)
+
+    out = [cached.get(t, fresh.get(t, "")) for t in texts]
+    if error:
+        return {"translations": out, "error": error}
     return {"translations": out}
 
 

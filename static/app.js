@@ -7782,6 +7782,15 @@ function _raFsRenderLines() {
   });
   _raFsActiveIdx = -1;  // the old highlighted element no longer exists after the rebuild above
 
+  // #1177: register this container for gloss-reveal RIGHT NOW, not after the
+  // /api/new-words round trip below — _makeWordsTappable() only calls
+  // _initGlossReveal() once it resolves, which used to mean the first 译 tap
+  // right after opening full-screen landed on a container _glossRoots didn't
+  // know about yet and did nothing. _initGlossReveal is idempotent (the Set
+  // add and the swipe-listener bind are both guarded), so this doesn't
+  // conflict with the one _makeWordsTappable() does moments later.
+  _initGlossReveal(container);
+
   // #1105: this screen needs a tappable word list too. Reuse it if it's
   // already loaded for this exact track+lang; otherwise fetch one — same
   // "new-words" endpoint the detail pages use (#1006), not a second
@@ -7896,7 +7905,18 @@ function _raFsSetActive(idx) {
       // overflow-y:auto (see style.css), unlike the detail-page's
       // _raScrollToActive which scrolls the whole window.
       const line = lines[idx];
-      const top = line.offsetTop - container.clientHeight * 0.33;
+      // #1177: Daniel wants the active line lower on screen (~45% down) than
+      // the old fixed 0.33-from-top offset, but a gloss-on block is taller
+      // than one line (the German translation renders below it via ::after,
+      // and line.offsetHeight already includes that) — centering purely on
+      // the offset without accounting for its own height can push the
+      // translation text off the bottom edge. free is the room left in the
+      // viewport after the block's own height; anchoring at 45% of THAT,
+      // not of the viewport, keeps the whole block (translation included)
+      // on screen. A block taller than the container (free < 0) just pins
+      // to the top — there is no room to center it either way.
+      const free = container.clientHeight - line.offsetHeight;
+      const top = line.offsetTop - Math.max(0, free * 0.45);
       container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
     }
   }
@@ -9004,6 +9024,35 @@ function _glossViewportDistance(el) {
 // answers "why is nothing appearing", ten answer it ten times.
 let _glossErrorShown = false;
 
+// #1177: the scrollable ancestor of a gloss block — the full-screen reader's
+// #ra-fs-text scrolls itself (overflow-y:auto), while every other gloss root
+// (book page, knowledge detail, review card) scrolls the whole document.
+// Walking up rather than hard-coding #ra-fs-text keeps this generic for
+// whichever root called _ensureSentenceGlosses.
+function _glossScrollParent(el) {
+  let node = el.parentElement;
+  while (node && node !== document.body) {
+    const style = getComputedStyle(node);
+    if ((style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+        node.scrollHeight > node.clientHeight) return node;
+    node = node.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
+// #1177: picks the block to hold fixed on screen while translations land —
+// the active read-along line if there is one (that's the one thing he's
+// looking at), else whichever gloss block is nearest the viewport centre
+// (same distance function the batching order already uses).
+function _glossAnchorFor(root) {
+  const active = root.querySelector && root.querySelector('.ra-fs-line.is-active');
+  const blocks = _glossBlocksIn(root);
+  const el = active || blocks
+    .reduce((best, b) => !best || _glossViewportDistance(b) < _glossViewportDistance(best) ? b : best, null);
+  if (!el) return null;
+  return { el, top: el.getBoundingClientRect().top };
+}
+
 // Fetches and fills in `data-gloss-tr` for every registered gloss root that
 // still needs it. Reads block.textContent directly: since #1111 there is no
 // per-word gloss text node mixed into it any more (translations render from a
@@ -9047,6 +9096,16 @@ async function _ensureSentenceGlosses() {
         await Promise.all(items
           .map(({ text }) => _glossTrCache.get(_glossTrKey(_wordTableLang, text)))
           .filter(Boolean));
+        // #1177: writing data-gloss-tr makes ::after render a whole extra
+        // line under the block, growing its height. The scroll container's
+        // scrollTop doesn't move, so everything below the newly-tall block
+        // gets shoved down the page under whatever he was reading — most
+        // noticeable in the full-screen reader where blocks land one batch
+        // at a time while he's mid-read. Anchor on a stable block's position
+        // before the mutation and nudge scrollTop back by however much it
+        // moved, so the content he's looking at doesn't jump.
+        const glossOn = document.body.classList.contains('gloss-on');
+        const anchor = glossOn ? _glossAnchorFor(root) : null;
         items.forEach(({ el, text }) => {
           delete el.dataset.glossBusy;
           // An empty answer means the server had nothing useful to say (see
@@ -9055,6 +9114,18 @@ async function _ensureSentenceGlosses() {
           const tr = _glossTrResolved.get(_glossTrKey(_wordTableLang, text));
           if (tr) el.dataset.glossTr = tr;
         });
+        if (anchor) {
+          const newTop = anchor.el.getBoundingClientRect().top;
+          // Skip if the anchor was already off-screen — nothing to preserve,
+          // and correcting for an invisible reference point would be a guess.
+          if (anchor.top >= 0 && anchor.top <= window.innerHeight) {
+            const delta = newTop - anchor.top;
+            if (delta) {
+              const scroller = _glossScrollParent(anchor.el);
+              scroller.scrollTop += delta;
+            }
+          }
+        }
       };
       for (const item of pending) {
         if (batch.length >= _GLOSS_BATCH_TEXTS || chars + item.text.length > _GLOSS_BATCH_CHARS) {
