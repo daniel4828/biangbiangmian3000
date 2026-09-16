@@ -7890,6 +7890,25 @@ function _raFsUpdate() {
 // all lines is acceptable — the line count is the sentence count of one
 // article/chapter, i.e. low hundreds at most, not the tens of thousands a
 // per-tick full-table scan elsewhere in this file would be unacceptable for.
+// #1184: px between the active block's bottom and the text container's bottom edge.
+const _RA_FS_BOTTOM_GAP = 16;
+
+// #1184: the active block sits at the BOTTOM of the viewport, as the last
+// thing visible — Daniel reads the lines already spoken above it, not what is
+// coming. line.offsetHeight already includes the gloss-on German translation
+// (rendered via ::after), so with translations on the translation is the last
+// visible thing instead; same formula either way. A block taller than the
+// container pins to the top so its start is at least readable.
+// _RA_FS_BOTTOM_GAP keeps it clear of the container's bottom edge.
+// Also called from _ensureSentenceGlosses when a translation lands under the
+// active line: keeping the line's top fixed there (the generic anchor
+// compensation) would push the new translation below the bottom edge.
+function _raFsScrollLineIntoPlace(line, container, smooth) {
+  const bottomAligned = line.offsetTop + line.offsetHeight - container.clientHeight + _RA_FS_BOTTOM_GAP;
+  const top = line.offsetHeight > container.clientHeight ? line.offsetTop : bottomAligned;
+  container.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
+}
+
 function _raFsSetActive(idx) {
   if (!_raFsOpen || idx === _raFsActiveIdx) return;
   const container = document.getElementById('ra-fs-text');
@@ -7904,20 +7923,7 @@ function _raFsSetActive(idx) {
       // Scrolls the CONTAINER, not the window — #ra-fs-text has its own
       // overflow-y:auto (see style.css), unlike the detail-page's
       // _raScrollToActive which scrolls the whole window.
-      const line = lines[idx];
-      // #1177: Daniel wants the active line lower on screen (~45% down) than
-      // the old fixed 0.33-from-top offset, but a gloss-on block is taller
-      // than one line (the German translation renders below it via ::after,
-      // and line.offsetHeight already includes that) — centering purely on
-      // the offset without accounting for its own height can push the
-      // translation text off the bottom edge. free is the room left in the
-      // viewport after the block's own height; anchoring at 45% of THAT,
-      // not of the viewport, keeps the whole block (translation included)
-      // on screen. A block taller than the container (free < 0) just pins
-      // to the top — there is no room to center it either way.
-      const free = container.clientHeight - line.offsetHeight;
-      const top = line.offsetTop - Math.max(0, free * 0.45);
-      container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      _raFsScrollLineIntoPlace(lines[idx], container, true);
     }
   }
   _raFsActiveIdx = idx;
@@ -9122,7 +9128,11 @@ async function _ensureSentenceGlosses() {
           const tr = _glossTrResolved.get(_glossTrKey(_wordTableLang, text));
           if (tr) el.dataset.glossTr = tr;
         });
-        if (anchor) {
+        if (anchor && anchor.el.classList.contains('is-active')) {
+          // #1184: the active read-along line stays bottom-aligned, with its
+          // fresh translation as the last visible thing — not top-fixed.
+          _raFsScrollLineIntoPlace(anchor.el, _glossScrollParent(anchor.el), false);
+        } else if (anchor) {
           const newTop = anchor.el.getBoundingClientRect().top;
           // Skip if the anchor was already off-screen — nothing to preserve,
           // and correcting for an invisible reference point would be a guess.
