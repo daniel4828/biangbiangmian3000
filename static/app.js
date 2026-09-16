@@ -15747,7 +15747,7 @@ function _warmAudio(url) {
   if (!url || _warmed.has(url)) return;
   _warmed.add(url);
   if (_warmed.size > _WARM_MAX) _warmed.delete(_warmed.values().next().value);
-  fetch(url).catch(() => {});
+  fetch(url).then(r => { if (!r.ok) _warmed.delete(url); }).catch(() => _warmed.delete(url));
 }
 
 // Warm the current card's sentence audio.
