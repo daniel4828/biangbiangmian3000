@@ -7143,6 +7143,12 @@ function toggleReadalong() {
     _raSaveProgress(false);  // #1078: save on pause
     return;
   }
+  // #1186: paused by sentence-step mode → ▶ means "next sentence", from its
+  // own start, not "resume the last few ms of the one just heard".
+  if (player.stepPaused && _raSentenceStep && player.activeIdx + 1 < player.cues.length) {
+    _raPlayAt(player.activeIdx + 1);
+    return;
+  }
   if (a && a.src && player.activeIdx >= 0 && a.src === new URL(player.audioUrl, location.href).href) {
     _kTtsStopPlayback();
     player.playing = true;
@@ -7207,6 +7213,7 @@ function _raPlayAt(idx, exactMs) {
   const player = _raPlayer;
   if (!player.audioUrl || idx < 0 || idx >= player.cues.length) return;
   player.queueNote = '';  // #1084: a real (re)start of playback supersedes any stale note
+  player.stepPaused = false;  // #1186: any explicit (re)start ends the step pause
   // #1049: taking the shared element away from the chunked reader cleanly —
   // see the matching call in _kTtsPlayAt for the reverse direction.
   _kTtsStopPlayback();
@@ -7343,6 +7350,25 @@ function _raOnTimeUpdate() {
   player.lastMs = ms;  // #1082: last known position — read back by toggleReadalong
                         // if something preempts the shared element before the
                         // next throttled save below lands.
+  // #1186: sentence-step mode — the current sentence has been heard to its
+  // end (or the next one is about to start: cues can abut with no gap, and a
+  // tick can land past end_ms) → pause HERE, before the index moves, so the
+  // highlight stays on the sentence just heard. toggleReadalong() sees
+  // stepPaused and plays the next sentence instead of resuming.
+  if (_raSentenceStep && player.activeIdx >= 0) {
+    const cue = player.cues[player.activeIdx];
+    const next = player.cues[player.activeIdx + 1];
+    const atEnd = (cue.end_ms && ms >= cue.end_ms) || (next && next.start_ms <= ms);
+    if (atEnd && next) {
+      player.playing = false;
+      player.stepPaused = true;
+      try { a.pause(); } catch (_) {}
+      player.lastMs = cue.end_ms || ms;
+      _raUpdateBar();
+      _raSaveProgress(false);
+      return;
+    }
+  }
   let idx = player.activeIdx < 0 ? 0 : player.activeIdx;
   while (idx + 1 < player.cues.length && player.cues[idx + 1].start_ms <= ms) idx++;
   while (idx > 0 && player.cues[idx].start_ms > ms) idx--;
@@ -7880,6 +7906,7 @@ function _raFsUpdate() {
 
   _raFsUpdateRate();
   _raFsUpdateSkip();   // #1152: labels follow the setting
+  _raFsUpdateStep();   // #1186: Step toggle reflects the setting
 
   _raFsSetActive(player.activeIdx);
 }
@@ -8013,6 +8040,27 @@ let _raSkipSeconds = (() => {
   const v = parseInt(localStorage.getItem('readalongSkipSeconds'), 10);
   return RA_SKIP_CHOICES.includes(v) ? v : 10;
 })();
+
+// #1186: sentence-step mode — playback pauses at the end of every sentence
+// and ▶ plays the next one (intensive listening / shadowing). Off by default;
+// the choice sticks across sessions like the skip amount above.
+let _raSentenceStep = (() => {
+  try { return localStorage.getItem('readalongSentenceStep') === '1'; } catch (_) { return false; }
+})();
+
+function toggleReadalongStep() {
+  _raSentenceStep = !_raSentenceStep;
+  try { localStorage.setItem('readalongSentenceStep', _raSentenceStep ? '1' : '0'); } catch (_) {}
+  // Switching it OFF while paused at a sentence end: the next ▶ should just
+  // resume, not jump a sentence ahead.
+  if (!_raSentenceStep) _raPlayer.stepPaused = false;
+  _raFsUpdateStep();
+}
+
+function _raFsUpdateStep() {
+  const btn = document.getElementById('ra-fs-step');
+  if (btn) btn.classList.toggle('is-on', _raSentenceStep);
+}
 
 function setReadalongSkipSeconds(value) {
   const v = parseInt(value, 10);
