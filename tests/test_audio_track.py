@@ -492,6 +492,33 @@ def test_asr_cloud_cleans_up_chunk_files_on_success(monkeypatch):
         assert not os.path.exists(p)
 
 
+def test_asr_cloud_chunk_suffix_follows_source_extension(monkeypatch):
+    """#1189: stream-copy (-c copy) requires the chunk's container to match
+    the source's — an .m4a source split into ".mp3"-suffixed chunks makes
+    ffmpeg refuse with "Exactly one MP3 audio stream is required"."""
+    monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 1500.0)
+    created_paths: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        created_paths.append(cmd[-1])
+        return FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(asr_cloud.subprocess, "run", fake_run)
+    calls = []
+
+    def fake_call_groq(client, path):
+        calls.append(path)
+        return [{"text": _padded(len(calls)), "start": 0.0, "end": 10.0}]
+
+    monkeypatch.setattr(asr_cloud, "_call_groq", fake_call_groq)
+
+    asr_cloud.build("/fake/input.m4a", lang="zh")
+
+    assert len(created_paths) == 3
+    for p in created_paths:
+        assert p.endswith(".m4a")
+
+
 def test_asr_cloud_cleans_up_chunk_files_on_groq_failure(monkeypatch):
     monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 1500.0)
     created_paths: list[str] = []
