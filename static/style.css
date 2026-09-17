@@ -3674,7 +3674,7 @@ a.nav-btn { text-decoration: none; }
   color: var(--muted);
   user-select: none;
 }
-.knowledge-tldr > p {
+.knowledge-tldr p {
   margin: 8px 0 0;
   line-height: 1.55;
   color: var(--text);
