@@ -1188,6 +1188,19 @@ async function openKnowledgeSummaryPopup(id, title) {
   bodyEl.innerHTML = summary.trim()
     ? summary
     : `<p class="keymap-hint">${_escHtml('No summary yet for this item.')}</p>`;
+  // #1191: this popup only ever shows the summary (no fulltext branch here),
+  // so it follows the same isZh rule as the summary view in
+  // openKnowledgeDetail. Without setting the word table first, tapping a
+  // word in the summary would silently wrap against whatever list the
+  // previous screen left behind (see the comment above _makeWordsTappable).
+  const isZh = lang === 'zh';
+  setWordTable(isZh ? (ep.hsk_words || []) : ((ep.rendition && ep.rendition.new_words) || []), lang);
+  // The word action panel (.word-actions, z-index 1200) sits above this
+  // popup (z-index 201), so tapping still works inside the modal.
+  // Scoped to bodyEl, not document.getElementById — the knowledge detail
+  // page can have elements with these same ids elsewhere in the DOM.
+  ['knowledge-tldr', 'podcast-summary-zh', 'podcast-summary-de', 'podcast-summary-rendition']
+    .forEach(id => _makeWordsTappable(bodyEl.querySelector('#' + id)));
 }
 
 // Update progress bar and status text during a multi-step loading operation.
@@ -8736,10 +8749,12 @@ function _markKnownFromDict(w, btns, rowIdx) {
 // solves this on the desktop (K / Shift+K over any word); a phone cannot run
 // extensions at all, which is what this is for.
 //
-// Only the two screens that render text and word table in the same pass call
-// this (knowledge detail, book page). The story loading screen shares
-// _knowledgeSummaryHtml() but never sets the word table, so it would wrap
-// against whatever list the previous screen left behind.
+// Every caller sets the word table (setWordTable()) immediately before
+// calling this: knowledge detail, book page, and — since #1191 — the source
+// summary popup on the story loading screen, which shares
+// _knowledgeSummaryHtml() with the detail page's summary view. A caller
+// that skipped setWordTable() first would wrap against whatever list the
+// previous screen left behind.
 function _makeWordsTappable(root, glossText) {
   if (!root) return;
   // Captured before any DOM mutation below — the #1018 all-words fetch at
