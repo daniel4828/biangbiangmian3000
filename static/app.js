@@ -11507,6 +11507,8 @@ function revealAnswer() {
   const _conceptRow = document.getElementById('sentence-concept-row');
   const _conceptEl = document.getElementById('sentence-concept');
   const _reasonBtn = document.getElementById('sentence-reasoning-btn');
+  // Knowledge mode's front-side 💡 (#1197) — only that branch shows it.
+  const _reasonRowFront = document.getElementById('sentence-concept-row-front');
   const _chNum = (!isSentenceNote && sentence?.concept_en)
     ? parseInt(sentence.concept_en.match(/Chapter (\d+)/)?.[1]) : null;
   const _isKahneman = !isSentenceNote && !!_chNum;
@@ -11540,7 +11542,9 @@ function revealAnswer() {
     _currentReasoningIsNews = false;
     _reasonBtn.style.display = (_currentReasoning || _currentSourceUrl) ? '' : 'none';
     _currentReasoningIsKnowledge = false;
+    _currentReasoningEpisode = null;
     _conceptRow.style.display = '';
+    if (_reasonRowFront) _reasonRowFront.style.display = 'none';
   } else if (_hidesInlineContext(sentence) && sentence?.reasoning_zh) {
     // Knowledge mode (#931): same 💡 light bulb kahneman has, holding the
     // model's "Fakt: … Warum: …" note about why it picked this passage. No
@@ -11558,7 +11562,15 @@ function revealAnswer() {
     _currentSourceUrl = '';
     _currentReasoningIsNews = false;
     _currentReasoningIsKnowledge = true;
+    // #1197: remember where the sentence came from so the popup can swap
+    // itself for the item's summary popup (in-app, no navigation).
+    _currentReasoningEpisode = {
+      id: _episodeIdFromSourceUrl(sentence.source_url),
+      title: sentence.source_title || '',
+    };
     _reasonBtn.style.display = '';
+    // #1197: same 💡 on the front, before the flip.
+    if (_reasonRowFront) _reasonRowFront.style.display = '';
   } else {
     _conceptRow.style.display = 'none';
     _conceptEl.innerHTML = '';
@@ -11568,6 +11580,8 @@ function revealAnswer() {
     _currentSourceUrl = '';
     _currentReasoningIsNews = false;
     _currentReasoningIsKnowledge = false;
+    _currentReasoningEpisode = null;
+    if (_reasonRowFront) _reasonRowFront.style.display = 'none';
   }
 
   const noteType = wordDetails?.note_type || card.note_type;
@@ -14530,6 +14544,9 @@ let _currentReasoningIsNews = false;
 // another boolean, because "which of N" stops being expressible as a flag the
 // moment there are three of them.
 let _currentReasoningIsKnowledge = false;
+// Knowledge mode (#1197): {id, title} of the item the current sentence came
+// from, for the popup's "open source" button. null in every other mode.
+let _currentReasoningEpisode = null;
 
 // Episode id encoded in a sentence's source_url, or null.
 //
@@ -14763,8 +14780,21 @@ function openReasoning() {
   } else {
     linkEl.style.display = 'none';
   }
+  // Knowledge mode (#1197): the source is an in-app page — a button that
+  // swaps this popup for the item's summary popup, never an <a href>.
+  const kBtn = document.getElementById('reasoning-knowledge-btn');
+  if (kBtn) kBtn.style.display = (_currentReasoningIsKnowledge && _currentReasoningEpisode?.id != null) ? '' : 'none';
   document.getElementById('reasoning-overlay').style.display = '';
   document.getElementById('reasoning-modal').style.display = '';
+}
+
+// Knowledge mode (#1197): from the 💡 popup straight to the item's summary
+// (the tappable-word popup of #930/#1191), closing back onto the card.
+function openReasoningSource() {
+  const ep = _currentReasoningEpisode;
+  if (!ep || ep.id == null) return;
+  closeReasoning();
+  openKnowledgeSummaryPopup(ep.id, ep.title);
 }
 
 function closeReasoning() {
@@ -17748,8 +17778,11 @@ document.addEventListener('keydown', async e => {
       e.preventDefault();
       // Kahneman cards keep g for the reasoning popup; everything else uses g to
       // flip the news-flow display language (original DE ↔ Chinese, issue #452).
+      // Knowledge mode's front-side lamp (#1197) counts too — g must work
+      // before the flip there, not only on the back.
       const _lampVisible = document.getElementById('sentence-reasoning-btn')?.style.display !== 'none'
-        && document.getElementById('sentence-concept-row')?.style.display !== 'none';
+        && (document.getElementById('sentence-concept-row')?.style.display !== 'none'
+            || document.getElementById('sentence-concept-row-front')?.style.display !== 'none');
       if (_lampVisible) {
         const _rOpen = document.getElementById('reasoning-modal')?.style.display !== 'none';
         if (_rOpen) closeReasoning(); else openReasoning();

@@ -251,6 +251,12 @@
                      oninput="updateWordBankPreview(this.value)"
                      onkeydown="if(event.key==='Enter')revealAnswer()">
             </div>
+            <!-- Knowledge mode (#1197): the same 💡 the back has, before the
+                 flip — opening it is a deliberate tap, unlike the inline
+                 context #931 removed from the front for spoiling the answer. -->
+            <div id="sentence-concept-row-front" class="sentence-concept-row" style="display:none">
+              <button id="sentence-reasoning-btn-front" class="sentence-reasoning-btn" title="为什么选这句? (快捷键: g)" onclick="openReasoning()">💡</button>
+            </div>
             <div class="front-actions-row">
               <button class="reveal-btn" id="reveal-btn" onclick="revealAnswer()">Show Answer</button>
               <button class="front-newsentence-btn" id="new-sentence-btn" onclick="requeueNewSentence()"
@@ -1341,6 +1347,9 @@
   </div>
   <div id="reasoning-body" class="reasoning-body"></div>
   <a id="reasoning-source-link" href="#" target="_blank" rel="noopener" style="display:none" class="edit-label">打开原文 ↗ / Open article ↗</a>
+  <!-- Knowledge mode (#1197): the source is an in-app page, so no <a href> —
+       a button that swaps this popup for the item's summary popup instead. -->
+  <button id="reasoning-knowledge-btn" type="button" class="edit-label" style="display:none;cursor:pointer;background:none;border:0;padding:0;font:inherit;color:inherit" onclick="openReasoningSource()">📄 打开素材原文 / Open source</button>
 </div>
 
 <!-- Session summary graph modal: interval timelines of all cards reviewed -->
