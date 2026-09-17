@@ -73,7 +73,13 @@ _ITUNES_NS = {"itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"}
 # applied up front (before any transcriber runs) since RSS gives us the
 # duration for free.
 _AUDIO_MAX_SECONDS = 3 * 60 * 60  # 3h — guards against a mislabeled/huge episode
-_WHISPER_SEGMENT_SECONDS = 20 * 60  # 20min segments stay well under OpenAI's 25MB upload cap
+# 5min, not the 20min the 25MB upload cap alone would allow (#1192): the real
+# ceiling is gpt-4o-mini-transcribe's 2000 output tokens per request. A
+# 14-minute Chinese episode sent as one segment came back with only its
+# first ~9 minutes (2917 chars, cut mid-sentence) and no error at all —
+# summary missed the back half, read-along alignment could never match.
+# Chinese speech runs ~3.7 tokens/s, so 300s ≈ 1100 tokens, well clear.
+_WHISPER_SEGMENT_SECONDS = 5 * 60
 
 # Instagram Reel transcription (#750): Groq's OpenAI-compatible audio
 # endpoint running whisper-large-v3-turbo — ~9x cheaper and ~10x faster than
