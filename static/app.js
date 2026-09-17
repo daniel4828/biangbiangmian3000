@@ -5387,11 +5387,15 @@ function closeKnowledgeDetail() {
 // shape, which is why the caller can hand any of them to this function.
 //
 // Pre-#708 summaries are plain text with no <b> at all — those fall back to
-// the first two sentences of the text. Returns '' when neither yields
+// the first two sentences of the text. Returns [] when neither yields
 // anything, so the caller can drop the block entirely.
+//
+// #1193: returns one entry per sentence rather than a joined string. Each
+// lead sentence is one topic of the summary, and the caller renders each as
+// its own paragraph — six topics run together in one block read as a wall.
 function _knowledgeTldrText(summaryHtml) {
   const raw = (summaryHtml || '').trim();
-  if (!raw) return '';
+  if (!raw) return [];
   // Parsed, never injected: the result is escaped again before it reaches the
   // page, same rule as _summaryZhHtml — AI-written text never carries markup.
   const doc = new DOMParser().parseFromString(`<div>${raw}</div>`, 'text/html');
@@ -5404,13 +5408,13 @@ function _knowledgeTldrText(summaryHtml) {
                  && !(el.previousSibling && el.previousSibling.textContent.trim()))
     .map(el => (el.textContent || '').trim())
     .filter(Boolean);
-  if (leads.length) return leads.join(' ');
+  if (leads.length) return leads;
   const plain = (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
-  if (!plain) return '';
+  if (!plain) return [];
   // CJK full stops count as sentence ends too: since #1125 this fallback also
   // runs on Chinese summaries, and /[.!?]/ alone would return the whole text.
   const sentences = plain.match(/[^.!?。！？]+[.!?。！？]+/g);
-  return sentences ? sentences.slice(0, 2).join(' ').trim() : plain.slice(0, 300);
+  return sentences ? sentences.slice(0, 2).map(x => x.trim()) : [plain.slice(0, 300)];
 }
 
 // Open by default: a TL;DR nobody sees is pointless. The toggle is remembered
@@ -5426,18 +5430,20 @@ function _knowledgeTldrHtml(ep) {
   const lang = activeLang();
   const source = (lang === 'zh' ? ep.summary_zh : (ep.rendition || {}).summary)
     || ep.summary_de;
-  const text = _knowledgeTldrText(source);
-  if (!text) return '';
+  const parts = _knowledgeTldrText(source);
+  if (!parts.length) return '';
   const open = localStorage.getItem('knowledgeTldrOpen') === '0' ? '' : ' open';
   // The id is what gets this block into the gloss/tap-word list at the detail
   // view's render (see the _makeWordsTappable call there) — without it the 译
   // button did nothing here, which on a phone is indistinguishable from a
-  // broken button. It sits on the <p>, not on the <details>: the label
-  // "Kurzfassung" is chrome, and a root with no <p> inside it is exactly the
-  // case _glossBlocksIn() falls back to treating as one block.
+  // broken button. It sits on a <div> wrapping the paragraphs, not on the
+  // <details>: the label "Kurzfassung" is chrome and must stay outside the
+  // gloss root. One <p> per topic (#1193) — _glossBlocksIn() and
+  // _makeWordsTappable() already handle a multi-<p> root, it is exactly the
+  // shape of #podcast-summary-zh.
   return `<details class="knowledge-tldr" onclick="setTimeout(_rememberKnowledgeTldr, 0)"${open}>
       <summary>Kurzfassung</summary>
-      <p id="knowledge-tldr">${_escHtml(text)}</p>
+      <div id="knowledge-tldr">${parts.map(t => `<p>${_escHtml(t)}</p>`).join('')}</div>
     </details>`;
 }
 
