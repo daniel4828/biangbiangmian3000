@@ -95,11 +95,16 @@ def _split_chunks(path: str, duration: float) -> list[tuple[str, float]]:
         return [(path, 0.0)]
 
     chunks: list[tuple[str, float]] = []
+    # Stream-copy (-c copy) demands the output container match the input —
+    # an .m4a (AAC) source copied into a chunk named ".mp3" makes ffmpeg
+    # refuse with "Exactly one MP3 audio stream is required" (#1189). So the
+    # chunk suffix always follows the source file's own extension.
+    suffix = os.path.splitext(path)[1] or ".mp3"
     try:
         start = 0.0
         while start < duration:
             length = min(_CHUNK_SECONDS, duration - start)
-            fd, chunk_path = tempfile.mkstemp(suffix=".mp3")
+            fd, chunk_path = tempfile.mkstemp(suffix=suffix)
             os.close(fd)
             try:
                 result = subprocess.run(
