@@ -11188,8 +11188,10 @@ function loadCard(c, counts) {
   // Auto-play audio for the listening category.
   // If sentence is missing and a story fetch is in flight, defer to the fetch callback above.
   if (category === 'listening') {
-    if (!sentence && (unfinishedMode || rootDeckId)) {
-      // Deferred — fetch callback will call playSentence() once story is loaded
+    if (!sentence && (unfinishedMode || rootDeckId) && !quickMode) {
+      // Deferred — fetch callback will call playSentence() once story is loaded.
+      // Must mirror the story-fetch guard above exactly: in quickMode that fetch
+      // never runs, so deferring here meant nobody ever played the word (#1204).
     } else {
       const snap = c;
       if (card === snap) playSentence();
