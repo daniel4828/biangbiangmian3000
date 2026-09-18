@@ -58,7 +58,7 @@
 
 ## 语言错误日志（#1129 → #1200 全局化）
 
-Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook 自动追加进 `~/Documents/zhongwen-lianxi/log/<日期>-<项目名>-<会话 id>.md`。练习项目 `zhongwen-lianxi` 拿这些做间隔重复练习。
+Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook 自动追加进 `~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/zhongwen-lianxi/log/<日期>-<项目名>-<会话 id>.md`。练习项目 `zhongwen-lianxi` 拿这些做间隔重复练习。
 
 - **本仓库里没有任何日志代码**（#1200 起）：hook 在 `~/.claude/settings.json`，脚本在 `~/.claude/hooks/log_language_errors.sh`，规则说明在全局技能 `~/.claude/skills/language-log/SKILL.md`——**那是唯一事实来源，改规则只改那里**，这里不复制
 - **纯德语/英语的消息不触发**（不纠正、不记录）：Daniel 那时没力气写中文，流程没有意义。R4 的改写同样只在消息含中文时做
