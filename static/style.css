@@ -6604,6 +6604,19 @@ body.gloss-on [data-gloss-tr]::after {
   gap: 14px;
   margin-top: 10px;
 }
+/* #1208: bookmarks panel above #ra-fs-text; row markup comes from the
+   existing .readalong-bookmarks/.readalong-bookmark-row rules (#1086),
+   reused as-is — only the placement is new. */
+#ra-fs-bookmarks {
+  flex-shrink: 0;
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 6px 20px;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.ra-fs-line.has-bookmark::before { content: '☆ '; color: var(--primary); }
 /* #1186: the Step toggle lit while sentence-step mode is on — same look as
    the 译 toggle's on-state so "this is switched on" reads the same way. */
 #ra-fs-step.is-on {

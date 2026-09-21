@@ -6729,6 +6729,10 @@ function _raRerenderBookmarkOwner(owner) {
   } else if (owner.kind === 'book_page') {
     _refreshBookReadalongBar(owner.id);
   }
+  // #1208: the full-screen screen has its own bookmarks panel/markers —
+  // repaint it too when it's the one currently open, regardless of which
+  // detail page (if any) is showing underneath.
+  if (_raFsOpen) _raFsUpdateBookmarks();
 }
 
 // GET never generates anything (there's nothing to generate) — this just
@@ -7789,6 +7793,82 @@ function _raFsGoToItem() {
   _raMiniOpen();
 }
 
+// #1208: bookmarks panel state for the full-screen screen. The list itself
+// (_raBookmarks/_raBookmarksOwner) is the same single-slot cache #1086
+// already maintains for the detail-page bar — this is just whether the
+// panel is expanded on THIS screen.
+let _raFsBookmarksOpen = false;
+
+// {kind, id, lang, variant} for whatever's currently loaded in the shared
+// player — the exact shape _raBookmarksFor/_raLoadBookmarks expect, built
+// the same way raAddBookmark already does (never a second construction).
+function _raFsCurrentOwner() {
+  return { kind: _raPlayer.ownerKind, id: _raPlayer.ownerId, lang: _raPlayer.lang, variant: _raPlayer.variant };
+}
+
+function _raFsToggleBookmarks() {
+  _raFsBookmarksOpen = !_raFsBookmarksOpen;
+  _raFsUpdateBookmarks();
+}
+
+// Repaints the 🔖 toggle label, the panel (when open) and the ☆ markers on
+// the line list. Reuses _raBookmarksHtml(owner) for the panel body — never a
+// second bookmark-row template — and _raLoadBookmarks(owner) for fetching,
+// same as the detail-page bar. Cheap enough to call from _raFsUpdate's every
+// repaint: the list is a handful of rows at most.
+function _raFsUpdateBookmarks() {
+  if (!_raFsOpen) return;
+  const owner = _raFsCurrentOwner();
+  const list = _raBookmarksFor(owner);
+  if (list === null) {
+    // Not fetched yet for this owner — kick off the load. _raLoadBookmarks
+    // calls _raRerenderBookmarkOwner when it lands, which calls back into
+    // this function (via the ra-fullscreen branch added below) once the
+    // list is actually there.
+    if (!_raBookmarksChecked(owner)) _raLoadBookmarks(owner);
+    return;
+  }
+  const toggle = document.getElementById('ra-fs-bookmarks-toggle');
+  if (toggle) toggle.textContent = list.length ? `🔖 ${list.length}` : '🔖';
+  const panel = document.getElementById('ra-fs-bookmarks');
+  if (panel) {
+    if (_raFsBookmarksOpen && list.length) {
+      panel.style.display = '';
+      // This runs on every sentence change (via _raFsUpdate); only touch the
+      // DOM when the rows actually differ, so a ✕ about to be clicked isn't
+      // replaced under the finger.
+      const html = _raBookmarksHtml(owner);
+      if (panel.dataset.rendered !== html) { panel.innerHTML = html; panel.dataset.rendered = html; }
+    } else {
+      panel.style.display = 'none';
+    }
+  }
+  // Mark the bookmarked lines with a ☆ (CSS ::before, see style.css) — line
+  // index i in #ra-fs-text corresponds 1:1 to _raPlayer.cues[i], same
+  // ordering _raFsRenderLines() built them in.
+  const container = document.getElementById('ra-fs-text');
+  if (container) {
+    const marked = new Set(list.map(b => _raCueIndexForMs(_raPlayer.cues, b.position_ms)));
+    const lines = container.children;
+    for (let i = 0; i < lines.length; i++) {
+      lines[i].classList.toggle('has-bookmark', marked.has(i));
+    }
+  }
+}
+
+// j: jump back to the nearest earlier bookmark. Subtracting 1.5s from the
+// current position (rather than comparing against it directly) means
+// pressing j repeatedly walks further back through the list instead of
+// landing on the bookmark we just jumped to every time.
+function _raFsJumpBackBookmark() {
+  const list = _raBookmarksFor(_raFsCurrentOwner());
+  if (!list || !list.length) return;
+  const pos = _raPlayer.lastMs || 0;
+  const earlier = list.filter(b => b.position_ms < pos - 1500);
+  const target = earlier.length ? earlier[earlier.length - 1] : list[list.length - 1];
+  raJumpToBookmark(target.id);
+}
+
 let _raFsKeysBound = false;
 
 function _raBindFsKeys() {
@@ -7821,6 +7901,10 @@ function _raBindFsKeys() {
     else if (key === 'ArrowRight') _raSeekBy(_raSkipSeconds);
     else if (key === 's') _raSkipSentence(-1);
     else if (key === 'd') _raSkipSentence(1);
+    // #1208: b bookmarks the current moment, j jumps back to the previous
+    // bookmark — mirrors the ☆/🔖 buttons exactly, same functions.
+    else if (key === 'b') raAddBookmark();
+    else if (key === 'j') _raFsJumpBackBookmark();
     else return;
     e.preventDefault();   // ←/→ would otherwise scroll the line list sideways
   });
@@ -7953,6 +8037,7 @@ function _raFsUpdate() {
   _raFsUpdateStep();   // #1186: Step toggle reflects the setting
 
   _raFsSetActive(player.activeIdx);
+  _raFsUpdateBookmarks();  // #1208: toggle label + panel + ☆ line markers
 }
 
 // Highlights the active line and dims everything before it. Cheap on the

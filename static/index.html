@@ -1565,6 +1565,10 @@
          element, relocated, never a second copy of it. -->
     <div id="ra-fs-search-slot"></div>
   </div>
+  <!-- #1208: bookmarks panel, toggled by #ra-fs-bookmarks-toggle below.
+       Reuses _raBookmarksHtml() row-for-row — never a second HTML template
+       for the same bookmark row. -->
+  <div id="ra-fs-bookmarks" style="display:none"></div>
   <div id="ra-fs-text"></div>
   <div id="ra-fs-foot">
     <input type="range" id="ra-fs-seek" min="0" max="1000" value="0"
@@ -1595,6 +1599,11 @@
       <!-- #1186: sentence-step mode — playback pauses at the end of every
            sentence; ▶ then plays the next one. State/label written by
            _raFsUpdateStep(). -->
+      <!-- #1208: bookmark this moment / toggle the bookmarks panel. Label of
+           the toggle button is written by _raFsUpdateBookmarks() (🔖 N), not
+           hard-coded, so it can't disagree with the list. -->
+      <button id="ra-fs-bookmark" class="ra-fs-jump" onclick="raAddBookmark()" title="Bookmark this moment (b)">☆</button>
+      <button id="ra-fs-bookmarks-toggle" class="ra-fs-jump" onclick="_raFsToggleBookmarks()" title="Bookmarks (j jumps back to the previous one)">🔖</button>
       <button id="ra-fs-step" class="ra-fs-jump" onclick="toggleReadalongStep()" title="Pause after every sentence; ▶ plays the next one">Step</button>
       <!-- #1152/#1167: one cue is one sentence — jump by it. -->
       <button id="ra-fs-sent-back" class="ra-fs-jump" onclick="_raSkipSentence(-1)" title="Previous sentence (s)">◀ S</button>
