@@ -194,8 +194,10 @@ const KEYMAP_DEFAULTS = {
   undo:           'z',
   'hint-minus':   'a',
   'hint-plus':    's',
-  'rate-minus':   '-',
-  'rate-plus':    '+',
+  // #1206: the two keys right of L on a US layout — one pair for review AND
+  // the read-along full-screen player (_raBindFsKeys reads these too).
+  'rate-minus':   ';',
+  'rate-plus':    "'",
   'story-modal':  'x',
   // shared (review card-back + word-detail page)
   examples:       'e',
@@ -245,8 +247,8 @@ const KEYMAP_ACTIONS = [
   { id: 'undo',         label: 'Undo last review',             scope: 'review' },
   { id: 'hint-minus',   label: 'Listening hint −',             scope: 'review' },
   { id: 'hint-plus',    label: 'Listening hint +',             scope: 'review' },
-  { id: 'rate-minus',   label: 'Audio speed −',                scope: 'review' },
-  { id: 'rate-plus',    label: 'Audio speed +',                scope: 'review' },
+  { id: 'rate-minus',   label: 'Audio speed − (review + read-along)', scope: 'review' },
+  { id: 'rate-plus',    label: 'Audio speed + (review + read-along)', scope: 'review' },
   { id: 'story-modal',  label: 'Open summary (full story)',    scope: 'review' },
 
   { id: 'examples',       label: 'Toggle examples',            scope: 'shared' },
@@ -7807,6 +7809,13 @@ function _raBindFsKeys() {
     // "reveal answer" in review, play in the story modal, and plain page
     // scrolling everywhere else.
     if (e.code === 'Space') { toggleReadalong(); e.preventDefault(); return; }
+    // #1206: same speed keys as review (`rate-minus`/`rate-plus`, rebindable in
+    // settings), same 0.05 step. setKnowledgeTtsRate() updates the slider and
+    // the playing audio, so this can't drift from the on-screen control.
+    // _raFsUpdateRate() is needed explicitly: _raFsUpdate only repaints on
+    // play/pause/seek, so the slider would otherwise lag the audio.
+    if (e.key === _key('rate-minus')) { setKnowledgeTtsRate(_kTtsRate - REVIEW_RATE_STEP); _raFsUpdateRate(); e.preventDefault(); return; }
+    if (e.key === _key('rate-plus'))  { setKnowledgeTtsRate(_kTtsRate + REVIEW_RATE_STEP); _raFsUpdateRate(); e.preventDefault(); return; }
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (key === 'ArrowLeft') _raSeekBy(-_raSkipSeconds);
     else if (key === 'ArrowRight') _raSeekBy(_raSkipSeconds);
