@@ -1,3 +1,22 @@
+#home-discovery { margin-bottom: 24px; }
+#home-discovery:empty { display: none; }
+.home-coffee { padding: 16px 18px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+.home-discovery-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; color: var(--muted); }
+.home-discovery-heading strong { color: var(--text); }
+.home-coffee-link { display: block; margin-top: 10px; color: var(--primary); font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+.home-coffee-link span { display: block; margin-top: 7px; font-size: 12px; font-weight: 400; }
+.home-picks-heading { margin: 16px 0 8px; }
+.home-picks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.home-pick { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.home-pick-kind { color: var(--muted); font-size: 11px; text-transform: capitalize; }
+.home-pick:hover, .home-coffee-link:hover { color: var(--primary); text-decoration: underline; }
+.home-pick:focus-visible, .home-coffee-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.home-discovery-empty { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+@media (max-width: 480px) {
+  .home-picks { gap: 6px; }
+  .home-pick { padding: 8px; font-size: 12px; }
+}
+
 :root {
   --bg:        #f1f5f9;
   --card:      #ffffff;

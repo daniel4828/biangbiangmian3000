@@ -586,6 +586,8 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 ## 知识库（Knowledge Base，#650–#655）
 
+首页推荐（#1212）：`GET /api/home-discovery?tz=<浏览器 IANA 时区>` 通过 `database/home.py` 只读选择当天《声动早咖啡》（按订阅源标题、作者或单集标题识别，发布时间换算为当地日期，无当日节目明确留空）。首页功能按钮上方显示入口，点击复用 `openKnowledgeItem(..., 'fulltext')` 和 `doStartListen()`。当地 10 点起每两小时显示三条可阅读且未归档的知识库内容；按日期稳定洗牌、来源和类型交错，按时段前进三条，库不足时显示实际数量。当天播客不在推荐中重复。`static/home-discovery.js` 每分钟及窗口重新获得焦点时刷新首页；不新增定时任务、AI 调用或数据库写入。听读生成仍由用户点击触发现有流程。
+
 播客爬虫（#479）泛化成一个统一的知识库：播客单集、YouTube 视频、报刊文章三类素材走**同一条流水线**（获取 → 转录/正文 → 中文+德语摘要 → 生词标注 → 通知 → 造卡）。总体设计见 `docs/knowledge-base.md`（各阶段 Issue 都引用它）。
 
 - **不新建表，泛化 `podcast_episodes`**：加两列 `kind`（`podcast`|`video`|`article`|`newsletter`，最后一个 #925 加的）、`title_en`。**表名和历史列名故意不改**——改名要重建表+迁移生产库，风险远大于收益，本仓库已有同类先例（`youtube_url` 现在也存文章/播客链接，`word_zh` 对法语存法语词形）。`video_id` 对文章存 `normalize_url()` 去掉跟踪参数后的规范化 URL（`podcast_episodes` 的去重键），`transcript_source` 存 `youtube_captions`/`article`/`tingwu`/`whisper`/`notebooklm`

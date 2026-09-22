@@ -16,3 +16,4 @@ from .knowledge_chat import *
 from .mailbox import *
 from .audio import *
 from .translations import *
+from .home import home_discovery
