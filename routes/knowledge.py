@@ -11,6 +11,8 @@ pipeline instead of hitting this HTTP endpoint or reimplementing it — one
 ingestion path per source type, see that module's docstring for why.
 """
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -30,6 +32,15 @@ from routes.utils import ai_disabled
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.get("/api/home-discovery")
+def home_discovery(tz: str = 'UTC'):
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(422, 'Unknown timezone')
+    return database.home_discovery(datetime.now(zone))
 
 
 class AddKnowledgeRequest(BaseModel):

@@ -1032,6 +1032,7 @@ function showView(name) {
   // also puts that element's display back under this function's control.
   if (document.body.classList.contains('wd-popup')) closeWordDetailPopup();
   _currentView = name;
+  if (name === 'decks' && typeof initHomeDiscovery === 'function') initHomeDiscovery();
   // #1137: the calendar/evolution tooltip is a direct child of <body>, so it
   // survives every view switch on its own. Clear it on any navigation.
   hcalHideTip();
@@ -2107,10 +2108,11 @@ function renderDecks(decks) {
   }
 
   document.getElementById('view-decks').innerHTML =
-    navRow + filteredSection +
+    '<section id="home-discovery" aria-label="Today’s listening and reading"></section>' + navRow + filteredSection +
     '<div id="home-calendar" class="hcal-card"></div>' +
     '<div id="home-evolution" class="hcal-card"></div>' + regularSection;
   _renderHeaderLangTabs();
+  if (typeof initHomeDiscovery === 'function') initHomeDiscovery();
   if (typeof initHomeCalendar === 'function') initHomeCalendar();
   if (typeof initHomeEvolution === 'function') initHomeEvolution();
 }
