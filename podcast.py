@@ -1558,6 +1558,12 @@ def _annotate_summary(result: dict) -> dict:
 _PLACEHOLDER_TITLE_RE = re.compile(r"^(video|reel|post|photo|clip)\s+by\s+\S", re.IGNORECASE)
 _SHORTCODE_TITLE_RE = re.compile(r"^[A-Za-z0-9_-]{8,20}$")
 
+# Only speech-recognition output benefits from #1215's proper-noun repair.
+# Article/pasted text and official YouTube captions are source material, not
+# ASR guesses, so sending them through a corrective model would add risk and
+# cost without solving the problem this pass exists for.
+_ASR_TRANSCRIPT_SOURCES = frozenset({"notebooklm", "tingwu", "whisper", "groq_whisper"})
+
 
 def _is_placeholder_title(title: str) -> bool:
     """True if `title` looks like an auto-generated non-title rather than
@@ -2246,6 +2252,13 @@ def _process_episode(episode_id: int, video: dict, detail_level: str, summary: d
                 if not transcript:
                     database.update_episode(episode_id, status="no_transcript")
                     return
+                if (not ai_disabled()
+                        and meta.get("transcript_source") in _ASR_TRANSCRIPT_SOURCES):
+                    transcript = ai.correct_transcript_proper_nouns(
+                        transcript,
+                        title=video.get("title") or "",
+                        source_name=existing.get("author"),
+                    )
                 database.update_episode(
                     episode_id, transcript_zh=transcript,
                     transcript_source=meta.get("transcript_source"),

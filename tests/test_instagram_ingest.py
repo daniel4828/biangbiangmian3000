@@ -537,6 +537,79 @@ def test_long_transcript_still_uses_ai_summary(monkeypatch):
     assert episode["status"] == "summarized"
 
 
+def test_new_transcript_is_corrected_before_downstream_processing(monkeypatch):
+    episode_id = database.create_pending_episode(
+        video_id="podcast:test123", channel_id="https://example.com/feed",
+        title="AI 公司", published_at=None,
+        youtube_url="https://example.com/episode", audio_url="https://example.com/audio.mp3",
+        duration_seconds=60, kind="podcast", author="声动早咖啡", platform="podcast",
+    )
+    video = {
+        "video_id": "podcast:test123", "title": "AI 公司",
+        "audio_url": "https://example.com/audio.mp3", "duration_seconds": 60,
+        "kind": "podcast",
+    }
+    monkeypatch.setattr(
+        podcast, "fetch_transcript",
+        lambda video: ("今天聊 Opic。", {"transcript_source": "whisper"}),
+    )
+
+    def fake_correct(transcript, title, source_name=None):
+        if title == "AI 公司" and source_name == "声动早咖啡":
+            return transcript.replace("Opic", "Anthropic")
+        return transcript
+
+    monkeypatch.setattr(ai, "correct_transcript_proper_nouns", fake_correct)
+    monkeypatch.setattr(database, "get_podcast_config", lambda: {"summarizer": "api"})
+    monkeypatch.setattr(
+        ai, "summarize_podcast_transcript",
+        lambda *args, **kwargs: {
+            "summary_zh": "中文摘要", "summary_de": "Deutsche Zusammenfassung", "words": []
+        },
+    )
+    monkeypatch.setattr(podcast, "build_transcript_de", lambda transcript: [])
+
+    podcast._process_episode(
+        episode_id, video, "medium", {"summarized": 0, "failed": 0, "emailed": 0}
+    )
+
+    assert database.get_episode(episode_id)["transcript_zh"] == "今天聊Anthropic。"
+
+
+def test_non_asr_source_skips_proper_noun_correction(monkeypatch):
+    episode_id = database.create_pending_episode(
+        video_id="article:test123", channel_id=None, title="文章",
+        published_at=None, youtube_url="https://example.com/article",
+        kind="article", author="作者", platform="web",
+    )
+    video = {
+        "video_id": "article:test123", "title": "文章", "audio_url": None,
+        "duration_seconds": None, "kind": "article",
+    }
+    monkeypatch.setattr(
+        podcast, "fetch_transcript",
+        lambda video: ("文章里的 Opic 保持原样。", {"transcript_source": "article"}),
+    )
+    monkeypatch.setattr(
+        ai, "correct_transcript_proper_nouns",
+        lambda *args, **kwargs: pytest.fail("non-ASR text must not be corrected"),
+    )
+    monkeypatch.setattr(database, "get_podcast_config", lambda: {"summarizer": "api"})
+    monkeypatch.setattr(
+        ai, "summarize_podcast_transcript",
+        lambda *args, **kwargs: {
+            "summary_zh": "中文摘要", "summary_de": "Deutsche Zusammenfassung", "words": []
+        },
+    )
+    monkeypatch.setattr(podcast, "build_transcript_de", lambda transcript: [])
+
+    podcast._process_episode(
+        episode_id, video, "medium", {"summarized": 0, "failed": 0, "emailed": 0}
+    )
+
+    assert database.get_episode(episode_id)["transcript_zh"] == "文章里的Opic保持原样。"
+
+
 # ---------------------------------------------------------------------------
 # podcast._transcribe_instagram: Groq-first, whisper-1 fallback chain
 # ---------------------------------------------------------------------------

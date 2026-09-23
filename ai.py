@@ -4311,6 +4311,64 @@ def summarize_podcast_transcript(transcript: str, title: str,
     return {"summary_zh": "", "summary_de": "", "words": []}
 
 
+def correct_transcript_proper_nouns(transcript: str, title: str,
+                                    source_name: str | None = None) -> str:
+    """Correct high-confidence proper-noun ASR errors without rewriting prose.
+
+    The model may only propose exact string replacements.  Applying those
+    replacements locally, instead of accepting a rewritten transcript, keeps
+    every unlisted word and punctuation mark byte-for-byte unchanged.  This is
+    best-effort enrichment: API or parse failures return the original text.
+    """
+    if not transcript:
+        return transcript
+
+    context = f"Source/show: {source_name or '(unknown)'}\nEpisode title: {title or '(unknown)'}"
+    prompt = (
+        "Review this speech-to-text transcript only for clear proper-noun "
+        "recognition errors, especially English company, person, product, and "
+        "organization names embedded in Chinese. Do not correct grammar, "
+        "wording, style, filler words, repetition, punctuation, or factual "
+        "claims. When uncertain, make no change.\n\n"
+        "Return ONLY a JSON array. Each item must be "
+        '{"original":"exact text present in transcript",'
+        '"corrected":"verified proper noun spelling"}. '
+        "Return [] when there is no high-confidence correction. Never return "
+        "the rewritten transcript.\n\n"
+        f"{context}\n\nTranscript:\n{transcript}"
+    )
+    try:
+        raw = _call_api(
+            DEFAULT_MODEL,
+            [{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            purpose="transcript-proper-nouns",
+        )
+        start, end = raw.find("["), raw.rfind("]") + 1
+        replacements = json.loads(raw[start:end]) if start != -1 and end != 0 else []
+        if not isinstance(replacements, list):
+            return transcript
+    except Exception as e:
+        logger.warning("correct_transcript_proper_nouns failed: %s", e)
+        return transcript
+
+    corrected = transcript
+    for item in replacements[:50]:
+        if not isinstance(item, dict):
+            continue
+        original = item.get("original")
+        replacement = item.get("corrected")
+        if not isinstance(original, str) or not isinstance(replacement, str):
+            continue
+        original, replacement = original.strip(), replacement.strip()
+        if (not original or not replacement or original == replacement
+                or len(original) > 120 or len(replacement) > 120
+                or original not in corrected):
+            continue
+        corrected = corrected.replace(original, replacement)
+    return corrected
+
+
 # Only the head of the body is sent to the metadata extractor: title, author,
 # outlet and date live in the first screenful of every article ever written,
 # and feeding a 15000-char body to pull four short strings out of it is money
