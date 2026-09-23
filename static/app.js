@@ -74,6 +74,7 @@ let _availableLangs = ['zh'];  // distinct langs in use, from GET /api/langs —
 let _offlineMode = false;      // GET /api/mode — no outbound calls possible right now (#612)
 let _localMode = false;        // GET /api/mode — laptop instance; shows the sync button (#625)
 let _currentView = 'loading';  // last name passed to showView(), so the mode poll can re-apply it
+let _loadingContextToken = null;  // optional owner for a cancellable loading view
 let _modePollTimer = null;     // LOCAL_MODE only: re-checks connectivity every 60s (#625)
 let _syncPollTimer = null;     // active /api/sync/progress poll (#625)
 
@@ -1032,6 +1033,7 @@ function showView(name) {
   // also puts that element's display back under this function's control.
   if (document.body.classList.contains('wd-popup')) closeWordDetailPopup();
   _currentView = name;
+  if (name !== 'loading') _loadingContextToken = null;
   if (name === 'decks' && typeof initHomeDiscovery === 'function') initHomeDiscovery();
   // #1137: the calendar/evolution tooltip is a direct child of <body>, so it
   // survives every view switch on its own. Clear it on any navigation.
@@ -1092,7 +1094,8 @@ function showView(name) {
 }
 
 // Show the loading view. Pass useProgress=true for story/audio generation to show the progress bar.
-function setLoading(msg, useProgress = false) {
+function setLoading(msg, useProgress = false, contextToken = null) {
+  _loadingContextToken = contextToken;
   document.getElementById('loading-msg').textContent = msg || 'Loading…';
   const wrap = document.getElementById('loading-progress-wrap');
   const bar  = document.getElementById('loading-progress-bar');
@@ -5326,9 +5329,10 @@ let _knowledgeDetailId = null;
 // the track it is resuming belongs to that view: landing on the summary tab
 // instead would show a "generate read-along" button for a track that already
 // exists, i.e. a click that looks like it did nothing.
-async function openKnowledgeItem(id, preferView) {
+async function openKnowledgeItem(id, preferView, requestIsCurrent) {
   navPush(`knowledge:item:${id}`);
-  setLoading('Loading…');
+  const loadingContextToken = requestIsCurrent ? {} : null;
+  setLoading('Loading…', false, loadingContextToken);
   _knowledgeEditOpen = false;   // #937: a fresh item opens read-only
   _knowledgeView = preferView === 'fulltext' ? 'fulltext' : 'summary';
                                 // #972: otherwise the summary, not whichever
@@ -5351,13 +5355,22 @@ async function openKnowledgeItem(id, preferView) {
     // rendition of the summary for non-Chinese tabs; zh's response is
     // byte-identical to before #804 either way (see routes/podcast.py).
     const ep = await api('GET', `/api/podcast/episodes/${id}?lang=${activeLang()}`);
+    // Optional guard for callers that can be superseded while this request
+    // is in flight (the homepage player fallback). Ordinary detail links do
+    // not pass one and keep their existing behavior.
+    if (requestIsCurrent &&
+        (_loadingContextToken !== loadingContextToken || !requestIsCurrent())) return false;
     _clearPodcastPoll();
     _knowledgeDetailId = id;
     showView('knowledge');
     _renderKnowledgeDetail(ep);
+    return true;
   } catch (e) {
+    if (requestIsCurrent &&
+        (_loadingContextToken !== loadingContextToken || !requestIsCurrent())) return false;
     showError('Failed to load: ' + e.message);
     openKnowledge();
+    return false;
   }
 }
 
@@ -8038,7 +8051,11 @@ function _raFsUpdate() {
   _raFsUpdateSkip();   // #1152: labels follow the setting
   _raFsUpdateStep();   // #1186: Step toggle reflects the setting
 
-  _raFsSetActive(player.activeIdx);
+  // A freshly opened, paused player previews the saved line without
+  // pretending playback has started (Play still consumes resumeMs).
+  const previewIdx = player.activeIdx < 0 && player.resumeMs && !player.resumeConsumed
+    ? _raCueIndexForMs(player.cues, player.resumeMs) : player.activeIdx;
+  _raFsSetActive(previewIdx);
   _raFsUpdateBookmarks();  // #1208: toggle label + panel + ☆ line markers
 }
 
