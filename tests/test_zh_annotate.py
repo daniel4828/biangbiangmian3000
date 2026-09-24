@@ -285,3 +285,10 @@ def test_successful_gloss_is_cached(monkeypatch):
     zh_annotate.extract_new_words("这集讨论对就业的影响。")
     zh_annotate.extract_new_words("这集讨论对就业的影响。")
     assert len(calls) == 1, "成功的答案要记住，不能每次重问"
+
+
+def test_all_words_carries_hsk_for_hint_thresholds(monkeypatch):
+    monkeypatch.setattr(zh_annotate, '_segment', lambda _: [('你好', 'n'), ('就业', 'n'), ('表外词', 'n')])
+    monkeypatch.setattr(zh_annotate, '_hsk_levels', lambda: {'你好': 1, '就业': 5})
+    words = zh_annotate.extract_all_words('你好就业表外词')
+    assert [(w['word'], w['hsk']) for w in words] == [('你好', 1), ('就业', 5), ('表外词', None)]

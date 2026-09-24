@@ -8745,7 +8745,8 @@ function _addWordFromDict(w, btns) {
   //
   // lang (#804): file the word under the language it was actually read in,
   // not always Chinese — same reasoning as #726's addWordViaAi lang param.
-  addWordViaAi(wordZh, 'list', (state, text) => {
+  const wordLang = _wordTableLang;
+  addWordViaAi(wordZh, 'list', (state, text, _deckPath, wordId) => {
     // 'idle' (#888): the "already in your collection" confirmation was
     // cancelled — nothing happened, so put the row's button back as if it
     // had never been clicked.
@@ -8753,10 +8754,11 @@ function _addWordFromDict(w, btns) {
       _setWordBtns(btns, '★ List', { disabled: false, error: false, done: false });
       return;
     }
+    if (state === 'done' && wordId) _hintWordSaved(wordZh, wordLang, wordId);
     // Only a failure is worth retrying; a finished add is not repeatable.
     _setWordBtns(btns, text, { disabled: state !== 'error', error: state === 'error',
                                done: state === 'done' });
-  }, _wordTableLang);
+  }, wordLang);
 }
 
 // Same label and state on every button standing for one word — the table row's
@@ -8824,6 +8826,7 @@ function _generateEntryFromDict(w, btn) {
   const wordZh = w.word || w.word_zh || '';
   if (!wordZh) return;
   _setWordBtns([btn], '…', { disabled: true });
+  const wordLang = _wordTableLang;
   addWordViaAi(wordZh, 'list', (state, text, _deckPath, wordId) => {
     if (state === 'idle') {
       _setWordBtns([btn], '✨ Generate entry', { disabled: false, error: false, done: false });
@@ -8833,10 +8836,11 @@ function _generateEntryFromDict(w, btn) {
                                 done: state === 'done' });
     if (state === 'done' && wordId) {
       w.word_id = wordId;
+      _hintWordSaved(wordZh, wordLang, wordId);
       closeWordActions();
       openWordDetailPopup(wordId);
     }
-  }, _wordTableLang);
+  }, wordLang);
 }
 
 // Same split as _addWordFromDict (#1149): the gloss-word panel marks a word
@@ -8999,6 +9003,7 @@ let _allWordsCache = new Map();
 // them synchronously while it builds its markup, and re-rendering on every
 // slider move must not re-await a promise that already resolved.
 let _allWordsResolved = new Map();
+const _allWordsErrors = new Set();
 
 function _allWordsKey(text, lang) { return (lang || 'zh') + '\n' + text; }
 
@@ -9016,6 +9021,7 @@ function _fetchAllWords(text, lang) {
       return words;
     })
     .catch(() => {
+      _allWordsErrors.add(key);
       _allWordsResolved.set(key, []);
       return [];
     });
@@ -13082,7 +13088,9 @@ function submitAddWord() {
 
 // ── Listening hint slider (#1006) ───────────────────────────────────────────
 //
-// Three stops and nothing in between, replacing the 0..8 HSK scale and its two
+// Stable stage IDs preserve saved defaults; slider indices follow user order.
+// Original three stages (additional HSK and unsaved stages configured below):
+// Previously replaced the 0..8 HSK scale and its two
 // blanking modes (#850/#862/#874/#983/#984):
 //
 //   0  Show all         — the whole sentence except the target word, which is
@@ -13098,12 +13106,85 @@ function submitAddWord() {
 // filter (#638), so the same word could count as new while reading and as
 // known while reviewing.
 const _HINT_MIN = 0;
-const _HINT_MAX = 2;
-const _HINT_LABELS = ['Show all', 'New words only', 'Hide all'];
+const _HINT_LABELS = ['Show all', 'New words only', 'Hide all',
+  'HSK 1', 'HSK 2', 'HSK 3', 'HSK 4', 'HSK 5', 'HSK 6', 'Unsaved words'];
+const _HINT_ORDER = [0, 3, 4, 5, 6, 7, 8, 1, 9, 2];
 
+function _hintStageConfig() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem('listenHintStages')); } catch (_) { saved = null; }
+  const result = [];
+  if (Array.isArray(saved)) for (const item of saved) {
+    if (item && _HINT_ORDER.includes(item.id) && !result.some(s => s.id === item.id))
+      result.push({id: item.id, enabled: item.enabled !== false});
+  }
+  for (const id of _HINT_ORDER) if (!result.some(s => s.id === id)) result.push({id, enabled: true});
+  return result;
+}
+function _hintEnabledStages() {
+  const ids = _hintStageConfig().filter(s => s.enabled &&
+    (currentCardLang() === 'zh' || s.id < 3 || s.id > 8)).map(s => s.id);
+  return ids.length ? ids : [0];
+}
 function _hintSavedDefault() {
-  const n = parseInt(localStorage.getItem('listenHintState') ?? '1', 10);
-  return Number.isFinite(n) ? Math.max(_HINT_MIN, Math.min(_HINT_MAX, n)) : 1;
+  const n = Number(localStorage.getItem('listenHintState') ?? '1');
+  const ids = _hintEnabledStages();
+  return ids.includes(n) ? n : ids[0];
+}
+function _hintKeepWord(stage, word) {
+  return stage === 9 ? !word.word_id : word.hsk == null || word.hsk > stage - 2;
+}
+function _hintWordSaved(word, lang, wordId) {
+  for (const [key, words] of _allWordsResolved) {
+    if (!key.startsWith(lang + '\n')) continue;
+    for (const item of words) if (item.word === word) item.word_id = wordId;
+  }
+  const slider = document.getElementById('listen-hint-slider');
+  if (slider && _hintCurrentStage() === 9) onListenHintSlider(slider.value);
+}
+function _hintCurrentStage() {
+  return _hintEnabledStages()[Number(document.getElementById('listen-hint-slider').value)];
+}
+function _syncHintSlider(stage) {
+  const ids = _hintEnabledStages();
+  const slider = document.getElementById('listen-hint-slider');
+  slider.max = ids.length - 1;
+  slider.value = Math.max(0, ids.indexOf(stage));
+  onListenHintSlider(slider.value);
+}
+function renderHintStageSettings() {
+  const rows = _hintStageConfig().filter(s => currentCardLang() === 'zh' || s.id < 3 || s.id > 8);
+  const enabled = _hintEnabledStages();
+  document.getElementById('hint-stage-options').innerHTML = rows.map((s, i) =>
+    `<div class="hint-stage-option"><label><input type="checkbox" ${s.enabled ? 'checked' : ''}
+      ${enabled.length === 1 && enabled[0] === s.id ? 'disabled' : ''}
+      onchange="changeHintStage(${s.id}, this.checked)"> ${_HINT_LABELS[s.id]}</label>
+      <button type="button" aria-label="Move ${_HINT_LABELS[s.id]} up" ${i === 0 ? 'disabled' : ''}
+      onclick="moveHintStage(${s.id}, -1)">↑</button>
+      <button type="button" aria-label="Move ${_HINT_LABELS[s.id]} down" ${i === rows.length - 1 ? 'disabled' : ''}
+      onclick="moveHintStage(${s.id}, 1)">↓</button></div>`).join('');
+}
+function _saveHintStages(config, current) {
+  localStorage.setItem('listenHintStages', JSON.stringify(config));
+  _syncHintSlider(current);
+  renderHintStageSettings();
+}
+function changeHintStage(id, enabled) {
+  const current = _hintCurrentStage();
+  const config = _hintStageConfig();
+  if (!enabled && _hintEnabledStages().length === 1 && _hintEnabledStages()[0] === id) return;
+  config.find(s => s.id === id).enabled = enabled;
+  _saveHintStages(config, current);
+}
+function moveHintStage(id, delta) {
+  const current = _hintCurrentStage();
+  const config = _hintStageConfig();
+  const visible = config.filter(s => currentCardLang() === 'zh' || s.id < 3 || s.id > 8);
+  const target = visible[visible.findIndex(s => s.id === id) + delta];
+  if (!target) return;
+  const a = config.findIndex(s => s.id === id), b = config.indexOf(target);
+  [config[a], config[b]] = [config[b], config[a]];
+  _saveHintStages(config, current);
 }
 
 // The new words of the sentence currently on screen, keyed by lang+sentence so
@@ -13135,6 +13216,8 @@ async function _loadHintNewWords(text, lang) {
 function _hintLabelFor(level) {
   const label = _HINT_LABELS[level] ?? _HINT_LABELS[1];
   if (level === 1 && _hintWords.error) return `${label} — unavailable`;
+  if (level >= 3 && _allWordsErrors.has(_allWordsKey(_hintSentenceText(), currentCardLang())))
+    return `${label} — unavailable`;
   return label;
 }
 
@@ -13157,7 +13240,9 @@ async function _initListenHint() {
   const slider = document.getElementById('listen-hint-slider');
   if (!slider) return;
   const saved = _hintSavedDefault();
-  slider.value = saved;
+  slider.max = _hintEnabledStages().length - 1;
+  slider.value = _hintEnabledStages().indexOf(saved);
+  renderHintStageSettings();
   document.getElementById('listen-hint-pct').textContent = _hintLabelFor(saved);
   _updateHintStar(saved);
   _renderListenHint(saved);
@@ -13168,7 +13253,7 @@ async function _initListenHint() {
 }
 
 function saveListenHintDefault() {
-  const val = parseInt(document.getElementById('listen-hint-slider').value, 10);
+  const val = _hintCurrentStage();
   localStorage.setItem('listenHintState', val);
   _updateHintStar(val);
 }
@@ -13282,9 +13367,19 @@ function _renderListenHint(level) {
   const loaded = _hintWords.key === _hintKey(zh, lang) ? _hintWords.words : null;
   // Positions to leave visible. null = leave everything visible.
   let keep = null;
-  if (level >= _HINT_MAX) {
+  if (level === 2) {
     keep = new Set();
-  } else if (level >= 1) {
+  } else if (level >= 3) {
+    const words = _allWordsSync(zh, lang);
+    keep = _allWordsErrors.has(_allWordsKey(zh, lang)) ? null
+      : _markWordPositions(zh, (words || []).filter(w => _hintKeepWord(level, w)).map(w => w.word), isZh);
+    // The Chinese all-words endpoint segments CJK only. Uncovered Latin,
+    // digits and other unlisted tokens are still unknown/unsaved hints.
+    if (keep !== null && words !== undefined) {
+      const covered = _markWordPositions(zh, words.map(w => w.word), isZh);
+      for (let i = 0; i < zh.length; i++) if (!covered.has(i)) keep.add(i);
+    }
+  } else if (level === 1) {
     // While the words are still loading, blank everything rather than flash
     // the sentence he is supposed to be recalling. On a failure the label says
     // "unavailable" and the sentence stays readable — the honest degradation,
@@ -13385,7 +13480,7 @@ function _renderListenHint(level) {
 
   // #1077: bound unconditionally now — the masked words above are tappable at
   // every level, including "hide all", where there is no new-word list at all.
-  setWordTable(level < _HINT_MAX && loaded ? loaded : [], lang);
+  setWordTable(level !== 2 && loaded ? loaded : [], lang);
   _makeWordsTappable(el, zh);   // zh, not the masked DOM text (see #1077)
 
   // The masked-word spans above need the all-words list synchronously. The
@@ -13397,15 +13492,15 @@ function _renderListenHint(level) {
       const slider = document.getElementById('listen-hint-slider');
       if (document.getElementById('listen-hint-sentence') === el &&
           _hintSentenceText() === zh &&
-          slider && parseInt(slider.value, 10) === level) {
-        _renderListenHint(level);
+          slider && _hintCurrentStage() === level) {
+        onListenHintSlider(slider.value);
       }
     });
   }
 }
 
 function onListenHintSlider(val) {
-  const lvl = parseInt(val, 10);
+  const lvl = _hintEnabledStages()[Number(val)] ?? _hintSavedDefault();
   document.getElementById('listen-hint-pct').textContent = _hintLabelFor(lvl);
   _updateHintStar(lvl);
   _renderListenHint(lvl);
@@ -13414,7 +13509,7 @@ function onListenHintSlider(val) {
 function _adjustListenHintSlider(delta) {
   const slider = document.getElementById('listen-hint-slider');
   if (!slider || document.getElementById('listen-hint-slider-wrap')?.style.display === 'none') return;
-  const next = Math.max(_HINT_MIN, Math.min(_HINT_MAX, parseInt(slider.value, 10) + delta));
+  const next = Math.max(_HINT_MIN, Math.min(_hintEnabledStages().length - 1, parseInt(slider.value, 10) + delta));
   slider.value = next;
   onListenHintSlider(next);
 }

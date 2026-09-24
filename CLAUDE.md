@@ -740,6 +740,14 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 首页播客播放器入口（#1214）：已有听读轨道时，`openHomePodcast()` 直接加载轨道和已保存进度并打开现有全屏播放器，保持暂停，用户按一次 Play 才续播；同一节目已经加载时保留实时位置和播放状态。全屏字幕预览保存位置，进度请求失败明确报错，不当作零进度。尚无轨道时才进入原有详情/听读准备流程。
 
+## 听力提示阶段（#1224）
+
+- Hint 下的 Stages 可勾选启用阶段，用 ↑ / ↓ 调整顺序；至少保留一个可用阶段。
+- 默认顺序：Show all → HSK 1–6 → New words only → Unsaved words → Hide all。
+- HSK N 隐藏 N 级及以下，显示更高级和表外词；仅中文可用。`all_words` 返回每词的 `hsk`。
+- Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断与目标词前一个词的提示。所有阶段继续隐藏目标答案。
+- 浏览器 `listenHintStages` 保存顺序及启用状态；`listenHintState` 保存稳定阶段 ID，兼容旧 0/1/2 默认值。取消默认阶段时使用第一个可用阶段；重新启用可恢复原默认。设置只在当前浏览器保存。
+
 ## 生词标注：代码做，不用 AI（`zh_annotate.py`，#638）
 
 #631 靠提示词让模型标 `pinyin/汉字`，模型经常漏（德语总结里出现光秃秃的 `(浙江)`），中文总结更是一个都没标。所有材料仓库里都有，所以改成确定性代码，**零 AI 调用**：`static/hsk_levels.json`（4991 词的 HSK 1-6 表）+ `entries.word_zh`（Daniel 的词库）+ `jieba` + `pypinyin` + `translator.py`。

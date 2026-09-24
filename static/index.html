@@ -197,9 +197,7 @@
             <div class="news-source-line-wrap" id="news-source-front" style="display:none"></div>
             <!-- Kontextsummary: German context of the preceding summary sentences (always above the Chinese sentence) -->
             <div class="sentence-context-de" id="sentence-context-de" style="display:none"></div>
-            <!-- Listening: hint sentence with a three-stop slider (#1006):
-                 everything but the target word / only the words he does not
-                 know yet / nothing at all. -->
+            <!-- Listening: configurable hint stages (#1224); the target stays hidden. -->
             <div id="listen-hint-wrap" style="display:none">
               <div class="listen-hint-sentence" id="listen-hint-sentence"></div>
             </div>
@@ -272,6 +270,11 @@
                 <span class="listen-hint-pct" id="listen-hint-pct">New words only</span>
                 <button class="hint-save-btn" id="hint-save-btn" onclick="saveListenHintDefault()" title="Save as default">☆</button>
               </div>
+              <details class="hint-stage-settings" ontoggle="if(this.open) renderHintStageSettings()">
+                <summary>Stages</summary>
+                <p>Choose stages and their order. HSK hides that level and below.</p>
+                <div id="hint-stage-options"></div>
+              </details>
             </div>
           </div>
 
