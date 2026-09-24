@@ -9493,7 +9493,7 @@ function _openWordActions(idx, anchor) {
 
   _placeWordActions(box, anchor);
   setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);
-  document.addEventListener('keydown', _wordActionsEscape);
+  document.addEventListener('keydown', _wordActionsEscape, true);
 }
 
 // The panel for any word that is not new (#1042) — one he has an entry for,
@@ -9563,7 +9563,7 @@ function _openKnownWordActions(key, anchor) {
 
   _placeWordActions(box, anchor);
   setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);
-  document.addEventListener('keydown', _wordActionsEscape);
+  document.addEventListener('keydown', _wordActionsEscape, true);
 }
 
 // Pin the panel to the word itself on every screen size (#994). It used to
@@ -9596,13 +9596,17 @@ function _wordActionsOutside(e) {
 }
 
 function _wordActionsEscape(e) {
-  if (e.key === 'Escape') closeWordActions();
+  if (e.key !== 'Escape') return;
+  // Consume Escape before the player/page bubble listeners can close underneath.
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  closeWordActions();
 }
 
 function closeWordActions() {
   document.getElementById('word-actions')?.remove();
   document.removeEventListener('click', _wordActionsOutside);
-  document.removeEventListener('keydown', _wordActionsEscape);
+  document.removeEventListener('keydown', _wordActionsEscape, true);
 }
 
 // Hash direct-link support: pre-#653 podcast emails/Signal messages link to

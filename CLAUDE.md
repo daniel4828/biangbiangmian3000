@@ -921,6 +921,8 @@ Daniel 2026-08-21 定的三件事：**源书是德/英原版**（不是上传中
 - **速度走浏览器的 `playbackRate`**（0.5–2×），不用 edge-tts 的 `rate`：后者会让同一段文字按每个速度各存一份 mp3
 - **进度存 `audio_progress`**（#1078），主键与 `audio_tracks` 对齐。🔴 **绝不在 `timeupdate` 里写库**（每秒约 4 次），节流到 10 秒 + `pause`/`ended`/`visibilitychange`/`beforeunload`；`beforeunload` 必须用 `sendBeacon`（`fetch` 会被取消）。**保存失败只 `console.warn` 不打断播放**——这是「失败绝不静默」的一个刻意例外
 
+- **词典小窗口优先处理 Escape**（#1220）：词语操作窗口在 capture 阶段关闭自身并停止事件传播；再按一次 Escape 才退出全屏播放器。两种词语窗口共用此行为，关闭时同步移除 capture 监听器。
+
 ### 有声书的三个入口
 
 `kind='audiobook'`（该列**没有 CHECK 约束**，加值不需要迁移，同 #925 的 `newsletter`）：
