@@ -70,3 +70,37 @@ test('saving a word updates every cached sentence only in its language', () => {
  assert.equal(first.word_id,42); assert.equal(second.word_id,42); assert.equal(other.word_id,undefined);
  assert.equal(c._hintKeepWord(9,first),false);
 });
+test('Q/W adjust visible front hints and ignore text input, modifiers and back', () => {
+ const c=setup(); const moved=[];
+ const nodes={'listen-hint-slider-wrap':{style:{display:''}},'side-back':{style:{display:'none'}}};
+ c.document={activeElement:{tagName:'INPUT',type:'range'},getElementById:id=>nodes[id]};
+ c._isEditableFocusTarget=el=>el?.type==='text'; c._hasOpenModal=()=>false;
+ c._adjustListenHintSlider=d=>moved.push(d);
+ const key=k=>({key:k,preventDefault(){this.prevented=true;}});
+ assert.equal(c._handleHintStageKey(key('q'),false),true);
+ assert.equal(c._handleHintStageKey(key('W'),false),true);
+ assert.deepEqual(moved,[-1,1]);
+ assert.equal(c._handleHintStageKey(key('q'),true),false);
+ c.document.activeElement.type='text'; assert.equal(c._handleHintStageKey(key('w'),false),false);
+ c.document.activeElement.type='range'; assert.equal(c._handleHintStageKey({...key('q'),metaKey:true},false),false);
+ nodes['listen-hint-slider-wrap'].style.display='none'; assert.equal(c._handleHintStageKey(key('q'),false),false);
+});
+test('stage controls live in Settings, not on the review card', () => {
+ const html=fs.readFileSync('static/index.html','utf8');
+ assert.ok(!html.includes('id="hint-stage-options"'));
+ const src=fs.readFileSync('static/app.js','utf8');
+ const settings=src.slice(src.indexOf('function renderSettings()'),src.indexOf('// ── Morning pre-generation'));
+ assert.match(settings,/id="hint-stage-options"/);
+});
+test('listening Q/W dispatch precedes remapped global shortcuts', async () => {
+ const c=setup(); let callback; let moved=0;
+ const nodes={'view-review':{style:{display:''}},'side-back':{style:{display:'none'}},'listen-hint-slider-wrap':{style:{display:''}}};
+ c.document={activeElement:null,getElementById:id=>nodes[id],addEventListener:(_,fn)=>callback=fn};
+ c._isEditableFocusTarget=()=>false; c._hasOpenModal=()=>false; c._adjustListenHintSlider=d=>moved+=d;
+ const src=fs.readFileSync('static/app.js','utf8');
+ const start=src.indexOf("document.addEventListener('keydown', async e => {");
+ const end=src.indexOf('  // Book reader (#836)',start);
+ vm.runInContext(src.slice(start,end)+"throw new Error('global shortcut reached');\n});",c);
+ await callback({key:'q',preventDefault(){}});
+ assert.equal(moved,-1);
+});

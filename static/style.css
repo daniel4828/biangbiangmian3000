@@ -7373,8 +7373,17 @@ body.gloss-on [data-gloss-tr]::after {
 }
 
 /* Configurable listening hint stages (#1224). */
-.hint-stage-settings { margin: 8px 0; font-size: 14px; }
-.hint-stage-settings summary { cursor: pointer; }
 .hint-stage-option { display: flex; gap: 8px; align-items: center; max-width: 340px; margin: 6px 0; }
 .hint-stage-option label { flex: 1; }
 .hint-stage-option button { min-width: 36px; min-height: 32px; }
+
+/* Center review controls without changing the word-bank slider (#1226). */
+#review-rate-row,
+#listen-hint-slider-wrap > .listen-hint-slider-row {
+  margin-inline: auto;
+  display: grid;
+  grid-template-columns: 44px minmax(80px, 1fr) 100px 24px;
+  max-width: 420px;
+}
+#review-rate-slider,
+#listen-hint-slider { width: 100%; min-width: 0; margin: 0; }
