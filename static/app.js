@@ -9961,6 +9961,7 @@ async function openPromptEditor() {
         <div id="prompt-editor-vars" style="font-size:12px;color:var(--muted,#888)"></div>
         <textarea id="prompt-editor-text" spellcheck="false"
           style="width:100%;min-height:50vh;font-family:monospace;font-size:12px;line-height:1.45;resize:vertical"></textarea>
+        <div id="prompt-editor-error" style="display:none;color:#b91c1c;font-size:13px"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
           <button class="edit-cancel-btn" onclick="resetPromptTemplate()">Reset to default</button>
           <button class="edit-cancel-btn" onclick="deletePromptPreset()">Delete</button>
@@ -9976,6 +9977,15 @@ async function openPromptEditor() {
   await loadPromptEditor();
 }
 
+// #1218: the editor is a full-screen overlay (z-index above #error-banner),
+// so showError() messages are invisible while it's open — show errors inline.
+function _promptEditorError(msg) {
+  const box = document.getElementById('prompt-editor-error');
+  if (!box) return;
+  box.textContent = msg || '';
+  box.style.display = msg ? 'block' : 'none';
+}
+
 // (Re)loads the mode's template metadata + presets from the server and
 // refreshes the title, placeholder hint, preset dropdown and textarea.
 async function loadPromptEditor() {
@@ -9984,6 +9994,7 @@ async function loadPromptEditor() {
   const ta = document.getElementById('prompt-editor-text');
   const select = document.getElementById('prompt-preset-select');
   document.getElementById('prompt-preset-name').value = '';
+  _promptEditorError('');
   title.textContent = 'Loading…';
   ta.value = '';
   try {
@@ -10022,8 +10033,19 @@ async function onPromptPresetChange() {
     }
     await loadPromptEditor();
   } catch (e) {
-    showError('Failed to switch version: ' + e.message);
+    _promptEditorError('Failed to switch version: ' + e.message);
   }
+}
+
+// Picks a name that doesn't collide with an existing preset for this mode,
+// e.g. "Custom", "Custom 2", "Custom 3" — used when the name field is empty
+// and there's no active preset to overwrite (#1218).
+function _uniquePromptPresetName() {
+  const existing = new Set((_promptEditorData && _promptEditorData.presets || []).map(p => p.name));
+  if (!existing.has('Custom')) return 'Custom';
+  let i = 2;
+  while (existing.has(`Custom ${i}`)) i++;
+  return `Custom ${i}`;
 }
 
 async function savePromptTemplate() {
@@ -10034,13 +10056,13 @@ async function savePromptTemplate() {
     if (activeId != null) {
       await api('PUT', `/api/prompt-presets/${activeId}`, { template });
     } else {
-      const name = document.getElementById('prompt-preset-name').value.trim() || 'Custom';
+      const name = document.getElementById('prompt-preset-name').value.trim() || _uniquePromptPresetName();
       await api('POST', `/api/prompt-presets/${_promptEditorMode}`, { name, template });
     }
     await loadPromptEditor();
     closePromptEditor();
   } catch (e) {
-    showError('Save failed: ' + e.message);
+    _promptEditorError('Save failed: ' + e.message);
   }
 }
 
@@ -10048,7 +10070,7 @@ async function savePromptPresetAsNew() {
   if (!_promptEditorMode) return;
   const name = document.getElementById('prompt-preset-name').value.trim();
   if (!name) {
-    showError('Enter a name for the new version.');
+    _promptEditorError('Enter a name for the new version.');
     return;
   }
   const template = document.getElementById('prompt-editor-text').value;
@@ -10056,14 +10078,14 @@ async function savePromptPresetAsNew() {
     await api('POST', `/api/prompt-presets/${_promptEditorMode}`, { name, template });
     await loadPromptEditor();
   } catch (e) {
-    showError('Save failed: ' + e.message);
+    _promptEditorError('Save failed: ' + e.message);
   }
 }
 
 async function deletePromptPreset() {
   const activeId = _promptEditorData && _promptEditorData.active_id;
   if (activeId == null) {
-    showError('Select a saved version to delete.');
+    _promptEditorError('Select a saved version to delete.');
     return;
   }
   if (!confirm('Delete this prompt version? This cannot be undone.')) return;
@@ -10071,7 +10093,7 @@ async function deletePromptPreset() {
     await api('DELETE', `/api/prompt-presets/${activeId}`);
     await loadPromptEditor();
   } catch (e) {
-    showError('Delete failed: ' + e.message);
+    _promptEditorError('Delete failed: ' + e.message);
   }
 }
 
@@ -10081,7 +10103,7 @@ async function resetPromptTemplate() {
     await api('DELETE', `/api/prompt-template/${_promptEditorMode}`);
     await loadPromptEditor();
   } catch (e) {
-    showError('Reset failed: ' + e.message);
+    _promptEditorError('Reset failed: ' + e.message);
   }
 }
 
