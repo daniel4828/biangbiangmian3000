@@ -289,7 +289,8 @@ def extract_all_words(text: str) -> list[dict]:
             return []
         glosses = _gloss_de_many(words)
         return [
-            {"word": w, "pinyin": pinyin_of(w), "definition_de": glosses.get(w, "")}
+            {"word": w, "pinyin": pinyin_of(w), "definition_de": glosses.get(w, ""),
+             "hsk": _hsk_levels().get(w)}
             for w in words
         ]
     except Exception as e:
