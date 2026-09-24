@@ -9953,30 +9953,55 @@ async function openPromptEditor() {
     overlay.id = 'prompt-editor-overlay';
     overlay.className = 'cost-prompt-overlay';
     overlay.innerHTML = `
-      <div class="cost-prompt-box" style="display:flex;flex-direction:column;gap:8px">
-        <div class="cost-prompt-header">
-          <span id="prompt-editor-title">Prompt template</span>
-          <button class="cost-prompt-close" onclick="closePromptEditor()">&times;</button>
+      <div class="prompt-editor-box">
+        <div class="prompt-editor-header">
+          <div class="prompt-editor-header-titles">
+            <span id="prompt-editor-title">Prompt template</span>
+            <span id="prompt-editor-subtitle"></span>
+          </div>
+          <button class="prompt-editor-close" onclick="closePromptEditor()">&times;</button>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <select id="prompt-preset-select" class="edit-input" style="flex:1;min-width:140px" onchange="onPromptPresetChange()"></select>
-          <input id="prompt-preset-name" class="edit-input" style="flex:1;min-width:140px" placeholder="Name for new version">
+        <div class="prompt-editor-body">
+          <div class="prompt-editor-toolbar">
+            <div class="prompt-editor-field">
+              <label class="prompt-editor-label">Version</label>
+              <select id="prompt-preset-select" class="edit-input" onchange="onPromptPresetChange()"></select>
+            </div>
+            <div class="prompt-editor-field">
+              <label class="prompt-editor-label">New version name</label>
+              <input id="prompt-preset-name" class="edit-input" placeholder="Name for new version">
+            </div>
+          </div>
+          <div id="prompt-editor-vars" class="prompt-editor-vars"></div>
+          <textarea id="prompt-editor-text" class="prompt-editor-text" spellcheck="false"></textarea>
+          <div id="prompt-editor-error" class="prompt-editor-error" style="display:none"></div>
         </div>
-        <div id="prompt-editor-vars" style="font-size:12px;color:var(--muted,#888)"></div>
-        <textarea id="prompt-editor-text" spellcheck="false"
-          style="width:100%;min-height:50vh;font-family:monospace;font-size:12px;line-height:1.45;resize:vertical"></textarea>
-        <div id="prompt-editor-error" style="display:none;color:#b91c1c;font-size:13px"></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
-          <button class="edit-cancel-btn" onclick="resetPromptTemplate()">Reset to default</button>
-          <button class="edit-cancel-btn" onclick="deletePromptPreset()">Delete</button>
-          <button class="edit-save-btn" onclick="savePromptPresetAsNew()">Save as new</button>
-          <button class="edit-save-btn" onclick="savePromptTemplate()">Save</button>
+        <div class="prompt-editor-footer">
+          <button class="prompt-editor-ghost" onclick="resetPromptTemplate()">Reset to default</button>
+          <button class="prompt-editor-ghost prompt-editor-danger" onclick="deletePromptPreset()">Delete</button>
+          <span style="flex:1"></span>
+          <button class="prompt-editor-secondary" onclick="savePromptPresetAsNew()">Save as new</button>
+          <button class="edit-save-btn" title="Save (⌘S)" onclick="savePromptTemplate()">Save</button>
         </div>
       </div>`;
     overlay.addEventListener('click', e => { if (e.target === overlay) closePromptEditor(); });
+    overlay.addEventListener('keydown', e => {
+      if (overlay.style.display === 'none') return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        e.stopPropagation();
+        savePromptTemplate();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closePromptEditor();
+      }
+    });
     document.body.appendChild(overlay);
   }
   overlay.style.display = 'flex';
+  overlay.tabIndex = -1;
+  overlay.focus();
   _promptEditorMode = mode;
   await loadPromptEditor();
 }
@@ -9990,22 +10015,63 @@ function _promptEditorError(msg) {
   box.style.display = msg ? 'block' : 'none';
 }
 
+// Inserts a placeholder chip's text at the textarea's current cursor
+// position and refocuses it there (click target for #prompt-editor-vars chips).
+function _insertPromptPlaceholder(text) {
+  const ta = document.getElementById('prompt-editor-text');
+  if (!ta) return;
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? ta.value.length;
+  ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = start + text.length;
+}
+
+// Rebuilds the title bar: "Prompt template" + a mode badge, and a subtitle
+// naming the currently active version (or "built-in default").
+function _setPromptEditorHeader(mode, activeName) {
+  const title = document.getElementById('prompt-editor-title');
+  const subtitle = document.getElementById('prompt-editor-subtitle');
+  title.textContent = 'Prompt template';
+  const badge = document.createElement('span');
+  badge.className = 'prompt-editor-mode';
+  badge.textContent = mode;
+  title.appendChild(badge);
+  subtitle.textContent = 'Active: ' + (activeName || 'built-in default');
+}
+
 // (Re)loads the mode's template metadata + presets from the server and
 // refreshes the title, placeholder hint, preset dropdown and textarea.
 async function loadPromptEditor() {
   const mode = _promptEditorMode;
   const title = document.getElementById('prompt-editor-title');
+  const subtitle = document.getElementById('prompt-editor-subtitle');
   const ta = document.getElementById('prompt-editor-text');
   const select = document.getElementById('prompt-preset-select');
   document.getElementById('prompt-preset-name').value = '';
   _promptEditorError('');
   title.textContent = 'Loading…';
+  subtitle.textContent = '';
   ta.value = '';
   try {
     const data = await api('GET', `/api/prompt-template/${mode}`);
     _promptEditorData = data;
-    document.getElementById('prompt-editor-vars').textContent =
-      'Placeholders (replaced at generation time): ' + data.variables.map(v => `{${v}}`).join('  ');
+
+    // Build the placeholder chips via the DOM, not an HTML string —
+    // clicking a chip inserts it into the textarea at the cursor.
+    const varsBox = document.getElementById('prompt-editor-vars');
+    varsBox.innerHTML = '';
+    const label = document.createElement('span');
+    label.textContent = 'Placeholders:';
+    varsBox.appendChild(label);
+    data.variables.forEach(v => {
+      const chip = document.createElement('code');
+      chip.className = 'prompt-editor-chip';
+      chip.textContent = `{${v}}`;
+      chip.title = 'Click to insert';
+      chip.onclick = () => _insertPromptPlaceholder(`{${v}}`);
+      varsBox.appendChild(chip);
+    });
     ta.value = data.template;
 
     // Build options via the DOM, not an HTML string — preset names are free
@@ -10017,7 +10083,7 @@ async function loadPromptEditor() {
     select.value = data.active_id != null ? String(data.active_id) : '';
 
     const active = data.presets.find(p => p.is_active);
-    title.textContent = `Prompt template — ${mode}` + (active ? ` · ${active.name}` : '');
+    _setPromptEditorHeader(mode, active ? active.name : null);
   } catch (e) {
     title.textContent = 'Failed to load template';
     ta.value = e.message;

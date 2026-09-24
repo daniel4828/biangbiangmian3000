@@ -4445,6 +4445,175 @@ body.wd-popup #view-word-detail {
   background: var(--bg);
 }
 
+/* ── Prompt template editor (#1222) ──────────────────────────────────────── */
+.prompt-editor-box {
+  background: var(--card);
+  border-radius: var(--radius);
+  width: min(960px, 94vw);
+  height: min(88vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+}
+.prompt-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+.prompt-editor-header-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+#prompt-editor-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+#prompt-editor-subtitle {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.prompt-editor-mode {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  vertical-align: middle;
+}
+.prompt-editor-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.prompt-editor-close:hover { background: var(--bg); color: var(--text); }
+.prompt-editor-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  overflow: auto;
+}
+.prompt-editor-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.prompt-editor-field {
+  flex: 1 1 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prompt-editor-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.prompt-editor-field .edit-input { width: 100%; }
+.prompt-editor-vars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.prompt-editor-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+}
+.prompt-editor-chip:hover { border-color: var(--primary); }
+.prompt-editor-text {
+  flex: 1;
+  min-height: 240px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  padding: 14px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  outline: none;
+  tab-size: 2;
+}
+.prompt-editor-text:focus { border-color: var(--primary); background: var(--card); }
+.prompt-editor-error {
+  color: var(--again);
+  background: color-mix(in srgb, var(--again) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--again) 25%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.prompt-editor-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.prompt-editor-ghost {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.prompt-editor-ghost:hover { background: var(--card); color: var(--text); }
+.prompt-editor-ghost.prompt-editor-danger:hover { color: var(--again); }
+.prompt-editor-secondary {
+  background: var(--card);
+  border: 1.5px solid var(--primary);
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.prompt-editor-secondary:hover { background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
+
+@media (max-width: 600px) {
+  .prompt-editor-box { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; }
+  .prompt-editor-header, .prompt-editor-body, .prompt-editor-footer { padding-left: 14px; padding-right: 14px; }
+}
+
 /* ── Model price info popup ─────────────────────────────────────────────── */
 .price-info-btn {
   background: none; border: none; cursor: pointer;
