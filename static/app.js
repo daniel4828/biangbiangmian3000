@@ -3814,6 +3814,11 @@ function renderSettings() {
       <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
     </div>
     <div class="keymap-panel">
+      <h2 class="keymap-heading">Listening hint stages</h2>
+      <p class="keymap-hint">Choose stages and their order. Saved automatically in this browser. HSK stages apply to Chinese and hide that level and below. On listening card fronts, Q / W move left / right through enabled stages (before Replay / Word analysis). Your configured hint shortcuts also work.</p>
+      <div id="hint-stage-options"></div>
+    </div>
+    <div class="keymap-panel">
       <h2 class="keymap-heading">Again → new sentence</h2>
       <p class="keymap-hint">Rating a card <b>Again</b> regenerates its sentence in the background, so it looks different when the card comes back. <b>Off</b> = the card keeps its original sentence (and costs no AI call) — better when the sentence was fine and only the recall failed. The <b>New sentence</b> button (${_keyLabel(_key('new-sentence'))}) always regenerates, switch or not.</p>
       <div class="keymap-row">
@@ -3859,6 +3864,7 @@ function renderSettings() {
       <p class="keymap-hint">View the last lines of the server log (helpful for debugging story generation, TTS, etc). Shortcut: Option+L (Alt+L).</p>
       <button class="keymap-reset-all" onclick="openLogsViewer()">Open logs</button>
     </div>`;
+  renderHintStageSettings();
   _loadPregenSettings();
 }
 
@@ -13142,6 +13148,18 @@ function _hintWordSaved(word, lang, wordId) {
   const slider = document.getElementById('listen-hint-slider');
   if (slider && _hintCurrentStage() === 9) onListenHintSlider(slider.value);
 }
+// Contextual Q/W keys apply only to a visible listening card front.
+function _handleHintStageKey(e, backVisible) {
+  const wrap = document.getElementById('listen-hint-slider-wrap');
+  if (backVisible || !wrap || wrap.style.display === 'none' ||
+      e.ctrlKey || e.metaKey || e.altKey || e.isComposing ||
+      _isEditableFocusTarget(document.activeElement) || _hasOpenModal()) return false;
+  const key = e.key.toLowerCase();
+  if (key !== 'q' && key !== 'w') return false;
+  e.preventDefault();
+  _adjustListenHintSlider(key === 'q' ? -1 : 1);
+  return true;
+}
 function _hintCurrentStage() {
   return _hintEnabledStages()[Number(document.getElementById('listen-hint-slider').value)];
 }
@@ -13153,9 +13171,11 @@ function _syncHintSlider(stage) {
   onListenHintSlider(slider.value);
 }
 function renderHintStageSettings() {
-  const rows = _hintStageConfig().filter(s => currentCardLang() === 'zh' || s.id < 3 || s.id > 8);
+  const container = document.getElementById('hint-stage-options');
+  if (!container) return;
+  const rows = _hintStageConfig();
   const enabled = _hintEnabledStages();
-  document.getElementById('hint-stage-options').innerHTML = rows.map((s, i) =>
+  container.innerHTML = rows.map((s, i) =>
     `<div class="hint-stage-option"><label><input type="checkbox" ${s.enabled ? 'checked' : ''}
       ${enabled.length === 1 && enabled[0] === s.id ? 'disabled' : ''}
       onchange="changeHintStage(${s.id}, this.checked)"> ${_HINT_LABELS[s.id]}</label>
@@ -13179,7 +13199,7 @@ function changeHintStage(id, enabled) {
 function moveHintStage(id, delta) {
   const current = _hintCurrentStage();
   const config = _hintStageConfig();
-  const visible = config.filter(s => currentCardLang() === 'zh' || s.id < 3 || s.id > 8);
+  const visible = config;
   const target = visible[visible.findIndex(s => s.id === id) + delta];
   if (!target) return;
   const a = config.findIndex(s => s.id === id), b = config.indexOf(target);
@@ -16137,7 +16157,7 @@ function _updateListenCounters() {
 // 语速行和 🔊 按钮同进同出：能听才有必要选速度。
 function _setReviewRateVisible(visible) {
   const row = document.getElementById('review-rate-row');
-  if (row) row.style.display = visible ? 'flex' : 'none';
+  if (row) row.style.display = visible ? 'grid' : 'none';
   if (visible) _syncReviewRateUI();
 }
 
@@ -17752,6 +17772,12 @@ function renderFsrsInspector() {
 
 document.addEventListener('keydown', async e => {
   const inInput = _isEditableFocusTarget(document.activeElement);
+
+  // Q/W own the visible listening front even when a global key was remapped.
+  const hintReview = document.getElementById('view-review');
+  if (hintReview && hintReview.style.display !== 'none' &&
+      _handleHintStageKey(e, document.getElementById('side-back')?.style.display === 'flex')) return;
+
 
   // Book reader (#836): ←/→ turn the page. Guarded on the reader actually
   // being open — the jump-to-page box is an input, so `inInput` keeps arrow
