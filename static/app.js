@@ -8174,9 +8174,9 @@ function _raSeekBy(seconds) {
 
 // ── Skip controls (#1152) ─────────────────────────────────────────────────
 //
-// Three grains of "jump", all of them routed through _raSeekTo above — so
-// none of them reloads the audio or changes the play/pause state, exactly
-// like the seek bar and the ±seconds buttons that were here first.
+// Three grains of "jump". Arbitrary-time jumps route through _raSeekTo;
+// sentence jumps deliberately route through _raPlayAt so either sentence
+// button always starts playback, including from a paused state.
 //
 //  - N seconds: the amount is now a setting (default 10). It used to be a
 //    hard-wired 15 that nobody could change.
@@ -8245,7 +8245,7 @@ function _raSkipSentence(dir) {
   let target = cur + dir;
   if (dir < 0 && (player.lastMs || 0) - player.cues[cur].start_ms > _RA_RESTART_MS) target = cur;
   target = Math.min(player.cues.length - 1, Math.max(0, target));
-  _raSeekTo(player.cues[target].start_ms);
+  _raPlayAt(target);
 }
 
 // Labels of the ±seconds buttons follow the setting. Called from _raFsUpdate

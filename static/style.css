@@ -6844,7 +6844,7 @@ body.gloss-on [data-gloss-tr]::after {
 #ra-fs-rate { flex: 1; min-width: 0; }
 /* #1152: the "how many seconds" picker sits with the rate slider rather than
    in the button row — it is a setting, not a transport control. */
-#ra-fs-skip-wrap {
+#ra-fs-skip-wrap:not([hidden]) {
   display: flex;
   align-items: center;
   gap: 6px;
