@@ -1590,7 +1590,7 @@
       <!-- #1152: how far ⏪/⏩ jump. The labels below are written by
            _raFsUpdateSkip(), not hard-coded, so they can never disagree
            with this value. -->
-      <div id="ra-fs-skip-wrap">
+      <div id="ra-fs-skip-wrap" hidden>
         <label for="ra-fs-skip">Skip</label>
         <select id="ra-fs-skip" onchange="setReadalongSkipSeconds(this.value)" title="Skip amount">
           <option value="5">5s</option>
@@ -1611,9 +1611,9 @@
       <button id="ra-fs-step" class="ra-fs-jump" onclick="toggleReadalongStep()" title="Pause after every sentence; ▶ plays the next one">Step</button>
       <!-- #1152/#1167: one cue is one sentence — jump by it. -->
       <button id="ra-fs-sent-back" class="ra-fs-jump" onclick="_raSkipSentence(-1)" title="Previous sentence (s)">◀ S</button>
-      <button id="ra-fs-back" onclick="_raSeekBy(-_raSkipSeconds)" title="Back 10 seconds">⏪ 10</button>
+      <button id="ra-fs-back" hidden onclick="_raSeekBy(-_raSkipSeconds)" title="Back 10 seconds">⏪ 10</button>
       <button id="ra-fs-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
-      <button id="ra-fs-fwd" onclick="_raSeekBy(_raSkipSeconds)" title="Forward 10 seconds">10 ⏩</button>
+      <button id="ra-fs-fwd" hidden onclick="_raSeekBy(_raSkipSeconds)" title="Forward 10 seconds">10 ⏩</button>
       <button id="ra-fs-sent-fwd" class="ra-fs-jump" onclick="_raSkipSentence(1)" title="Next sentence (d)">S ▶</button>
     </div>
   </div>
