@@ -742,7 +742,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 ## 听力提示阶段（#1224）
 
-- 阶段设置在 **Settings 页的「Listening hint stages」**（#1232 从复习卡片上搬走：卡片上只留滑块）：勾选启用阶段，用 ↑ / ↓ 调整顺序；至少保留一个启用阶段。设置页没有当前卡片，所以列出全部阶段；非中文卡片复习时自动跳过 HSK 阶段。
+- 阶段设置在 **Settings 页的「Stages」**（#1232 从复习卡片上搬走：卡片上只留滑块）：勾选启用阶段，用 ↑ / ↓ 调整顺序；至少保留一个启用阶段。设置页没有当前卡片，所以列出全部阶段；非中文卡片复习时自动跳过 HSK 阶段。
 - 默认顺序：Show all → HSK 1–6 → New words only → Unsaved words → Hide all。
 - HSK N 隐藏 N 级及以下，显示更高级和表外词；仅中文可用。`all_words` 返回每词的 `hsk`。
 - Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断与目标词前一个词的提示。所有阶段继续隐藏目标答案。

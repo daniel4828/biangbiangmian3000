@@ -3838,7 +3838,7 @@ function renderSettings() {
       </div>
     </div>
     <div class="keymap-panel">
-      <h2 class="keymap-heading">Listening hint stages</h2>
+      <h2 class="keymap-heading">Stages</h2>
       <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. HSK N hides level N and below (Chinese only).</p>
       <div id="hint-stage-options">${_hintStageOptionsHtml()}</div>
     </div>
