@@ -13139,6 +13139,28 @@ function _hintSavedDefault() {
 function _hintKeepWord(stage, word) {
   return stage === 9 ? !word.word_id : word.hsk == null || word.hsk > stage - 2;
 }
+function _hintPreviousWordEnabled() {
+  return localStorage.getItem('listenHintPreviousWord') !== 'false';
+}
+function _hintPreviousWordPositions(zh, lang, targetPositions, isMaskable) {
+  const positions = new Set();
+  if (!targetPositions.size) return positions;
+  let end = Math.min(...targetPositions);
+  while (end > 0 && !isMaskable(zh[end - 1])) end--;
+  const isZh = lang === 'zh';
+  const hay = isZh ? zh : zh.toLowerCase();
+  let best = 0;
+  for (const w of (_allWordsSync(zh, lang) || [])) {
+    const needle = isZh ? (w.word || '') : (w.word || '').toLowerCase();
+    const idx = end - needle.length;
+    if (!needle || idx < 0 || needle.length <= best) continue;
+    if (!hay.startsWith(needle, idx)) continue;
+    if (!isZh && /[\p{L}\p{M}]/u.test(zh[idx - 1] || '')) continue;
+    best = needle.length;
+  }
+  for (let i = end - best; i < end; i++) positions.add(i);
+  return positions;
+}
 function _hintWordSaved(word, lang, wordId) {
   for (const [key, words] of _allWordsResolved) {
     if (!key.startsWith(lang + '\n')) continue;
@@ -13157,7 +13179,10 @@ function _hintCurrentStage() {
 function _hintStageOptionsHtml() {
   const rows = _hintStageConfig();
   const enabled = rows.filter(s => s.enabled);
-  return rows.map((s, i) =>
+  const previousWord = `<div class="hint-stage-option"><label><input type="checkbox"
+    ${_hintPreviousWordEnabled() ? 'checked' : ''}
+    onchange="changeHintPreviousWord(this.checked)"> Always show word before target</label></div>`;
+  return previousWord + rows.map((s, i) =>
     `<div class="hint-stage-option"><label><input type="checkbox" ${s.enabled ? 'checked' : ''}
       ${enabled.length === 1 && enabled[0].id === s.id ? 'disabled' : ''}
       onchange="changeHintStage(${s.id}, this.checked)"> ${_HINT_LABELS[s.id]}</label>
@@ -13179,6 +13204,11 @@ function changeHintStage(id, enabled) {
   if (!enabled && config.filter(s => s.enabled).length === 1) return;
   config.find(s => s.id === id).enabled = enabled;
   _saveHintStages(config);
+}
+function changeHintPreviousWord(enabled) {
+  localStorage.setItem('listenHintPreviousWord', String(enabled));
+  const slider = document.getElementById('listen-hint-slider');
+  if (slider) onListenHintSlider(slider.value);
 }
 function moveHintStage(id, delta) {
   const config = _hintStageConfig();
@@ -13387,30 +13417,12 @@ function _renderListenHint(level) {
     keep = _hintWords.error ? null
          : loaded === null ? new Set()
          : _markWordPositions(zh, loaded.map(w => w.word || w.word_zh || ''), isZh);
-    // #1101 (was #1098): the one word immediately before the target stays
-    // visible at this stop, known or not — it is the run-up he hangs the
-    // recall on. #1098 kept the whole lead-in, which lit up half the sentence
-    // and turned this stop into a second "Show all". Word boundaries come
-    // from the same all-words pass the masked words below use, so there is no
-    // second segmenter here; if it has not landed the re-render at the end of
-    // this function redoes the whole thing, and if it fails nothing extra is
-    // kept (the plain #1006 behaviour).
-    if (keep !== null && targetPositions.size > 0) {
-      let end = Math.min(...targetPositions);
-      while (end > 0 && !isMaskable(zh[end - 1])) end--;   // the space or comma
-      const hay = isZh ? zh : zh.toLowerCase();
-      let best = 0;
-      for (const w of (_allWordsSync(zh, lang) || [])) {
-        const needle = isZh ? (w.word || '') : (w.word || '').toLowerCase();
-        const idx = end - needle.length;
-        if (!needle || idx < 0 || needle.length <= best) continue;
-        if (!hay.startsWith(needle, idx)) continue;
-        // Same boundary rule as _markWordPositions: no match inside a word.
-        if (!isZh && /[\p{L}\p{M}]/u.test(zh[idx - 1] || '')) continue;
-        best = needle.length;
-      }
-      for (let i = end - best; i < end; i++) keep.add(i);
-    }
+  }
+
+  // #1234: the word immediately before the target can anchor recall at every
+  // masked stop. It is on by default and can be disabled in Stages settings.
+  if (keep !== null && _hintPreviousWordEnabled()) {
+    for (const i of _hintPreviousWordPositions(zh, lang, targetPositions, isMaskable)) keep.add(i);
   }
 
   // #1077: a masked word Daniel already has an entry for (word_id from the
