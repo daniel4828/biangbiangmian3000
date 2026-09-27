@@ -3689,6 +3689,16 @@ def _podcast_max_tokens(model: str, n_words: int) -> int:
 # retells one concrete fact from the material, hard data preferred, no
 # invented content. The source material may be in any language; only the
 # output language is fixed here.
+_KNOWLEDGE_CARD_AD_FILTER_RULE_ZH = """【广告过滤（固定规则）】素材中的广告、赞助口播、联盟推广、产品推销和购买号召
+都不是内容，不得用于生成卡片句子或 reasoning_zh，也不算
+第 6 条要求覆盖的话题。只有当素材在正常讨论或批评“广告”这个现象时，那部分才是内容。"""
+
+_KNOWLEDGE_CARD_AD_FILTER_RULE_NON_ZH = """AD FILTER (fixed rule): Advertisements, sponsorship messages, affiliate promotions,
+product pitches, and calls to purchase are not content. They
+must not be used for card sentences or reasoning_zh and do not count as topics to cover. Keep
+legitimate discussion or criticism when advertising itself is the material's subject."""
+
+
 _KNOWLEDGE_PROMPT_NON_ZH = """Task: below is the content of a podcast/video/article. It may be a raw
 transcript or a summary, and it may be in any language. Write a set of
 sentences IN {lang_name} — one sentence per target word — where each sentence
@@ -3868,13 +3878,14 @@ def generate_podcast_sentences(
                 f"{i + 1}. {c['word_zh']}（{c.get('pinyin', '')}）— {c.get('definition', '')}"
                 for i, c in enumerate(batch)
             )
-            return _render_prompt(tpl, {
+            rendered = _render_prompt(tpl, {
                 "title": title_block,
                 "summary": summary_block,
                 "words": word_list,
                 "max_hsk": str(max_hsk),
                 "extra_hint": extra_hint,
             })
+            return f"{rendered}\n\n{_KNOWLEDGE_CARD_AD_FILTER_RULE_ZH}"
         # Non-Chinese decks (issue #806): knowledge mode is language-agnostic —
         # the material's language never mattered, only the output language
         # does. The background-vocabulary slider's shared 1-6 value maps to a
@@ -3884,7 +3895,7 @@ def generate_podcast_sentences(
             f"{i + 1}. {c['word_zh']} — {c.get('definition_de') or c.get('definition') or ''}"
             for i, c in enumerate(batch)
         )
-        return _KNOWLEDGE_PROMPT_NON_ZH.format(
+        rendered = _KNOWLEDGE_PROMPT_NON_ZH.format(
             lang_name=cfg["name_en"],
             learner=cfg["learner_level"],
             title=title_block,
@@ -3894,6 +3905,7 @@ def generate_podcast_sentences(
             sentence_limit=cfg["sentence_limit"],
             extra_hint=extra_hint,
         )
+        return f"{rendered}\n\n{_KNOWLEDGE_CARD_AD_FILTER_RULE_NON_ZH}"
 
     sentences: list[dict] = []
     remaining = list(cards)
@@ -4047,6 +4059,12 @@ _PODCAST_DETAIL_WORDS = {
     "detailed": "900-1300",
 }
 
+_KNOWLEDGE_AD_FILTER_RULE = """Treat advertisements, sponsorship messages, affiliate
+promotions, product pitches, and calls to purchase as non-content. Ignore them completely:
+do not mention them or extract vocabulary from them in summary_de, summary_zh, words, or title_suggestion.
+Keep legitimate discussion or criticism of advertising when advertising
+is itself the source's subject."""
+
 
 def build_podcast_summary_prompt(transcript: str, title: str, detail_level: str,
                                  for_notebooklm: bool = False) -> str:
@@ -4065,9 +4083,9 @@ def build_podcast_summary_prompt(transcript: str, title: str, detail_level: str,
     Dropping the transcript here isn't a content loss: in the NotebookLM path
     the transcript is already uploaded and indexed as the chat's source
     (podcast._run_notebooklm_summary), so inlining it a second time was pure
-    duplication and the main reason the prompt was so long. The API branch below
-    is untouched byte-for-byte — the default (`for_notebooklm=False`) call path
-    must not change at all."""
+    duplication and the main reason the prompt was so long. Keep the API and
+    NotebookLM branches aligned on fixed content-policy rules even though their
+    surrounding instructions differ."""
     words_target = _PODCAST_DETAIL_WORDS.get(detail_level, _PODCAST_DETAIL_WORDS["detailed"])
 
     if for_notebooklm:
@@ -4076,6 +4094,8 @@ Chinese (HSK 4-5, learning towards HSK 6). Episode title: {title}
 The source material may be in Chinese, German, English, or a mix — summarize
 it regardless of its language. Output languages are fixed: summary_de is
 always German, summary_zh is always Chinese.
+
+{_KNOWLEDGE_AD_FILTER_RULE}
 
 Tasks:
 1. summary_de: German HTML summary, ~{words_target} words. Wrap each paragraph in
@@ -4127,6 +4147,8 @@ summaries below have a FIXED output language each: summary_zh is always Chinese,
 is always German — translate/summarize into those languages no matter what language the
 source is in. For a German or English source, the Chinese summary IS the learning material
 (that's the point — it lets Daniel read the content in Chinese even though the source wasn't).
+{_KNOWLEDGE_AD_FILTER_RULE}
+
 {excerpt}
 
 Task:

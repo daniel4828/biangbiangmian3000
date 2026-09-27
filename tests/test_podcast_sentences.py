@@ -118,6 +118,19 @@ def test_returns_the_prompt_actually_sent(monkeypatch):
     assert "承认" in prompt and "顺便" in prompt   # 目标词
 
 
+def test_prompt_excludes_ads_even_with_a_custom_template(monkeypatch):
+    """#1236: cards read the raw transcript, so the ad rule must be fixed
+    outside the user-editable template and survive a custom preset."""
+    monkeypatch.setattr(ai, "_story_prompt_template", lambda mode: "素材：{summary}")
+    monkeypatch.setattr(ai, "_call_api", lambda *a, **kw: _reply([]))
+    monkeypatch.setattr(ai, "_fill_translations", lambda *a, **kw: None)
+
+    _, prompt = ai.generate_podcast_sentences(CARDS, _sources("正文。广告口播。"))
+
+    assert "广告、赞助口播、联盟推广、产品推销和购买号召" in prompt
+    assert "不得用于生成卡片句子或 reasoning_zh" in prompt
+
+
 def test_prompt_includes_every_retry_round(monkeypatch):
     """补漏轮带 extra_hint，提示词和第一轮不同——只留第一轮就说不清
     这些句子到底是被什么提示词写出来的。"""

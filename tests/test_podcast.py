@@ -235,6 +235,14 @@ def test_prompt_asks_for_chinese_summary_as_full_translation():
     assert "<b>" in prompt
 
 
+def test_prompt_excludes_advertising_from_all_generated_content():
+    """#1236: raw transcripts stay intact, but ads must not reach summaries,
+    vocabulary, title suggestions, or the cards built from those outputs."""
+    prompt = ai.build_podcast_summary_prompt("正文。广告口播。", "标题", "detailed")
+    assert "Treat advertisements, sponsorship messages" in prompt
+    assert "summary_de, summary_zh, words, or title_suggestion" in prompt
+
+
 def test_parse_summary_json_reads_chinese_summary():
     raw = '{"summary_zh": "简短总结。", "summary_de": "<p>Text</p>", "words": []}'
     out = ai.parse_podcast_summary_json(raw)

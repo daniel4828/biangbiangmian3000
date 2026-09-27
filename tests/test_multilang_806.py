@@ -133,6 +133,27 @@ def test_knowledge_mode_chinese_prompt_unchanged(monkeypatch):
     assert "目标词汇" in seen["prompt"]
 
 
+def test_knowledge_mode_non_chinese_prompt_excludes_ads(monkeypatch):
+    cards = _cards("réduire")
+    seen = {}
+
+    def fake_call(model, messages, max_tokens, purpose=None, **kw):
+        seen["prompt"] = messages[0]["content"]
+        return json.dumps([{
+            "reasoning_zh": "Fakt: Der Inhalt nennt 2026.",
+            "sentence_zh": "La France réduira ses émissions en 2026.",
+            "target_word": "réduire",
+        }])
+
+    monkeypatch.setattr(ai, "_call_api", fake_call)
+    monkeypatch.setattr(ai, "_fill_translations", lambda *a, **kw: None)
+
+    ai.generate_podcast_sentences(cards, _SOURCE, lang="fr")
+
+    assert "Advertisements, sponsorship messages, affiliate promotions" in seen["prompt"]
+    assert "must not be used for card sentences or reasoning_zh" in seen["prompt"]
+
+
 def test_french_fallback_sentence_is_not_chinese(monkeypatch):
     """When every round fails, the filler must not be the Chinese
     我学了X这个词。in a French deck."""
