@@ -742,7 +742,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 ## 听力提示阶段（#1224）
 
-- Hint 下的 Stages 可勾选启用阶段，用 ↑ / ↓ 调整顺序；至少保留一个可用阶段。
+- 阶段设置在 **Settings 页的「Stages」**（#1232 从复习卡片上搬走：卡片上只留滑块）：勾选启用阶段，用 ↑ / ↓ 调整顺序；至少保留一个启用阶段。设置页没有当前卡片，所以列出全部阶段；非中文卡片复习时自动跳过 HSK 阶段。
 - 默认顺序：Show all → HSK 1–6 → New words only → Unsaved words → Hide all。
 - HSK N 隐藏 N 级及以下，显示更高级和表外词；仅中文可用。`all_words` 返回每词的 `hsk`。
 - Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断。所有阶段继续隐藏目标答案。
@@ -928,6 +928,7 @@ Daniel 2026-08-21 定的三件事：**源书是德/英原版**（不是上传中
 - **抢占必须可恢复**：复习朗读/分块朗读/整篇故事播放都经过 `_stopSharedPlayback()` 这个唯一瓶颈，它在抢占前保存位置和进度并标记为**暂停**。绝不能出现「复习完一张卡，正在听的书没了」
 - **锁屏/耳机走 Media Session API**（#1083）：`setPositionState` **必须带 `playbackRate`**，否则 1.5× 听的时候进度条走不对；**队列做出来之前不注册 `previoustrack`/`nexttrack`**——按下去没反应的按钮比没有更糟
 - **速度走浏览器的 `playbackRate`**（0.5–2×），不用 edge-tts 的 `rate`：后者会让同一段文字按每个速度各存一份 mp3
+- **上一句/下一句是播放动作**（#1230）：无论普通模式还是逐句暂停模式，点击后都从目标句立即播放；秒数前进/后退控件暂时用 `hidden` 隐藏，底层能力保留给未来设置
 - **进度存 `audio_progress`**（#1078），主键与 `audio_tracks` 对齐。🔴 **绝不在 `timeupdate` 里写库**（每秒约 4 次），节流到 10 秒 + `pause`/`ended`/`visibilitychange`/`beforeunload`；`beforeunload` 必须用 `sendBeacon`（`fetch` 会被取消）。**保存失败只 `console.warn` 不打断播放**——这是「失败绝不静默」的一个刻意例外
 
 - **词典小窗口优先处理 Escape**（#1220）：词语操作窗口在 capture 阶段关闭自身并停止事件传播；再按一次 Escape 才退出全屏播放器。两种词语窗口共用此行为，关闭时同步移除 capture 监听器。

@@ -3838,6 +3838,11 @@ function renderSettings() {
       </div>
     </div>
     <div class="keymap-panel">
+      <h2 class="keymap-heading">Stages</h2>
+      <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. HSK N hides level N and below (Chinese only).</p>
+      <div id="hint-stage-options">${_hintStageOptionsHtml()}</div>
+    </div>
+    <div class="keymap-panel">
       <h2 class="keymap-heading">Day boundary</h2>
       <p class="keymap-hint">Hour a new day starts. Cards due the next day stay out of the stack until this time, so late-night reviews still count as the previous day. Default 5.</p>
       <div class="keymap-row">
@@ -8174,9 +8179,9 @@ function _raSeekBy(seconds) {
 
 // ── Skip controls (#1152) ─────────────────────────────────────────────────
 //
-// Three grains of "jump", all of them routed through _raSeekTo above — so
-// none of them reloads the audio or changes the play/pause state, exactly
-// like the seek bar and the ±seconds buttons that were here first.
+// Three grains of "jump". Arbitrary-time jumps route through _raSeekTo;
+// sentence jumps deliberately route through _raPlayAt so either sentence
+// button always starts playback, including from a paused state.
 //
 //  - N seconds: the amount is now a setting (default 10). It used to be a
 //    hard-wired 15 that nobody could change.
@@ -8245,7 +8250,7 @@ function _raSkipSentence(dir) {
   let target = cur + dir;
   if (dir < 0 && (player.lastMs || 0) - player.cues[cur].start_ms > _RA_RESTART_MS) target = cur;
   target = Math.min(player.cues.length - 1, Math.max(0, target));
-  _raSeekTo(player.cues[target].start_ms);
+  _raPlayAt(target);
 }
 
 // Labels of the ±seconds buttons follow the setting. Called from _raFsUpdate
@@ -13167,38 +13172,38 @@ function _hintWordSaved(word, lang, wordId) {
 function _hintCurrentStage() {
   return _hintEnabledStages()[Number(document.getElementById('listen-hint-slider').value)];
 }
-function _syncHintSlider(stage) {
-  const ids = _hintEnabledStages();
-  const slider = document.getElementById('listen-hint-slider');
-  slider.max = ids.length - 1;
-  slider.value = Math.max(0, ids.indexOf(stage));
-  onListenHintSlider(slider.value);
-}
-function renderHintStageSettings() {
-  const rows = _hintStageConfig().filter(s => currentCardLang() === 'zh' || s.id < 3 || s.id > 8);
-  const enabled = _hintEnabledStages();
-  const previousWord = document.getElementById('hint-previous-word');
-  if (previousWord) previousWord.checked = _hintPreviousWordEnabled();
-  document.getElementById('hint-stage-options').innerHTML = rows.map((s, i) =>
+// The stage list lives on the Settings page (#1232), not on the card: it is
+// set once, and on the card it pushed the sentence around. There is no card
+// there, so every stage is listed; HSK stops are skipped at review time for
+// non-Chinese cards (_hintEnabledStages).
+function _hintStageOptionsHtml() {
+  const rows = _hintStageConfig();
+  const enabled = rows.filter(s => s.enabled);
+  const previousWord = `<div class="hint-stage-option"><label><input type="checkbox"
+    ${_hintPreviousWordEnabled() ? 'checked' : ''}
+    onchange="changeHintPreviousWord(this.checked)"> Always show word before target</label></div>`;
+  return previousWord + rows.map((s, i) =>
     `<div class="hint-stage-option"><label><input type="checkbox" ${s.enabled ? 'checked' : ''}
-      ${enabled.length === 1 && enabled[0] === s.id ? 'disabled' : ''}
+      ${enabled.length === 1 && enabled[0].id === s.id ? 'disabled' : ''}
       onchange="changeHintStage(${s.id}, this.checked)"> ${_HINT_LABELS[s.id]}</label>
       <button type="button" aria-label="Move ${_HINT_LABELS[s.id]} up" ${i === 0 ? 'disabled' : ''}
       onclick="moveHintStage(${s.id}, -1)">↑</button>
       <button type="button" aria-label="Move ${_HINT_LABELS[s.id]} down" ${i === rows.length - 1 ? 'disabled' : ''}
       onclick="moveHintStage(${s.id}, 1)">↓</button></div>`).join('');
 }
-function _saveHintStages(config, current) {
+function renderHintStageSettings() {
+  const box = document.getElementById('hint-stage-options');
+  if (box) box.innerHTML = _hintStageOptionsHtml();
+}
+function _saveHintStages(config) {
   localStorage.setItem('listenHintStages', JSON.stringify(config));
-  _syncHintSlider(current);
   renderHintStageSettings();
 }
 function changeHintStage(id, enabled) {
-  const current = _hintCurrentStage();
   const config = _hintStageConfig();
-  if (!enabled && _hintEnabledStages().length === 1 && _hintEnabledStages()[0] === id) return;
+  if (!enabled && config.filter(s => s.enabled).length === 1) return;
   config.find(s => s.id === id).enabled = enabled;
-  _saveHintStages(config, current);
+  _saveHintStages(config);
 }
 function changeHintPreviousWord(enabled) {
   localStorage.setItem('listenHintPreviousWord', String(enabled));
@@ -13206,14 +13211,11 @@ function changeHintPreviousWord(enabled) {
   if (slider) onListenHintSlider(slider.value);
 }
 function moveHintStage(id, delta) {
-  const current = _hintCurrentStage();
   const config = _hintStageConfig();
-  const visible = config.filter(s => currentCardLang() === 'zh' || s.id < 3 || s.id > 8);
-  const target = visible[visible.findIndex(s => s.id === id) + delta];
-  if (!target) return;
-  const a = config.findIndex(s => s.id === id), b = config.indexOf(target);
+  const a = config.findIndex(s => s.id === id), b = a + delta;
+  if (b < 0 || b >= config.length) return;
   [config[a], config[b]] = [config[b], config[a]];
-  _saveHintStages(config, current);
+  _saveHintStages(config);
 }
 
 // The new words of the sentence currently on screen, keyed by lang+sentence so
@@ -13271,7 +13273,6 @@ async function _initListenHint() {
   const saved = _hintSavedDefault();
   slider.max = _hintEnabledStages().length - 1;
   slider.value = _hintEnabledStages().indexOf(saved);
-  renderHintStageSettings();
   document.getElementById('listen-hint-pct').textContent = _hintLabelFor(saved);
   _updateHintStar(saved);
   _renderListenHint(saved);

@@ -6844,7 +6844,7 @@ body.gloss-on [data-gloss-tr]::after {
 #ra-fs-rate { flex: 1; min-width: 0; }
 /* #1152: the "how many seconds" picker sits with the rate slider rather than
    in the button row — it is a setting, not a transport control. */
-#ra-fs-skip-wrap {
+#ra-fs-skip-wrap:not([hidden]) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -7373,8 +7373,6 @@ body.gloss-on [data-gloss-tr]::after {
 }
 
 /* Configurable listening hint stages (#1224). */
-.hint-stage-settings { margin: 8px 0; font-size: 14px; }
-.hint-stage-settings summary { cursor: pointer; }
 .hint-stage-option { display: flex; gap: 8px; align-items: center; max-width: 340px; margin: 6px 0; }
 .hint-stage-option label { flex: 1; }
 .hint-stage-option button { min-width: 36px; min-height: 32px; }

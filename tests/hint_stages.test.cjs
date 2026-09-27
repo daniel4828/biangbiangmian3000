@@ -28,17 +28,15 @@ test('HSK threshold includes harder and unlisted words; unsaved ignores known st
  assert.equal(c._hintKeepWord(9,{word_id:12}),false);
  assert.equal(c._hintKeepWord(9,{word_id:null}),true);
 });
-test('reordering preserves current stage, disabling skips it, preferences survive reload', () => {
+test('reordering and disabling persist from settings', () => {
  const saved={}; const c=setup(saved);
- const slider={value:7}; const options={innerHTML:''};
- c.document={getElementById:id=>id==='listen-hint-slider'?slider:options};
- c.onListenHintSlider=()=>{};
+ const options={innerHTML:''};
+ c.document={getElementById:()=>options};
  c.moveHintStage(1,-1);
- assert.equal(c._hintCurrentStage(),1);
  assert.equal(c._hintEnabledStages()[6],1);
  c.changeHintStage(1,false);
- assert.equal(c._hintCurrentStage(),0);
  assert.ok(!setup(saved)._hintEnabledStages().includes(1));
+ assert.match(options.innerHTML,/Always show word before target/);
  assert.match(options.innerHTML,/Move HSK 4 up/);
 });
 test('non-Chinese skips HSK and last available stage cannot be disabled', () => {
