@@ -60,7 +60,29 @@ test('render hides basic HSK and saved words while never revealing answer', () =
  c._renderListenHint(6); assert.equal(visible(),'__就业__Musk20。');
  c._renderListenHint(9); assert.equal(visible(),'__就业__Musk20。');
  c._renderListenHint(0); assert.equal(visible(),'你好就业__Musk20。');
- c._renderListenHint(2); assert.equal(visible(),'____________。');
+ c._renderListenHint(2); assert.equal(visible(),'__就业________。');
+});
+test('every masked stage shows the word before the target by default and setting can disable it', () => {
+ const render = saved => {
+  const c=setup(saved); const el={innerHTML:''};
+  Object.assign(c, {document:{getElementById:()=>el}, card:{word_zh:'答案'}, sentence:{sentence_zh:'你好就业答案Musk20。'},
+  _allWordsSync:()=>[{word:'你好',hsk:1,word_id:5},{word:'就业',hsk:5},{word:'答案',hsk:4}],
+  _allWordsErrors:new Set(), _allWordsKey:()=>'', _glossWordIndex:new Map(),
+  _escHtml:s=>s, setWordTable(){}, _makeWordsTappable(){}});
+  const source=fs.readFileSync('static/app.js','utf8');
+  vm.runInContext(source.slice(source.indexOf('// The new words of the sentence'),source.indexOf('// ── Render sentence (with target word highlighted)')),c);
+  return level => {
+   c._renderListenHint(level);
+   return el.innerHTML.replace(/<[^>]*>/g,'');
+  };
+ };
+ const enabled=render({});
+ for (const level of [1,2,6,9]) {
+  assert.match(enabled(level),/就业/);
+  assert.doesNotMatch(enabled(level),/答案/);
+ }
+ const disabled=render({listenHintPreviousWord:'false'});
+ assert.doesNotMatch(disabled(2),/就业/);
 });
 test('saving a word updates every cached sentence only in its language', () => {
  const c=setup(); const first={word:'就业'},second={word:'就业'},other={word:'就业'};

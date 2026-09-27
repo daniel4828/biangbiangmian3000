@@ -273,6 +273,8 @@
               <details class="hint-stage-settings" ontoggle="if(this.open) renderHintStageSettings()">
                 <summary>Stages</summary>
                 <p>Choose stages and their order. HSK hides that level and below.</p>
+                <div class="hint-stage-option"><label><input type="checkbox" id="hint-previous-word"
+                  onchange="changeHintPreviousWord(this.checked)"> Always show word before target</label></div>
                 <div id="hint-stage-options"></div>
               </details>
             </div>

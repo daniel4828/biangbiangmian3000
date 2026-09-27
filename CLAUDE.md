@@ -745,7 +745,8 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 - Hint 下的 Stages 可勾选启用阶段，用 ↑ / ↓ 调整顺序；至少保留一个可用阶段。
 - 默认顺序：Show all → HSK 1–6 → New words only → Unsaved words → Hide all。
 - HSK N 隐藏 N 级及以下，显示更高级和表外词；仅中文可用。`all_words` 返回每词的 `hsk`。
-- Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断与目标词前一个词的提示。所有阶段继续隐藏目标答案。
+- Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断。所有阶段继续隐藏目标答案。
+- 所有会遮挡文字的阶段默认保留目标词前一个词作为回忆提示；Stages 设置可关闭，浏览器用 `listenHintPreviousWord` 保存。
 - 浏览器 `listenHintStages` 保存顺序及启用状态；`listenHintState` 保存稳定阶段 ID，兼容旧 0/1/2 默认值。取消默认阶段时使用第一个可用阶段；重新启用可恢复原默认。设置只在当前浏览器保存。
 
 ## 生词标注：代码做，不用 AI（`zh_annotate.py`，#638）
