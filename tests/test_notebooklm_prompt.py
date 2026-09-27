@@ -47,6 +47,14 @@ def test_notebooklm_prompt_keeps_core_rules():
     assert "GERMAN ONLY" in prompt
 
 
+def test_notebooklm_prompt_excludes_advertising_from_all_generated_content():
+    """#1236: NotebookLM must apply the same ad policy as the API path."""
+    prompt = ai.build_podcast_summary_prompt(LONG_TRANSCRIPT, "测试标题", "detailed",
+                                             for_notebooklm=True)
+    assert "Treat advertisements, sponsorship messages" in prompt
+    assert "summary_de, summary_zh, words, or title_suggestion" in prompt
+
+
 def test_default_prompt_still_inlines_transcript():
     """for_notebooklm defaults to False and must not change the existing
     API-path behavior at all — the transcript excerpt still appears inline."""
