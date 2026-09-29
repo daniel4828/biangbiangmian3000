@@ -26,13 +26,13 @@ import zh_annotate
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_MODEL = "gpt-6-luna"
 
-# briefing mode (issue #444) — env var BRIEFING_MODEL, default gpt-5.6-luna,
+# briefing mode (issue #444) — env var BRIEFING_MODEL, default gpt-6-luna,
 # verified against the OpenAI models API with a fallback chain, cached for
-# process lifetime. Retired gpt-5.1/gpt-5 here (#731, Daniel 2026-08-14): luna
-# is $0.20/$1.20 against their $1.25/$10.00 for the same job.
-BRIEFING_MODEL_FALLBACKS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5-mini")
+# process lifetime. Older models remain in the chain for accounts that cannot
+# access GPT-6 Luna yet.
+BRIEFING_MODEL_FALLBACKS = ("gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini")
 _briefing_model_cache: str | None = None
 
 # issue #514: if the OpenAI account runs out of quota mid-run (429
@@ -152,9 +152,10 @@ def _openai_client(model: str) -> openai.OpenAI:
     raise ValueError(f"Unknown provider for model: {model}")
 
 
-# gpt-5 系列关闭推理时用的最低档 —— 两代的名字互不兼容（2026-08-12 实测，#724）：
+# GPT 模型关闭推理时用的最低档 —— 各代名字并不完全兼容：
 #   gpt-5 / gpt-5-mini   支持 minimal, low, medium, high   —— 发 'none' 报 400
 #   gpt-5.1 / gpt-5.6-*  支持 none, low, medium, high, xhigh —— 5.6 发 'minimal' 报 400
+#   gpt-6-luna/sol 支持 none；gpt-6-astra 最低是 low。
 # 实测生成故事句子时 low 要烧 403 个推理 token（比 none 贵 6.2 倍、慢一倍），
 # 而输出质量看不出差别 —— 这类任务不需要思维链。
 _GPT_MIN_EFFORT = {
@@ -164,6 +165,9 @@ _GPT_MIN_EFFORT = {
     "gpt-5.6-luna": "none",
     "gpt-5.6-terra": "none",
     "gpt-5.6-sol": "none",
+    "gpt-6-luna": "none",
+    "gpt-6-sol": "none",
+    "gpt-6-astra": "low",
 }
 # 表里没有的 gpt 模型走这个值：任何一代都接受，绝不会 400。新模型上线时
 # 宁可多花钱，也不能因为猜错档位名而让整条流程静默挂掉。
@@ -175,7 +179,7 @@ _SNAPSHOT_SUFFIX_RE = re.compile(r"(-\d{4}-\d{2}-\d{2}|-\d{8})$")
 
 
 def _gpt_reasoning_effort(model: str, thinking: bool) -> str:
-    """gpt-5 系列该发哪个 reasoning_effort。
+    """GPT 模型该发哪个 reasoning_effort。
 
     thinking=True 时用 "low"（够用且各代通用）；默认的 thinking=False 查
     _GPT_MIN_EFFORT，未知模型回落到 _GPT_SAFE_EFFORT。
@@ -210,7 +214,7 @@ def _call_api(model: str, messages: list, max_tokens: int, purpose: str,
     thinking: enable the provider's thinking/reasoning mode (default False — disabled).
               deepseek-v4-flash defaults to thinking=on server-side, so we must
               explicitly disable it for tasks that don't need chain-of-thought.
-              GLM-4.5+ 同理。gpt-5 系列自 #724 起也尊重这个参数：False 时发该
+              GLM-4.5+ 同理。GPT 模型自 #724 起也尊重这个参数：False 时发该
               模型支持的最低 reasoning_effort（见 _gpt_reasoning_effort）。
     """
     t0 = time.time()
@@ -255,7 +259,7 @@ def _call_api(model: str, messages: list, max_tokens: int, purpose: str,
             logger.debug("[%s] thinking=%s", model, thinking)
         try:
             if model.startswith("gpt-"):
-                # gpt-5 series (Chat Completions): max_completion_tokens replaces max_tokens
+                # GPT reasoning models (Chat Completions): max_completion_tokens replaces max_tokens
                 # and is shared with internal reasoning tokens; custom temperature is not
                 # supported. reasoning_effort 由 _gpt_reasoning_effort 按模型决定 ——
                 # 与 DeepSeek/GLM 分支一样尊重 thinking 参数（#724）。
@@ -333,9 +337,9 @@ def _call_api(model: str, messages: list, max_tokens: int, purpose: str,
 def resolve_briefing_model() -> str:
     """Resolve the OpenAI model id used for briefing mode (issue #444).
 
-    Reads BRIEFING_MODEL (default "gpt-5.6-luna"), verifies on first use that
+    Reads BRIEFING_MODEL (default "gpt-6-luna"), verifies on first use that
     the id actually exists via the OpenAI models API, and falls back through
-    luna → terra → gpt-5-mini if not (or if the id is some other unlisted
+    GPT-6 Luna → GPT-5.6 Luna → gpt-5-mini if not (or if the id is some other unlisted
     string). The resolved id is cached for the process lifetime — the models
     API is only ever hit once per process. OpenAI only (briefing is OpenAI-only,
     same reasoning as news/paste: DeepSeek censors news content).
@@ -2030,13 +2034,13 @@ Return ONLY valid JSON, no explanation, no markdown:
         return {"etymology": "", "translation": ""}
 
 
-_ENRICH_MODEL = "deepseek-v4-flash"
+_ENRICH_MODEL = DEFAULT_MODEL
 
 
 def enrich_word(word: dict, characters: list[dict], model: str = DEFAULT_MODEL) -> dict:
     """
     Determine HSK level for a word and fill missing character data (etymology, other_meanings).
-    Always uses DeepSeek — the model parameter is ignored.
+    Uses the configured enrichment model — the model parameter is ignored.
     Only requests data for fields that are currently empty.
     Returns: {hsk_level: int|None, characters: [{char, etymology, other_meanings}]}
     """
@@ -2215,7 +2219,7 @@ def fix_definition_commas(cards: list[dict]) -> int:
             f"Words:\n{word_lines}"
         )
         try:
-            raw = _call_api("deepseek-v4-flash",
+            raw = _call_api(DEFAULT_MODEL,
                             [{"role": "user", "content": prompt}],
                             max_tokens=2000, purpose="fix_commas")
             # extract JSON array from response
@@ -2422,7 +2426,7 @@ PODCAST_SOLO_ROUND = 4
 def generate_news_sentences(
     cards: list[dict],
     articles: list[dict],
-    model: str = "gpt-5-mini",
+    model: str = DEFAULT_MODEL,
     max_hsk: int = 2,
     progress_key: str | None = None,
     attempt_label: str = "",
@@ -3092,7 +3096,7 @@ def _repair_briefing_sentences(articles: list[dict], items: list[dict], issues: 
 def generate_briefing_sentences(
     cards: list[dict],
     articles: list[dict],
-    model: str = "gpt-5-mini",
+    model: str = DEFAULT_MODEL,
     # HSK 1-5 background vocabulary (issue #448): Daniel is HSK 4-5 — capping
     # the non-target words at HSK 1-2 made sentences childish and was the
     # tightest remaining constraint after the #444 rework.
@@ -3782,7 +3786,7 @@ sentence):
 def generate_podcast_sentences(
     cards: list[dict],
     source: dict,              # {"title", "kind", "url", "material"} — see routes/story.py's knowledge branch; caller ensures non-empty "material"
-    model: str = DEFAULT_MODEL,     # #640: DeepSeek, same as kahneman
+    model: str = DEFAULT_MODEL,
     max_hsk: int = 3,
     progress_key: str | None = None,
     attempt_label: str = "",
@@ -4281,12 +4285,8 @@ def summarize_podcast_transcript(transcript: str, title: str,
     transcript into a German summary + a list of HSK5+ vocabulary worth
     reviewing before listening.
 
-    Uses DEFAULT_MODEL (DeepSeek) first when DEEPSEEK_API_KEY is configured —
-    unlike the news briefing, a podcast content summary isn't the
-    censorship-sensitive case that forced news onto OpenAI, so a cheap
-    DeepSeek pass is preferred to save money (#532). Falls back to
-    resolve_briefing_model() (OpenAI/gpt) if DeepSeek is unavailable or its
-    reply fails to parse — gpt is the paid-but-reliable backstop.
+    Uses DEFAULT_MODEL first. DeepSeek is an optional fallback for material
+    that is not marked china_critical; the briefing model is another fallback.
 
     `china_critical` (#731) is the exception Daniel flags at paste time: for
     material critical of China, DeepSeek is the censorship-sensitive case
@@ -4306,9 +4306,9 @@ def summarize_podcast_transcript(transcript: str, title: str,
     """
     prompt = build_podcast_summary_prompt(transcript, title, detail_level)
 
-    candidates = []
+    candidates = [DEFAULT_MODEL]
     if os.environ.get("DEEPSEEK_API_KEY") and not china_critical:
-        candidates.append(DEFAULT_MODEL)
+        candidates.append("deepseek-v4-flash")
     fallback = resolve_briefing_model()
     if fallback not in candidates:
         candidates.append(fallback)

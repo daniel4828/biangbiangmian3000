@@ -89,9 +89,12 @@ def get_stats(deck_id: int | None = None, lang: str | None = None) -> dict:
 # this table is hand-maintained — update it (and the static price table in
 # static/index.html's story-setup modal) whenever a provider changes pricing
 # or a new model is adopted. See CLAUDE.md "规范与约束".
-_PRICING_AS_OF = "2026-08-15"
+_PRICING_AS_OF = "2026-09-29"
 _MODEL_PRICING: dict[str, dict[str, float]] = {
     # OpenAI (news/briefing/podcast summaries)
+    "gpt-6-luna":   {"input": 0.10, "cached": 0.01, "output": 0.50},
+    "gpt-6-sol":    {"input": 2.00, "cached": 0.20, "output": 10.00},
+    "gpt-6-astra":  {"input": 10.00, "cached": 1.00, "output": 50.00},
     "gpt-5.6-sol":   {"input": 5.00, "cached": 0.50, "output": 30.00},
     "gpt-5.6-terra": {"input": 2.00, "cached": 0.20, "output": 12.00},
     "gpt-5.6-luna":  {"input": 0.20, "cached": 0.02, "output": 1.20},

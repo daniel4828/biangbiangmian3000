@@ -54,6 +54,20 @@ def test_gpt_56_models_whitelisted():
         assert model in ALLOWED_MODELS
 
 
+def test_gpt_6_models_whitelisted_and_priced():
+    from database.stats import _lookup_pricing
+    for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6-astra"):
+        assert model in ALLOWED_MODELS
+        assert _lookup_pricing(model) is not None
+
+
+def test_gpt_6_luna_is_backend_and_story_default():
+    import ai
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    assert ai.DEFAULT_MODEL == "gpt-6-luna"
+    assert re.search(r'<option value="gpt-6-luna" selected>', html)
+
+
 def test_validated_model_falls_back_and_warns(caplog):
     from routes.story import _validated_model
 

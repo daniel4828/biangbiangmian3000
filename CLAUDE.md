@@ -152,7 +152,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 **技术栈：**
 - **后端：** Python + FastAPI；**数据库：** SQLite（标准库 `sqlite3`，无 ORM）
 - **前端：** `static/index.html` + `app.js` + `style.css`，FastAPI 直接提供，**无构建步骤**（无 npm）
-- **AI：** 多提供商（`ai.py`）——默认 `deepseek-chat`；也支持 ZhipuAI GLM、Qwen、Claude、OpenAI
+- **AI：** 多提供商（`ai.py`）——默认 `gpt-6-luna`；也支持 DeepSeek、ZhipuAI GLM、Qwen、Claude
 - **语音合成（TTS）：** `edge-tts`（中文 `zh-CN-XiaoxiaoNeural`）
 - **语言：** 界面标签英文，内容中文/法文
 
@@ -322,7 +322,7 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 |------|--------|------|
 | `ANTHROPIC_API_KEY` | 必填 | Claude API 密钥 |
 | `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `QWEN_API_KEY` | 可选 | 其他 AI 提供商密钥 |
-| `OPENAI_API_KEY` | 可选 | briefing 管线（`paste`/`contextsummary`）的默认模型，以及 china-kritisch 素材的摘要（#731）。模型由 `BRIEFING_MODEL` 决定，默认 `gpt-5.6-luna`，回退链 luna → terra → `gpt-5-mini`。**`gpt-5.1` 自 #731 起全应用停用**（同样的活贵六倍），价格表里保留它只为解析历史成本记录 |
+| `OPENAI_API_KEY` | 默认 AI 功能需要 | 全应用默认 `gpt-6-luna`；briefing 管线可用 `BRIEFING_MODEL` 覆盖，自动回退顺序为 `gpt-6-luna` → `gpt-5.6-luna` → `gpt-5-mini`。旧模型仍可手动选择，历史价格记录保留 |
 | `DB_PATH` | `data/srs.db` | 数据库路径（开发用 `data/dev.db`） |
 | `DISABLE_AI` | `0` | 设为 `1` 跳过 AI 故事生成 |
 | `OFFLINE_MODE` | `0` | 设为 `1` 进入硬离线模式（#612）：隐含 `DISABLE_AI`，TTS 只读缓存，零网络请求，连探测都不做 |

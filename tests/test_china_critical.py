@@ -83,8 +83,8 @@ def test_china_critical_never_calls_deepseek(monkeypatch):
 
     assert result["summary_de"]
     models = _models_called(mock_call)
-    assert ai.DEFAULT_MODEL not in models, f"勾了 china-kritisch 却调用了 DeepSeek：{models}"
-    assert models == ["gpt-5.6-luna"]
+    assert "deepseek-v4-flash" not in models, f"勾了 china-kritisch 却调用了 DeepSeek：{models}"
+    assert models == [ai.DEFAULT_MODEL]
 
 
 def test_china_critical_uses_openai_even_without_deepseek_key(monkeypatch):
@@ -94,7 +94,7 @@ def test_china_critical_uses_openai_even_without_deepseek_key(monkeypatch):
          patch("ai.resolve_briefing_model", return_value="gpt-5.6-luna"):
         ai.summarize_podcast_transcript("转录文本", "标题", china_critical=True)
 
-    assert _models_called(mock_call) == ["gpt-5.6-luna"]
+    assert _models_called(mock_call) == [ai.DEFAULT_MODEL]
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ def test_add_text_endpoint_flag_is_optional(client):
 
 def test_gpt_51_not_in_briefing_fallback_chain():
     assert "gpt-5.1" not in ai.BRIEFING_MODEL_FALLBACKS
-    assert ai.BRIEFING_MODEL_FALLBACKS[0] == "gpt-5.6-luna"
+    assert ai.BRIEFING_MODEL_FALLBACKS[0] == "gpt-6-luna"
 
 
 def test_gpt_51_not_whitelisted_for_stories():

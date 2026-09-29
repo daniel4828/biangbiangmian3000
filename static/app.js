@@ -9758,6 +9758,9 @@ function _prettyModel(model) {
   return model
     .replace('claude-', '')
     .replace('-20251001', '')
+    .replace('gpt-6-luna', 'GPT-6 Luna')
+    .replace('gpt-6-sol', 'GPT-6 Sol')
+    .replace('gpt-6-astra', 'GPT-6 Astra')
     .replace('gpt-5.6-luna', 'GPT-5.6 Luna')
     .replace('gpt-5.6-terra', 'GPT-5.6 Terra')
     .replace('gpt-5.6-sol', 'GPT-5.6 Sol')
@@ -10959,7 +10962,7 @@ function _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chap
   const p = new URLSearchParams();
   if (topic)                              p.set('topic', topic);
   if (maxHsk !== 3)                       p.set('max_hsk', maxHsk);
-  if (model && model !== 'deepseek-v4-flash') p.set('model', model);
+  if (model && model !== 'gpt-6-luna') p.set('model', model);
   if (grammarFocus)                       p.set('grammar_focus', grammarFocus);
   if (grammarFocus && grammarPct !== 75)  p.set('grammar_pct', grammarPct);
   if (mode && mode !== 'story')           p.set('mode', mode);
@@ -14702,17 +14705,29 @@ const SERVER_MODEL_VALUE = 'briefing-server';
 // *default* to the server placeholder, the only configuration this pipeline is
 // verified on. knowledge mode made the same move earlier (#561/#640).
 
-// Per-mode remembered model (issue #561): knowledge mode has its own
-// first-time default, then remembers whatever the user picked last. Since
-// #640 that default is DeepSeek (like kahneman) rather than gpt-5-mini — must
-// stay in sync with ai.DEFAULT_MODEL, which is the backend-side default.
+// Per-mode remembered model (issue #561): first use follows ai.DEFAULT_MODEL;
+// later visits keep the user's explicit selection.
 // paste/contextsummary default to the server placeholder itself.
 const MODE_MODEL_DEFAULTS = {
-  knowledge: 'deepseek-v4-flash',
-  book: 'deepseek-v4-flash',
+  story: 'gpt-6-luna',
+  kahneman: 'gpt-6-luna',
+  podcast: 'gpt-6-luna',
+  knowledge: 'gpt-6-luna',
+  book: 'gpt-6-luna',
   paste: SERVER_MODEL_VALUE,
   contextsummary: SERVER_MODEL_VALUE,
 };
+// The previous default was also saved as a per-mode choice. Migrate it once
+// so existing browsers receive the new default, while later manual picks stay.
+if (!localStorage.getItem('gpt6LunaDefaultApplied')) {
+  for (const mode of ['story', 'knowledge', 'book', 'kahneman', 'podcast']) {
+    if (localStorage.getItem('setupModel:' + mode) === 'deepseek-v4-flash')
+      localStorage.setItem('setupModel:' + mode, 'gpt-6-luna');
+  }
+  if (localStorage.getItem('knowledgeChatModel') === 'deepseek-v4-flash')
+    localStorage.setItem('knowledgeChatModel', 'gpt-6-luna');
+  localStorage.setItem('gpt6LunaDefaultApplied', '1');
+}
 let _modelSelMode = 'story';   // mode the model dropdown's current value belongs to
 
 // Modes whose dropdown carries the "let the server decide" option.
@@ -14731,7 +14746,7 @@ function _autoSwitchModelForMode(mode) {
     serverOpt = document.createElement('option');
     serverOpt.id = 'setup-model-server-opt';
     serverOpt.value = SERVER_MODEL_VALUE;
-    serverOpt.textContent = 'Server: BRIEFING_MODEL (gpt-5.6-luna)';
+    serverOpt.textContent = 'Server: BRIEFING_MODEL (gpt-6-luna)';
     modelSel.appendChild(serverOpt);
   }
 
@@ -19796,6 +19811,9 @@ async function openBookChapterSummary(bookId, number) {
 // the only one in JS — do not add a fourth by copying it into a template
 // string somewhere else.
 const KNOWLEDGE_CHAT_MODELS = [
+  ['gpt-6-luna', 'GPT-6 Luna — OpenAI, default'],
+  ['gpt-6-sol', 'GPT-6 Sol — OpenAI, balanced'],
+  ['gpt-6-astra', 'GPT-6 Astra — OpenAI flagship'],
   ['deepseek-v4-flash', 'DeepSeek V4 Flash — cheap, reliable'],
   ['deepseek-v4-pro', 'DeepSeek V4 Pro — higher quality'],
   ['glm-4.7', 'GLM-4.7 — Zhipu, best Chinese value'],

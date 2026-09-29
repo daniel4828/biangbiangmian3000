@@ -24,6 +24,9 @@ import ai
     ("gpt-5.6-luna", "none"),
     ("gpt-5.6-terra", "none"),
     ("gpt-5.6-sol", "none"),
+    ("gpt-6-luna", "none"),
+    ("gpt-6-sol", "none"),
+    ("gpt-6-astra", "low"),
 ])
 def test_min_effort_per_model(model, expected):
     assert ai._gpt_reasoning_effort(model, thinking=False) == expected
