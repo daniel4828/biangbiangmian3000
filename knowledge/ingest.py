@@ -29,6 +29,7 @@ import database
 import knowledge.article
 import knowledge.instagram
 import knowledge.youtube
+import knowledge.spotify
 from languages import DEFAULT_LANG
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,9 @@ def ingest_url(url: str, china_critical: bool = False, as_audiobook: bool = Fals
     if not url:
         raise IngestError("url is required")
 
+    if knowledge.spotify.is_spotify_url(url):
+        return _ingest_spotify(url, china_critical=china_critical)
+
     video_id = knowledge.youtube.parse_video_id(url)
     if video_id:
         if as_audiobook:
@@ -77,6 +81,35 @@ def ingest_url(url: str, china_critical: bool = False, as_audiobook: bool = Fals
         return _ingest_instagram(url, shortcode, china_critical=china_critical)
 
     return _ingest_article(url, china_critical=china_critical)
+
+
+def _spotify_result(row, *, existing=True):
+    result = {"episode_id": row["id"], "process_required": not row.get("processing_started_at") and row["status"] in {"pending", "error", "no_transcript"}}
+    if existing:
+        result["status"] = "already_exists"
+    return result
+
+
+def _ingest_spotify(url, china_critical=False):
+    try:
+        canonical = knowledge.spotify.canonical_url(url)
+        existing = database.get_episode_by_spotify_url(canonical)
+        if existing:
+            return _spotify_result(existing)
+        episode = knowledge.spotify.resolve_episode(canonical)
+    except Exception as exc:
+        raise IngestError(f"Could not resolve Spotify episode: {exc}") from exc
+    existing = database.get_episode_by_video_id(episode["video_id"])
+    if existing:
+        updates = {"spotify_url": canonical}
+        if not existing.get("audio_url"):
+            updates["audio_url"] = episode["audio_url"]
+        database.update_episode(existing["id"], **updates)
+        return _spotify_result(existing)
+    episode_id = database.create_pending_episode(
+        **episode, kind="podcast", platform="spotify", china_critical=china_critical)
+    database.update_episode(episode_id, spotify_url=canonical)
+    return {"episode_id": episode_id, "process_required": True}
 
 
 # Above this length (#1054), an audiobook is not downloaded until Daniel has

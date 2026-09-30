@@ -293,7 +293,7 @@ async function ingestKnowledge(payload, confirmFn) {
     if (!proceed) return { status: 'cancelled' };
     res = await api('POST', path, { ...payload, confirm_long: true });
   }
-  if (res?.status !== 'already_exists' && res?.status !== 'cancelled' && res?.episode_id != null) {
+  if ((res?.status !== 'already_exists' || res?.process_required) && res?.status !== 'cancelled' && res?.episode_id != null) {
     api('POST', `/api/podcast/episodes/${res.episode_id}/process`).catch(() => {});
   }
   return res;

@@ -985,13 +985,18 @@ def check_mailbox(imap_factory=None) -> dict:
                 summary["processed"] += 1
                 continue
 
-            # 主路径不变（#655）：有 URL 就走 ingest_url()，一个字节都不能变。
+            # URL 共用 ingest_url；Spotify 返回 process_required 时立即处理（#1238）。
             if route == "urls":
                 urls = payload
                 all_ok = True
                 for url in urls:
                     try:
                         result = knowledge.ingest.ingest_url(url)
+                        if result.get("process_required"):
+                            import podcast
+                            outcome = podcast.retry_episode(result["episode_id"])
+                            if outcome.get("status") != "summarized":
+                                raise RuntimeError(outcome.get("error") or "Spotify episode processing failed")
                         summary["ingested"] += 1
                         logger.info("knowledge.mailbox: 已处理 %s -> %s", url, result)
                     except Exception as e:

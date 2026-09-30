@@ -586,6 +586,11 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 ## 知识库（Knowledge Base，#650–#655）
 
+- **Spotify 单集分享（#1238）**：网页加链接、Signal Note to Self、邮件 URL 都走 `knowledge.ingest.ingest_url` → `knowledge/spotify.py`。支持普通、国际化、embed 单集地址及 `spotify.link`（只允许跳转到 Spotify）；节目/歌曲地址明确拒绝。
+  - 公共 embed 元数据识别节目与单集；先查已有 RSS，再查 Apple iTunes podcast 目录。RSS 节目名和单集名严格匹配，日期/时长交叉检查，拒绝歧义；只用完整 RSS enclosure，不用 Spotify preview 或加密音频。没有公开 RSS 的独家/下架/旧集会给出明确错误。
+  - 使用 RSS GUID 去重，保留原 Spotify 单集链接；不自动订阅节目、不在导入时调用付费 AI。`kind=podcast`、`platform=spotify`、`author=节目名`，之后复用现有转录、摘要与通知链。
+  - `process_required` 让三个分享入口继续处理 pending/error/no_transcript 的已有单集；已完成或正在处理的单集不重复执行。邮件导入后直接处理，不等前端按钮。
+
 首页推荐（#1212）：`GET /api/home-discovery?tz=<浏览器 IANA 时区>` 通过 `database/home.py` 只读选择当天《声动早咖啡》（按订阅源标题、作者或单集标题识别，发布时间换算为当地日期，无当日节目明确留空）。首页功能按钮上方显示入口，点击复用 `openKnowledgeItem(..., 'fulltext')` 和 `doStartListen()`。当地 10 点起每两小时显示三条可阅读且未归档的知识库内容；按日期稳定洗牌、来源和类型交错，按时段前进三条，库不足时显示实际数量。当天播客不在推荐中重复。`static/home-discovery.js` 每分钟及窗口重新获得焦点时刷新首页；不新增定时任务、AI 调用或数据库写入。听读生成仍由用户点击触发现有流程。
 
 播客爬虫（#479）泛化成一个统一的知识库：播客单集、YouTube 视频、报刊文章三类素材走**同一条流水线**（获取 → 转录/正文 → 中文+德语摘要 → 生词标注 → 通知 → 造卡）。总体设计见 `docs/knowledge-base.md`（各阶段 Issue 都引用它）。

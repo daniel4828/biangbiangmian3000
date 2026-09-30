@@ -682,7 +682,7 @@ def check_signal_inbox(runner=None) -> dict:
         summary["results"].append({
             "url": url, "ok": True, "episode_id": episode_id, "title": title,
         })
-        if already_exists:
+        if already_exists and not result.get("process_required"):
             receipt_lines.append(f"↺ 已在库中：{title or url}")
         else:
             receipt_lines.append(f"✅ {title or url}")
