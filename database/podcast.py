@@ -144,6 +144,14 @@ def get_episode_by_video_id(video_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def get_episode_by_spotify_url(url: str) -> dict | None:
+    """Canonical Spotify URL lookup before metadata/network work (#1238)."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM podcast_episodes WHERE spotify_url = ?", (url,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def get_known_video_ids() -> set[str]:
     """Used to filter the RSS feed down to genuinely new videos."""
     conn = get_db()

@@ -2305,7 +2305,7 @@ def _process_episode(episode_id: int, video: dict, detail_level: str, summary: d
             # when it's about to be replaced below — Reels never need a
             # Spotify search link, and podcasts/YouTube never have a
             # placeholder title in the first place, so this never matters.
-            spotify_url = find_spotify_url(video["title"])
+            spotify_url = (database.get_episode(episode_id) or {}).get("spotify_url") or find_spotify_url(video["title"])
             update_fields = dict(
                 summary_zh=result.get("summary_zh") or "",
                 summary_de=result["summary_de"],
