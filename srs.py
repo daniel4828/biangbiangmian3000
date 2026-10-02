@@ -48,6 +48,39 @@ def _hard_minutes(card: dict) -> int:
     return max(1, round(days * 1440))
 
 
+def _learning_hard_delay(steps: list[int], idx: int, preset: dict) -> float:
+    """Hard delay for a learning or relearning step, in minutes."""
+    if _hard_1d_enabled(preset):
+        return _hard_minutes(preset)
+    if idx == 0 and len(steps) > 1:
+        return (steps[0] + steps[1]) / 2
+    if len(steps) == 1:
+        return steps[0] * 1.5
+    return steps[idx]
+
+
+def _learning_good_compromise(card: dict, preset: dict, steps: list[int],
+                              idx: int, relearn: bool) -> int | None:
+    """Day interval for Good when its normal 1d step collides with Hard.
+
+    The card graduates early so Good can sit between a 1d Hard and Easy's
+    longer graduation interval. Other step schedules keep their usual flow.
+    """
+    if _fmt_min(_learning_hard_delay(steps, idx, preset)) != "1d":
+        return None
+    cfg = {**card, **preset}
+    normal_good = (steps[idx + 1] if idx < len(steps) - 1 else
+                   (_relearn_graduate_interval(cfg, 3) if relearn else
+                    _graduate_interval(cfg, 3)) * 1440)
+    if _fmt_min(normal_good) != "1d":
+        return None
+    easy_days = (_relearn_graduate_interval(cfg, 4) if relearn else
+                 _graduate_interval(cfg, 4))
+    if easy_days < 3:
+        return None  # No whole-day interval strictly between Hard and Easy.
+    return max(2, (1 + easy_days) // 2)
+
+
 def _elapsed_days(card: dict) -> int:
     """Days since the previous review, for computing retrievability.
 
@@ -160,15 +193,11 @@ def preview_intervals(card: dict) -> dict:
         # the steps were shortened after the card entered learning.
         si = min(step_index, len(l_steps) - 1)
         again = _fmt_min(l_steps[0])
-        if _hard_1d_enabled(card):
-            hard = _fmt_min(_hard_minutes(card))
-        elif si == 0 and len(l_steps) > 1:
-            hard = _fmt_min((l_steps[0] + l_steps[1]) / 2)
-        elif len(l_steps) == 1:
-            hard = _fmt_min(l_steps[0] * 1.5)
-        else:
-            hard = _fmt_min(l_steps[si])
-        if si >= len(l_steps) - 1:
+        hard = _fmt_min(_learning_hard_delay(l_steps, si, card))
+        compromise = _learning_good_compromise(card, card, l_steps, si, False)
+        if compromise is not None:
+            good = _fmt_day(compromise)
+        elif si >= len(l_steps) - 1:
             good = _fmt_day(_graduate_interval(card, 3))
         else:
             good = _fmt_min(l_steps[si + 1])
@@ -193,15 +222,11 @@ def preview_intervals(card: dict) -> dict:
     elif state == "relearn":
         si = min(step_index, len(r_steps) - 1)
         again = _fmt_min(r_steps[0])
-        if _hard_1d_enabled(card):
-            hard = _fmt_min(_hard_minutes(card))
-        elif si == 0 and len(r_steps) > 1:
-            hard = _fmt_min((r_steps[0] + r_steps[1]) / 2)
-        elif len(r_steps) == 1:
-            hard = _fmt_min(r_steps[0] * 1.5)
-        else:
-            hard = _fmt_min(r_steps[si] * 1.5)
-        if si >= len(r_steps) - 1:
+        hard = _fmt_min(_learning_hard_delay(r_steps, si, card))
+        compromise = _learning_good_compromise(card, card, r_steps, si, True)
+        if compromise is not None:
+            good = _fmt_day(compromise)
+        elif si >= len(r_steps) - 1:
             good = _fmt_day(_relearn_graduate_interval(card, 3))
         else:
             good = _fmt_min(r_steps[si + 1])
@@ -491,7 +516,7 @@ def _handle_learning(card: dict, preset: dict, rating: int) -> dict:
 
     probation_on = bool(preset.get("enable_probation", 1))
 
-    def _graduate(grad_rating: int) -> None:
+    def _graduate(grad_rating: int, interval_override: int | None = None) -> None:
         # With probation on the card is NOT a review card yet: it enters
         # probation and must survive an interval >= learned_interval first
         # (failing restarts the steps without counting a lapse). With probation
@@ -516,7 +541,10 @@ def _handle_learning(card: dict, preset: dict, rating: int) -> dict:
             base = fsrs.next_interval(s, dr, mx)
         else:
             base = preset["easy_interval"] if grad_rating == 4 else preset["graduating_interval"]
-        c["interval"] = _fuzz_interval(max(1, base))
+        c["interval"] = _fuzz_interval(max(1, interval_override or base))
+        if interval_override is not None:
+            easy_days = _graduate_interval({**card, **preset}, 4)
+            c["interval"] = max(2, min(c["interval"], easy_days - 1))
         c["due"] = next_review_due(c["interval"])
 
     if rating == 4:  # Easy — graduate immediately
@@ -533,14 +561,7 @@ def _handle_learning(card: dict, preset: dict, rating: int) -> dict:
     if rating == 2:  # Hard — stay on current step, slow delay
         c["state"] = "learning"
         idx = c["step_index"]
-        if _hard_1d_enabled(preset):
-            delay = _hard_minutes(preset)
-        elif idx == 0 and len(steps) > 1:
-            delay = (steps[0] + steps[1]) / 2
-        elif len(steps) == 1:
-            delay = steps[0] * 1.5
-        else:
-            delay = steps[idx]
+        delay = _learning_hard_delay(steps, idx, preset)
         c["due"] = _smart_due(datetime.now() + timedelta(minutes=delay))
         _touch_learning_memory(c, preset, rating)
         return c
@@ -549,7 +570,10 @@ def _handle_learning(card: dict, preset: dict, rating: int) -> dict:
     idx = c["step_index"]
     last = len(steps) - 1
 
-    if idx >= last:  # Graduate
+    compromise = _learning_good_compromise(card, preset, steps, idx, False)
+    if compromise is not None:
+        _graduate(3, compromise)
+    elif idx >= last:  # Graduate
         _graduate(3)
     else:
         c["step_index"] = idx + 1
@@ -640,14 +664,7 @@ def _handle_relearn(card: dict, preset: dict, rating: int) -> dict:
     if rating == 2:  # Hard — repeat current step
         c["state"] = "relearn"
         idx = c["step_index"]
-        if _hard_1d_enabled(preset):
-            delay = _hard_minutes(preset)
-        elif idx == 0 and len(steps) > 1:
-            delay = (steps[0] + steps[1]) / 2
-        elif len(steps) == 1:
-            delay = steps[0] * 1.5
-        else:
-            delay = steps[idx]
+        delay = _learning_hard_delay(steps, idx, preset)
         c["due"] = _smart_due(datetime.now() + timedelta(minutes=delay))
         _touch_learning_memory(c, preset, rating)
         return c
@@ -657,13 +674,17 @@ def _handle_relearn(card: dict, preset: dict, rating: int) -> dict:
 
     probation_on = bool(preset.get("enable_probation", 1))
 
-    def _graduate(grad_rating: int) -> None:
+    def _graduate(grad_rating: int, interval_override: int | None = None) -> None:
         # With probation on the relearn card must survive an interval of
         # >= learned_interval days before returning to 'review'; with probation
         # off it returns to 'review' immediately (classic Anki behaviour).
         c["state"] = "relearn" if probation_on else "review"
         c["probation"] = 1 if probation_on else 0
-        c["interval"] = _fuzz_interval(_relearn_graduate_interval(card, grad_rating))
+        base = interval_override or _relearn_graduate_interval(card, grad_rating)
+        c["interval"] = _fuzz_interval(base)
+        if interval_override is not None:
+            easy_days = _relearn_graduate_interval({**card, **preset}, 4)
+            c["interval"] = max(2, min(c["interval"], easy_days - 1))
         c["due"] = next_review_due(c["interval"])
         c["step_index"] = 0
         c["repetitions"] += 1
@@ -674,13 +695,17 @@ def _handle_relearn(card: dict, preset: dict, rating: int) -> dict:
 
     if rating == 4:  # Easy — skip steps, graduate with bonus
         _graduate(4)
-    elif idx >= last:  # Good at last step — back to review
-        _graduate(3)
     else:
-        c["step_index"] = idx + 1
-        c["state"] = "relearn"
-        c["due"] = next_learning_due(steps, c["step_index"])
-        _touch_learning_memory(c, preset, rating)
+        compromise = _learning_good_compromise(card, preset, steps, idx, True)
+        if compromise is not None:
+            _graduate(3, compromise)
+        elif idx >= last:  # Good at last step — back to review
+            _graduate(3)
+        else:
+            c["step_index"] = idx + 1
+            c["state"] = "relearn"
+            c["due"] = next_learning_due(steps, c["step_index"])
+            _touch_learning_memory(c, preset, rating)
 
     return c
 

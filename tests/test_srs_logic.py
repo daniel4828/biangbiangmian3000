@@ -101,15 +101,16 @@ class TestHandleLearning:
         assert result["state"] == "learning"
         assert result["step_index"] == 1
 
-    def test_learning_step_1_good_enters_probation(self):
+    def test_learning_step_1_good_enters_probation(self, monkeypatch):
         # step_index=1 is the last step in "1 10", so Good finishes the steps —
-        # the card gets its graduating interval but stays 'learning' (probation)
+        # the Good compromise gets 2d, and the card stays 'learning' (probation)
         # until it survives an interval of >= learned_interval days.
+        monkeypatch.setattr(srs, "_fuzz_interval", lambda days: days)
         card = make_card(state="learning", step_index=1)
         result = srs._handle_learning(card, DEFAULT_PRESET, rating=3)
         assert result["state"] == "learning"
         assert result["probation"] == 1
-        assert result["interval"] == DEFAULT_PRESET["graduating_interval"]
+        assert result["interval"] == 2
         assert result["step_index"] == 0
         assert result["repetitions"] == 1
 
@@ -178,6 +179,31 @@ class TestHandleReview:
 # ---------------------------------------------------------------------------
 
 class TestHandleRelearn:
+    def test_good_between_hard_and_easy_when_day_steps_collide(self, monkeypatch):
+        monkeypatch.setattr(srs, "_fuzz_interval", lambda days: days)
+        preset = {**FSRS_PRESET, "relearning_steps": "10m 1d",
+                  "learning_hard_1d": 1}
+        card = {**make_card(state="relearn", step_index=0), **preset,
+                "stability": 5.5, "difficulty": 5.0}
+
+        assert srs.preview_intervals(card) == {
+            1: "10m", 2: "1d", 3: "7d", 4: "13d",
+        }
+        result = srs._handle_relearn(card, preset, rating=3)
+        assert result["state"] == "review"
+        assert result["interval"] == 7
+        assert result["due"] == srs.next_review_due(7)
+
+    def test_good_compromise_never_fuzzes_back_to_one_day(self, monkeypatch):
+        monkeypatch.setattr(srs, "_fuzz_interval", lambda days: 1)
+        preset = {**DEFAULT_PRESET, "relearning_steps": "10m 1d",
+                  "learning_hard_1d": 1}
+        card = {**make_card(state="relearn", step_index=0, interval=2), **preset}
+
+        result = srs._handle_relearn(card, preset, rating=3)
+
+        assert result["interval"] == 2
+
     def test_good_at_last_step_enters_probation(self):
         # "10" is a single-step relearn; step_index=0 is the last step.
         # Finishing the steps no longer returns straight to 'review' — the card
@@ -280,6 +306,18 @@ W = fsrs.DEFAULT_WEIGHTS
 
 
 class TestLearningShortTermMemory:
+    def test_learning_good_uses_compromise_when_day_steps_collide(self, monkeypatch):
+        monkeypatch.setattr(srs, "_fuzz_interval", lambda days: days)
+        preset = {**FSRS_PRESET, "learning_steps": "10m 1d",
+                  "learning_hard_1d": 1}
+        card = {**make_card(state="learning", step_index=0), **preset,
+                "stability": 5.5, "difficulty": 5.0}
+
+        assert srs.preview_intervals(card)[3] == "7d"
+        result = srs._handle_learning(card, preset, rating=3)
+        assert result["state"] == "review"
+        assert result["interval"] == 7
+
     def test_learning_again_seeds_memory(self):
         card = make_card(state="new", step_index=0)
         card["stability"] = None
