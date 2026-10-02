@@ -322,10 +322,10 @@ class TestResolveBriefingModel:
             assert ai.resolve_briefing_model() == "gpt-5.6-luna"
 
     def test_falls_back_when_requested_model_missing(self, monkeypatch):
-        monkeypatch.setenv("BRIEFING_MODEL", "gpt-5.6-luna")
+        monkeypatch.setenv("BRIEFING_MODEL", "gpt-6-luna")
         with patch("openai.OpenAI", return_value=self._mock_models_client(
-            ["gpt-5.6-terra", "gpt-5-mini"])):
-            assert ai.resolve_briefing_model() == "gpt-5.6-terra"
+            ["gpt-5.6-luna", "gpt-5-mini"])):
+            assert ai.resolve_briefing_model() == "gpt-5.6-luna"
 
     def test_falls_back_to_mini_when_only_mini_available(self, monkeypatch):
         monkeypatch.setenv("BRIEFING_MODEL", "gpt-5.6-luna")
