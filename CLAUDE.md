@@ -823,6 +823,8 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 
 ## 知识条目的「全文」视图（#972）
 
+- **复制原语言全文（#1247）**：知识详情顶部的 `Copy Transcript in Original Language` 直接复制 `transcript_zh` 保存的原文，独立于当前阅读语言、摘要/全文标签和 `transcript_de` 翻译。原文为空时隐藏。下方原有复制按钮有双语段落时标为 `(bilingual)`，否则标为 `(original language)`；共用剪贴板成功提示与 HTTP 回退。
+
 详情页两个标签：**Summary**（AI 摘要，原样不变）/ **Full text**——未删节的原文，翻成正在读的语言、同样标注生词。FAZ 通讯是主场景（每天一篇），其它素材也能用。
 
 - **复用 `rendition.render_html()`，不新建管线**：一页书（#836）、一篇摘要（#804）、一份全文按同一套规则翻译+标注。差别只在输入准备

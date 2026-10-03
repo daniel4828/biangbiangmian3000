@@ -8382,6 +8382,7 @@ function _renderKnowledgeDetail(ep) {
     ep.status === 'summarized' ? `<button id="podcast-notify-email" class="btn-secondary" onclick="doPodcastNotify('email')">Send Email</button>` : '',
     ep.status === 'summarized' ? `<button id="podcast-regen-summary" class="btn-secondary" onclick="doPodcastRegenerateSummary()">Regenerate summary</button>` : '',
     ep.status === 'summarized' ? `<button id="knowledge-retag" class="btn-secondary" onclick="doKnowledgeRetag()">↻ Retag</button>` : '',
+    _knowledgeOriginalTranscriptText(ep) ? `<button id="knowledge-copy-original-transcript" class="btn-secondary" onclick="doKnowledgeCopyOriginalTranscript(this)">\u{1F4CB} Copy Transcript in Original Language</button>` : '',
     _knowledgeSummaryText(ep) ? `<button id="knowledge-copy-summary" class="btn-secondary" onclick="doKnowledgeCopySummary(this)">\u{1F4CB} Copy summary</button>` : '',
     ep.status === 'processing' ? `<span class="keymap-hint">⏳ processing…</span>` : '',
   ].filter(Boolean).join(' ');
@@ -8395,7 +8396,7 @@ function _renderKnowledgeDetail(ep) {
   const transcript = (trPairs.length || ep.transcript_zh)
     ? `<div class="podcast-transcript-wrap">
          <button class="keymap-reset-all" onclick="_togglePodcastTranscript()">Show/hide ${contentLabel.toLowerCase()}</button>
-         <button class="keymap-reset-all" style="margin-left:8px" id="knowledge-copy-transcript" onclick="doKnowledgeCopyTranscript(this)">\u{1F4CB} Copy ${contentLabel.toLowerCase()}</button>
+         <button class="keymap-reset-all" style="margin-left:8px" id="knowledge-copy-transcript" onclick="doKnowledgeCopyTranscript(this)">\u{1F4CB} Copy ${contentLabel.toLowerCase()} (${trPairs.length ? 'bilingual' : 'original language'})</button>
          <div id="podcast-transcript-body" class="podcast-transcript" style="display:none">${trBody}</div>
        </div>`
     : '';
@@ -8584,6 +8585,12 @@ function _knowledgeSummaryText(ep) {
   return ep.rendition ? _htmlToPlainText(_summaryZhHtml(ep.rendition.summary || '')) : '';
 }
 
+// transcript_zh stores the source language, regardless of the column name.
+// Never rebuild the original from bilingual pairs: those may be translated.
+function _knowledgeOriginalTranscriptText(ep) {
+  return String((ep && ep.transcript_zh) || '').trim();
+}
+
 // Bilingual transcripts (#772) copy as "<Chinese line>\n<other line>" per
 // segment; single-language transcripts copy as they are.
 function _knowledgeTranscriptText(ep) {
@@ -8632,6 +8639,10 @@ async function _copyToClipboard(text, btn) {
 
 function doKnowledgeCopySummary(btn) {
   _copyToClipboard(_knowledgeSummaryText(_knowledgeDetailEpisode), btn);
+}
+
+function doKnowledgeCopyOriginalTranscript(btn) {
+  _copyToClipboard(_knowledgeOriginalTranscriptText(_knowledgeDetailEpisode), btn);
 }
 
 function doKnowledgeCopyTranscript(btn) {
