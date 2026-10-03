@@ -1,6 +1,7 @@
 import sqlite3
 from .core import get_db
 from .cards import get_card
+from word_frequency import frequency_rank
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +18,7 @@ def get_words_for_browse(lang: str | None = None) -> list[dict]:
     """
     where = "WHERE w.lang = ?" if lang else ""
     sql = f"""
-        SELECT w.id, w.word_zh, w.pinyin, w.definition, w.definition_de, w.pos, w.hsk_level, w.note_type,
+        SELECT w.id, w.lang, w.word_zh, w.pinyin, w.definition, w.definition_de, w.pos, w.hsk_level, w.note_type,
                c.id as card_id, c.category, c.state, c.interval, c.ease,
                c.due, c.lapses, c.step_index, c.deck_id,
                c.is_leech, c.leeched_at, c.learning_again_count,
@@ -45,6 +46,7 @@ def get_words_for_browse(lang: str | None = None) -> list[dict]:
                 "pos": r["pos"],
                 "hsk_level": r["hsk_level"],
                 "note_type": r["note_type"],
+                "frequency_rank": frequency_rank(r["word_zh"], r["lang"]),
                 "cards": [],
             }
         if r["card_id"] is not None:

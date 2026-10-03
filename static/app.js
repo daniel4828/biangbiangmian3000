@@ -2453,6 +2453,9 @@ function _sortWords(words) {
   const sorted = [...words];
   const locale = { sensitivity: 'base' };
   switch (_browseSort) {
+    case 'frequency':
+      sorted.sort((a, b) => (a.frequency_rank ?? Infinity) - (b.frequency_rank ?? Infinity) || b.id - a.id);
+      break;
     case 'pinyin-asc':  sorted.sort((a, b) => (a.pinyin || '').localeCompare(b.pinyin || '', 'en', locale)); break;
     case 'pinyin-desc': sorted.sort((a, b) => (b.pinyin || '').localeCompare(a.pinyin || '', 'en', locale)); break;
     case 'hanzi-asc':   sorted.sort((a, b) => (a.word_zh || '').localeCompare(b.word_zh || '', 'zh')); break;
@@ -2498,6 +2501,9 @@ function onBrowseSort(val) {
 // word sort (#773, generalized to flagged in #854). Must run BEFORE the list is
 // (re)rendered so _browseSort is already correct.
 function _syncSortOptions() {
+  const showFrequency = _browseCardStatus === 'saved' && activeLang() === 'zh' && _browseMode !== 'hanzi';
+  document.querySelectorAll('#browse-sort option[value="frequency"]').forEach(o => o.hidden = !showFrequency);
+  if (!showFrequency && _browseSort === 'frequency') _browseSort = DEFAULT_BROWSE_SORT;
   const showLeeched = _browseCardStatus === 'leech';
   const showStarred = _browseCardStatus === 'starred';
   const showFlagged = _browseCardStatus === 'flagged';
@@ -2812,6 +2818,7 @@ function _wordRow(w) {
       <div class="bw-left">
         <span class="bw-hanzi">${w.word_zh}</span>
         <span class="bw-pinyin">${w.pinyin || ''}</span>
+        ${_browseCardStatus === 'saved' && activeLang() === 'zh' ? `<span class="bw-pinyin" title="SUBTLEX-CH whole-word frequency rank from film subtitles; lower means more frequent">${w.frequency_rank ? 'Frequency #' + w.frequency_rank : 'Frequency: unlisted'}</span>` : ''}
       </div>
       <div class="bw-mid">
         <span class="bw-def">${def}</span>
