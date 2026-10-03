@@ -90,3 +90,27 @@ test('saving a word updates every cached sentence only in its language', () => {
  assert.equal(first.word_id,42); assert.equal(second.word_id,42); assert.equal(other.word_id,undefined);
  assert.equal(c._hintKeepWord(9,first),false);
 });
+
+test('HSK masks simple grammar combinations using hint level without changing other stages', () => {
+ const c=setup();
+ for (const word of [{word:'他们',hsk:null,hint_hsk:1},{word:'交给',hsk:null,hint_hsk:4}]) {
+  assert.equal(c._hintKeepWord(8,word),false);
+  assert.equal(c._hintKeepWord(3,word),word.word==='交给');
+  assert.equal(c._hintKeepWord(9,word),true);
+ }
+ assert.equal(c._hintKeepWord(8,{hsk:null,hint_hsk:null}),true);
+ assert.equal(c._hintKeepWord(6,{hsk:5,hint_hsk:5}),true);
+});
+
+test('HSK 6 renders screenshot combinations as blanks and keeps target hidden', () => {
+ const c=setup({listenHintPreviousWord:'false'}); const el={innerHTML:''};
+ Object.assign(c, {document:{getElementById:()=>el}, card:{word_zh:'答案'}, sentence:{sentence_zh:'旧答案交给他们。'},
+ _allWordsSync:()=>[{word:'旧',hsk:5,hint_hsk:5},{word:'答案',hsk:4,hint_hsk:4},
+ {word:'交给',hsk:null,hint_hsk:4},{word:'他们',hsk:null,hint_hsk:1}],
+ _allWordsErrors:new Set(), _allWordsKey:()=>'', _glossWordIndex:new Map(),
+ _escHtml:s=>s, setWordTable(){}, _makeWordsTappable(){}});
+ const source=fs.readFileSync('static/app.js','utf8');
+ vm.runInContext(source.slice(source.indexOf('// The new words of the sentence'),source.indexOf('// ── Render sentence (with target word highlighted)')),c);
+ c._renderListenHint(8);
+ assert.equal(el.innerHTML.replace(/<[^>]*>/g,''),'_______。');
+});

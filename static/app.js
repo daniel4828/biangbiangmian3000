@@ -13137,7 +13137,8 @@ function _hintSavedDefault() {
   return ids.includes(n) ? n : ids[0];
 }
 function _hintKeepWord(stage, word) {
-  return stage === 9 ? !word.word_id : word.hsk == null || word.hsk > stage - 2;
+  const level = word.hint_hsk ?? word.hsk;
+  return stage === 9 ? !word.word_id : level == null || level > stage - 2;
 }
 function _hintPreviousWordEnabled() {
   return localStorage.getItem('listenHintPreviousWord') !== 'false';

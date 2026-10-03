@@ -261,6 +261,26 @@ def extract_new_words(text: str) -> list[dict]:
         return []
 
 
+def _hint_hsk_level(word: str, hsk: dict[str, int]) -> int | None:
+    """Hint-only estimate for productive grammar, never an official HSK label.
+
+    Keep complete vocabulary entries authoritative. Unknown compounds are
+    NOT reduced to character levels: simple characters can form hard words.
+    """
+    if word in hsk:
+        return hsk[word]
+    if len(word) == 2 and word[-1] == '们' and word[0] in '我你他她它您':
+        return hsk.get(word[0])
+    if len(word) > 1 and word[-1] in '给到完过着了':
+        base, suffix = word[:-1], word[-1]
+        if base in hsk and suffix in hsk:
+            # A noun followed by one of these characters is not sufficient.
+            pairs = _segment(base)
+            if len(pairs) == 1 and pairs[0][0] == base and pairs[0][1].startswith('v'):
+                return max(hsk[base], hsk[suffix])
+    return None
+
+
 def extract_all_words(text: str) -> list[dict]:
     """Every CJK word segment of `text` (not filtered to "new" — the new-word
     criterion doesn't apply here), each carrying pinyin + a German gloss.
@@ -288,9 +308,10 @@ def extract_all_words(text: str) -> list[dict]:
         if not words:
             return []
         glosses = _gloss_de_many(words)
+        hsk = _hsk_levels()
         return [
             {"word": w, "pinyin": pinyin_of(w), "definition_de": glosses.get(w, ""),
-             "hsk": _hsk_levels().get(w)}
+             "hsk": hsk.get(w), "hint_hsk": _hint_hsk_level(w, hsk)}
             for w in words
         ]
     except Exception as e:

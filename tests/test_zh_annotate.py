@@ -292,3 +292,26 @@ def test_all_words_carries_hsk_for_hint_thresholds(monkeypatch):
     monkeypatch.setattr(zh_annotate, '_hsk_levels', lambda: {'你好': 1, '就业': 5})
     words = zh_annotate.extract_all_words('你好就业表外词')
     assert [(w['word'], w['hsk']) for w in words] == [('你好', 1), ('就业', 5), ('表外词', None)]
+
+
+@pytest.mark.parametrize('word, level', [
+    ('他们', 1), ('她们', 1), ('它们', 2), ('你们', 1),
+    ('交给', 4), ('看到', 2), ('看过', 4),
+])
+def test_all_words_estimates_only_hint_level_for_grammar_combinations(word, level):
+    words = zh_annotate.extract_all_words(word)
+    entry = next(w for w in words if w['word'] == word)
+    assert entry['hsk'] is None  # Do not invent an official vocabulary level.
+    assert entry['hint_hsk'] == level
+
+
+def test_split_verb_complement_still_has_basic_hint_levels():
+    words = zh_annotate.extract_all_words('看完')
+    assert ''.join(w['word'] for w in words) == '看完'
+    assert max(w['hint_hsk'] for w in words) == 2
+
+
+@pytest.mark.parametrize('word', ['就业', '马虎', '量子纠缠', '鸡给'])
+def test_hint_level_keeps_official_difficulty_and_unknown_words(word):
+    hsk = zh_annotate._hsk_levels()
+    assert zh_annotate._hint_hsk_level(word, hsk) == hsk.get(word)
