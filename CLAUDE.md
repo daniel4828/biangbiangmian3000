@@ -522,6 +522,10 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 ---
 
+## ★ List 中文词频排序（#1246）
+
+Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名越小越靠前，未收录词排最后；每行显示排名或 unlisted。离开中文 Saved 视图恢复默认排序。`word_frequency.py` 缓存读取 `resources/subtlex-ch-ranks.json`（SUBTLEX-CH，99,121 词，电影字幕语料）；`database/browse.py` 按词条语言返回 `frequency_rank`，非中文返回 null。无数据库迁移，无运行时下载。来源和重建方式见 `resources/README.md`。
+
 ## 故事生成
 
 - 每个类别（阅读/听力/写作——界面顺序也是这个）独立生成自己的故事
