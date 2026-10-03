@@ -752,6 +752,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 - 阶段设置在 **Settings 页的「Stages」**（#1232 从复习卡片上搬走：卡片上只留滑块）：勾选启用阶段，用 ↑ / ↓ 调整顺序；至少保留一个启用阶段。设置页没有当前卡片，所以列出全部阶段；非中文卡片复习时自动跳过 HSK 阶段。
 - 默认顺序：Show all → HSK 1–6 → New words only → Unsaved words → Hide all。
 - HSK N 隐藏 N 级及以下，显示更高级和表外词；仅中文可用。`all_words` 返回每词的 `hsk`。
+- #1244：HSK 提示使用 `all_words.hint_hsk`（旧响应回退 `hsk`）。完整词表等级优先；未收录的代词复数（他们等）、词表内动词加给/到/完/过/着/了，按基础词和尾字的最高等级估算。原始 `hsk` 不变，不按单字最低等级猜所有组合词，无法判断的表外词仍显示。已有句子读取时即生效，无需重新生成。
 - Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断。所有阶段继续隐藏目标答案。
 - 所有会遮挡文字的阶段默认保留目标词前一个词作为回忆提示；Stages 设置可关闭，浏览器用 `listenHintPreviousWord` 保存。
 - 浏览器 `listenHintStages` 保存顺序及启用状态；`listenHintState` 保存稳定阶段 ID，兼容旧 0/1/2 默认值。取消默认阶段时使用第一个可用阶段；重新启用可恢复原默认。设置只在当前浏览器保存。
