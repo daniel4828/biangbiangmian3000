@@ -25,7 +25,7 @@ def test_setup_lang_prefers_the_active_tab():
     and the deck's own lang is only the fallback."""
     app_js = _app_js()
     assert (
-        "return _availableLangs.length > 1 ? activeLang() : (_deckLangById[deckId] || 'zh');"
+        "return _langScoped() ? activeLang() : (_deckLangById[deckId] || 'zh');"
         in app_js
     )
 

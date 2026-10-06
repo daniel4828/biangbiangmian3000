@@ -164,10 +164,45 @@ def get_langs(available: bool = False):
     they are where a language *starts*, and a brand-new language has no decks
     yet, so filtering by usage there would make it impossible to add its very
     first word.
+
+    Without available=1, languages switched off in Settings are left out
+    (#1252; French is off by default). Never returns an empty list.
     """
     if available:
         return list(languages.LANGUAGES.keys())
-    return database.get_available_langs()
+    disabled = set(database.get_disabled_langs())
+    result = [l for l in database.get_available_langs() if l not in disabled]
+    return result or ["zh"]
+
+
+def _lang_settings_payload() -> dict:
+    disabled = set(database.get_disabled_langs())
+    in_use = database.get_available_langs()
+    return {
+        "langs": [{"code": code, "enabled": code not in disabled,
+                   "in_use": code in in_use}
+                  for code in languages.LANGUAGES],
+        "in_use": in_use,
+    }
+
+
+@router.get("/api/lang-settings")
+def get_lang_settings():
+    """Per-language on/off switches for Settings (#1252)."""
+    return _lang_settings_payload()
+
+
+@router.put("/api/lang-settings")
+def put_lang_settings(body: dict):
+    """body: {"lang": "fr", "enabled": bool} (#1252)."""
+    lang = body.get("lang")
+    if lang not in languages.LANGUAGES:
+        raise HTTPException(400, f"Unknown language: {lang!r}")
+    try:
+        database.set_lang_enabled(lang, bool(body.get("enabled")))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _lang_settings_payload()
 
 
 @router.get("/api/decks")

@@ -71,7 +71,8 @@ let _retentionData = null;  // cached result from GET /api/retention
 let _cachedDecks = null;       // last fetched deck tree (for toggle re-renders)
 let _deckLangById = {};        // deckId → 'zh'|'fr', rebuilt whenever decks load (flatten(decks))
 let _availableLangs = ['zh'];  // distinct langs in use, from GET /api/langs — tab bar shows only when > 1
-let _offlineMode = false;      // GET /api/mode — no outbound calls possible right now (#612)
+let _langsInUse = ['zh'];      // all langs that have decks, unfiltered by Settings (#1252)
+let _offlineMode = false;     // GET /api/mode — no outbound calls possible right now (#612)
 let _localMode = false;        // GET /api/mode — laptop instance; shows the sync button (#625)
 let _currentView = 'loading';  // last name passed to showView(), so the mode poll can re-apply it
 let _loadingContextToken = null;  // optional owner for a cancellable loading view
@@ -82,7 +83,16 @@ let _syncPollTimer = null;     // active /api/sync/progress poll (#625)
 // "what language am I studying right now" on the home page: deck list, All-deck
 // aggregation, unfinished cards, and the stats charts all read this. Persisted
 // so it survives reloads; defaults to 'zh' so pure-Chinese users see no change.
-function activeLang() { return localStorage.getItem('activeLang') || 'zh'; }
+function activeLang() {
+  const stored = localStorage.getItem('activeLang') || 'zh';
+  // A language switched off in Settings (#1252) must not stay active.
+  return _availableLangs.includes(stored) ? stored : (_availableLangs[0] || 'zh');
+}
+// Whether requests must carry lang. Switched-off languages still have decks, so
+// as long as more than one language is in use every request needs lang —
+// otherwise French cards would leak into the Chinese queue after disabling
+// French (#1252). Not the same as the tab bar, which uses _availableLangs.
+function _langScoped() { return _langsInUse.length > 1; }
 // Query-string fragment for the active tab's lang — empty when only one
 // language is in use, so pure-Chinese installs send no lang param at all
 // (byte-identical to pre-#436 requests). Use `?${_langQ()}` when the URL has
@@ -90,7 +100,7 @@ function activeLang() { return localStorage.getItem('activeLang') || 'zh'; }
 // (both are safe no-ops — trailing '?'/'&' with nothing after them — when
 // _langQ() is empty, but callers still guard with `${_langQ() ? '&...' : ''}`
 // style where a stray separator would look odd).
-function _langQ() { return _availableLangs.length > 1 ? `lang=${activeLang()}` : ''; }
+function _langQ() { return _langScoped() ? `lang=${activeLang()}` : ''; }
 // Convenience: '?lang=fr' / '&lang=fr' / '' depending on separator + whether a tab bar is active.
 function _langQP(sep) { const q = _langQ(); return q ? `${sep}${q}` : ''; }
 function setActiveLang(lang) {
@@ -135,7 +145,7 @@ function currentCardLang() {
 // them. currentCardLang() above deliberately keeps using the card's own deck
 // (#726): the word being added comes from that card, not from the tab.
 function setupLang() {
-  return _availableLangs.length > 1 ? activeLang() : (_deckLangById[deckId] || 'zh');
+  return _langScoped() ? activeLang() : (_deckLangById[deckId] || 'zh');
 }
 
 // Shared 1-6 difficulty value → per-language label (issue #596):
@@ -1679,11 +1689,13 @@ async function _pollSyncProgress() {
 async function loadDecks({ keepView = false } = {}) {
   if (!keepView) setLoading('Loading decks…');
   try {
-    const [langs, mode] = await Promise.all([
+    const [langs, mode, ls] = await Promise.all([
       api('GET', '/api/langs').catch(() => ['zh']),
       api('GET', '/api/mode').catch(() => ({ offline: false })),
+      api('GET', '/api/lang-settings').catch(() => null),
     ]);
     _availableLangs = langs && langs.length ? langs : ['zh'];
+    _langsInUse = (ls && ls.in_use && ls.in_use.length) ? ls.in_use : _availableLangs.slice();
     _offlineMode = !!(mode && mode.offline);
     _localMode = !!(mode && mode.local);
     const syncBtn = document.getElementById('sync-btn');
@@ -1692,7 +1704,7 @@ async function loadDecks({ keepView = false } = {}) {
     _startModePolling();
     // Only scope requests to the active tab once there's more than one language
     // in use — keeps a pure-Chinese install byte-identical to pre-#436 behavior.
-    const langParam = _availableLangs.length > 1 ? `&lang=${activeLang()}` : '';
+    const langParam = _langScoped() ? `&lang=${activeLang()}` : '';
     const [decks, retention] = await Promise.all([
       api('GET', `/api/decks?unfinished_scope=${_unfinishedScope}${langParam}`),
       api('GET', `/api/retention?days=0${langParam}`).catch(() => null),
@@ -3735,6 +3747,51 @@ function openSettings() {
   renderSettings();
   _loadDayCutoffHour();
   _loadAgainRegenEnabled();
+  _loadLangSettings();
+}
+
+// ── Languages on/off (issue #1252) ──────────────────────────────────────────
+let _langSettings = null;       // GET /api/lang-settings; null = not loaded (or failed)
+let _langSettingsFailed = false;
+
+async function _loadLangSettings() {
+  try {
+    _langSettings = await api('GET', '/api/lang-settings');
+    _langSettingsFailed = false;
+  } catch (e) {
+    _langSettings = null;
+    _langSettingsFailed = true;
+  }
+  renderSettings();
+}
+
+function _langSettingsRowsHtml() {
+  if (!_langSettings) return `<div class="keymap-hint">${_langSettingsFailed ? 'Could not load' : 'Loading…'}</div>`;
+  return _langSettings.langs.map(l => {
+    const label = _LANG_TAB_LABELS[l.code] || l.code;
+    const isZh = l.code === 'zh';
+    const note = l.in_use ? '' : ' <span class="keymap-hint">(no decks yet)</span>';
+    return `<div class="keymap-row">
+        <span class="keymap-label">${_escHtml(label)}${note}</span>
+        <label class="switch-wrap">
+          <input type="checkbox" ${l.enabled ? 'checked' : ''} ${isZh ? 'disabled' : ''}
+                 onchange="setLangEnabled('${l.code}', this.checked)" style="width:18px;height:18px;cursor:pointer">
+          <span>${l.enabled ? 'On' : 'Off'}</span>
+        </label>
+      </div>`;
+  }).join('');
+}
+
+async function setLangEnabled(code, enabled) {
+  try {
+    _langSettings = await api('PUT', '/api/lang-settings', { lang: code, enabled });
+  } catch (e) {
+    showError('Could not save: ' + e.message);
+    renderSettings();
+    return;
+  }
+  renderSettings();
+  loadDecks({ keepView: true });
 }
 
 // ── Again → new sentence switch (issue #714) ────────────────────────────────
@@ -3813,6 +3870,11 @@ function renderSettings() {
   const msg = _settingsMsg ? `<div class="keymap-msg">${_settingsMsg}</div>` : '';
   const nfZh = _newsflowLang === 'zh';
   document.getElementById('view-settings-content').innerHTML = `
+    <div class="keymap-panel" style="margin-bottom:24px">
+      <h2 class="keymap-heading">Languages</h2>
+      <p class="keymap-hint">A language that is switched off does not appear in the language tab bar and its cards stay out of the current review. Words and progress are kept — switch it back on any time. Chinese cannot be switched off.</p>
+      ${_langSettingsRowsHtml()}
+    </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Review shortcuts</h2>
       <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed.</p>
@@ -19065,7 +19127,7 @@ function initHomeEvolution() {
   if (_evoLoading) return;
   _evoLoading = true;
   el.innerHTML = '<div class="hcal-loading">Loading card evolution…</div>';
-  const langParam = _availableLangs.length > 1 ? `&lang=${activeLang()}` : '';
+  const langParam = _langScoped() ? `&lang=${activeLang()}` : '';
   api('GET', `/api/card-evolution?days=365${langParam}`)
     .then(d => { _evoData = d; _evoLoading = false; _evoRender(); })
     .catch(err => {
