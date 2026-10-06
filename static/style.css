@@ -2709,6 +2709,8 @@ a.nav-btn { text-decoration: none; }
   outline: none;
   cursor: pointer;
   flex-shrink: 0;
+  max-width: 220px;
+  text-overflow: ellipsis;
 }
 .browse-search-row select:focus { border-color: var(--primary); }
 
@@ -6907,6 +6909,12 @@ body.gloss-on [data-gloss-tr]::after {
   .bw-mid { flex: 1 1 120px; }
   .bw-right { margin-left: auto; }
   .ss-row { flex-wrap: wrap; }
+  /* The nowrap filter row (3 selects + search) was wider than the screen when a
+     deck name / sort label was long (#1250): search takes its own first line,
+     the selects share the second and may shrink. 16px stops iOS focus-zoom. */
+  .browse-search-row { flex-wrap: wrap; }
+  .browse-search-row input { order: -1; flex: 1 1 100%; min-width: 0; font-size: 16px; }
+  .browse-search-row select { flex: 1 1 0; min-width: 0; max-width: none; text-overflow: ellipsis; }
 }
 
 /* ── Book reader (#836) ─────────────────────────────────────────────────── */
