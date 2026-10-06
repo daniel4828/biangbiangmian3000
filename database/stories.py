@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 from datetime import date, datetime, timedelta
 from .core import get_db
@@ -550,6 +551,42 @@ def set_app_setting(key: str, value: str) -> None:
         (key, value))
     conn.commit()
     conn.close()
+
+
+DEFAULT_DISABLED_LANGS = ["fr"]
+
+
+def get_disabled_langs() -> list[str]:
+    """Languages switched off in Settings (#1252). Missing key -> defaults
+    (French is off until enabled). zh can never be disabled."""
+    raw = get_app_setting("disabled_langs")
+    if raw is None:
+        langs = list(DEFAULT_DISABLED_LANGS)
+    else:
+        try:
+            langs = json.loads(raw)
+            if not isinstance(langs, list):
+                raise ValueError("not a list")
+        except ValueError:
+            logging.getLogger(__name__).warning(
+                "app_settings.disabled_langs is not a JSON list (%r); "
+                "using defaults", raw)
+            langs = list(DEFAULT_DISABLED_LANGS)
+    return [l for l in langs if l != "zh"]
+
+
+def set_lang_enabled(lang: str, enabled: bool) -> list[str]:
+    """Enable/disable one language (#1252); returns the new disabled list."""
+    if lang == "zh" and not enabled:
+        raise ValueError("zh cannot be disabled")
+    disabled = set(get_disabled_langs())
+    if enabled:
+        disabled.discard(lang)
+    else:
+        disabled.add(lang)
+    result = sorted(disabled)
+    set_app_setting("disabled_langs", json.dumps(result))
+    return result
 
 
 def set_pregen_config(deck_id: int, entries: list[dict]) -> None:

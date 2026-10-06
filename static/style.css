@@ -7384,3 +7384,16 @@ body.gloss-on [data-gloss-tr]::after {
 .hint-stage-option { display: flex; gap: 8px; align-items: center; max-width: 340px; margin: 6px 0; }
 .hint-stage-option label { flex: 1; }
 .hint-stage-option button { min-width: 36px; min-height: 32px; }
+
+/* #1252: on a phone the header wraps onto several lines, and the full-height
+   tab's negative margins reach into the counts row below. The read-only label
+   (single language) becomes an ordinary small pill. Kept last so it overrides
+   the non-media .lang-tab-static rule above. */
+@media (max-width: 700px) {
+  .lang-tabs-header { align-self: center; }
+  .lang-tabs-header .lang-tab-static {
+    margin: 0; padding: 3px 10px;
+    border: 1px solid var(--lang-accent, var(--border));
+    border-radius: 999px;
+  }
+}
