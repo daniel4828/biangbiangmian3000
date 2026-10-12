@@ -13243,6 +13243,30 @@ function _hintPreviousWordPositions(zh, lang, targetPositions, isMaskable) {
     best = needle.length;
   }
   for (let i = end - best; i < end; i++) positions.add(i);
+  if (best === 0) {
+    // #1254: no word ends exactly at the target (jieba glued the previous
+    // character to the target, e.g. 重新掌权, or the word list is missing).
+    // Fall back so the hint is never silently empty.
+    let bestStart = -1;
+    for (const w of (_allWordsSync(zh, lang) || [])) {
+      const needle = isZh ? (w.word || '') : (w.word || '').toLowerCase();
+      if (!needle) continue;
+      for (let start = hay.indexOf(needle); start !== -1; start = hay.indexOf(needle, start + 1)) {
+        if (start >= end || start + needle.length <= end) continue;
+        if (!isZh && /[\p{L}\p{M}]/u.test(zh[start - 1] || '')) continue;
+        if (bestStart === -1 || end - start > end - bestStart) bestStart = start;
+      }
+    }
+    if (bestStart !== -1) {
+      for (let i = bestStart; i < end; i++) positions.add(i);
+    } else if (isZh) {
+      if (end > 0 && isMaskable(zh[end - 1])) positions.add(end - 1);
+    } else {
+      let i = end - 1;
+      while (i >= 0 && /[\p{L}\p{M}]/u.test(zh[i])) { positions.add(i); i--; }
+    }
+  }
+  for (const i of [...positions]) if (targetPositions.has(i)) positions.delete(i);
   return positions;
 }
 function _hintWordSaved(word, lang, wordId) {

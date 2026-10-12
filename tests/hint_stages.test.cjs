@@ -114,3 +114,24 @@ test('HSK 6 renders screenshot combinations as blanks and keeps target hidden', 
  c._renderListenHint(8);
  assert.equal(el.innerHTML.replace(/<[^>]*>/g,''),'_______。');
 });
+
+// #1254: previous-word hint must never be empty when segmentation glues it to the target
+test('previous-word hint falls back when jieba merges it with the target or the word list is missing', () => {
+ const render = (saved, words) => {
+  const c=setup(saved); const el={innerHTML:''};
+  Object.assign(c, {document:{getElementById:()=>el}, card:{word_zh:'掌权'}, sentence:{sentence_zh:'他说重新掌权了。'},
+  _allWordsSync:()=>words,
+  _allWordsErrors:new Set(), _allWordsKey:()=>'', _glossWordIndex:new Map(),
+  _escHtml:s=>s, setWordTable(){}, _makeWordsTappable(){}});
+  const source=fs.readFileSync('static/app.js','utf8');
+  vm.runInContext(source.slice(source.indexOf('// The new words of the sentence'),source.indexOf('// ── Render sentence (with target word highlighted)')),c);
+  c._renderListenHint(2);
+  return el.innerHTML.replace(/<[^>]*>/g,'');
+ };
+ const merged=render({}, [{word:'他'},{word:'说'},{word:'重新掌权'},{word:'了'}]);
+ assert.match(merged,/重新/); assert.doesNotMatch(merged,/掌权/);
+ const empty=render({}, []);
+ assert.match(empty,/新/); assert.doesNotMatch(empty,/掌权/);
+ const off=render({listenHintPreviousWord:'false'}, [{word:'他'},{word:'说'},{word:'重新掌权'},{word:'了'}]);
+ assert.doesNotMatch(off,/重新/);
+});
