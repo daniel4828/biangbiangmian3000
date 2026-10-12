@@ -341,6 +341,18 @@
               <button id="sentence-reasoning-btn" class="sentence-reasoning-btn" title="为什么这句体现本章偏误? (快捷键: g)" onclick="openReasoning()" style="display:none">💡</button>
             </div>
 
+            <!-- Word summary: character, pinyin, pos, definition.
+                 Placed above the rating buttons so the target word's meaning is
+                 visible on a phone without scrolling (#1256). -->
+            <div class="vocab-detail">
+              <div class="word-big" id="word-zh"></div>
+              <div class="word-pin" id="word-pin"></div>
+              <div class="word-pos-row"><span class="word-pos" id="word-pos"></span><span class="word-register" id="word-register" style="display:none"></span></div>
+              <div class="word-def-de" id="word-def-de" style="display:none"></div>
+              <div class="word-def" id="word-def"></div>
+              <div class="word-def-fr" id="word-def-fr" style="display:none"></div>
+            </div>
+
             <!-- 3. Rating buttons (immediately visible after flip) -->
             <div class="rating-row" id="rating-row">
               <button class="r-btn r-again" onclick="rate(1)">Again<small id="int-1"></small></button>
@@ -358,15 +370,6 @@
               <button class="fsrs-inspect-btn" onclick="toggleFsrsInspector()"
                       data-shortcut-action="fsrs-inspector" data-shortcut-title="FSRS scheduler details"
                       title="FSRS scheduler details (Shift+S)">🔬 Scheduler</button>
-            </div>
-            <!-- Word summary: character, pinyin, pos, definition -->
-            <div class="vocab-detail">
-              <div class="word-big" id="word-zh"></div>
-              <div class="word-pin" id="word-pin"></div>
-              <div class="word-pos-row"><span class="word-pos" id="word-pos"></span><span class="word-register" id="word-register" style="display:none"></span></div>
-              <div class="word-def-de" id="word-def-de" style="display:none"></div>
-              <div class="word-def" id="word-def"></div>
-              <div class="word-def-fr" id="word-def-fr" style="display:none"></div>
             </div>
 
           </div>
