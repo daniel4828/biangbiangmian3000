@@ -989,17 +989,20 @@ body.ra-fullscreen-open #error-banner {
 .r-good  { background: var(--good); }
 .r-easy  { background: var(--easy); }
 
-/* ── Vocab detail (below ratings on back side) ───────── */
+/* ── Vocab detail (above ratings on back side, #1256) ───────── */
 .vocab-detail {
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: baseline;
 }
 
-.word-big  { font-size: 46px; font-weight: 700; text-align: center; }
-.word-pin  { font-size: 16px; color: var(--muted); text-align: center; }
+.word-big  { font-size: 28px; font-weight: 700; text-align: left; line-height: 1.2; grid-column: 1; }
+.word-pin  { font-size: 15px; color: var(--muted); text-align: left; grid-column: 2; }
 .word-pos  {
   display: inline-block;
   font-size: 11px;
@@ -1011,10 +1014,11 @@ body.ra-fullscreen-open #error-banner {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.word-pos-row { text-align: center; margin: 2px 0; }
-.word-def  { font-size: 14px; color: var(--muted); text-align: center; margin-bottom: 4px; }
-.word-def-de { font-size: 16px; color: var(--text); font-weight: 700; text-align: center; margin-bottom: 4px; }
-.word-def-fr { font-size: 14px; color: var(--muted); text-align: center; margin-bottom: 4px; }
+.word-pos-row { grid-column: 1 / -1; text-align: left; margin: 0; }
+.word-pos-row:has(.word-pos:empty):has(.word-register[style*="none"]) { display: none; }
+.word-def  { grid-column: 1 / -1; font-size: 14px; color: var(--muted); text-align: left; margin-bottom: 0; }
+.word-def-de { grid-column: 1 / -1; font-size: 16px; color: var(--text); font-weight: 700; text-align: left; margin-bottom: 0; }
+.word-def-fr { grid-column: 1 / -1; font-size: 14px; color: var(--muted); text-align: left; margin-bottom: 0; }
 
 /* ── Edit card ───────────────────────────────────────── */
 .edit-card-btn {
@@ -7397,3 +7401,6 @@ body.gloss-on [data-gloss-tr]::after {
     border-radius: 999px;
   }
 }
+/* #1256: the vocab card's background is var(--bg), the pos pill's own colour —
+   give the pill the card colour so it stays visible inside it. */
+.vocab-detail .word-pos { background: var(--card); }
