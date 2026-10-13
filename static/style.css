@@ -1013,15 +1013,19 @@ body.ra-fullscreen-open #error-banner {
   background: var(--bg);
   border-radius: 12px;
   padding: 10px 14px;
-  display: grid;
-  grid-template-columns: auto 1fr;
+  /* Centered like the sentence above it (#1266): word + pinyin share the
+     first line, everything else takes a full line of its own. */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
   column-gap: 12px;
   row-gap: 2px;
-  align-items: baseline;
+  text-align: center;
 }
 
-.word-big  { font-size: 28px; font-weight: 700; text-align: left; line-height: 1.2; grid-column: 1; }
-.word-pin  { font-size: 15px; color: var(--muted); text-align: left; grid-column: 2; }
+.word-big  { font-size: 28px; font-weight: 700; line-height: 1.2; }
+.word-pin  { font-size: 15px; color: var(--muted); }
 .word-pos  {
   display: inline-block;
   font-size: 11px;
@@ -1033,11 +1037,11 @@ body.ra-fullscreen-open #error-banner {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.word-pos-row { grid-column: 1 / -1; text-align: left; margin: 0; }
+.word-pos-row { flex-basis: 100%; margin: 0; }
 .word-pos-row:has(.word-pos:empty):has(.word-register[style*="none"]) { display: none; }
-.word-def  { grid-column: 1 / -1; font-size: 14px; color: var(--muted); text-align: left; margin-bottom: 0; }
-.word-def-de { grid-column: 1 / -1; font-size: 16px; color: var(--text); font-weight: 700; text-align: left; margin-bottom: 0; }
-.word-def-fr { grid-column: 1 / -1; font-size: 14px; color: var(--muted); text-align: left; margin-bottom: 0; }
+.word-def  { flex-basis: 100%; font-size: 14px; color: var(--muted); margin-bottom: 0; }
+.word-def-de { flex-basis: 100%; font-size: 16px; color: var(--text); font-weight: 700; margin-bottom: 0; }
+.word-def-fr { flex-basis: 100%; font-size: 14px; color: var(--muted); margin-bottom: 0; }
 
 /* ── Edit card ───────────────────────────────────────── */
 .edit-card-btn {
