@@ -3580,7 +3580,7 @@ a.nav-btn { text-decoration: none; }
 /* ── 列表 + 左右滑动（#940）─────────────────────────────────────────────── */
 .knowledge-lists-bar { margin-bottom: 10px; flex-wrap: wrap; }
 /* 行本身被拖动，两个动作面板露在它后面 */
-.knowledge-swipe { position: relative; overflow: hidden; border-radius: 8px; }
+.knowledge-swipe { position: relative; overflow: hidden; border-radius: 10px; }
 .knowledge-swipe + .knowledge-swipe { margin-top: 0; }
 .knowledge-swipe-row {
   position: relative;
@@ -3590,6 +3590,33 @@ a.nav-btn { text-decoration: none; }
 }
 .knowledge-swipe-active .knowledge-swipe-row { transition: none; }
 .knowledge-swipe-row { transition: transform 0.18s ease; }
+
+/* ── 素材列表的按日分组与行样式（#1259）─────────────────────────────────── */
+.knowledge-day-header {
+  margin-top: 14px;
+  margin-bottom: 6px;
+  padding-bottom: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.knowledge-day-header:first-child { margin-top: 4px; }
+.knowledge-swipe .podcast-row {
+  padding: 12px 14px;
+  border-radius: 10px;
+  transition: transform 0.18s ease, box-shadow 120ms, border-color 120ms;
+}
+.knowledge-swipe-active .knowledge-swipe-row { transition: none; }
+.knowledge-swipe .podcast-row .podcast-row-title-main { font-weight: 500; font-size: 15px; }
+.knowledge-swipe .podcast-row-clickable:hover {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  border-color: var(--primary);
+}
+.knowledge-row-pending .podcast-row-title-main { opacity: 0.75; }
+/* 按钮在知识库行里要小：不然一个 Transcribe 就把整行撑高一倍 */
+.knowledge-swipe .podcast-row .podcast-transcribe-btn { font-size: 12px; padding: 3px 10px; min-height: 0; }
 .knowledge-swipe-action {
   position: absolute;
   top: 0;
@@ -3604,6 +3631,8 @@ a.nav-btn { text-decoration: none; }
 }
 .knowledge-swipe-left  { left: 0;  background: var(--primary); }
 .knowledge-swipe-right { right: 0; background: #64748b; }
+/* 不滑动时把动作面板藏起来：行是圆角，面板的颜色会从四个角漏出来（#1259） */
+.knowledge-swipe:not(.knowledge-swipe-active) .knowledge-swipe-action { visibility: hidden; }
 
 /* 桌面端没有触摸：悬停时给出同样两个动作，功能不缺失 */
 .knowledge-hover-actions { display: none; gap: 4px; }

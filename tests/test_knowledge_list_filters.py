@@ -8,9 +8,8 @@ pinned down:
   * `sort`/`order` are a whitelist. They go into an ORDER BY clause, and an
     unknown value falls back to the default order rather than 400ing (a stale
     bookmark should still show the list).
-  * Unprocessed material sorts FIRST under the default sort. Those are the rows
-    waiting for Daniel; NULL processed_at sinking to the bottom of a DESC sort
-    would make "you have things to process" invisible.
+  * The date sorts are one chronological timeline (#1259): mixed-clock date
+    strings are normalized to UTC, unprocessed rows sit in by published/created.
   * Filters are OR within an axis, AND across axes — how a filter bar is
     expected to behave.
   * Archived material (#940) is hidden by default at the HTTP layer.
@@ -19,6 +18,7 @@ Isolation follows the house pattern: monkeypatch database.core.DB_PATH, never
 database.DB_PATH (#615).
 """
 import os
+import re
 import sys
 
 import pytest
@@ -77,15 +77,35 @@ def test_default_sort_is_processed_at_desc(tmp_db):
     assert _titles(database.list_episodes()) == ["neu", "alt"]
 
 
-def test_unprocessed_material_sorts_first(tmp_db):
-    """The whole point of the default sort: rows still waiting to be processed
-    are the ones Daniel has to act on."""
+def test_unprocessed_material_sorts_into_the_timeline(tmp_db):
+    """#1259: unprocessed rows no longer float to the top; they sit in the
+    timeline by published_at / created_at."""
     _ep("a", title="fertig", status="summarized", processed_at="2026-08-01T00:00:00")
-    _ep("b", title="wartet", status="pending", processed_at=None)
-    assert _titles(database.list_episodes()) == ["wartet", "fertig"]
-    # ... and still first when the order is flipped: "unprocessed" is not a
-    # date, so it doesn't belong at either end depending on direction.
-    assert _titles(database.list_episodes(order="asc"))[0] == "wartet"
+    _ep("b", title="wartet", status="pending", processed_at=None,
+        published_at="2026-05-01T00:00:00+00:00")
+    assert _titles(database.list_episodes()) == ["fertig", "wartet"]
+    assert _titles(database.list_episodes(order="asc")) == ["wartet", "fertig"]
+
+
+def test_mixed_date_formats_sort_chronologically(tmp_db):
+    _ep("a", title="lokal", status="summarized", processed_at="2026-08-01T10:00:00")
+    _ep("b", title="offset", status="pending", processed_at=None,
+        published_at="2026-08-05T12:00:00+00:00")
+    _ep("c", title="datum", status="pending", processed_at=None,
+        published_at="2026-08-03")
+    _ep("d", title="rfc822", status="pending", processed_at=None,
+        published_at="Mon, 12 Oct 2026 05:00:00 GMT")
+    conn = database.get_db()
+    # d's unparseable published_at must fall back to created_at (UTC).
+    conn.execute("UPDATE podcast_episodes SET created_at = '2026-08-04 00:00:00' "
+                 "WHERE video_id = 'd'")
+    conn.commit()
+    conn.close()
+    eps = database.list_episodes()
+    assert _titles(eps) == ["offset", "rfc822", "datum", "lokal"]
+    for e in eps:
+        assert e["list_date"] is not None
+        assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", e["list_date"])
 
 
 def test_sort_by_title_and_author(tmp_db):
