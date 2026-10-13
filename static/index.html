@@ -1535,15 +1535,22 @@
     <div id="mini-player-queue-list"></div>
     <button class="btn-secondary mini-player-queue-clear" onclick="raQueueClear()">Clear queue</button>
   </div>
-  <div id="mini-player-track"><div id="mini-player-fill"></div></div>
   <div id="mini-player-row">
     <!-- #1105: opens the full-screen "now playing" view, not the item's own
          detail page — _raMiniOpen() (which still does that) is now reached
-         from a button INSIDE the full-screen view instead. -->
-    <button id="mini-player-title" onclick="_raOpenFullscreen()" title="Open player"></button>
-    <button id="mini-player-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
-    <button id="mini-player-close" onclick="_raMiniClose()" title="Stop">✕</button>
+         from a button INSIDE the full-screen view instead. (#1260: the title
+         is now a <span> inside this button, together with cover + time.) -->
+    <button id="mini-player-open" onclick="_raOpenFullscreen()" title="Open player">
+      <span id="mini-player-cover" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg></span>
+      <span id="mini-player-meta">
+        <span id="mini-player-title"></span>
+        <span id="mini-player-time">0:00 / 0:00</span>
+      </span>
+    </button>
+    <button id="mini-player-toggle" onclick="_raMiniToggle()" title="Play / Pause" aria-label="Play"><svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.92-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4.5" width="4.2" height="15" rx="1.3"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.3"/></svg></button>
+    <button id="mini-player-close" onclick="_raMiniClose()" title="Stop" aria-label="Stop"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>
+  <div id="mini-player-track"><div id="mini-player-fill"></div></div>
   <!-- #1084: "Next: …" line and the skip-reason note — both hidden
        (display:none, toggled from _raUpdateMiniPlayer) when there's nothing
        to say. -->
@@ -1568,9 +1575,9 @@
 <div id="ra-fullscreen" style="display:none">
   <div id="ra-fs-head">
     <div id="ra-fs-head-row">
-      <button id="ra-fs-collapse" onclick="_raCloseFullscreen()" title="Close">⌄</button>
-      <div id="ra-fs-title"></div>
-      <button id="ra-fs-goto" onclick="_raFsGoToItem()" title="Open this item's page">↗</button>
+      <button id="ra-fs-collapse" onclick="_raCloseFullscreen()" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div id="ra-fs-title-wrap"><div id="ra-fs-eyebrow">Now playing</div><div id="ra-fs-title"></div></div>
+      <button id="ra-fs-goto" onclick="_raFsGoToItem()" title="Open this item's page" aria-label="Open this item's page"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>
     </div>
     <!-- #1109: the app header's multi-purpose search box (#1055) is MOVED here
          while this screen is open (see app.js's _raFsMountSearch) — the one
@@ -1583,15 +1590,34 @@
   <div id="ra-fs-bookmarks" style="display:none"></div>
   <div id="ra-fs-text"></div>
   <div id="ra-fs-foot">
-    <input type="range" id="ra-fs-seek" min="0" max="1000" value="0"
+    <input type="range" id="ra-fs-seek" class="ra-range" min="0" max="1000" value="0"
            oninput="_raFsSeekInput(this.value)" title="Seek">
     <div id="ra-fs-times"><span id="ra-fs-pos">0:00</span><span id="ra-fs-dur">0:00</span></div>
+    <!-- #1260: primary transport row (prev sentence / play / next sentence);
+         #ra-fs-controls below is now the secondary row of chips + sliders. -->
+    <div id="ra-fs-transport">
+      <!-- #1152/#1167: one cue is one sentence — jump by it. -->
+      <button id="ra-fs-sent-back" onclick="_raSkipSentence(-1)" title="Previous sentence (s)" aria-label="Previous sentence"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14"/><path d="M19 6.2v11.6a1 1 0 0 1-1.55.83L9 12.8a1 1 0 0 1 0-1.6l8.45-5.83A1 1 0 0 1 19 6.2z" fill="currentColor"/></svg></button>
+      <button id="ra-fs-back" hidden onclick="_raSeekBy(-_raSkipSeconds)" title="Back 10 seconds">⏪ 10</button>
+      <button id="ra-fs-toggle" onclick="_raMiniToggle()" title="Play / Pause" aria-label="Play"><svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.92-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4.5" width="4.2" height="15" rx="1.3"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.3"/></svg></button>
+      <button id="ra-fs-fwd" hidden onclick="_raSeekBy(_raSkipSeconds)" title="Forward 10 seconds">10 ⏩</button>
+      <button id="ra-fs-sent-fwd" onclick="_raSkipSentence(1)" title="Next sentence (d)" aria-label="Next sentence"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14"/><path d="M5 6.2v11.6a1 1 0 0 0 1.55.83L15 12.8a1 1 0 0 0 0-1.6L6.55 5.37A1 1 0 0 0 5 6.2z" fill="currentColor"/></svg></button>
+    </div>
     <div id="ra-fs-controls">
+      <!-- #1186: sentence-step mode — playback pauses at the end of every
+           sentence; ▶ then plays the next one. State/label written by
+           _raFsUpdateStep(). -->
+      <!-- #1208: bookmark this moment / toggle the bookmarks panel. Label of
+           the toggle button is written by _raFsUpdateBookmarks() (🔖 N), not
+           hard-coded, so it can't disagree with the list. -->
+      <button id="ra-fs-bookmark" class="ra-fs-chip" onclick="raAddBookmark()" title="Bookmark this moment (b)">☆</button>
+      <button id="ra-fs-bookmarks-toggle" class="ra-fs-chip" onclick="_raFsToggleBookmarks()" title="Bookmarks (j jumps back to the previous one)">🔖</button>
+      <button id="ra-fs-step" class="ra-fs-chip" onclick="toggleReadalongStep()" title="Pause after every sentence; ▶ plays the next one">Step</button>
       <!-- #1109: continuous slider, not the earlier fixed-rate <select> —
            see setKnowledgeTtsRate/_raFsUpdateRate in app.js for why the
            value can now be anything in [0.5, 2], not just a preset. -->
       <div id="ra-fs-rate-wrap">
-        <input type="range" id="ra-fs-rate" min="0.5" max="2" step="0.05"
+        <input type="range" id="ra-fs-rate" class="ra-range ra-range-sm" min="0.5" max="2" step="0.05"
                oninput="_raFsRateInput(this.value)" title="Playback speed">
         <span id="ra-fs-rate-label">1×</span>
       </div>
@@ -1608,21 +1634,6 @@
           <option value="60">60s</option>
         </select>
       </div>
-      <!-- #1186: sentence-step mode — playback pauses at the end of every
-           sentence; ▶ then plays the next one. State/label written by
-           _raFsUpdateStep(). -->
-      <!-- #1208: bookmark this moment / toggle the bookmarks panel. Label of
-           the toggle button is written by _raFsUpdateBookmarks() (🔖 N), not
-           hard-coded, so it can't disagree with the list. -->
-      <button id="ra-fs-bookmark" class="ra-fs-jump" onclick="raAddBookmark()" title="Bookmark this moment (b)">☆</button>
-      <button id="ra-fs-bookmarks-toggle" class="ra-fs-jump" onclick="_raFsToggleBookmarks()" title="Bookmarks (j jumps back to the previous one)">🔖</button>
-      <button id="ra-fs-step" class="ra-fs-jump" onclick="toggleReadalongStep()" title="Pause after every sentence; ▶ plays the next one">Step</button>
-      <!-- #1152/#1167: one cue is one sentence — jump by it. -->
-      <button id="ra-fs-sent-back" class="ra-fs-jump" onclick="_raSkipSentence(-1)" title="Previous sentence (s)">◀ S</button>
-      <button id="ra-fs-back" hidden onclick="_raSeekBy(-_raSkipSeconds)" title="Back 10 seconds">⏪ 10</button>
-      <button id="ra-fs-toggle" onclick="_raMiniToggle()" title="Play / Pause">▶</button>
-      <button id="ra-fs-fwd" hidden onclick="_raSeekBy(_raSkipSeconds)" title="Forward 10 seconds">10 ⏩</button>
-      <button id="ra-fs-sent-fwd" class="ra-fs-jump" onclick="_raSkipSentence(1)" title="Next sentence (d)">S ▶</button>
     </div>
   </div>
 </div>
