@@ -3485,6 +3485,153 @@ a.nav-btn { text-decoration: none; }
 .podcast-badge-pending { background: #fef3c7; color: #b45309; }
 .podcast-transcribe-btn { font-size: 12px; padding: 3px 10px; }
 
+/* ── 知识库界面改版（kn- 前缀，仅作用于知识库列表与详情页）─────────────── */
+.kn-header { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 12px; margin-bottom: 14px; }
+.kn-header-text { flex: 1 1 auto; min-width: 0; }
+.kn-h2 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.2; }
+.kn-sub { margin-top: 2px; font-size: 13px; color: var(--muted); }
+.kn-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.kn-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 34px; padding: 0 11px; gap: 5px; border: none; border-radius: 999px;
+  background: var(--hover-bg); color: var(--text); font-size: 14px; cursor: pointer;
+  white-space: nowrap; transition: background .15s, color .15s;
+}
+.kn-icon-btn:hover { background: var(--primary-soft); color: var(--primary); }
+.kn-primary-btn {
+  height: 34px; padding: 0 16px; border: none; border-radius: 999px;
+  background: var(--primary); color: #fff; font-size: 14px; font-weight: 600;
+  cursor: pointer; white-space: nowrap; transition: background .15s;
+}
+.kn-primary-btn:hover { background: var(--primary-hover); }
+@media (max-width: 600px) { .kn-btn-label { display: none; } }
+
+.kn-search { position: relative; margin-bottom: 12px; }
+.kn-search input {
+  width: 100%; box-sizing: border-box; height: 40px; padding: 0 40px 0 38px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--card);
+  color: var(--text); font-size: 14px; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.kn-search input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+.kn-search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 14px; pointer-events: none; opacity: .7; }
+.kn-search-clear {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; padding: 0; border: none; border-radius: 50%;
+  background: var(--hover-bg); color: var(--muted); font-size: 11px; cursor: pointer;
+}
+.kn-search-clear:hover { background: var(--primary-soft); color: var(--primary); }
+
+.kn-kind-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.kn-kind-pill {
+  height: 30px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--card); color: var(--text); font-size: 13px; cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.kn-kind-pill:hover { border-color: var(--primary); }
+.kn-kind-count { color: var(--muted); font-size: 12px; margin-left: 2px; }
+.kn-kind-pill.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.kn-kind-pill.active .kn-kind-count { color: rgba(255,255,255,.75); }
+
+.kn-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.kn-list-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
+.kn-list-tab {
+  padding: 5px 10px; border: none; border-radius: 8px; background: transparent;
+  color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.kn-list-tab:hover { background: var(--hover-bg); color: var(--text); }
+.kn-list-tab.active { background: var(--primary-soft); color: var(--primary); }
+.kn-list-count { font-size: 11px; opacity: .7; margin-left: 2px; }
+.kn-chip-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--card);
+  color: var(--text); font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.kn-chip-btn:hover { border-color: var(--primary); }
+.kn-chip-btn.pressed { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+.kn-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--primary); color: #fff; font-size: 11px; font-weight: 600;
+}
+.kn-sort {
+  display: inline-flex; align-items: stretch; height: 32px; max-width: 100%;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--card); overflow: hidden;
+}
+.kn-sort select {
+  border: none; background: transparent; color: var(--text); font-size: 13px;
+  padding: 0 6px 0 12px; cursor: pointer; outline: none; min-width: 0;
+}
+.kn-sort button {
+  border: none; border-left: 1px solid var(--border); background: transparent;
+  color: var(--text); padding: 0 11px; font-size: 14px; cursor: pointer;
+}
+.kn-sort button:hover { background: var(--hover-bg); }
+
+.kn-filter-panel {
+  margin-bottom: 10px; padding: 12px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 12px;
+}
+.kn-filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.kn-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kn-field-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.kn-select {
+  width: 100%; box-sizing: border-box; height: 34px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  color: var(--text); font-size: 13px; min-width: 0;
+}
+.kn-select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+.kn-select.kn-select-inline { width: auto; max-width: 100%; }
+.kn-filter-archived { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: var(--muted); cursor: pointer; }
+
+/* 详情页 */
+.keymap-panel.kn-panel {
+  padding: 20px; border: none; border-radius: 16px; background: var(--card);
+  box-shadow: var(--shadow); min-width: 0;
+}
+@media (max-width: 600px) { .keymap-panel.kn-panel { padding: 16px; } }
+.kn-back {
+  align-self: flex-start; padding: 2px 0; border: none; background: none;
+  color: var(--muted); font-size: 13px; cursor: pointer;
+}
+.kn-back:hover { color: var(--primary); }
+.kn-eyebrow { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.kn-title { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .kn-title { font-size: 20px; } }
+.kn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 18px; }
+.kn-actions.kn-actions-tight { margin: 4px 0 12px; }
+.kn-pill, a.kn-pill, .kn-pill.btn-secondary {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  height: 32px; padding: 0 13px; border: none; border-radius: 999px;
+  background: var(--hover-bg); color: var(--text); font-size: 13px; font-weight: 500;
+  text-decoration: none; cursor: pointer; white-space: nowrap; box-sizing: border-box;
+  transition: background .15s, color .15s;
+}
+.kn-pill:hover, a.kn-pill:hover, .kn-pill.btn-secondary:hover { background: var(--primary-soft); color: var(--primary); border: none; }
+.kn-menu { position: relative; }
+.kn-menu > summary { list-style: none; user-select: none; }
+.kn-menu > summary::-webkit-details-marker { display: none; }
+.kn-menu[open] > summary { background: var(--primary-soft); color: var(--primary); }
+.kn-menu-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 220px; max-width: 80vw;
+  padding: 6px; background: var(--card); border-radius: 12px; box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.kn-menu-item {
+  width: 100%; text-align: left; padding: 9px 12px; border: none; border-radius: 8px;
+  background: transparent; color: var(--text); font-size: 13px; cursor: pointer;
+}
+.kn-menu-item:hover { background: var(--hover-bg); }
+.kn-menu-item:disabled { opacity: .6; cursor: default; }
+.mailbox-tabs.kn-seg {
+  display: inline-flex; gap: 2px; padding: 3px; background: var(--hover-bg); border-radius: 999px;
+}
+.mailbox-tabs.kn-seg .mailbox-tab {
+  border: none; border-radius: 999px; padding: 5px 16px; font-size: 13px; font-weight: 600;
+  background: transparent; color: var(--muted);
+}
+.mailbox-tabs.kn-seg .mailbox-tab.active { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+
 /* ── 知识库统一素材列表（#936，大方向 #934）─────────────────────────────── */
 /* 四个入口（Tags / Inbox / Subscriptions / Add）在手机上放不下一行，必须换行
    而不是溢出 —— 溢出的按钮等于不存在（#988） */
@@ -3543,12 +3690,12 @@ a.nav-btn { text-decoration: none; }
   font-size: 12px;
   padding: 3px 9px;
   border-radius: 999px;
-  border: 1px solid var(--primary);
+  border: 1px solid transparent;
   background: var(--primary-soft);
   color: var(--primary);
   cursor: pointer;
 }
-.knowledge-chip:hover { background: #dbeafe; }
+.knowledge-chip:hover { border-color: var(--primary-ring); }
 .knowledge-chip-clear { border-color: var(--border); background: var(--card); color: var(--muted); }
 .knowledge-chip-clear:hover { background: var(--hover-bg); }
 .knowledge-tag-row { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -3601,7 +3748,7 @@ a.nav-btn { text-decoration: none; }
 /* ── 列表 + 左右滑动（#940）─────────────────────────────────────────────── */
 .knowledge-lists-bar { margin-bottom: 10px; flex-wrap: wrap; }
 /* 行本身被拖动，两个动作面板露在它后面 */
-.knowledge-swipe { position: relative; overflow: hidden; border-radius: 10px; }
+.knowledge-swipe { position: relative; overflow: hidden; border-radius: 12px; }
 .knowledge-swipe + .knowledge-swipe { margin-top: 0; }
 .knowledge-swipe-row {
   position: relative;
@@ -3614,26 +3761,29 @@ a.nav-btn { text-decoration: none; }
 
 /* ── 素材列表的按日分组与行样式（#1259）─────────────────────────────────── */
 .knowledge-day-header {
-  margin-top: 14px;
-  margin-bottom: 6px;
-  padding-bottom: 3px;
-  font-size: 12px;
+  margin: 18px 2px 8px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
-  border-bottom: 1px solid var(--border);
 }
-.knowledge-day-header:first-child { margin-top: 4px; }
+.knowledge-day-header:first-child { margin-top: 6px; }
+.podcast-list .knowledge-swipe + .knowledge-swipe { margin-top: 8px; }
 .knowledge-swipe .podcast-row {
   padding: 12px 14px;
-  border-radius: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--card);
   transition: transform 0.18s ease, box-shadow 120ms, border-color 120ms;
 }
+/* 阴影放在容器上：容器 overflow:hidden 会把行自己的外阴影裁掉 */
+.knowledge-swipe { box-shadow: var(--shadow); transition: box-shadow 120ms; }
+.knowledge-swipe:has(.podcast-row-clickable:hover) { box-shadow: var(--shadow-lg); }
 .knowledge-swipe-active .knowledge-swipe-row { transition: none; }
 .knowledge-swipe .podcast-row .podcast-row-title-main { font-weight: 500; font-size: 15px; }
 .knowledge-swipe .podcast-row-clickable:hover {
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-  border-color: var(--primary);
+  border-color: var(--primary-ring);
 }
 .knowledge-row-pending .podcast-row-title-main { opacity: 0.75; }
 /* 按钮在知识库行里要小：不然一个 Transcribe 就把整行撑高一倍 */
