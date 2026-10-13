@@ -316,20 +316,58 @@ def get_episode(episode_id: int) -> dict | None:
     return d
 
 
+def _utc_sql(col: str) -> str:
+    """SQL expression normalizing one date column to a UTC 'YYYY-MM-DD HH:MM:SS'
+    string (NULL when unparseable, so callers COALESCE to the next column).
+
+    The columns hold three different clocks/formats:
+      * naive 'T' values (processed_at) are written by Python datetime.now(),
+        i.e. the process's local time. SQLite's 'utc' modifier converts using
+        the same process's localtime, so the round trip is consistent by
+        construction, whatever the server TZ is.
+      * naive space-separated values (created_at) are SQLite datetime('now'),
+        which is already UTC.
+      * values with an offset or 'Z' (published_at) are converted by
+        datetime() itself.
+      * unparseable text (raw RFC822 dates) -> NULL.
+    No data is rewritten in the DB; this only normalizes at query time."""
+    return (
+        f"CASE WHEN {col} GLOB '????-??-??T*' "
+        f"AND NOT ({col} GLOB '*[+-][0-9][0-9]:[0-9][0-9]' OR {col} GLOB '*Z') "
+        f"THEN datetime({col}, 'utc') "
+        f"ELSE datetime({col}) END"
+    )
+
+
+# The date each sort key means, normalized to UTC. processed_at is also what
+# the title/author/duration sorts display as the row date.
+_DATE_PROCESSED = (f"COALESCE({_utc_sql('processed_at')}, "
+                   f"{_utc_sql('published_at')}, {_utc_sql('created_at')})")
+_DATE_PUBLISHED = f"COALESCE({_utc_sql('published_at')}, {_utc_sql('created_at')})"
+_DATE_CREATED = _utc_sql("created_at")
+EPISODE_DATE_EXPRS = {
+    "processed_at": _DATE_PROCESSED,
+    "published_at": _DATE_PUBLISHED,
+    "created_at":   _DATE_CREATED,
+    "title":        _DATE_PROCESSED,
+    "duration":     _DATE_PROCESSED,
+    "author":       _DATE_PROCESSED,
+}
+
 # Columns the unified material list (#936) may sort on, mapped to the SQL
 # ordering they mean. A whitelist, not string interpolation of whatever the
 # query string says: `sort` goes straight into an ORDER BY clause.
 #
-# processed_at is the default and gets special treatment: rows that have NOT
-# been processed yet sort FIRST, because those are the ones waiting for Daniel
-# to do something. NULLs would otherwise sink to the bottom of a DESC sort and
-# the "you have unprocessed material" signal would be invisible. That leading
-# term is hard-coded ASC and does NOT follow `order`: "not processed yet" is
-# not a date, so flipping the direction must not bury it at the far end.
+# The date sorts are ONE single timeline (#1259). The stored strings come from
+# mixed clocks and formats (local-time ISO 'T', UTC space-separated, offset/Z),
+# so comparing them as raw strings was not chronological; each is normalized to
+# UTC first. The old "unprocessed rows first" term is gone: it buried the order
+# by pinning every unprocessed row to the top, ordered only by id. Unprocessed
+# rows now sit in the timeline by their published_at / created_at.
 EPISODE_SORTS = {
-    "processed_at": "processed_at IS NOT NULL ASC, processed_at {dir}",
-    "published_at": "COALESCE(published_at, created_at) {dir}",
-    "created_at":   "created_at {dir}",
+    "processed_at": _DATE_PROCESSED + " {dir}",
+    "published_at": _DATE_PUBLISHED + " {dir}",
+    "created_at":   _DATE_CREATED + " {dir}",
     "title":        "title COLLATE NOCASE {dir}",
     "duration":     "COALESCE(duration_seconds, 0) {dir}",
     "author":       "author COLLATE NOCASE {dir}",
@@ -374,12 +412,14 @@ def list_episodes(limit: int = 100, feed_url: str | None = None, kind=None,
     `sort`/`order` are validated against EPISODE_SORTS — never interpolated
     raw."""
     conn = get_db()
-    query = """SELECT id, video_id, channel_id, title, title_en, kind, published_at, youtube_url, spotify_url,
+    date_expr = EPISODE_DATE_EXPRS.get(sort or "", EPISODE_DATE_EXPRS["processed_at"])
+    query = f"""SELECT id, video_id, channel_id, title, title_en, kind, published_at, youtube_url, spotify_url,
                       audio_url, duration_seconds,
                       summary_de, hsk_words, detail_level, status, error, email_sent_at, created_at,
                       transcript_source, china_critical,
                       processed_at, author, platform, archived_at,
-                      (transcript_zh IS NOT NULL AND transcript_zh != '') AS has_transcript
+                      (transcript_zh IS NOT NULL AND transcript_zh != '') AS has_transcript,
+                      {date_expr} AS list_date
                FROM podcast_episodes"""
     clauses: list = []
     params: list = []
@@ -418,11 +458,7 @@ def list_episodes(limit: int = 100, feed_url: str | None = None, kind=None,
         # Bounded on the same date the current sort uses, so "last 7 days"
         # means the same thing the list is ordered by rather than silently
         # switching to a different clock.
-        date_col = {
-            "published_at": "COALESCE(published_at, created_at)",
-            "created_at":   "created_at",
-        }.get(sort or "", "COALESCE(processed_at, created_at)")
-        clauses.append(f"{date_col} >= ?")
+        clauses.append(f"{date_expr} >= ?")
         params.append(since)
 
     if not include_archived:

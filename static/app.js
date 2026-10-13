@@ -4105,7 +4105,7 @@ const KNOWLEDGE_PLATFORM_LABEL = {
 // an unknown key doesn't 400, it silently falls back to the default order,
 // which would look like "the sort button does nothing".
 const KNOWLEDGE_SORTS = [
-  ['processed_at', 'Processed'],
+  ['processed_at', 'Date'],
   ['published_at', 'Published'],
   ['created_at',   'Added'],
   ['title',        'Title'],
@@ -4337,7 +4337,19 @@ function _renderKnowledgeList() {
   if (!el) return;
   const anyFilter = ['kind', 'platform', 'author', 'tag', 'status']
     .some(a => (_kFilters[a] || []).length) || _kFilters.since;
-  const rows = _podcastEpisodes.map(ep => _knowledgeMaterialRowHtml(ep)).join('') ||
+  const grouped = ['processed_at', 'published_at', 'created_at'].includes(_kFilters.sort);
+  let lastDay = null;
+  const rows = _podcastEpisodes.map(ep => {
+    let header = '';
+    if (grouped) {
+      const day = _knowledgeDayKey(ep);
+      if (day !== lastDay) {
+        header = `<div class="knowledge-day-header">${_escHtml(_knowledgeDayLabel(day))}</div>`;
+        lastDay = day;
+      }
+    }
+    return header + _knowledgeMaterialRowHtml(ep, grouped);
+  }).join('') ||
     `<div class="keymap-hint">${anyFilter
       ? 'Nothing matches these filters.'
       : 'Nothing here yet — use ＋ Add to paste a link, some text or a file.'}</div>`;
@@ -4501,12 +4513,40 @@ function knowledgeToggleArchived(checked) {
 //
 // The row is wrapped in a swipe container (#940): the two coloured action
 // panes sit behind it and are revealed as the row itself is dragged sideways.
-function _knowledgeMaterialRowHtml(ep) {
+// list_date is the server-normalized UTC 'YYYY-MM-DD HH:MM:SS' the list was
+// sorted by (#1259). Returns a Date, or null for empty/invalid.
+function _utcListDate(s) {
+  if (!s) return null;
+  const d = new Date(String(s).replace(' ', 'T') + 'Z');
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Berlin-local day (YYYY-MM-DD) of a row, '' when it has no date.
+function _knowledgeDayKey(ep) {
+  const d = _utcListDate(ep.list_date);
+  return d ? _localDate(d.toISOString()) : '';
+}
+
+function _knowledgeDayLabel(day) {
+  if (!day) return 'No date';
+  const now = new Date();
+  if (day === _localDate(now.toISOString())) return 'Today';
+  if (day === _localDate(new Date(now.getTime() - 86400000).toISOString())) return 'Yesterday';
+  const d = new Date(day + 'T12:00:00Z');  // noon UTC: same calendar day in Berlin
+  const opts = { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Berlin' };
+  if (day.slice(0, 4) !== _localDate(now.toISOString()).slice(0, 4)) opts.year = 'numeric';
+  return d.toLocaleDateString('en-GB', opts);
+}
+
+function _knowledgeMaterialRowHtml(ep, grouped) {
   const status = ep.status || 'pending';
   const label = PODCAST_STATUS_LABEL[status] || status;
   const cls = PODCAST_STATUS_CLASS[status] || 'podcast-badge-muted';
   const clickable = status === 'summarized';
-  const date = _localDate(ep.processed_at || ep.published_at || ep.created_at || '');
+  const listDate = _utcListDate(ep.list_date);
+  const date = grouped ? '' : (listDate
+    ? _localDate(listDate.toISOString())
+    : _localDate(ep.processed_at || ep.published_at || ep.created_at || ''));
   let source = ep.author || '';
   if (!source && ep.youtube_url) {
     try { source = new URL(ep.youtube_url).hostname.replace(/^www\./, ''); } catch (e) { /* leave blank */ }
@@ -4523,7 +4563,7 @@ function _knowledgeMaterialRowHtml(ep) {
   return `<div class="knowledge-swipe" data-episode-id="${ep.id}">
     <div class="knowledge-swipe-action knowledge-swipe-left">${inReadLater ? '✕ Read Later' : '📖 Read Later'}</div>
     <div class="knowledge-swipe-action knowledge-swipe-right">${archived ? '↩ Unarchive' : '🗄 Archive'}</div>
-    <div class="podcast-row knowledge-swipe-row${clickable ? ' podcast-row-clickable' : ''}${archived ? ' knowledge-row-archived' : ''}"
+    <div class="podcast-row knowledge-swipe-row${clickable ? ' podcast-row-clickable' : ''}${archived ? ' knowledge-row-archived' : ''}${status !== 'summarized' ? ' knowledge-row-pending' : ''}"
          ${clickable ? `onclick="openKnowledgeItem(${ep.id})"` : ''}>
       <span class="podcast-row-title podcast-row-title-stack">
         <span class="podcast-row-title-main">${inReadLater ? '<span title="Read Later">📖 </span>' : ''}${_knowledgeSourceIcon(ep)}${_escHtml(ep.title || '(untitled)')}</span>
@@ -4531,10 +4571,9 @@ function _knowledgeMaterialRowHtml(ep) {
         ${tags ? `<span class="knowledge-tag-row">${tags}</span>` : ''}
       </span>
       <span class="podcast-row-meta">
-        ${source ? `<span class="podcast-row-date">${_escHtml(source)}</span>` : ''}
-        ${platform ? `<span class="podcast-row-date">${_escHtml(platform)}</span>` : ''}
-        <span class="podcast-row-date">${date}</span>
-        <span class="podcast-badge ${cls}">${label}</span>
+        ${(source || platform) ? `<span class="podcast-row-date">${[source, platform].filter(Boolean).map(_escHtml).join(' · ')}</span>` : ''}
+        ${date ? `<span class="podcast-row-date">${date}</span>` : ''}
+        ${status === 'summarized' ? '' : `<span class="podcast-badge ${cls}">${label}</span>`}
         ${transcribeBtn}
         <span class="knowledge-hover-actions">
           <button class="btn-secondary podcast-transcribe-btn" title="Read Later"
