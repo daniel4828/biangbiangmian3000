@@ -7711,7 +7711,12 @@ function _raUpdateMiniPlayer() {
     const title = document.getElementById('mini-player-title');
     if (title) title.textContent = p.title || '…';
     const toggle = document.getElementById('mini-player-toggle');
-    if (toggle) toggle.textContent = p.playing ? '⏸' : '▶';
+    // #1260: icons are inline SVGs switched by CSS (.is-playing), not glyphs
+    if (toggle) {
+      toggle.classList.toggle('is-playing', !!p.playing);
+      toggle.setAttribute('aria-label', p.playing ? 'Pause' : 'Play');
+    }
+    el.classList.toggle('is-playing', !!p.playing);
   }
   // #1084: "Next: …" line — hidden entirely (same "no empty chip" rule as
   // the bar itself, and as #821's task indicator) when the queue is empty,
@@ -7748,6 +7753,8 @@ function _raUpdateMiniProgress() {
   const durationMs = p.durationMs || ((_sharedAudio && isFinite(_sharedAudio.duration)) ? _sharedAudio.duration * 1000 : 0);
   const posMs = typeof p.lastMs === 'number' ? p.lastMs : 0;
   fill.style.width = durationMs > 0 ? `${Math.min(100, Math.max(0, posMs / durationMs * 100))}%` : '0%';
+  const timeEl = document.getElementById('mini-player-time');   // #1260
+  if (timeEl) timeEl.textContent = durationMs > 0 ? `${_raFormatMs(posMs)} / ${_raFormatMs(durationMs)}` : _raFormatMs(posMs);
   _raFsUpdateProgress();  // #1105: the same cheap per-tick repaint, for the full-screen seek bar
 }
 
@@ -8082,6 +8089,7 @@ function _raFsRenderLines() {
 // clamps/persists/applies it to _sharedAudio — this is just the slider's
 // onchange wiring plus the drag guard below.
 function _raFsRateInput(value) {
+  _raRangeFill(document.getElementById('ra-fs-rate'));   // #1260
   setKnowledgeTtsRate(value);
   _raFsRateDragging = true;
   clearTimeout(_raFsRateDragTimer);
@@ -8103,7 +8111,7 @@ function _raFsUpdateRate() {
   // under the finger.
   if (_raFsRateDragging) return;
   const rate = document.getElementById('ra-fs-rate');
-  if (rate) rate.value = String(_kTtsRate);
+  if (rate) { rate.value = String(_kTtsRate); _raRangeFill(rate); }
 }
 
 // Repaints title/toggle/rate controls and the active-line highlight —
@@ -8119,7 +8127,12 @@ function _raFsUpdate() {
   const title = document.getElementById('ra-fs-title');
   if (title) title.textContent = player.title || '…';
   const toggle = document.getElementById('ra-fs-toggle');
-  if (toggle) toggle.textContent = player.playing ? '⏸' : '▶';
+  if (toggle) {   // #1260: SVG icons switched by CSS (.is-playing)
+    toggle.classList.toggle('is-playing', !!player.playing);
+    toggle.setAttribute('aria-label', player.playing ? 'Pause' : 'Play');
+  }
+  const fsEl = document.getElementById('ra-fullscreen');
+  if (fsEl) fsEl.classList.toggle('is-playing', !!player.playing);
 
   _raFsUpdateRate();
   _raFsUpdateSkip();   // #1152: labels follow the setting
@@ -8193,12 +8206,25 @@ function _raFsUpdateProgress() {
   // Don't fight a finger that's mid-drag on the slider — see _raFsSeekInput.
   if (_raFsSeeking) return;
   const seek = document.getElementById('ra-fs-seek');
-  if (seek) seek.value = String(durationMs > 0 ? Math.min(1000, Math.max(0, Math.round(posMs / durationMs * 1000))) : 0);
+  if (seek) {
+    seek.value = String(durationMs > 0 ? Math.min(1000, Math.max(0, Math.round(posMs / durationMs * 1000))) : 0);
+    _raRangeFill(seek);
+  }
+}
+
+// (#1260) Native range inputs can't colour the already-played part
+// cross-browser, so the track gradient reads this --fill custom property.
+function _raRangeFill(el) {
+  if (!el) return;
+  const min = Number(el.min) || 0, max = Number(el.max) || 100;
+  const pct = max > min ? (Number(el.value) - min) / (max - min) * 100 : 0;
+  el.style.setProperty('--fill', `${Math.max(0, Math.min(100, pct))}%`);
 }
 
 let _raFsSeekTimer = null;
 
 function _raFsSeekInput(value) {
+  _raRangeFill(document.getElementById('ra-fs-seek'));   // #1260: the filled part follows the finger
   _raFsSeeking = true;
   clearTimeout(_raFsSeekTimer);
   // Commits the seek a beat after the finger stops moving, rather than on
