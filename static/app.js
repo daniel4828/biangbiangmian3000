@@ -4266,9 +4266,61 @@ function _knowledgeOptionsHtml(axis, facetKey, labels) {
 // One <select> per axis that ADDS a chip and resets itself. Plain selects
 // rather than a custom multi-select widget: no build step here, and the
 // native picker is the one control that is genuinely good on iOS.
+let _knowledgeFiltersOpen = (() => {
+  try { return localStorage.getItem('knowledgeFiltersOpen') === '1'; } catch (e) { return false; }
+})();
+
+// One document-level listener closes any open dropdown (details.kn-menu) when
+// the click lands outside it. Registered once; the detail page re-renders its
+// innerHTML often, so per-render listeners would pile up.
+if (!window._knMenuListenerBound) {
+  window._knMenuListenerBound = true;
+  document.addEventListener('click', (ev) => {
+    document.querySelectorAll('details.kn-menu[open]').forEach(d => {
+      if (!d.contains(ev.target)) d.open = false;
+    });
+  });
+}
+
+function knowledgeToggleFilters() {
+  _knowledgeFiltersOpen = !_knowledgeFiltersOpen;
+  try { localStorage.setItem('knowledgeFiltersOpen', _knowledgeFiltersOpen ? '1' : '0'); } catch (e) { /* private mode */ }
+  _renderKnowledgeList();
+}
+
+function knowledgeToggleKind(v) {
+  const cur = _kFilters.kind || [];
+  _kFilters.kind = cur.includes(v) ? cur.filter(k => k !== v) : [...cur, v];
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+function knowledgeClearKinds() {
+  _kFilters.kind = [];
+  _saveKnowledgeFilters();
+  _refreshKnowledgeList();
+}
+
+// Kind is a row of pills (not a dropdown): it is the one axis you flip between
+// all day, so it should be one tap away.
+function _knowledgeKindPillsHtml() {
+  const kinds = _knowledgeFacets?.kinds || [];
+  const sel = _kFilters.kind || [];
+  const pill = (active, onclick, label, count) =>
+    `<button class="kn-kind-pill${active ? ' active' : ''}" onclick="${onclick}">${label}${
+      count != null ? ` <span class="kn-kind-count">${count}</span>` : ''}</button>`;
+  const pills = kinds.map(k => pill(sel.includes(k.value),
+    `knowledgeToggleKind(${JSON.stringify(k.value).replace(/"/g, '&quot;')})`,
+    _escHtml(KNOWLEDGE_KIND_LABEL[k.value] || k.value), k.count));
+  return `<div class="kn-kind-pills">${pill(!sel.length, 'knowledgeClearKinds()', 'All', null)}${pills.join('')}</div>`;
+}
+
+function _knowledgeActiveFilterCount() {
+  return ['platform', 'author', 'tag', 'status'].reduce((n, a) => n + (_kFilters[a] || []).length, 0)
+    + (_kFilters.since ? 1 : 0) + (_kFilters.archived ? 1 : 0);
+}
+
 function _knowledgeFilterBarHtml() {
   const axes = [
-    ['kind', 'kinds', 'Kind', KNOWLEDGE_KIND_LABEL],
     ['platform', 'platforms', 'Platform', KNOWLEDGE_PLATFORM_LABEL],
     ['author', 'authors', 'Author', null],
     ['tag', null, 'Tag', null],
@@ -4281,22 +4333,26 @@ function _knowledgeFilterBarHtml() {
           .map(t => `<option value="${_escHtml(t.name)}">${_escHtml(t.name)} (${t.count})</option>`).join('')
       : _knowledgeOptionsHtml(axis, facetKey, labels);
     if (!opts) return '';
-    return `<select class="opt-input knowledge-filter-select"
+    return `<label class="kn-field"><span class="kn-field-label">${label}</span>
+            <select class="kn-select"
                     onchange="knowledgeAddFilter('${axis}', this.value); this.selectedIndex=0">
-              <option value="">${label}</option>${opts}
-            </select>`;
+              <option value="">Add…</option>${opts}
+            </select></label>`;
   }).join('');
 
   const sinceOpts = KNOWLEDGE_SINCE.map(([v, l]) =>
     `<option value="${v}" ${_kFilters.since === v ? 'selected' : ''}>${l}</option>`).join('');
   const archivedCount = _knowledgeFacets?.archived_count || 0;
 
-  return `<div class="knowledge-filter-bar">
-    ${selects}
-    <select class="opt-input knowledge-filter-select" onchange="knowledgeSetSince(this.value)">${sinceOpts}</select>
-    ${archivedCount ? `<label class="knowledge-filter-toggle">
+  return `<div class="kn-filter-panel">
+    <div class="kn-filter-grid">
+      ${selects}
+      <label class="kn-field"><span class="kn-field-label">Time</span>
+        <select class="kn-select" onchange="knowledgeSetSince(this.value)">${sinceOpts}</select></label>
+    </div>
+    ${archivedCount ? `<label class="kn-filter-archived">
       <input type="checkbox" ${_kFilters.archived ? 'checked' : ''} onchange="knowledgeToggleArchived(this.checked)">
-      Archived (${archivedCount})
+      Show archived (${archivedCount})
     </label>` : ''}
   </div>`;
 }
@@ -4308,7 +4364,7 @@ function _knowledgeChipsHtml() {
     platform: (v) => KNOWLEDGE_PLATFORM_LABEL[v] || v,
     author: (v) => v, tag: (v) => '#' + v, status: (v) => v,
   };
-  for (const axis of ['kind', 'platform', 'author', 'tag', 'status']) {
+  for (const axis of ['platform', 'author', 'tag', 'status']) {
     for (const v of _kFilters[axis] || []) {
       chips.push(`<button class="knowledge-chip" onclick="knowledgeRemoveFilter('${axis}', ${JSON.stringify(v).replace(/"/g, '&quot;')})">
         ${_escHtml(labelFor[axis](v))} ✕</button>`);
@@ -4323,12 +4379,21 @@ function _knowledgeSortBarHtml() {
   const opts = KNOWLEDGE_SORTS.map(([v, l]) =>
     `<option value="${v}" ${_kFilters.sort === v ? 'selected' : ''}>${l}</option>`).join('');
   const arrow = _kFilters.order === 'asc' ? '↑' : '↓';
-  return `<div class="knowledge-sort-row">
-    <span class="keymap-label">Sort</span>
-    <select class="opt-input knowledge-filter-select" onchange="knowledgeSetSort(this.value)">${opts}</select>
-    <button class="btn-secondary knowledge-order-btn" onclick="knowledgeToggleOrder()"
+  return `<div class="kn-sort">
+    <select onchange="knowledgeSetSort(this.value)" title="Sort by">${opts}</select>
+    <button onclick="knowledgeToggleOrder()"
             title="${_kFilters.order === 'asc' ? 'Ascending' : 'Descending'}">${arrow}</button>
-    <span class="knowledge-count">${_podcastEpisodes.length} item${_podcastEpisodes.length === 1 ? '' : 's'}</span>
+  </div>`;
+}
+
+function _knowledgeToolbarHtml() {
+  const n = _knowledgeActiveFilterCount();
+  return `<div class="kn-toolbar">
+    ${_knowledgeListsBarHtml()}
+    <span style="flex:1"></span>
+    <button class="kn-chip-btn${_knowledgeFiltersOpen ? ' pressed' : ''}" onclick="knowledgeToggleFilters()">⚙ Filters${
+      n ? `<span class="kn-badge">${n}</span>` : ''}</button>
+    ${_knowledgeSortBarHtml()}
   </div>`;
 }
 
@@ -4353,21 +4418,27 @@ function _renderKnowledgeList() {
     `<div class="keymap-hint">${anyFilter
       ? 'Nothing matches these filters.'
       : 'Nothing here yet — use ＋ Add to paste a link, some text or a file.'}</div>`;
+  const total = _podcastEpisodes.length;
+  const unprocessed = _podcastEpisodes.filter(e => e.status !== 'summarized').length;
   el.innerHTML = `
-    <div class="knowledge-header">
-      <h2 class="keymap-heading" style="margin:0">Knowledge</h2>
-      <span style="flex:1"></span>
-      <button class="btn-secondary" onclick="openKnowledgeTags()" title="Manage tags">🏷 Tags</button>
-      <button class="btn-secondary" onclick="openMailbox()" title="Gmail inbox — pick what to read">📬 Inbox</button>
-      <button class="btn-secondary" onclick="openKnowledgeSubs()" title="Newsletters and podcast feeds you subscribe to">📡 Subscriptions</button>
-      <button class="btn-secondary" onclick="toggleKnowledgeAdd()">${_knowledgeAddOpen ? '✕ Close' : '＋ Add'}</button>
+    <div class="kn-header">
+      <div class="kn-header-text">
+        <h2 class="kn-h2">Knowledge</h2>
+        <div class="kn-sub">${total} item${total === 1 ? '' : 's'}${unprocessed ? ` · ${unprocessed} unprocessed` : ''}</div>
+      </div>
+      <div class="kn-header-actions">
+        <button class="kn-icon-btn" onclick="openKnowledgeTags()" title="Manage tags">🏷<span class="kn-btn-label"> Tags</span></button>
+        <button class="kn-icon-btn" onclick="openMailbox()" title="Gmail inbox — pick what to read">📬<span class="kn-btn-label"> Inbox</span></button>
+        <button class="kn-icon-btn" onclick="openKnowledgeSubs()" title="Newsletters and podcast feeds you subscribe to">📡<span class="kn-btn-label"> Subscriptions</span></button>
+        <button class="kn-primary-btn" onclick="toggleKnowledgeAdd()">${_knowledgeAddOpen ? '✕ Close' : '＋ Add'}</button>
+      </div>
     </div>
     ${_knowledgeAddOpen ? _knowledgeAddPanelHtml() : ''}
-    ${_knowledgeListsBarHtml()}
     ${_knowledgeSearchBarHtml()}
     ${_knowledgeSearchResults !== null ? _knowledgeSearchResultsHtml() : `
-    ${_knowledgeSortBarHtml()}
-    ${_knowledgeFilterBarHtml()}
+    ${_knowledgeKindPillsHtml()}
+    ${_knowledgeToolbarHtml()}
+    ${_knowledgeFiltersOpen ? _knowledgeFilterBarHtml() : ''}
     ${_knowledgeChipsHtml()}
     <div class="podcast-list">${rows}</div>`}`;
   const box = document.getElementById('knowledge-search-input');
@@ -4388,14 +4459,15 @@ let _knowledgeSearchTimer = null;
 let _knowledgeSearchFocused = false;
 
 function _knowledgeSearchBarHtml() {
-  return `<div class="knowledge-search-row">
-    <input type="text" class="opt-input" id="knowledge-search-input"
-           placeholder="🔍 Search titles, transcripts, summaries, translations…"
+  return `<div class="kn-search">
+    <span class="kn-search-icon">🔍</span>
+    <input type="text" id="knowledge-search-input"
+           placeholder="Search titles, transcripts, summaries, translations…"
            value="${_escHtml(_knowledgeSearchQuery)}"
            oninput="onKnowledgeSearchInput(this.value)"
            onfocus="_knowledgeSearchFocused = true"
            onblur="_knowledgeSearchFocused = false">
-    ${_knowledgeSearchQuery ? `<button class="btn-secondary" onclick="clearKnowledgeSearch()">✕</button>` : ''}
+    ${_knowledgeSearchQuery ? `<button class="kn-search-clear" onclick="clearKnowledgeSearch()" title="Clear search">✕</button>` : ''}
   </div>`;
 }
 
@@ -4607,17 +4679,17 @@ function _knowledgeInReadLater(ep) {
 function _knowledgeListsBarHtml() {
   if (!_knowledgeLists.length) return '';
   const btn = (id, label, count, extra = '') =>
-    `<button class="hcal-seg-btn ${_kFilters.listId === id ? 'active' : ''}"
+    `<button class="kn-list-tab${_kFilters.listId === id ? ' active' : ''}"
              onclick="knowledgeSetList(${id === null ? 'null' : id})">${label}${
-      count != null ? ` (${count})` : ''}${extra}</button>`;
+      count != null ? ` <span class="kn-list-count">${count}</span>` : ''}${extra}</button>`;
   const buttons = [btn(null, 'All', null)].concat(_knowledgeLists.map(l =>
     btn(l.id, `${l.icon || '📂'} ${_escHtml(l.name)}`, l.count))).join('');
   const current = _knowledgeLists.find(l => l.id === _kFilters.listId);
-  return `<div class="hcal-seg knowledge-lists-bar">
+  return `<div class="kn-list-tabs">
       ${buttons}
-      <button class="hcal-seg-btn" onclick="createKnowledgeList()">＋</button>
+      <button class="kn-list-tab" onclick="createKnowledgeList()" title="New list">＋</button>
       ${current && !current.is_builtin
-        ? `<button class="hcal-seg-btn" onclick="deleteKnowledgeList(${current.id})" title="Delete this list">🗑</button>`
+        ? `<button class="kn-list-tab" onclick="deleteKnowledgeList(${current.id})" title="Delete this list">🗑</button>`
         : ''}
     </div>`;
 }
@@ -5677,7 +5749,7 @@ function _knowledgeFulltextFor(ep, lang) {
 
 function _knowledgeViewTabs(ep) {
   return `
-    <div class="mailbox-tabs" style="margin:10px 0 12px">
+    <div class="mailbox-tabs kn-seg" style="margin:10px 0 12px">
       <button class="mailbox-tab${_knowledgeView === 'summary' ? ' active' : ''}"
               onclick="switchKnowledgeView('summary')">Summary</button>
       <button class="mailbox-tab${_knowledgeView === 'fulltext' ? ' active' : ''}"
@@ -6793,8 +6865,8 @@ function _audioIdleBarHtml(ep, lang) {
   return `
     <div class="readalong-bar">
       <div class="knowledge-tts-bar">
-        <button class="btn-secondary" id="audio-listen-btn" onclick="doAudioListen(${ep.id})">🎧 Listen</button>
-        <select class="knowledge-tts-rate" onchange="setKnowledgeAudioMode(this.value)" title="How to listen">
+        <button class="btn-secondary kn-pill" id="audio-listen-btn" onclick="doAudioListen(${ep.id})">🎧 Listen</button>
+        <select class="knowledge-tts-rate kn-select kn-select-inline" onchange="setKnowledgeAudioMode(this.value)" title="How to listen">
           ${opts.map(([v, label]) => `<option value="${v}"${v === mode ? ' selected' : ''}>${label}</option>`).join('')}
         </select>
       </div>
@@ -8509,17 +8581,33 @@ function _renderKnowledgeDetail(ep) {
   _podcastDetailEpisodeId = ep.id;
   _knowledgeDetailEpisode = ep;
   const hskTable = wordTableHtml('No HSK vocabulary extracted.');
-  const links = [
-    ep.youtube_url ? `<a href="${_escHtml(ep.youtube_url)}" target="_blank" rel="noopener" class="btn-secondary">${isPodcast ? 'YouTube' : 'Open'} ↗</a>` : '',
-    isPodcast && ep.spotify_url ? `<a href="${_escHtml(ep.spotify_url)}" target="_blank" rel="noopener" class="btn-secondary">Spotify ↗</a>` : '',
-    ep.status === 'summarized' ? `<button id="podcast-notify-signal" class="btn-secondary" onclick="doPodcastNotify('signal')">Send to Signal</button>` : '',
-    ep.status === 'summarized' ? `<button id="podcast-notify-email" class="btn-secondary" onclick="doPodcastNotify('email')">Send Email</button>` : '',
-    ep.status === 'summarized' ? `<button id="podcast-regen-summary" class="btn-secondary" onclick="doPodcastRegenerateSummary()">Regenerate summary</button>` : '',
-    ep.status === 'summarized' ? `<button id="knowledge-retag" class="btn-secondary" onclick="doKnowledgeRetag()">↻ Retag</button>` : '',
-    _knowledgeOriginalTranscriptText(ep) ? `<button id="knowledge-copy-original-transcript" class="btn-secondary" onclick="doKnowledgeCopyOriginalTranscript(this)">\u{1F4CB} Copy Transcript in Original Language</button>` : '',
-    _knowledgeSummaryText(ep) ? `<button id="knowledge-copy-summary" class="btn-secondary" onclick="doKnowledgeCopySummary(this)">\u{1F4CB} Copy summary</button>` : '',
+  // Menu items. Labels are identical to what the handlers restore after they
+  // flash "…" / "✓ sent" / "Regenerating…", so the text never drifts. Quick
+  // feedback items (copy/notify) close the menu after a beat so the user sees
+  // the ✓; the others close at once (they re-render or navigate).
+  const closeLater = `var d=this.closest('details');setTimeout(function(){d.open=false;},1400);`;
+  const copyItems = [
+    _knowledgeOriginalTranscriptText(ep) ? `<button id="knowledge-copy-original-transcript" class="kn-menu-item" onclick="${closeLater}doKnowledgeCopyOriginalTranscript(this)">\u{1F4CB} Copy Transcript in Original Language</button>` : '',
+    _knowledgeSummaryText(ep) ? `<button id="knowledge-copy-summary" class="kn-menu-item" onclick="${closeLater}doKnowledgeCopySummary(this)">\u{1F4CB} Copy summary</button>` : '',
+  ].filter(Boolean).join('');
+  const moreItems = ep.status === 'summarized' ? [
+    `<button id="podcast-notify-signal" class="kn-menu-item" onclick="${closeLater}doPodcastNotify('signal')">Send to Signal</button>`,
+    `<button id="podcast-notify-email" class="kn-menu-item" onclick="${closeLater}doPodcastNotify('email')">Send Email</button>`,
+    `<button id="podcast-regen-summary" class="kn-menu-item" onclick="${closeLater}doPodcastRegenerateSummary()">Regenerate summary</button>`,
+    `<button id="knowledge-retag" class="kn-menu-item" onclick="${closeLater}doKnowledgeRetag()">↻ Retag</button>`,
+  ].join('') : '';
+  const actions = [
+    ep.youtube_url ? `<a href="${_escHtml(ep.youtube_url)}" target="_blank" rel="noopener" class="kn-pill">↗ ${isPodcast ? 'YouTube' : 'Source'}</a>` : '',
+    isPodcast && ep.spotify_url ? `<a href="${_escHtml(ep.spotify_url)}" target="_blank" rel="noopener" class="kn-pill">↗ Spotify</a>` : '',
     ep.status === 'processing' ? `<span class="keymap-hint">⏳ processing…</span>` : '',
-  ].filter(Boolean).join(' ');
+    `<span style="flex:1"></span>`,
+    copyItems ? `<details class="kn-menu"><summary class="kn-pill">\u{1F4CB} Copy ▾</summary><div class="kn-menu-pop">${copyItems}</div></details>` : '',
+    `<button class="kn-pill" onclick="toggleKnowledgeEdit()" title="Edit details">${_knowledgeEditOpen ? '✕' : '✎'}</button>`,
+    moreItems ? `<details class="kn-menu"><summary class="kn-pill" title="More actions">⋯</summary><div class="kn-menu-pop">${moreItems}</div></details>` : '',
+  ].filter(Boolean).join('');
+  const kindLabel = (typeof KNOWLEDGE_KIND_LABEL !== 'undefined' && KNOWLEDGE_KIND_LABEL[kind]) || '';
+  const eyebrow = [_escHtml(kindLabel), _escHtml(ep.author || ''), _escHtml(_knowledgePlatformLabel(ep)), date,
+    _knowledgeDiskUsageLabel(ep)].filter(Boolean).join(' · ');
   const trPairs = Array.isArray(ep.transcript_de) ? ep.transcript_de : [];
   const trBody = trPairs.length
     ? trPairs.map(p => `<div class="podcast-tr-pair">
@@ -8529,34 +8617,32 @@ function _renderKnowledgeDetail(ep) {
     : (ep.transcript_zh ? _escHtml(ep.transcript_zh).replace(/\n/g, '<br>') : '');
   const transcript = (trPairs.length || ep.transcript_zh)
     ? `<div class="podcast-transcript-wrap">
-         <button class="keymap-reset-all" onclick="_togglePodcastTranscript()">Show/hide ${contentLabel.toLowerCase()}</button>
-         <button class="keymap-reset-all" style="margin-left:8px" id="knowledge-copy-transcript" onclick="doKnowledgeCopyTranscript(this)">\u{1F4CB} Copy ${contentLabel.toLowerCase()} (${trPairs.length ? 'bilingual' : 'original language'})</button>
+         <div class="kn-actions kn-actions-tight">
+           <button class="kn-pill" onclick="_togglePodcastTranscript()">Show/hide ${contentLabel.toLowerCase()}</button>
+           <button class="kn-pill" id="knowledge-copy-transcript" onclick="doKnowledgeCopyTranscript(this)">\u{1F4CB} Copy ${contentLabel.toLowerCase()} (${trPairs.length ? 'bilingual' : 'original language'})</button>
+         </div>
          <div id="podcast-transcript-body" class="podcast-transcript" style="display:none">${trBody}</div>
        </div>`
     : '';
   const summaryBlock = _knowledgeSummaryHtml(ep);
 
   el.innerHTML = `
-    <button class="keymap-reset-all" onclick="closeKnowledgeDetail()">← Back</button>
-    <div class="keymap-panel">
-      <div class="knowledge-header">
-        <h2 class="keymap-heading" style="margin:0">${_escHtml(ep.title || '(untitled)')}</h2>
-        <span style="flex:1"></span>
-        <button class="btn-secondary" onclick="toggleKnowledgeEdit()">${_knowledgeEditOpen ? '✕ Close' : '✎ Edit'}</button>
-      </div>
-      <p class="keymap-hint">${[_escHtml(ep.author || ''), _escHtml(_knowledgePlatformLabel(ep)), date, _knowledgeDiskUsageLabel(ep)].filter(Boolean).join(' · ')}</p>
+    <div class="keymap-panel kn-panel">
+      <button class="kn-back" onclick="closeKnowledgeDetail()">← Knowledge</button>
+      <div class="kn-eyebrow">${eyebrow}</div>
+      <h1 class="kn-title">${_escHtml(ep.title || '(untitled)')}</h1>
       ${_knowledgeTagRowHtml(ep)}
+      <div class="kn-actions">${actions}</div>
       ${_knowledgeEditOpen ? _knowledgeEditFormHtml(ep) : ''}
-      <div style="margin:4px 0 10px">${links}</div>
       ${_knowledgeViewTabs(ep)}
       ${_audioBarHtml(ep, lang)}
       ${_knowledgeView === 'fulltext' ? _knowledgeFulltextHtml(ep, lang) : summaryBlock}
     </div>
-    <div class="keymap-panel">
+    <div class="keymap-panel kn-panel">
       <h2 class="keymap-heading">${isZh ? 'HSK vocabulary' : 'New words'}</h2>
       ${hskTable}
     </div>
-    <div class="keymap-panel">
+    <div class="keymap-panel kn-panel">
       <h2 class="keymap-heading">${contentLabel}</h2>
       ${transcript || `<p class="keymap-hint">No ${contentLabel.toLowerCase()} available.</p>`}
     </div>
