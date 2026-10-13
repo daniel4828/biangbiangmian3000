@@ -31,7 +31,9 @@ import concurrent.futures
 import json
 import logging
 import re
+import socket
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
@@ -44,7 +46,15 @@ _translators: dict[tuple[str, str], object] = {}
 # check once froze for 14h this way while holding its run lock (#565). urlopen
 # gets the timeout too; the thread deadline below is the backstop for a
 # connection that trickles bytes slowly enough to never trip it.
-_REQUEST_TIMEOUT_SECONDS = 90
+# 🔴 #1265: this is the budget of ONE Google request, so it must be short. A
+# Google door that hangs instead of refusing used to eat 90 s each, and the
+# fallback doors (google-json, DeepSeek) never got their turn. The #565
+# rationale (never hang forever) still holds; the whole-walk deadline is
+# _WALK_DEADLINE_SECONDS below.
+_REQUEST_TIMEOUT_SECONDS = 15
+# Hard deadline around a full walk of all transports: must cover two Google
+# timeouts plus a DeepSeek call (#1265).
+_WALK_DEADLINE_SECONDS = 180
 
 _GOOGLE_URL = "https://translate.google.com/m"
 # Same service, different door: a plain JSON API. Reached when the mobile page
@@ -306,8 +316,16 @@ def _is_throttled_error(e: Exception) -> bool:
     code = getattr(e, "code", None)
     if code in (403, 429):
         return True
+    # A door that does not answer at all is treated like a refusal (#1265):
+    # otherwise every following chunk waits the full timeout on it again.
+    if isinstance(e, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(e, urllib.error.URLError) and isinstance(
+            getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+        return True
     text = str(e)
-    return "429" in text or "Too Many Requests" in text or "Sorry..." in text
+    return ("429" in text or "Too Many Requests" in text or "Sorry..." in text
+            or "timed out" in text)
 
 
 def _cooldown_left(name: str) -> tuple[int, str]:
@@ -364,7 +382,7 @@ class _WebTranslator:
                 errors.append(f"{name}: {e}")
                 if _is_throttled_error(e):
                     _cooldowns[name] = (time.time() + _THROTTLE_COOLDOWN_SECONDS, str(e))
-                    logger.warning("translator: %s is throttling us, skipping it for %d min",
+                    logger.warning("translator: %s is throttling or not answering, skipping it for %d min",
                                    name, _THROTTLE_COOLDOWN_SECONDS // 60)
                 if self.preferred == name:
                     self.preferred = None
@@ -388,10 +406,11 @@ def _translate_with_timeout(t, text: str) -> str:
     """Run t.translate(text) with a hard deadline on a throwaway thread. On
     timeout the worker thread is abandoned (it dies whenever its socket does)
     and concurrent.futures.TimeoutError propagates to the caller's existing
-    fallback handling."""
+    fallback handling. The deadline covers a whole walk of the transports
+    (_WALK_DEADLINE_SECONDS, #1265), not a single request."""
     ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        return ex.submit(t.translate, text).result(timeout=_REQUEST_TIMEOUT_SECONDS)
+        return ex.submit(t.translate, text).result(timeout=_WALK_DEADLINE_SECONDS)
     finally:
         ex.shutdown(wait=False)
 

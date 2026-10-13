@@ -9,6 +9,7 @@ Supported model prefixes:
   gpt-*         → OpenAI (OPENAI_API_KEY) — used for news mode (DeepSeek censors news content)
 """
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -2125,8 +2126,26 @@ def _fill_translations(sentences: list[dict], progress_key: str | None = None,
                           percent=88 + 4 * done / n)
 
         t0 = time.time()
-        de_results = _t.translate_batch(texts, target="de", source=source,
-                                        on_progress=_on_progress if progress_key else None)
+        _on = _on_progress if progress_key else None
+        if progress_key:
+            # #1265: cancel was only seen between chunks, so a hung translation
+            # ignored it for minutes. Run the batch on a daemon worker and poll
+            # the cancel flag every 0.5 s; an abandoned worker finishes alone.
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = ex.submit(_t.translate_batch, texts, target="de",
+                                source=source, on_progress=_on)
+                while True:
+                    try:
+                        de_results = fut.result(timeout=0.5)
+                        break
+                    except concurrent.futures.TimeoutError:
+                        raise_if_cancelled(progress_key)
+            finally:
+                ex.shutdown(wait=False)
+        else:
+            de_results = _t.translate_batch(texts, target="de", source=source,
+                                            on_progress=None)
         logger.info("translate DE done in %.1fs (%d sentences)", time.time() - t0, total)
 
         if progress_key and total > 0:
