@@ -6789,6 +6789,8 @@ body.gloss-on [data-gloss-tr]::after {
 
 @media (max-width: 560px) {
   #tasks-btn { min-height: 40px; font-size: 15px; }
+  /* #1265: anchored to a mid-header button the panel spilled off the left edge; pin it to the viewport instead */
+  #tasks-panel { position: fixed; top: 64px; left: 12px; right: 12px; width: auto; max-width: none; }
 }
 
 /* ── Persistent mini audio player (#1082) ────────────────
