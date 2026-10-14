@@ -153,7 +153,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 - **后端：** Python + FastAPI；**数据库：** SQLite（标准库 `sqlite3`，无 ORM）
 - **前端：** `static/index.html` + `app.js` + `style.css`，FastAPI 直接提供，**无构建步骤**（无 npm）
 - **AI：** 多提供商（`ai.py`）——默认 `gpt-6-luna`；也支持 DeepSeek、ZhipuAI GLM、Qwen、Claude
-- **语音合成（TTS）：** `edge-tts`（中文 `zh-CN-XiaoxiaoNeural`）
+- **语音合成（TTS）：** `edge-tts`（中文 `zh-CN-XiaoxiaoNeural`）；最低版本 `7.3.1`，适配微软新版连接算法并修复旧版 HTTP 403（#1269）。部署时必须安装满足 `requirements.txt` 的版本。
 - **语言：** 界面标签英文，内容中文/法文
 
 ---

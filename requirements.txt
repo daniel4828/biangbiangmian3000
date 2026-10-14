@@ -6,7 +6,8 @@ fastapi>=0.135,<1.0
 uvicorn>=0.41,<1.0
 anthropic>=0.84,<1.0
 openai>=2.29,<3.0
-edge-tts>=7.2,<8.0
+# 7.3.1 适配微软新版语音连接，避免旧版 HTTP 403（#1269）。
+edge-tts>=7.3.1,<8.0
 PyYAML>=6.0,<7.0
 python-multipart>=0.0.22,<0.1
 jieba>=0.42,<1.0
