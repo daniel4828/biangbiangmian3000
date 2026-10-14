@@ -761,6 +761,12 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - 所有会遮挡文字的阶段默认保留目标词前一个词作为回忆提示；Stages 设置可关闭，浏览器用 `listenHintPreviousWord` 保存。
 - 浏览器 `listenHintStages` 保存顺序及启用状态；`listenHintState` 保存稳定阶段 ID，兼容旧 0/1/2 默认值。取消默认阶段时使用第一个可用阶段；重新启用可恢复原默认。设置只在当前浏览器保存。
 
+## 主界面主题（#1271）
+
+主界面顶栏的 `System / Light / Dark` 原生选择器在所有视图和手机上可用，默认跟随系统。`static/theme.js` 在样式表之前同步执行，把 `localStorage.theme` 的选择解析为根元素 `data-theme` 和 `color-scheme`，避免首次渲染闪白；只有选择 `System` 时才响应系统配色变化。存储不可用时仍允许当前页面切换。
+
+`style.css` 的深色语义变量覆盖背景、卡片、文字、表单、日历及提示色；图表和词汇状态保留原有可区分的色板。内嵌词典变量跟随主界面，独立 `/dict` 页面继续跟随系统。主题逻辑不依赖 `app.js`，行为测试运行 `node --test tests/theme.test.cjs`。
+
 ## 生词标注：代码做，不用 AI（`zh_annotate.py`，#638）
 
 #631 靠提示词让模型标 `pinyin/汉字`，模型经常漏（德语总结里出现光秃秃的 `(浙江)`），中文总结更是一个都没标。所有材料仓库里都有，所以改成确定性代码，**零 AI 调用**：`static/hsk_levels.json`（4991 词的 HSK 1-6 表）+ `entries.word_zh`（Daniel 的词库）+ `jieba` + `pypinyin` + `translator.py`。
