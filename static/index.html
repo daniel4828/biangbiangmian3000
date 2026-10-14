@@ -6,7 +6,8 @@
   <title>biangbiangmian3000</title>
   <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/logo.svg">
-  <link rel="stylesheet" href="/static/style.css?v=20">
+  <script src="/static/theme.js?v=1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=21">
   <!-- Dictionary-result styling, shared with the standalone /dict page
        (#1055): the header search box renders lookups with shared.js's
        renderDictResult(), so both pages must load the same sheet. -->
@@ -67,6 +68,11 @@
     <button class="undo-btn" id="session-graph-btn" onclick="openSessionSummary()" title="Graph of cards reviewed this session">📈 Session</button>
   </div>
   <div class="header-right">
+    <select id="theme-select" aria-label="Color theme" title="Color theme">
+      <option value="system">System</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
     <!-- Background-task indicator (#821). Hidden while nothing is running;
          _renderTasks() fills the badge and the dropdown from GET /api/tasks. -->
     <div id="tasks-wrap" style="display:none">
@@ -871,7 +877,7 @@
   </div>
   <p id="setup-count-label" class="setup-count-label"></p>
   <div id="setup-learning-warning" style="display:none;background:var(--again-bg,#fff3cd);color:var(--again-text,#856404);border:1px solid var(--again-border,#ffc107);border-radius:6px;padding:8px 12px;font-size:13px;margin:0 0 8px"></div>
-  <div id="setup-token-warning" style="display:none;background:#fff3cd;color:#856404;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;font-size:13px;margin:0 0 8px"></div>
+  <div id="setup-token-warning" style="display:none;background:var(--amber-bg, #fff3cd);color:var(--amber-ink, #856404);border:1px solid #ffc107;border-radius:6px;padding:8px 12px;font-size:13px;margin:0 0 8px"></div>
   <div class="edit-card-fields">
     <label class="edit-label">Content mode
       <select class="edit-input" id="setup-mode" onchange="updateSetupMode()">
@@ -1261,7 +1267,7 @@
     <!-- Conflict resolution button (shown only when conflicts exist) -->
     <div id="import-conflicts-section" style="display:none;margin-top:8px">
       <button onclick="openConflictModal()"
-        style="background:#e67e22;color:#fff;border:1px solid #c0392b;border-radius:4px;padding:6px 14px;font-size:13px;cursor:pointer;font-weight:600;width:100%">
+        style="background:#e67e22;color:#fff;border:1px solid var(--red-ink, #c0392b);border-radius:4px;padding:6px 14px;font-size:13px;cursor:pointer;font-weight:600;width:100%">
         ⚠ <span id="import-conflicts-count">0</span> component word conflict(s) — click to resolve →
       </button>
     </div>

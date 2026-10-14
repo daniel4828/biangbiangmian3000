@@ -580,7 +580,7 @@ const _STATE_ANIM = {
   learning:  { text: '学习中',   color: _STATE_COLOR.learning },
   review:    { text: '学会了',   color: _STATE_COLOR.review },
   relearn:   { text: '重新学习', color: _STATE_COLOR.relearn },
-  suspended: { text: '难词！',   color: '#b45309' },
+  suspended: { text: '难词！',   color: 'var(--amber-ink, #b45309)' },
 };
 
 // Floating Chinese state-change cue: fades + scales in, drifts up, removes itself.
@@ -12379,7 +12379,7 @@ function _showRegenPreviewModal(previewData) {
       <button onclick="_closeRegenPreviewModal()">×</button>
     </div>
     <div class="regen-preview-body">${bodyHtml}</div>
-    <div id="regen-modal-error" style="display:none;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px 12px;margin:8px 16px;font-size:13px"></div>
+    <div id="regen-modal-error" style="display:none;color:var(--red-ink, #b91c1c);background:var(--red-bg, #fef2f2);border:1px solid var(--red-line, #fecaca);border-radius:6px;padding:8px 12px;margin:8px 16px;font-size:13px"></div>
     <div class="regen-preview-footer">
       <button class="regen-btn regen-btn-regenerate" id="regen-btn-regen" onclick="_rerunRegen()">↺ Regenerate</button>
       <button class="regen-btn regen-btn-reject" onclick="_closeRegenPreviewModal()">✗ Reject</button>
@@ -19403,7 +19403,7 @@ function _evoRender() {
            onmousemove="evoMove(event)" onmouseleave="evoLeave()">
         ${grid}${layers}
         <line id="evo-cursor" x1="0" y1="0" x2="0" y2="${H}"
-              stroke="#1e293b" stroke-width="0.8" style="display:none"/>
+              stroke="var(--text)" stroke-width="0.8" style="display:none"/>
       </svg>
       <div class="hcal-graph-axis"><span>${fmt(dates[0])}</span><span>${fmt(dates[n - 1])}</span></div>
     </div>`;
