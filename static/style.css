@@ -7894,6 +7894,7 @@ body.gloss-on [data-gloss-tr]::after {
 /* SVG 中的系统媒体查询继承此 color-scheme，手动选择也能控制标志。 */
 #header-logo { color-scheme: inherit; }
 :root[data-theme="dark"] header { border-bottom-color: var(--border); }
+:root[data-theme="dark"] .sentence { color: #fff; }
 :root[data-theme="dark"] input::placeholder,
 :root[data-theme="dark"] textarea::placeholder { color: var(--muted); opacity: .85; }
 :root[data-theme="dark"] .cal-cell.cal-has-future { background: var(--hover-bg); }
