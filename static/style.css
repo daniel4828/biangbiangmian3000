@@ -674,7 +674,7 @@ body.ra-fullscreen-open #error-banner {
   align-items: center;
   justify-content: center;
   min-height: 90px;
-  color: #000;
+  color: var(--text);
 }
 .sentence .hl { color: var(--primary); font-weight: 700; }
 .sentence .hl-secondary { color: var(--hard, #f59e0b); font-weight: 600; }
