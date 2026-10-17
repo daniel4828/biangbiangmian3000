@@ -14,9 +14,9 @@
 
 ## Codex 与 Claude Code 的差异
 
-- CLAUDE.md 中 R3、R5 的工作流责任同样适用于 Codex 主会话：在用户授权的任务范围内完成 Issue、分支、PR，CI 通过后自行合并；不直接推送 main。
+- CLAUDE.md 中 R3、R5 的工作流责任适用于本机 Codex 主会话：在用户授权范围内完成 Issue、分支、PR，CI 通过后自行合并；不直接推送 main。云端 Codex 无法推送、创建或合并 PR 时，只完成工作区改动，交由本机 Codex 接手 Git/GitHub 发布；不要要求云端尝试这些操作。
 - R14 的 Opus/Fable、Sonnet、`subagent_type: implementer` 和 `.claude/agents/implementer.md` 工具表是 Claude Code 专用配置，Codex 不照搬模型名称或参数。
-- Codex 主会话可直接完成小任务；需要分工时，按当前会话实际提供的代理工具和模型执行。主会话负责设计、审查、验证及全部 Git/gh 操作。子代理任务必须写清背景、文件边界、验收方法及「不得执行 Git/gh」。
+- 本机 Codex 主会话可直接完成小任务；需要分工时，按当前会话实际提供的代理工具和模型执行。本机主会话负责设计、审查、验证及全部 Git/gh 操作；云端 Codex 完成的改动由本机接手发布。子代理任务必须写清背景、文件边界、验收方法及「不得执行 Git/gh」。
 - 上述子代理禁令是任务约束，不等于工具权限隔离。不能因为 Claude 的 implementer 没有 Bash，就声称 Codex 子代理也没有 Shell；需要强制限制时先核实当前平台能力。
 - 并行修改使用独立 worktree，不操作 Claude Code 管理的 `.claude/worktrees/`。已有未提交内容不得覆盖或清理。
 - `.claude/settings.json`、`.claude/rules.txt`、Claude hooks、commands 和 MCP 设置不作为 Codex 自动加载的配置；不要直接复制它们到 Codex 设置。
