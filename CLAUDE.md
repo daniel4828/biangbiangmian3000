@@ -926,6 +926,12 @@ Daniel 2026-08-21 定的三件事：**源书是德/英原版**（不是上传中
 - **超时不能写死**（#1076 未做）：`asr_local._TIMEOUT_SECONDS` 是常数 6 小时，对 3 分钟的 Reel 等于没有上限，对 10 小时的书必被判死
 - **跑几小时的任务必须有进度**（#1076 未做）：whisper.cpp 一直在往 stdout 写进度，我们重定向到临时文件后再没人看过，于是跑满六小时才知道不行
 
+### 音频费用开关（#1275）
+
+`app_settings.openai_audio_enabled=0` 禁止本项目所有 OpenAI 音频转录入口（播客/Instagram Whisper、听读 cloud ASR），显式选择 OpenAI 或已有密钥也不能绕过；每块发送前重新检查。`app_settings.auto_listen_enabled=0` 关闭订阅播客处理后的自动听读准备，防止已有 NotebookLM 转录又调用付费 ASR 获取时间轴。缺省值均为 `1`，保留其他安装的原行为；手动听读仍受 OpenAI 音频开关限制。
+
+2026-10-18 生产设置：两个开关均为 `0`；`podcast_config.transcriber=notebooklm`、`whisper_fallback=0`，NotebookLM 失败不会调用听悟/OpenAI。仅声动早咖啡保留自动处理；Lage der Nation 与 F.A.Z. Frühdenker 自动处理已关闭。摘要优先免费 NotebookLM，文字翻译优先免费 Google，付费文字路径仍用 `gpt-6-luna`：当日官方标准输入/输出价格为 $0.10/$0.50 每百万 token，低于 DeepSeek Flash 非高峰未缓存输入/输出 $0.15/$0.60（高峰 $0.30/$1.20）；缓存命中比例可能改变比较。价格来源：https://developers.openai.com/api/docs/models/gpt-6-luna 与 https://api-docs.deepseek.com/quick_start/pricing/ 。
+
 ### 闲时队列（#1053）
 
 本地转录排进 `audio_jobs`，`scripts/audio_worker.py` 每 5 分钟一轮，四道闸门：没有任务 / 30 分钟内有人操作 / 落在早晨预生成窗口（05:30–09:30，**服务器本地时间 `Asia/Shanghai`**）/ 上一轮还在跑（PID 锁——8 GB 内存放不下两个 whisper）。
