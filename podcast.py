@@ -141,6 +141,15 @@ _TINGWU_POLL_INTERVAL_SECONDS = 15
 _TINGWU_POLL_TIMEOUT_SECONDS = 20 * 60
 
 
+def openai_audio_enabled() -> bool:
+    """Persistent opt-out shared by podcast and read-along audio (#1275).
+
+    Missing setting preserves existing installations; an explicit zero blocks
+    every OpenAI audio entry, independently of API keys and provider choices.
+    """
+    return database.get_app_setting("openai_audio_enabled", "1") == "1"
+
+
 def _http_get(url: str, timeout: int = 20) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "biangbiangmian3000/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -433,6 +442,9 @@ def _transcribe_via_whisper(mp3_path: str, duration: float, video_id: str, tmp_d
     transcription failure; callers log and treat that the same as no
     transcript.
     """
+    if not openai_audio_enabled():
+        logger.info("podcast: OpenAI audio disabled, skipping Whisper for %s", video_id)
+        return None
     if not os.environ.get("OPENAI_API_KEY"):
         logger.warning("podcast: OPENAI_API_KEY not set, skipping Whisper for %s", video_id)
         return None
@@ -454,6 +466,8 @@ def _transcribe_via_whisper(mp3_path: str, duration: float, video_id: str, tmp_d
                         kwargs["language"] = language
                     if filter_hallucinations:
                         kwargs["response_format"] = "verbose_json"
+                    if not openai_audio_enabled():
+                        raise RuntimeError("OpenAI audio transcription disabled")
                     result = client.audio.transcriptions.create(**kwargs)
                 break
             except Exception as e:
@@ -2161,6 +2175,9 @@ def _maybe_prepare_listen(episode_id: int) -> None:
     The 🎧 Listen button on the detail page is always still there as a
     manual fallback.
     """
+    if database.get_app_setting("auto_listen_enabled", "1") != "1":
+        logger.info("podcast: automatic read-along disabled for %s", episode_id)
+        return
     try:
         episode = database.get_episode(episode_id)
         if not episode:

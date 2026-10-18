@@ -159,6 +159,8 @@ def _call_openai(client, path: str) -> list:
     """One OpenAI request for a single (<=25MB) audio chunk, using whisper-1
     — see the module docstring's 🔴 callout for why that model specifically.
     Same shape/degraded-fallback contract as _call_groq above."""
+    if not podcast.openai_audio_enabled():
+        raise AudioTrackError("OpenAI audio transcription disabled")
     with open(path, "rb") as f:
         resp = client.audio.transcriptions.create(
             model=_OPENAI_MODEL, file=f, response_format="verbose_json",
@@ -214,6 +216,8 @@ def build(audio_path: str, lang: str = "zh", provider: str | None = None,
 
     provider = _resolve_provider(provider)
     if provider == "openai":
+        if not podcast.openai_audio_enabled():
+            raise AudioTrackError("OpenAI audio transcription disabled")
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise AudioTrackError("OPENAI_API_KEY is not configured — cloud ASR (#1090) needs it")

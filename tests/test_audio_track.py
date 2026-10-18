@@ -1632,7 +1632,7 @@ def test_asr_cloud_resolve_provider_raises_with_neither_key_configured(monkeypat
         asr_cloud._resolve_provider(None)
 
 
-def test_asr_cloud_build_uses_openai_whisper1_when_only_openai_key_configured(monkeypatch):
+def test_asr_cloud_build_uses_openai_whisper1_when_only_openai_key_configured(tmp_db, monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr(asr_cloud, "_probe_duration_seconds", lambda path: 300.0)
