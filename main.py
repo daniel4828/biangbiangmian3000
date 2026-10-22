@@ -338,9 +338,21 @@ try:
         )
         return response
 
+    # Web-App-Manifest und seine Icons (#1277) müssen ohne Login erreichbar
+    # sein: Der Browser holt sie beim Installieren ohne Session-Cookie, ein
+    # 303 auf /login lässt die Installation still scheitern. Exakte Pfade,
+    # kein Präfix – alles andere unter /static/ bleibt geschützt.
+    _PUBLIC_PATHS = frozenset({
+        "/login",
+        "/static/manifest.webmanifest",
+        "/static/icons/app-icon-192.png",
+        "/static/icons/app-icon-512.png",
+        "/static/icons/apple-touch-icon.png",
+    })
+
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
-        if not _AUTH_ENABLED or request.url.path == "/login":
+        if not _AUTH_ENABLED or request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
         cookie = request.cookies.get(_SESSION_COOKIE, "")
         if cookie and _session_cookie_valid(cookie):
