@@ -123,3 +123,21 @@ def test_auth_disabled_is_a_noop():
     with TestClient(main.app, follow_redirects=False) as c:
         assert c.get("/api/version").status_code == 200
         assert c.get("/login").status_code == 303
+
+
+@pytest.mark.parametrize("path", [
+    "/static/manifest.webmanifest",
+    "/static/icons/app-icon-192.png",
+    "/static/icons/app-icon-512.png",
+    "/static/icons/apple-touch-icon.png",
+])
+def test_web_app_manifest_is_public(auth_client, path):
+    # #1277: browsers fetch the manifest and its icons without the session
+    # cookie when installing the app — a redirect to /login breaks install.
+    r = auth_client.get(path)
+    assert r.status_code == 200
+
+
+def test_manifest_exemption_does_not_open_other_static_files(auth_client):
+    r = auth_client.get("/static/app.js")
+    assert r.status_code == 303
