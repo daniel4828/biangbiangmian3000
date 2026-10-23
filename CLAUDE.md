@@ -248,7 +248,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 
 - **唯一生产数据库在服务器上**（`/home/anki/biangbiangmian3000/data/srs.db`）。本地开发只用 `run.dev.sh` + `data/dev.db`。**本地的 `data/srs.db` 已过时，绝不要把它当作现状或复制回服务器。**
 - **自动部署：** 服务器 cron 每 2 分钟运行 `deploy/deploy.sh`——**PR 合并到 main ≈ 2 分钟后自动上线**（拉取、装依赖、重启 systemd 服务 `biangbiangmian3000`）
-- **自动备份：** 服务器 cron 每 6 小时把数据库快照到 `data/backups/`
+- **自动备份（#1279）：** 服务器 cron 每 6 小时跑 `scripts/backup_db.sh`（快照 + zstd 压缩 + `scripts/backup_retention.py` 清理：2 天全留 → 14 天每天一份 → 60 天每周一份 → 删除；只认 `srs_<时间>.db[.zst]`，一次性手工备份不碰）。🔴 **这行 cron 由仓库管理**：写在 `deploy/crontab.managed`，`deploy.sh` 每轮调用 `deploy/install_cron.sh` 同步进 crontab——改备份 cron 只改那个文件，不要 `crontab -e`。2026-10 之前它是手工加的一行、从不删除，攒到 37 GB 把磁盘塞到 94%
 - HTTPS 由 Caddy 反向代理提供（证书自动续期）；从零搭建教程见 `DEPLOY.md`
 
 ### Claude 可以直接 SSH 上服务器

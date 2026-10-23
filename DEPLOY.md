@@ -226,23 +226,19 @@ tail -f /home/anki/deploy.log
 
 ---
 
-## 8. 数据库备份建议
+## 8. 数据库备份（#1279：脚本入库，cron 由部署自动安装）
 
-数据库文件在 `data/srs.db`，建议用 cron 每 6 小时做一次快照，并保留一段时间：
+**不要再手工 `crontab -e` 加备份行。** 备份由仓库里的 `scripts/backup_db.sh` 完成，它的 cron 行写在
+`deploy/crontab.managed`，`deploy/deploy.sh` 每轮调用 `deploy/install_cron.sh` 把这块同步进 `anki` 的
+crontab（两行标记之间的块，幂等；其余 cron 行不动；顺带删掉旧的手工 `sqlite3 … .backup …` 行）。
 
-```bash
-mkdir -p /home/anki/biangbiangmian3000/data/backups
-crontab -e
-```
-
-添加一行：
-
-```
-0 */6 * * * sqlite3 /home/anki/biangbiangmian3000/data/srs.db ".backup '/home/anki/biangbiangmian3000/data/backups/srs_$(date +\%Y-\%m-\%d_\%H-\%M-\%S).db'"
-```
-
-（本地 Mac 上已经有类似的 `backup.sh` + launchd 方案，可以参考其保留策略——
-只保留最近 120 份快照，自动清理更早的。）
+- 每 6 小时：`sqlite3 .backup` → `PRAGMA quick_check` → `zstd -3` 压缩（约 160 MB → 40 MB）→ `data/backups/srs_<时间>.db.zst`
+- 然后跑 `scripts/backup_retention.py --apply --compress`：最近 2 天全留；14 天内每天留最新一份；60 天内每 ISO 周留最新一份；更早删除。
+  只认 `srs_YYYY-MM-DD_HH-MM-SS.db[.zst]`，手工的一次性备份（`pre-728-*.db` 等）一律不碰
+- 日志：`data/backup.log`
+- 先看计划不删：`python3 scripts/backup_retention.py --dir data/backups`（默认 dry-run）
+- 恢复：`zstd -d data/backups/srs_<时间>.db.zst -o /tmp/restore.db`，检查后停服务再替换 `data/srs.db`（同时删掉旧的 `-wal`/`-shm`）
+- 需要 `apt install zstd`（没有时脚本照常备份，只是不压缩）
 
 **强烈建议做异地备份**：定期把服务器上的备份 `rsync` 回本地 Mac，防止服务器本身出问题导致数据全部丢失：
 
