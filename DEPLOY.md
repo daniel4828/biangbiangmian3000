@@ -233,7 +233,7 @@ tail -f /home/anki/deploy.log
 crontab（两行标记之间的块，幂等；其余 cron 行不动；顺带删掉旧的手工 `sqlite3 … .backup …` 行）。
 
 - 每 6 小时：`sqlite3 .backup` → `PRAGMA quick_check` → `zstd -3` 压缩（约 160 MB → 40 MB）→ `data/backups/srs_<时间>.db.zst`
-- 然后跑 `scripts/backup_retention.py --apply --compress`：最近 2 天全留；14 天内每天留最新一份；60 天内每 ISO 周留最新一份；更早删除。
+- 然后跑 `scripts/backup_retention.py --apply --compress`：最近 2 天全留；14 天内每天留最新一份；60 天内每 ISO 周留最新一份；更早的每个日历月永久留最新一份。
   只认 `srs_YYYY-MM-DD_HH-MM-SS.db[.zst]`，手工的一次性备份（`pre-728-*.db` 等）一律不碰
 - 日志：`data/backup.log`
 - 先看计划不删：`python3 scripts/backup_retention.py --dir data/backups`（默认 dry-run）

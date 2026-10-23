@@ -45,7 +45,7 @@ def test_last_two_days_all_kept():
     assert plan.delete == []
 
 
-def test_daily_then_weekly_then_gone():
+def test_daily_then_weekly_then_monthly():
     names = every_6h(120)  # 4 个月
     plan = br.plan_retention(names, NOW)
     kept = [br.parse_timestamp(n) for n in plan.keep]
@@ -61,8 +61,20 @@ def test_daily_then_weekly_then_gone():
     weeks = [t.isocalendar()[:2] for t in weekly]
     assert len(set(weeks)) == len(weeks)            # 每周至多一份
     assert 6 <= len(weekly) <= 8
-    assert old == []
+    months = [(t.year, t.month) for t in old]
+    assert len(set(months)) == len(months)          # 每月至多一份
+    all_old_months = {(t.year, t.month) for t in map(br.parse_timestamp, names)
+                      if NOW - t >= timedelta(days=60)}
+    assert set(months) == all_old_months            # 每个月都有一份
     assert len(plan.keep) + len(plan.delete) == len(names)
+
+
+def test_monthly_keeps_newest_of_month():
+    names = [snap(datetime(2026, 5, d, h)) for d in (1, 15, 31) for h in (0, 18)]
+    names.append(snap(NOW - timedelta(hours=1)))
+    plan = br.plan_retention(names, NOW)
+    assert snap(datetime(2026, 5, 31, 18)) in plan.keep
+    assert len([n for n in plan.keep if n.startswith("srs_2026-05")]) == 1
 
 
 def test_keeps_newest_in_each_day():
@@ -86,9 +98,10 @@ def test_one_off_backups_never_touched():
 
 
 def test_db_and_zst_with_same_timestamp_treated_together():
-    ts = NOW - timedelta(days=100)
+    ts = datetime(2026, 5, 10)
+    same_month_newer = snap(datetime(2026, 5, 20))
     newest = snap(NOW - timedelta(hours=1))
-    plan = br.plan_retention([snap(ts), snap(ts, ".zst"), newest], NOW)
+    plan = br.plan_retention([snap(ts), snap(ts, ".zst"), same_month_newer, newest], NOW)
     assert set(plan.delete) == {snap(ts), snap(ts, ".zst")}
 
 
@@ -158,6 +171,8 @@ def test_backup_db_script_end_to_end(tmp_path):
     (bdir / "pre-728-fix-20260813-083803.db").write_bytes(b"keep me")
     ancient = bdir / "srs_2020-01-01_00-00-00.db"
     ancient.write_bytes(b"old")
+    ancient_newer = bdir / "srs_2020-01-31_00-00-00.db"   # 同月更新的一份 → 留它、删上面那份
+    ancient_newer.write_bytes(b"old")
 
     env = {**os.environ, "BACKUP_DB": str(db), "BACKUP_DIR": str(bdir),
            "BACKUP_PYTHON": sys.executable}
@@ -167,8 +182,10 @@ def test_backup_db_script_end_to_end(tmp_path):
     files = sorted(os.listdir(bdir))
     assert "pre-728-fix-20260813-083803.db" in files
     assert not ancient.exists()
-    snaps = [f for f in files if f.startswith("srs_")]
+    snaps = sorted(f for f in files if f.startswith("srs_") and not f.startswith("srs_2020"))
     assert len(snaps) == 1
+    assert [f for f in files if f.startswith("srs_2020")] == (
+        ["srs_2020-01-31_00-00-00.db.zst"] if shutil.which("zstd") else ["srs_2020-01-31_00-00-00.db"])
     if shutil.which("zstd"):
         assert snaps[0].endswith(".db.zst")
     assert not [f for f in files if f.endswith(".partial")]

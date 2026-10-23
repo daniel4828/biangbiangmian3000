@@ -7,7 +7,7 @@
 - 最近 KEEP_ALL_DAYS（2）天：全部保留
 - 到 DAILY_DAYS（14）天为止：每个日历日只留最新一份
 - 到 WEEKLY_DAYS（60）天为止：每个 ISO 周只留最新一份
-- 更早：删除
+- 更早：每个日历月永久保留最新一份
 - 最新的一份永远保留（哪怕时钟出了问题）
 
 只认 `srs_YYYY-MM-DD_HH-MM-SS.db`（以及压缩后的 `.db.zst` / `.db.gz`）。
@@ -91,7 +91,7 @@ def plan_retention(names: list[str], now: datetime, *,
             iso = ts.isocalendar()
             bucket = ("week", iso[0], iso[1])
         else:
-            continue  # 太旧，删除
+            bucket = ("month", ts.year, ts.month)  # 永久保留，每月最新一份
         if bucket not in newest_in_bucket or ts > newest_in_bucket[bucket]:
             newest_in_bucket[bucket] = ts
     keep_ts.update(newest_in_bucket.values())

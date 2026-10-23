@@ -608,7 +608,7 @@ YouTube，也不会过期。
 
 - `backup_db.sh`：`sqlite3 .backup` → `quick_check` → `zstd` 压缩 → 调用保留规则。环境变量 `BACKUP_DB` / `BACKUP_DIR` / `BACKUP_PYTHON` 只给测试用
 - `backup_retention.py`：纯标准库。**默认 dry-run**，`--apply` 才删，`--compress` 把保留下来的未压缩 `.db` 压成 `.db.zst`
-  - 2 天内全留；14 天内每天最新一份；60 天内每 ISO 周最新一份；更早删除；最新一份永远保留
+  - 2 天内全留；14 天内每天最新一份；60 天内每 ISO 周最新一份；更早的每个日历月永久保留最新一份；最新一份永远保留
   - 只认 `srs_YYYY-MM-DD_HH-MM-SS.db[.zst|.gz]`，其它文件（一次性手工备份）不碰
 
 ```bash
