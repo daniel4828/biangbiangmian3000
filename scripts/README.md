@@ -601,3 +601,19 @@ YouTube，也不会过期。
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `YOUTUBE_COOKIES_FILE` | `data/youtube_cookies.txt` | Netscape 格式；文件不存在时照常尝试下载（未被封的 IP 上多数视频不需要），失败时错误信息会指出可能缺 cookies |
+
+## backup_db.sh + backup_retention.py（issue #1279）
+
+服务器数据库每 6 小时一份快照，cron 行由 `deploy/install_cron.sh` 从 `deploy/crontab.managed` 安装（不要手工 `crontab -e`）。
+
+- `backup_db.sh`：`sqlite3 .backup` → `quick_check` → `zstd` 压缩 → 调用保留规则。环境变量 `BACKUP_DB` / `BACKUP_DIR` / `BACKUP_PYTHON` 只给测试用
+- `backup_retention.py`：纯标准库。**默认 dry-run**，`--apply` 才删，`--compress` 把保留下来的未压缩 `.db` 压成 `.db.zst`
+  - 2 天内全留；14 天内每天最新一份；60 天内每 ISO 周最新一份；更早的每个日历月永久保留最新一份；最新一份永远保留
+  - 只认 `srs_YYYY-MM-DD_HH-MM-SS.db[.zst|.gz]`，其它文件（一次性手工备份）不碰
+
+```bash
+python3 scripts/backup_retention.py --dir data/backups            # 看计划
+python3 scripts/backup_retention.py --dir data/backups --apply --compress
+```
+
+测试：`pytest tests/test_backup_retention.py`

@@ -24,6 +24,11 @@ fi
 
 cd "$REPO_DIR"
 
+# 每轮同步一次仓库管理的 cron 行（#1279）；没变化时不写也不输出。
+# 放在"已是最新"判断之前：本次 PR 合并后的第一轮就会生效，不必等下一次提交。
+# 失败只记日志，不挡部署。
+bash "$REPO_DIR/deploy/install_cron.sh" || echo "[$(date '+%Y-%m-%d %H:%M:%S')] install_cron 失败（见上），继续部署。"
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 检查更新..."
 git fetch origin main --quiet
 
