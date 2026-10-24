@@ -481,6 +481,17 @@ def bulk_unleech(body: dict):
     return {"ok": True, "count": count}
 
 
+@router.post("/api/cards/bulk-leech-new")
+def bulk_set_leech_new(body: dict):
+    word_ids = body.get("word_ids")
+    if (not isinstance(word_ids, list)
+            or any(type(word_id) is not int or word_id <= 0 for word_id in word_ids)):
+        raise HTTPException(status_code=400, detail="word_ids must be a list of positive integers")
+    count = database.bulk_set_leech_new_by_words(list(dict.fromkeys(word_ids)))
+    _queue_mgr.invalidate()
+    return {"ok": True, "count": count}
+
+
 @router.post("/api/cards/{card_id}/reset")
 def reset_card_endpoint(card_id: int):
     return database.reset_card(card_id)

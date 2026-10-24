@@ -225,6 +225,8 @@ def _next_card_from_queue(key, build_fn) -> dict | None:
 
 @router.get("/api/today/{deck_id}/{category}")
 def get_today(deck_id: int, category: str, lang: str | None = None):
+    if lang in (None, "zh") and database.ensure_daily_target():
+        _queue_mgr.invalidate()
     ids = leaf_ids(deck_id, category, lang=lang)
     key, build_fn = _key_and_build(ids=ids, category=category, parent_for_multi=deck_id, lang=lang)
 
@@ -242,6 +244,8 @@ def get_today(deck_id: int, category: str, lang: str | None = None):
 
 @router.get("/api/today-unfinished")
 def get_today_unfinished(scope: str = "unfinished", lang: str | None = None):
+    if lang in (None, "zh") and database.ensure_daily_target():
+        _queue_mgr.invalidate()
     card = database.get_next_unfinished_card(scope, lang=lang)
     if card:
         card["intervals"] = srs.preview_intervals(card)
@@ -252,11 +256,15 @@ def get_today_unfinished(scope: str = "unfinished", lang: str | None = None):
 
 @router.get("/api/today-unfinished-decks")
 def get_today_unfinished_decks(scope: str = "unfinished", lang: str | None = None):
+    if lang in (None, "zh") and database.ensure_daily_target():
+        _queue_mgr.invalidate()
     return database.get_unfinished_deck_categories(scope, lang=lang)
 
 
 @router.get("/api/today-mixed/{deck_id}")
 def get_today_mixed(deck_id: int, lang: str | None = None):
+    if lang in (None, "zh") and database.ensure_daily_target():
+        _queue_mgr.invalidate()
     key, build_fn = _key_and_build(root_deck_id=deck_id, lang=lang)
     card = _next_card_from_queue(key, build_fn)
     counts = database.count_due_any_cat(deck_id, lang=lang)

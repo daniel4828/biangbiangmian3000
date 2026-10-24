@@ -401,8 +401,9 @@ def test_list_generates_the_full_entry_but_parks_it_suspended(tmp_db):
     assert examples > 0, "list mode must still produce the full entry"
 
 
-def test_listed_word_is_invisible_to_the_review_queue(tmp_db):
-    """The whole point: a listed word must not turn up for review anywhere."""
+def test_listed_word_is_invisible_to_the_review_queue_when_daily_fill_is_off(tmp_db):
+    """With automatic promotion disabled, Saved remains outside every queue."""
+    database.set_app_setting("daily_target_enabled", "0")
     _run_add_word("生态", day="list")
     today_deck = database.get_or_create_deck_path(f"Daily::{database.anki_today().isoformat()}")
     for category in ("reading", "listening", "creating"):
