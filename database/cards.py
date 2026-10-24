@@ -7,6 +7,7 @@ from .core import get_db, anki_today, get_day_cutoff_hour
 from .presets import get_preset_for_deck
 from .decks import get_deck, get_locked_deck_ids
 from .entries import surface_forms
+from .daily_target import limit_new_cards, daily_target_card_ids, daily_target_new_counts, ordinary_new_sql
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +265,7 @@ def _count_new_introduced_today_multi(conn, deck_ids: list[int], category: str, 
     row = conn.execute(
         f"""SELECT COUNT(DISTINCT c.id) FROM cards c
             WHERE c.deck_id IN ({ph}) AND c.category = ?
+              {ordinary_new_sql(conn)}
               AND EXISTS (
                 SELECT 1 FROM review_log rl
                 WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
@@ -280,8 +282,9 @@ def _count_new_introduced_today_multi(conn, deck_ids: list[int], category: str, 
 def _count_new_introduced_today(conn, deck_id: int, category: str, today: str) -> int:
     """Cards whose very first review log entry is today (introduced as new today)."""
     return conn.execute(
-        """SELECT COUNT(DISTINCT c.id) FROM cards c
+        f"""SELECT COUNT(DISTINCT c.id) FROM cards c
            WHERE c.deck_id = ? AND c.category = ?
+             {ordinary_new_sql(conn)}
              AND EXISTS (
                SELECT 1 FROM review_log rl
                WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
@@ -518,7 +521,7 @@ def get_due_cards(deck_id: int, category: str, *, sibling_suppression: bool = Fa
         random.shuffle(new_cards_raw)
     # else: card_type_gathered / gathered → keep gather order
 
-    new_cards = new_cards_raw[:new_remaining]
+    new_cards = limit_new_cards(new_cards_raw, new_remaining)
 
     # ── 2. Sort review cards ──────────────────────────────────────────────────
     rev_o = preset.get("review_sort_order", "due_random")
@@ -683,6 +686,7 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     new_today_rows = conn.execute(
         f"""SELECT c.deck_id, COUNT(DISTINCT c.id) AS cnt FROM cards c
             WHERE c.deck_id IN ({ph}) AND c.category = ?
+              {ordinary_new_sql(conn)}
               AND EXISTS (
                 SELECT 1 FROM review_log rl
                 WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
@@ -697,7 +701,7 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     new_today = {r["deck_id"]: r["cnt"] for r in new_today_rows}
 
     due_rows = conn.execute(
-        f"""SELECT c.deck_id, c.state, c.due, c.interval FROM cards c
+        f"""SELECT c.id, c.deck_id, c.state, c.due, c.interval FROM cards c
             WHERE c.deck_id IN ({ph}) AND c.category = ?
               AND c.state != 'suspended'
               AND c.deleted_at IS NULL
@@ -753,11 +757,11 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
 
         learning = sum(1 for r in rows if _is_learning(r))
         review = sum(1 for r in rows if r["state"] == "review" and not _is_learning(r))
-        new_avail = sum(1 for r in rows if r["state"] == "new")
+        new_avail = len(limit_new_cards([r for r in rows if r["state"] == "new"], new_remaining))
 
         first_due, last_due = learning_soon_due.get(did, (None, None))
         result[did] = {
-            "new": min(new_avail, new_remaining),
+            "new": new_avail,
             "learning": learning,
             "review": review,
             "learning_future": learning_future.get(did, 0),
@@ -784,7 +788,7 @@ def count_due(deck_id: int, category: str) -> dict:
     new_remaining = max(0, new_limit - new_done_today)
 
     rows = conn.execute(
-        f"""SELECT c.word_id, c.state, c.due, c.interval FROM cards c
+        f"""SELECT c.id, c.word_id, c.state, c.due, c.interval FROM cards c
            WHERE c.deck_id = ? AND c.category = ?
              AND c.state != 'suspended'
              AND c.deleted_at IS NULL
@@ -806,7 +810,7 @@ def count_due(deck_id: int, category: str) -> dict:
 
     learning = sum(1 for r in rows if _is_learning(r))
     review   = sum(1 for r in rows if r["state"] == "review" and not _is_learning(r))
-    new_avail = sum(1 for r in rows if r["state"] == "new")
+    new_avail = len(limit_new_cards([r for r in rows if r["state"] == "new"], new_remaining))
 
     learning_future = conn.execute(
         f"""SELECT COUNT(*) FROM cards
@@ -831,7 +835,7 @@ def count_due(deck_id: int, category: str) -> dict:
 
     conn.close()
     return {
-        "new": min(new_avail, new_remaining),
+        "new": new_avail,
         "learning": learning,
         "review": review,
         "learning_future": learning_future,
@@ -1139,9 +1143,9 @@ def get_due_cards_any_cat(root_deck_id: int, lang: str | None = None) -> list[di
         root_new_done = _count_new_introduced_today_multi(conn, cat_deck_ids, cat, today)
         root_new_remaining = max(0, root_preset["new_per_day"] - root_new_done)
         cat_new = [c for c in all_cards if c["state"] == "new" and c["category"] == cat]
-        if len(cat_new) > root_new_remaining:
-            remove_ids = {c["id"] for c in cat_new[root_new_remaining:]}
-            all_cards = [c for c in all_cards if c["id"] not in remove_ids]
+        kept_ids = {c["id"] for c in limit_new_cards(cat_new, root_new_remaining)}
+        remove_ids = {c["id"] for c in cat_new if c["id"] not in kept_ids}
+        all_cards = [c for c in all_cards if c["id"] not in remove_ids]
     conn.close()
 
     # Build category order index from root deck's preset
@@ -1250,7 +1254,9 @@ def count_due_by_category(root_deck_id: int, lang: str | None = None) -> dict:
             continue
         root_new_done = _count_new_introduced_today_multi(conn, cat_deck_ids, category, today)
         root_new_remaining = max(0, root_preset["new_per_day"] - root_new_done)
-        result[category]["new"] = min(result[category]["new"], root_new_remaining)
+        auto_new = sum(n for (did, cat), n in daily_target_new_counts(conn).items()
+                       if did in cat_deck_ids and cat == category)
+        result[category]["new"] = auto_new + min(max(0, result[category]["new"] - auto_new), root_new_remaining)
     conn.close()
 
     return result
@@ -1280,6 +1286,7 @@ def get_due_cards_multi(deck_ids: list[int], category: str, *, root_deck_id: int
         rows = conn.execute(
             f"""SELECT c.deck_id, COUNT(DISTINCT c.id) AS cnt FROM cards c
                 WHERE c.deck_id IN ({ph}) AND c.category = ?
+                  {ordinary_new_sql(conn)}
                   AND EXISTS (
                     SELECT 1 FROM review_log rl
                     WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
@@ -1324,7 +1331,7 @@ def get_due_cards_multi(deck_ids: list[int], category: str, *, root_deck_id: int
             root_new_done = _count_new_introduced_today_multi(conn, deck_ids, category, today)
             conn.close()
             root_new_remaining = max(0, root_new_limit - root_new_done)
-            new_cards = new_cards[:root_new_remaining]
+            new_cards = limit_new_cards(new_cards, root_new_remaining)
 
     learning_cards.sort(key=lambda c: (learning_rank(c), c["due"]))
     review_cards.sort(key=lambda c: c["due"])
@@ -1369,7 +1376,9 @@ def count_due_multi(deck_ids: list[int], category: str, *, root_deck_id: int | N
             conn = get_db()
             root_new_done = _count_new_introduced_today_multi(conn, deck_ids, category, today)
             conn.close()
-            total["new"] = min(total["new"], max(0, root_new_limit - root_new_done))
+            auto_new = sum(n for (did, cat), n in daily_target_new_counts().items()
+                           if did in deck_ids and cat == category)
+            total["new"] = auto_new + min(max(0, total["new"] - auto_new), max(0, root_new_limit - root_new_done))
 
     return total
 
@@ -1412,6 +1421,7 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
     # word_id -> (state_rank, cat_rank, state, deck_id, category)
     best: dict[int, tuple] = {}
     new_remaining_map: dict[tuple, int] = {}
+    auto_ids = daily_target_card_ids(conn)
 
     for deck_id, category in leaf_pairs:
         pr = get_preset_for_deck(deck_id)
@@ -1420,7 +1430,7 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
         new_remaining_map[(deck_id, category)] = max(0, pr["new_per_day"] - new_done)
 
         rows = conn.execute(
-            f"""SELECT c.word_id, c.state, c.interval FROM cards c
+            f"""SELECT c.id, c.word_id, c.state, c.interval FROM cards c
                WHERE c.deck_id = ? AND c.category = ?
                  AND c.state != 'suspended'
                  AND c.deleted_at IS NULL
@@ -1442,7 +1452,7 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
             is_lrn = (r["state"] in ("learning", "relearn")
                       or (r["state"] == "review" and (r["interval"] or 0) < threshold))
             if r["word_id"] not in best or (sr, cr) < best[r["word_id"]][:2]:
-                best[r["word_id"]] = (sr, cr, r["state"], deck_id, category, is_lrn)
+                best[r["word_id"]] = (sr, cr, r["state"], deck_id, category, is_lrn, r["id"] in auto_ids)
 
     # Cards coming back later today (#844). Deduped by word for the same reason
     # the counts above are: one word must not inflate a parent badge three times.
@@ -1473,7 +1483,11 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
     review_count = 0
     new_by_deck: dict[tuple, int] = {}
 
-    for sr, cr, state, deck_id, category, is_lrn in best.values():
+    auto_new_count = 0
+    for sr, cr, state, deck_id, category, is_lrn, automatic in best.values():
+        if state == "new" and automatic:
+            auto_new_count += 1
+            continue
         if state == "new":
             key = (deck_id, category)
             new_by_deck[key] = new_by_deck.get(key, 0) + 1
@@ -1482,7 +1496,7 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
         else:
             review_count += 1
 
-    new_count = sum(
+    new_count = auto_new_count + sum(
         min(count, new_remaining_map.get(key, 0))
         for key, count in new_by_deck.items()
     )
@@ -1989,9 +2003,9 @@ def count_due_all_decks() -> dict:
 
     # 3. New cards introduced today grouped by (deck_id, category)
     new_today_rows = conn.execute(
-        """SELECT c.deck_id, c.category, COUNT(DISTINCT c.id) AS cnt
+        f"""SELECT c.deck_id, c.category, COUNT(DISTINCT c.id) AS cnt
            FROM cards c
-           WHERE EXISTS (
+           WHERE 1=1 {ordinary_new_sql(conn)} AND EXISTS (
                SELECT 1 FROM review_log rl
                WHERE rl.card_id = c.id
                  AND rl.reviewed_at >= ?
@@ -2071,6 +2085,8 @@ def count_due_all_decks() -> dict:
         (r["deck_id"], r["category"]): r["new_per_day"] for r in limit_rows
     }
 
+    auto_new_counts = daily_target_new_counts()
+
     # Future-dated daily decks are locked: force their counts to zero so they
     # neither display due cards nor contribute to parent aggregation.
     locked = get_locked_deck_ids()
@@ -2090,7 +2106,9 @@ def count_due_all_decks() -> dict:
             c["learning_soon_last_min"] = None
         limit = new_limits.get(key, 20)
         done = new_today.get(key, 0)
-        c["new"] = min(c.pop("new_raw", 0), max(0, limit - done))
+        raw = c.pop("new_raw", 0)
+        auto_new = min(raw, auto_new_counts.get(key, 0))
+        c["new"] = auto_new + min(raw - auto_new, max(0, limit - done))
 
     # Build suspension flags dict
     susp_flags: dict[tuple, bool] = {}

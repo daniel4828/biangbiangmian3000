@@ -1,5 +1,5 @@
 import sqlite3
-from .core import get_db
+from .core import get_db, anki_today
 from .cards import get_card
 from word_frequency import frequency_rank
 
@@ -245,6 +245,27 @@ def bulk_clear_leech_by_words(word_ids: list[int]) -> int:
     conn.commit()
     conn.close()
     return cur.rowcount
+
+
+def bulk_set_leech_new_by_words(word_ids: list[int]) -> int:
+    """Restart only the selected words' leeches; keep their review history."""
+    if not word_ids:
+        return 0
+    conn = get_db()
+    try:
+        ph = ','.join('?' * len(word_ids))
+        cur = conn.execute(
+            f"""UPDATE cards SET state='new', due=?, step_index=0, interval=0,
+                ease=2.5, repetitions=0, lapses=0, stability=NULL, difficulty=NULL,
+                last_review=NULL, learning_again_count=0, is_leech=0, leeched_at=NULL,
+                probation=0, buried_until=NULL, pre_suspend_state=NULL
+                WHERE is_leech=1 AND deleted_at IS NULL AND word_id IN ({ph})""",
+            [anki_today().isoformat(), *word_ids],
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
 
 
 def toggle_card_suspension(card_id: int) -> dict:

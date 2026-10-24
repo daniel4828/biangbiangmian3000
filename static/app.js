@@ -2513,7 +2513,7 @@ function onBrowseSort(val) {
 // word sort (#773, generalized to flagged in #854). Must run BEFORE the list is
 // (re)rendered so _browseSort is already correct.
 function _syncSortOptions() {
-  const showFrequency = _browseCardStatus === 'saved' && activeLang() === 'zh' && _browseMode !== 'hanzi';
+  const showFrequency = ['saved', 'leech'].includes(_browseCardStatus) && activeLang() === 'zh' && _browseMode !== 'hanzi';
   document.querySelectorAll('#browse-sort option[value="frequency"]').forEach(o => o.hidden = !showFrequency);
   if (!showFrequency && _browseSort === 'frequency') _browseSort = DEFAULT_BROWSE_SORT;
   const showLeeched = _browseCardStatus === 'leech';
@@ -2522,7 +2522,12 @@ function _syncSortOptions() {
   document.querySelectorAll('#browse-sort option[value^="leeched-"]').forEach(o => o.hidden = !showLeeched);
   document.querySelectorAll('#browse-sort option[value^="starred-"]').forEach(o => o.hidden = !showStarred);
   document.querySelectorAll('#browse-sort option[value^="flagged-"]').forEach(o => o.hidden = !showFlagged);
-  if (showLeeched && !_browseSort.startsWith('leeched-')) _browseSort = 'leeched-desc';
+  // Set a default only when entering a view; re-rendering must preserve the
+  // user's chosen pinyin/hanzi/date order within that view.
+  const scope = `${activeLang()}:${_browseMode}:${_browseCardStatus}`;
+  const entering = _syncSortOptions._scope !== scope;
+  _syncSortOptions._scope = scope;
+  if (showLeeched && entering) _browseSort = showFrequency ? 'frequency' : 'leeched-desc';
   else if (showStarred && !_browseSort.startsWith('starred-')) _browseSort = 'starred-desc';
   else if (showFlagged && !_browseSort.startsWith('flagged-')) _browseSort = 'flagged-desc';
   else if (!showLeeched && !showStarred && !showFlagged &&
@@ -2806,7 +2811,8 @@ function _wordRow(w) {
   } else if (_browseCardStatus === 'leech' && w.cards.some(c => c.is_leech)) {
     rightHtml =
       `<button class="bw-unleech-btn" onclick="event.stopPropagation();browseUnleechWord(${w.id},this)"` +
-      ` title="Clear the leech flag and unsuspend">✓ Unleech</button>`;
+      ` title="Clear the leech flag and unsuspend">✓ Unleech</button>` +
+      `<button class="bw-saved-btn" onclick="event.stopPropagation();browseLeechNewWord(${w.id},this)" title="Restart this word's leech cards from scratch">Set as New Card</button>`;
   } else if (w.cards.length === 0) {
     rightHtml = `<button class="bw-add-btn" onclick="openAddToDeckModal(event,${w.id})" title="Add to deck">＋ Add</button>`;
   } else {
@@ -2830,7 +2836,7 @@ function _wordRow(w) {
       <div class="bw-left">
         <span class="bw-hanzi">${w.word_zh}</span>
         <span class="bw-pinyin">${w.pinyin || ''}</span>
-        ${_browseCardStatus === 'saved' && activeLang() === 'zh' ? `<span class="bw-pinyin" title="SUBTLEX-CH whole-word frequency rank from film subtitles; lower means more frequent">${w.frequency_rank ? 'Frequency #' + w.frequency_rank : 'Frequency: unlisted'}</span>` : ''}
+        ${['saved', 'leech'].includes(_browseCardStatus) && activeLang() === 'zh' ? `<span class="bw-pinyin" title="SUBTLEX-CH whole-word frequency rank from film subtitles; lower means more frequent">${w.frequency_rank ? 'Frequency #' + w.frequency_rank : 'Frequency: unlisted'}</span>` : ''}
       </div>
       <div class="bw-mid">
         <span class="bw-def">${def}</span>
@@ -2852,6 +2858,29 @@ async function browseUnleechWord(wordId, btn) {
     btn.disabled = false;
     btn.textContent = orig;
     showError('Unleech failed: ' + e.message);
+  }
+}
+
+// Restart just this word's leech cards; healthy sibling cards keep their progress.
+async function browseLeechNewWord(wordId, btn) {
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '…';
+  try {
+    await api('POST', '/api/cards/bulk-leech-new', { word_ids: [wordId] });
+    await _browseReload();
+    const decks = await api('GET', `/api/decks${_langQP('?')}`);
+    _cachedDecks = decks;
+    _browseDecks = _flattenDecks(decks);
+    const allRoot = decks.find(d => d.virtual && d.id !== 'unfinished');
+    _browseDeckTree = allRoot ? (allRoot.children || []) : decks.filter(d => !d.virtual);
+    _renderBrowseDeckSelect();
+    renderDecks(decks);
+    showQuickAddBanner('✓ Leech cards set as new', false);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = orig;
+    showError('Set as new failed: ' + e.message);
   }
 }
 
@@ -3748,6 +3777,51 @@ function openSettings() {
   _loadDayCutoffHour();
   _loadAgainRegenEnabled();
   _loadLangSettings();
+  _loadDailyTarget();
+}
+
+// ── Daily card target (issue #1281) ─────────────────────────────────────────
+let _dailyTarget = null;
+let _dailyTargetFailed = false;
+let _dailyTargetSaving = false;
+
+async function _loadDailyTarget() {
+  try {
+    _dailyTarget = await api('GET', '/api/daily-target');
+    _dailyTargetFailed = false;
+  } catch (e) {
+    _dailyTarget = null;
+    _dailyTargetFailed = true;
+  }
+  renderSettings();
+}
+
+function _dailyTargetHtml() {
+  const disabled = !_dailyTarget || _dailyTargetSaving;
+  return `<div class="keymap-row">
+    <span class="keymap-label">Fill up to 50 Chinese cards per day</span>
+    <label class="switch-wrap">
+      <input type="checkbox" ${_dailyTarget?.enabled ? 'checked' : ''} ${disabled ? 'disabled' : ''}
+        onchange="setDailyTargetEnabled(this.checked)" style="width:18px;height:18px;cursor:pointer">
+      <span>${_dailyTargetFailed ? 'Could not load' : !_dailyTarget ? 'Loading…' : _dailyTarget.enabled ? 'On' : 'Off'}</span>
+    </label>
+  </div>`;
+}
+
+async function setDailyTargetEnabled(enabled) {
+  if (!_dailyTarget || _dailyTargetSaving) return;
+  const previous = _dailyTarget;
+  _dailyTargetSaving = true;
+  renderSettings();
+  try {
+    _dailyTarget = await api('PUT', '/api/daily-target', { enabled });
+  } catch (e) {
+    _dailyTarget = previous;
+    showError('Daily target could not be saved: ' + e.message);
+  } finally {
+    _dailyTargetSaving = false;
+    renderSettings();
+  }
 }
 
 // ── Languages on/off (issue #1252) ──────────────────────────────────────────
@@ -3910,6 +3984,11 @@ function renderSettings() {
       <h2 class="keymap-heading">Stages</h2>
       <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. HSK N hides level N and below (Chinese only).</p>
       <div id="hint-stage-options">${_hintStageOptionsHtml()}</div>
+    </div>
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Daily card target</h2>
+      <p class="keymap-hint">When fewer than 50 different Chinese cards are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
+      ${_dailyTargetHtml()}
     </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Day boundary</h2>
