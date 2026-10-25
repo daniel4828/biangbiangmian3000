@@ -531,7 +531,7 @@ body.ra-fullscreen-open #error-banner {
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 28px 24px 24px;
+  padding: 18px 24px 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -547,6 +547,40 @@ body.ra-fullscreen-open #error-banner {
 .card-meta-row > #review-cat-row {
   flex: 0;
 }
+/* Compact header (#1287): everything above the sentence in two short lines —
+   row 1 deck path ← → tools, row 2 story info ← → speed. One divider under the
+   whole block instead of one under the path; the rows sit 2px apart instead of
+   inheriting the card's 16px gap. */
+.card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 15%, transparent);
+}
+.card-head-row {
+  display: flex;
+  flex-wrap: wrap;   /* narrow phones: tools/speed drop below instead of eating the text */
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+.card-head-row > .card-deck-path,
+.card-head-row > #story-info-row {
+  flex: 1 1 140px;
+  width: auto;
+  min-width: 0;
+}
+.card-head-row > .card-meta-row,
+.card-head-row > #review-rate-row { margin-left: auto; flex-shrink: 0; }
+.card-head-row > .card-meta-row .card-meta-right { flex: none; }
+#review-rate-row.review-rate-compact { width: auto; max-width: none; gap: 6px; }
+.review-rate-compact #review-rate-slider { width: 96px; accent-color: var(--primary, #4a90d9); cursor: pointer; }
+.review-rate-compact .listen-hint-label,
+.review-rate-compact .listen-hint-pct { font-size: 11px; }
+.review-rate-compact .listen-hint-pct { min-width: 28px; }
+.review-rate-compact .hint-save-btn { font-size: 14px; }
 .card-meta-right {
   flex: 1;
   display: flex;
@@ -617,8 +651,6 @@ body.ra-fullscreen-open #error-banner {
   font-size: 11px;
   font-weight: 500;
   color: var(--muted);
-  padding: 4px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--muted) 15%, transparent);
   letter-spacing: 0.2px;
   white-space: nowrap;
   overflow: hidden;
