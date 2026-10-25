@@ -168,7 +168,6 @@
           <div class="card-meta-row">
             <div id="review-cat-row" style="flex:1"></div>
             <div class="card-meta-right">
-              <button id="card-hsk-badge" class="card-hsk-badge" onclick="enrichCard()" title="Ask AI to fill HSK level &amp; character data" style="display:none"></button>
               <div class="meta-play-group">
                 <button id="meta-play-btn" class="play-icon-btn play-icon-sm" onclick="playSentence()" style="display:none" title="Play audio">🔊</button>
                 <span class="listen-counter listen-counter-meta" id="listen-counter-meta" style="display:none"></span>
@@ -353,7 +352,11 @@
                  Placed above the rating buttons so the target word's meaning is
                  visible on a phone without scrolling (#1256). -->
             <div class="vocab-detail">
-              <span class="word-freq" id="word-freq" hidden title="SUBTLEX-CH whole-word frequency rank (film subtitles): lower = more common"></span>
+              <!-- Top-right corner: HSK level + frequency rank side by side (#1285) -->
+              <div class="vocab-corner">
+                <button id="card-hsk-badge" class="card-hsk-badge" onclick="enrichCard()" title="Ask AI to fill HSK level &amp; character data" style="display:none"></button>
+                <span class="word-freq" id="word-freq" hidden title="SUBTLEX-CH whole-word frequency rank (film subtitles): lower = more common"></span>
+              </div>
               <div class="word-big" id="word-zh"></div>
               <div class="word-pin" id="word-pin"></div>
               <div class="word-pos-row"><span class="word-pos" id="word-pos"></span><span class="word-register" id="word-register" style="display:none"></span></div>

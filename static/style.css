@@ -1025,8 +1025,9 @@ body.ra-fullscreen-open #error-banner {
   text-align: center;
 }
 
-/* SUBTLEX-CH rank badge, top-right of the vocab box (#1283) */
-.word-freq { position: absolute; top: 8px; right: 12px; font-size: 11px; color: var(--muted); font-weight: 600; }
+/* Top-right of the vocab box: HSK badge + SUBTLEX-CH rank (#1283, #1285) */
+.vocab-corner { position: absolute; top: 8px; right: 12px; display: flex; align-items: center; gap: 8px; }
+.word-freq { font-size: 11px; color: var(--muted); font-weight: 600; }
 
 .word-big  { font-size: 28px; font-weight: 700; line-height: 1.2; }
 .word-pin  { font-size: 15px; color: var(--muted); }
