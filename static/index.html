@@ -158,44 +158,48 @@
       <div class="review-center-tile">
         <div class="review-card" id="review-card">
 
-          <!-- Deck path bar: full-width breadcrumb above meta row -->
-          <div id="card-deck-path" class="card-deck-path" style="display:none"></div>
-
-          <!-- Story info row: sentence count + topic (clickable → full story) -->
-          <div id="story-info-row" style="display:none" onclick="openStoryModal()" title="View full story"></div>
-
-          <!-- Card meta row: category circles (centre) + right group -->
-          <div class="card-meta-row">
-            <div id="review-cat-row" style="flex:1"></div>
-            <div class="card-meta-right">
-              <div class="meta-play-group">
-                <button id="meta-play-btn" class="play-icon-btn play-icon-sm" onclick="playSentence()" style="display:none" title="Play audio">🔊</button>
-                <span class="listen-counter listen-counter-meta" id="listen-counter-meta" style="display:none"></span>
-              </div>
-              <div id="card-timer" style="display:none"></div>
-              <div id="card-mode-badge" style="display:none"></div>
-              <div id="card-type-badge"></div>
-              <div class="wd-card-menu-wrap" id="review-card-menu-wrap">
-                <button class="wd-menu-btn" onclick="toggleReviewCardMenu(event)">⋯</button>
-                <div class="wd-card-menu" id="review-card-menu" style="display:none">
-                  <button class="wd-menu-item" onclick="reviewCardAction('bury')">Bury until tomorrow</button>
-                  <button class="wd-menu-item" id="review-suspend-btn" onclick="reviewCardAction('suspend')">Suspend</button>
-                  <button class="wd-menu-item" onclick="reviewCardAction('leech')">Mark as leech (⇧L)</button>
-                  <button class="wd-menu-item wd-menu-item-danger" onclick="reviewCardAction('delete')">Delete card</button>
+          <!-- Compact two-line header (#1287): path + tools, then story + speed.
+               The ids are unchanged, so app.js shows/hides each piece as before. -->
+          <div class="card-head">
+            <div class="card-head-row">
+              <div id="card-deck-path" class="card-deck-path" style="display:none"></div>
+              <!-- Card meta row: category circles (centre) + right group -->
+              <div class="card-meta-row">
+                <div id="review-cat-row" style="flex:1"></div>
+                <div class="card-meta-right">
+                  <div class="meta-play-group">
+                    <button id="meta-play-btn" class="play-icon-btn play-icon-sm" onclick="playSentence()" style="display:none" title="Play audio">🔊</button>
+                    <span class="listen-counter listen-counter-meta" id="listen-counter-meta" style="display:none"></span>
+                  </div>
+                  <div id="card-timer" style="display:none"></div>
+                  <div id="card-mode-badge" style="display:none"></div>
+                  <div id="card-type-badge"></div>
+                  <div class="wd-card-menu-wrap" id="review-card-menu-wrap">
+                    <button class="wd-menu-btn" onclick="toggleReviewCardMenu(event)">⋯</button>
+                    <div class="wd-card-menu" id="review-card-menu" style="display:none">
+                      <button class="wd-menu-item" onclick="reviewCardAction('bury')">Bury until tomorrow</button>
+                      <button class="wd-menu-item" id="review-suspend-btn" onclick="reviewCardAction('suspend')">Suspend</button>
+                      <button class="wd-menu-item" onclick="reviewCardAction('leech')">Mark as leech (⇧L)</button>
+                      <button class="wd-menu-item wd-menu-item-danger" onclick="reviewCardAction('delete')">Delete card</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-
-          <!-- 语速（#1123）：正面和背面共用同一行，所以放在 card-meta-row
-               外面而不是塞进 .meta-play-group —— 那里每一面都要各显示一次。
-               步进 0.05，因为 Daniel 要的是 0.9 这种下拉框给不了的值。 -->
-          <div id="review-rate-row" class="listen-hint-slider-row" style="display:none">
-            <span class="listen-hint-label">Speed</span>
-            <input type="range" id="review-rate-slider" min="0.5" max="2" step="0.05" value="1"
-                   oninput="onReviewRateSlider(this.value)">
-            <span class="listen-hint-pct" id="review-rate-pct">1×</span>
-            <button class="hint-save-btn" id="review-rate-save-btn" onclick="saveReviewTtsRateDefault()" title="Save as default">☆</button>
+            <div class="card-head-row">
+              <!-- Story info: sentence count + topic (clickable → full story) -->
+              <div id="story-info-row" style="display:none" onclick="openStoryModal()" title="View full story"></div>
+              <!-- 语速（#1123）：正面和背面共用同一行，所以放在 card-meta-row
+                   外面而不是塞进 .meta-play-group —— 那里每一面都要各显示一次。
+                   步进 0.05，因为 Daniel 要的是 0.9 这种下拉框给不了的值。 -->
+              <div id="review-rate-row" class="listen-hint-slider-row review-rate-compact" style="display:none">
+                <span class="listen-hint-label" title="Playback speed">Speed</span>
+                <input type="range" id="review-rate-slider" min="0.5" max="2" step="0.05" value="1"
+                       oninput="onReviewRateSlider(this.value)">
+                <span class="listen-hint-pct" id="review-rate-pct">1×</span>
+                <button class="hint-save-btn" id="review-rate-save-btn" onclick="saveReviewTtsRateDefault()" title="Save as default">☆</button>
+              </div>
+            </div>
           </div>
 
           <!-- Front side (content varies by category) -->
