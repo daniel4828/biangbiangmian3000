@@ -11690,6 +11690,7 @@ function loadCard(c, counts) {
     .then(d => {
       if (!d) return;
       wordDetails = d;
+      renderWordFreq();
       // If back is already showing (user flipped before fetch completed), re-render with full data
       if (document.getElementById('side-back').style.display !== 'none') {
         // Re-render interactive word-zh now that components are available
@@ -12133,6 +12134,7 @@ function revealAnswer() {
   const wordDefFrEl = document.getElementById('word-def-fr');
   wordDefFrEl.textContent = card.definition_fr ? `🇫🇷 ${card.definition_fr}` : '';
   wordDefFrEl.style.display = card.definition_fr ? 'block' : 'none';
+  renderWordFreq();
 
   const posEl = document.getElementById('word-pos');
   posEl.textContent   = card.pos || '';
@@ -12718,6 +12720,16 @@ function renderEtymologySection(container, wordData, wordId) {
 // landed yet, so fall back to the current card's deck language.
 function _entryLang(wordData) {
   return wordData?.lang || currentCardLang() || 'zh';
+}
+
+// #1283: SUBTLEX-CH rank in the vocab box's corner — lower = more common.
+// Only Chinese has ranks; frequency_rank arrives with /api/word/{id}.
+function renderWordFreq() {
+  const el = document.getElementById('word-freq');
+  if (!el) return;
+  const show = !!wordDetails && wordDetails.id === card?.word_id && _entryLang(wordDetails) === 'zh';
+  el.hidden = !show;
+  if (show) el.textContent = wordDetails.frequency_rank ? `Rank #${wordDetails.frequency_rank}` : 'Rank: unlisted';
 }
 
 // Verb conjugation section (issue #596) — French & future conjugating

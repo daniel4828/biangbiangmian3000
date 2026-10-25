@@ -11,3 +11,10 @@ def test_frequency_is_exact_and_language_scoped(client):
     assert words['我']['frequency_rank'] > 1
     assert words['完全不存在的测试词语']['frequency_rank'] is None
     assert words['你']['frequency_rank'] is None
+
+
+def test_word_detail_carries_frequency_rank(client):
+    zh_id = _entry('的', 'zh')
+    fr_id = _entry('de', 'fr')
+    assert client.get(f'/api/word/{zh_id}').json()['frequency_rank'] == 1
+    assert client.get(f'/api/word/{fr_id}').json()['frequency_rank'] is None
