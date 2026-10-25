@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 from .core import get_db
+from word_frequency import frequency_rank
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ def get_word_full(word_id: int) -> dict | None:
     word["components"] = get_note_components(word_id)
     word["conjugations"] = get_word_conjugations(word_id)
     word["inflections"] = get_word_inflections(word_id)
+    word["frequency_rank"] = frequency_rank(word["word_zh"], word.get("lang") or "zh")
     return word
 
 
