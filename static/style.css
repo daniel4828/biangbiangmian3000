@@ -581,6 +581,16 @@ body.ra-fullscreen-open #error-banner {
 .review-rate-compact .listen-hint-pct { font-size: 11px; }
 .review-rate-compact .listen-hint-pct { min-width: 28px; }
 .review-rate-compact .hint-save-btn { font-size: 14px; }
+/* Phones: wrapping put the header back at four lines (#1289). Keep both rows on
+   one line each instead — the text sides truncate, "Speed" goes (the slider
+   and its 1× readout say it), the slider narrows. */
+@media (max-width: 560px) {
+  .card-head-row { flex-wrap: nowrap; }
+  .card-head-row > .card-deck-path,
+  .card-head-row > #story-info-row { flex-basis: 0; }
+  .review-rate-compact .listen-hint-label { display: none; }
+  .review-rate-compact #review-rate-slider { width: 72px; }
+}
 .card-meta-right {
   flex: 1;
   display: flex;
@@ -1060,6 +1070,11 @@ body.ra-fullscreen-open #error-banner {
 /* Top-right of the vocab box: HSK badge + SUBTLEX-CH rank (#1283, #1285) */
 .vocab-corner { position: absolute; top: 8px; right: 12px; display: flex; align-items: center; gap: 8px; }
 .word-freq { font-size: 11px; color: var(--muted); font-weight: 600; }
+/* Phones: the centred word + pinyin reach the corner, so the badges take a
+   line of their own at the top instead of floating over them (#1289). */
+@media (max-width: 560px) {
+  .vocab-corner { position: static; order: -1; flex-basis: 100%; justify-content: flex-end; }
+}
 
 .word-big  { font-size: 28px; font-weight: 700; line-height: 1.2; }
 .word-pin  { font-size: 15px; color: var(--muted); }
