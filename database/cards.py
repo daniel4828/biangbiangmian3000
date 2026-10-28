@@ -2365,6 +2365,26 @@ def _replay_schedule_step(state, step, interval, ease, rating, P):
     return (state, step, interval, ease, float(interval))
 
 
+def _apply_real_review_gaps(rows, points, final_state, card_interval):
+    """Overwrite replayed gaps of review-state points with real intervals.
+
+    review_log.last_interval is the interval *before* a review, so the interval
+    review i produced is rows[i+1]["last_interval"]; for the last review it is
+    the card's current interval. NULL/0 values keep the replayed gap.
+    """
+    for i, p in enumerate(points):
+        if p["state"] != "review":
+            continue
+        if i + 1 < len(rows):
+            real = rows[i + 1]["last_interval"]
+        elif final_state == "review":
+            real = card_interval
+        else:
+            continue
+        if real is not None and real > 0:
+            p["gap"] = float(real)
+
+
 def get_card_timeline_data(card_id: int) -> dict:
     """Per-card interval timeline for all category cards of the same word.
 
@@ -2379,6 +2399,11 @@ def get_card_timeline_data(card_id: int) -> dict:
     Recorded review_log.state values recalibrate the replayed state, and the
     card's current state pins the end. Each card gets a final dashed point at
     its real due date with the current interval.
+
+    Points in review state use the real recorded intervals (the next row's
+    review_log.last_interval, or cards.interval for the last review); the SM-2
+    replay is only the fallback for learning steps and legacy rows without
+    last_interval (real scheduling is FSRS, so replayed intervals drift).
     """
     from .stats import _EVOLUTION_STATES
 
@@ -2400,7 +2425,8 @@ def get_card_timeline_data(card_id: int) -> dict:
     result = []
     for c in cards:
         rows = conn.execute(
-            """SELECT datetime(reviewed_at, 'localtime') AS at, rating, state
+            """SELECT datetime(reviewed_at, 'localtime') AS at, rating, state,
+                      last_interval
                FROM review_log WHERE card_id = ? ORDER BY reviewed_at""",
             (c["id"],),
         ).fetchall()
@@ -2433,6 +2459,7 @@ def get_card_timeline_data(card_id: int) -> dict:
             })
         if points and final in _EVOLUTION_STATES:
             points[-1]["state"] = final  # pin the end to the card's real state
+        _apply_real_review_gaps(rows, points, final, c["interval"])
 
         # Final dashed point: the card's real current interval, plotted at its due date
         scheduled = None
@@ -2491,7 +2518,8 @@ def get_session_timelines(card_ids: list[int]) -> dict:
     result = []
     for c in cards:
         rows = conn.execute(
-            """SELECT datetime(reviewed_at, 'localtime') AS at, rating, state
+            """SELECT datetime(reviewed_at, 'localtime') AS at, rating, state,
+                      last_interval
                FROM review_log WHERE card_id = ? ORDER BY reviewed_at""",
             (c["id"],),
         ).fetchall()
@@ -2522,6 +2550,7 @@ def get_session_timelines(card_ids: list[int]) -> dict:
                            "rating": r["rating"], "state": state})
         if points and final in _EVOLUTION_STATES:
             points[-1]["state"] = final
+        _apply_real_review_gaps(rows, points, final, c["interval"])
 
         scheduled = None
         if points and c["state"] in ("learning", "relearn", "review"):
