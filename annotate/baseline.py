@@ -7,7 +7,7 @@ word?" Until now the answer came only from what he had studied here
 flagged as new, drowning a French rendition in parentheses.
 
 These lists are the missing floor: French CEFR A1-A2, Chinese HSK 3.0 1-4 and
-(#1294) Spanish A1, the latter an approximation (top-500 lemmas, lemmas only —
+(#1294) Spanish A1, the latter an approximation (top-300 lemmas, lemmas only —
 see scripts/build_es_baseline.py).
 They are a static linguistic fact about a proficiency level, not a personal
 per-word mark, which is why they live in the repo rather than in the known_words

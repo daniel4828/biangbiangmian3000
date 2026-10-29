@@ -5,12 +5,14 @@ Reads the bundled lexicon (resources/es-lexicon.json.gz, #1293) and writes the
 N most frequent lemmas (default 300), proper nouns excluded, one per line in
 rank order.
 
-    python scripts/build_es_baseline.py [--top 500] [--lexicon PATH] [--out PATH]
+    python scripts/build_es_baseline.py [--top 300] [--lexicon PATH] [--out PATH]
 
 Why an approximation: the real A1 list would be ELELex (the CEFRLex Spanish
-list), which could not be downloaded from the build environment. The 500 most
+list), which could not be downloaded from the build environment. The 300 most
 frequent lemmas of the OpenSubtitles frequency table are a reasonable stand-in
-for what a solid A1 learner has met.
+for what a solid A1 learner has met. The default is deliberately tight: the
+placement test showed words at rank 336 (ayer) and 438 (lograr) were still
+unknown, and a too generous list hides real new words.
 
 Why lemmas only: since #1293 the romance annotator judges known-ness by lemma
 (a token is known if ANY of its candidate lemmas is known), so inflected forms
@@ -25,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LEXICON = ROOT / "resources" / "es-lexicon.json.gz"
 DEFAULT_OUT = ROOT / "annotate" / "baseline_es.txt"
-DEFAULT_TOP = 500
+DEFAULT_TOP = 300
 
 
 def select_lemmas(lexicon: dict, top: int) -> list[str]:
