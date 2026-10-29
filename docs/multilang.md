@@ -392,6 +392,14 @@ CREATE TABLE knowledge_renditions (
 （词条详情弹窗）+ `inflection-section`（复习卡背面），紧跟在各自的
 conjugation 挂载点后面。
 
+### 名词冠词（#1294）
+
+`languages.py` 的语言条目可带可选的 `articles`（目前只有西语：`{"m": "el", "f": "la"}`）。
+`languages.article_for(word, gender, lang)` 据此给名词词头配冠词：`m`→`el`、`f`→`la`，
+以重读 a/ha 开头的阴性名词（显式词表，如 `agua`、`alma`）单数用 `el`，`mf`→`el/la`，
+其余一律 `None`，不抛异常。`GET /api/word/{id}` 的 `article` 字段只供显示（复习卡背面和词条详情页）；
+`word_zh` 与编辑框仍是裸词。法语需要省音（`l'eau`），暂未支持。
+
 ---
 
 ## 造句与调度预设（#806，已实现）

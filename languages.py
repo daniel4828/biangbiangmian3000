@@ -135,9 +135,24 @@ LANGUAGES = {
         "learner_level": "CEFR A2",
         "background_vocab": "CEFR A1",
         "sentence_limit": "12 words",
+        # Definite article by noun gender, shown in front of the headword in the
+        # review card back and the word detail page (#1294: "la clima" errors
+        # in the placement test). French is deliberately absent: it needs
+        # elision (l'eau) and is out of scope for now.
+        "articles": {"m": "el", "f": "la"},
         "features": {**_ROMANCE_BASE["features"]},
     },
 }
+
+# Spanish feminine nouns that begin with a stressed /a/ take "el" in the
+# singular ("el agua", but "las aguas" and "la otra agua"). Explicit list on
+# purpose: the rule depends on stress, which can't be derived from spelling
+# alone (la aguja, la ambulancia are unstressed and keep "la"). Only the
+# unambiguous classics are listed; a word missing here just shows "la".
+_ES_EL_FEMININE = frozenset({
+    "agua", "águila", "alma", "arma", "área", "hambre", "hacha", "aula",
+    "ala", "ave", "haba", "hada", "asma", "ancla", "arpa", "alba", "ánima",
+})
 
 
 def get_lang_config(lang: str | None) -> dict:
@@ -150,6 +165,35 @@ def get_lang_config(lang: str | None) -> dict:
 
 def is_valid_lang(lang: str | None) -> bool:
     return lang in LANGUAGES
+
+
+def article_for(word: str | None, gender: str | None, lang: str | None) -> str | None:
+    """Definite article to show before a noun headword (#1294), or None.
+
+    None when the language has no "articles" table, the gender is empty/unknown
+    or the word is empty. "m"/"f" give the matching article; Spanish feminine
+    nouns on the _ES_EL_FEMININE list take "el" (el agua). Any gender naming
+    both ("mf", "m/f", "mfbysense") gives "el/la". Never raises: this runs on
+    every word detail response and must not be able to break it.
+    """
+    try:
+        articles = get_lang_config(lang).get("articles")
+        g = (gender or "").strip().lower()
+        w = (word or "").strip()
+        if not articles or not g or not w:
+            return None
+        has_m, has_f = "m" in g, "f" in g
+        if has_m and has_f:
+            return f"{articles['m']}/{articles['f']}"
+        if has_m:
+            return articles["m"]
+        if has_f:
+            if (lang == "es" and w.lower() in _ES_EL_FEMININE):
+                return articles["m"]
+            return articles["f"]
+        return None
+    except Exception:
+        return None
 
 
 def deck_root(lang: str | None) -> str:

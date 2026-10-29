@@ -3351,11 +3351,17 @@ function closeWordDetailPopup() {
     _currentView === 'word-detail' ? 'block' : 'none';
 }
 
+// Headword with its article ("la cuenta"), display only (#1294). The edit
+// modal edits word_zh itself and must never go through this.
+function _withArticle(word, article) {
+  return article ? `${article} ${word}` : word;
+}
+
 function renderWordDetail(word) {
   document.getElementById('wd-edit-btn').onclick = () => openWordEditModal(word);
   const regenAllBtn = document.getElementById('wd-regen-all-btn');
   if (regenAllBtn) regenAllBtn.onclick = () => word.id && regenAllFields(word.id);
-  document.getElementById('wd-hanzi').textContent = word.word_zh || '';
+  document.getElementById('wd-hanzi').textContent = _withArticle(word.word_zh || '', word.article);
   document.getElementById('wd-pinyin').textContent = word.pinyin || '';
   document.getElementById('wd-def').textContent = word.definition ? `🇬🇧 ${word.definition}` : '';
   const posEl = document.getElementById('wd-pos');
@@ -11715,6 +11721,8 @@ function loadCard(c, counts) {
         const isMultiWord = nt === 'sentence' || nt === 'chengyu' || nt === 'expression';
         if (isMultiWord && wordDetails?.components?.length) {
           wzEl.innerHTML = renderInteractiveZh(card.word_zh, wordDetails.components);
+        } else if (!isMultiWord && wordDetails.id === card.word_id) {
+          wzEl.textContent = _withArticle(card.word_zh, wordDetails.article);
         }
         renderVocabDetail();
         renderNotesSection();
@@ -12138,7 +12146,10 @@ function revealAnswer() {
   if (isMultiWord && wordDetails?.components?.length) {
     wordZhEl.innerHTML = renderInteractiveZh(card.word_zh, wordDetails.components);
   } else {
-    wordZhEl.textContent = card.word_zh;
+    // wordDetails belongs to this card only if the ids match (a slow fetch for
+    // the previous card must not leak its article here, #1294).
+    wordZhEl.textContent = _withArticle(
+      card.word_zh, wordDetails?.id === card.word_id ? wordDetails.article : null);
   }
   const wordPinEl = document.getElementById('word-pin');
   wordPinEl.textContent = isSentenceNote ? '' : (card.pinyin || '');

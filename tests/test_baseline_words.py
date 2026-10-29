@@ -26,13 +26,16 @@ def test_shipped_lists_load():
     # resources and a pinned number would fail for the wrong reason.
     assert len(fr) > 10000
     assert len(zh) > 3000
-    assert not any(w.startswith("#") for w in fr | zh)
+    es = baseline.baseline_words("es")
+    assert len(es) > 200
+    assert not any(w.startswith("#") for w in fr | zh | es)
 
 
 def test_language_without_a_list_is_empty_not_an_error():
-    """Spanish ships no baseline yet. That must be an empty set, not a crash —
-    same posture as romance.stopwords() on an unreadable file."""
-    assert baseline.baseline_words("es") == frozenset()
+    """A language with no baseline file (here an unregistered code) must give an
+    empty set, not a crash — same posture as romance.stopwords() on an
+    unreadable file."""
+    assert baseline.baseline_words("pt") == frozenset()
 
 
 def test_unreadable_list_degrades_to_empty(monkeypatch, tmp_path):
