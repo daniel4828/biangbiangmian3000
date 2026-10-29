@@ -125,7 +125,8 @@ def regular_form(lemma: str, tense: str, person: str) -> str | None:
     else (other endings, reflexive -se, unknown tense/person). Never raises."""
     try:
         lemma = (lemma or "").strip().lower()
-        if person not in PERSONS or len(lemma) < 3 or lemma.endswith("se"):
+        # len 2 is allowed on purpose: "ir" = empty stem + the -ir endings.
+        if person not in PERSONS or len(lemma) < 2 or lemma.endswith("se"):
             return None
         idx = PERSONS.index(person)
         if tense == "ind_fut":
@@ -204,6 +205,14 @@ def _differing_persons(lemma: str, tense: str, row: list[str]) -> list[str]:
     return out
 
 
+def _unregular_note(lemma: str, tense: str, row: list[str]) -> str:
+    """Generic fallback note. Person labels already end in "." ("3. Sg."), so
+    the sentence period is only added when the last label doesn't supply one."""
+    text = "Unregelmäßig in: " + (", ".join(_differing_persons(lemma, tense, row))
+                                  or "einzelnen Formen")
+    return text if text.endswith(".") else text + "."
+
+
 def _stem_change(lemma: str, row: list[str]) -> str | None:
     """Detect e→ie / o→ue / e→i in the present (3rd person singular)."""
     reg = regular_form(lemma, "ind_pres", "3s")
@@ -220,12 +229,22 @@ def _stem_change(lemma: str, row: list[str]) -> str | None:
 
 def _pattern(lemma: str, tense: str, row: list[str]) -> tuple[str, str]:
     """(category key, German note) for one form card. The key groups cards that
-    share a pattern, for the "Wie: …" list."""
+    share a pattern, for the "Wie: …" list. An EMPTY key means "generic note,
+    no real pattern category" — such cards get no "Wie:" (it would group
+    unrelated verbs: ser, estar, ver, saber)."""
     if tense == "ind_pret":
+        reg1 = (regular_form(lemma, tense, "1s") or "").lower()
+        first = row[0].lower()
         if lemma in ("ser", "ir"):
-            return "pret_serir", ("Starkes Indefinido (pretérito fuerte): unbetonte Endungen -e, -iste, -o, "
-                                  "-imos, -isteis, -ieron. ser und ir haben dasselbe Indefinido (fui, fuiste, fue…).")
-        if not row[0].lower().endswith(("é", "í")):
+            return "pret_serir", ("ser und ir haben dasselbe Indefinido: "
+                                  "fui, fuiste, fue, fuimos, fuisteis, fueron.")
+        if len(first) < 3:
+            # vi/di: monosyllables lose the accent; not a pretérito fuerte.
+            note = f"Einsilbige Formen ohne Akzent ({row[0]}, {row[2]})."
+            if lemma == "dar":
+                note += " dar konjugiert wie ein -er/-ir-Verb (di, diste, dio …)."
+            return "", note
+        if first.endswith("e") and first != reg1:
             note = ("Starkes Indefinido (pretérito fuerte): unbetonte Endungen -e, -iste, -o, "
                     "-imos, -isteis, -ieron.")
             key = "pret_strong"
@@ -233,28 +252,29 @@ def _pattern(lemma: str, tense: str, row: list[str]) -> tuple[str, str]:
                 note += " 3. Pl. auf -eron."
                 key = "pret_strong_eron"
             return key, note
-        diff = _differing_persons(lemma, tense, row)
-        return "pret_other", "Unregelmäßig in: " + (", ".join(diff) or "einzelnen Formen") + "."
+        return "", _unregular_note(lemma, tense, row)
     if tense == "ind_pres":
         parts, keys = [], []
         reg1 = regular_form(lemma, tense, "1s") or ""
         if row[0].lower().endswith("go") and not reg1.endswith("go"):
             parts.append("yo-Form auf -go.")
             keys.append("go")
+        elif row[0].lower().endswith("zco") and not reg1.endswith("zco"):
+            parts.append("yo-Form auf -zco.")
+            keys.append("zco")
         change = _stem_change(lemma, row)
         if change:
             parts.append(f"Stammwechsel {change} (nicht in nosotros/vosotros).")
             keys.append(change)
         if parts:
             return "pres_" + "_".join(keys), " ".join(parts)
-        diff = _differing_persons(lemma, tense, row)
-        return "pres_other", "Unregelmäßig in: " + (", ".join(diff) or "einzelnen Formen") + "."
+        return "", _unregular_note(lemma, tense, row)
     if tense == "ind_fut":
         stem = row[0][:-1] if row[0].endswith("é") else row[0]
         return "fut_stem", f"Unregelmäßiger Futurstamm: {stem}- (Endungen regelmäßig)."
     if tense == "ind_impf":
         return "impf", "Nur ser, ir und ver haben ein unregelmäßiges Imperfecto."
-    return "other", ""
+    return "", ""
 
 
 def pattern_note(lemma: str, tense: str, row: list[str], lang: str) -> str:
@@ -271,6 +291,12 @@ def form_card_candidates(lang: str, max_verbs: int = 25, max_tenses: int = 3,
     verbs × their first `max_tenses` irregular tenses, capped at `limit`.
 
     Each item: {lemma, tense, word_zh, row (6 forms), note_de}. Deterministic.
+
+    Note on haber: it only shows up if the lexicon's verbs index carries it.
+    The story code keeps a hard-coded present-tense fallback for haber
+    (_HABER_PRES) precisely because the Jehle-derived table may lack it; when
+    it has no forms there is nothing to build a row from, so it is simply left
+    out rather than hand-listed (irregularity is derived from data, #1296).
     Never raises — [] without a lexicon."""
     items: list[dict] = []
     keys: list[str] = []
@@ -292,12 +318,14 @@ def form_card_candidates(lang: str, max_verbs: int = 25, max_tenses: int = 3,
                 items.append({"lemma": lemma, "tense": tense,
                               "word_zh": form_card_word(lemma, tense),
                               "row": row, "note_de": note})
-                keys.append(f"{tense}:{key}")
+                keys.append(f"{tense}:{key}" if key else "")
                 taken += 1
             if taken:
                 verbs += 1
         for item, key in zip(items, keys):
-            like = [o["lemma"] for o, k in zip(items, keys)
+            if not key:
+                continue
+            like =[o["lemma"] for o, k in zip(items, keys)
                     if k == key and o["lemma"] != item["lemma"]][:4]
             if like:
                 item["note_de"] += " Wie: " + ", ".join(like) + "."

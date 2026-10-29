@@ -26,6 +26,17 @@ TABLE = {
         "ind_fut": "tendré tendrás tendrá tendremos tendréis tendrán",
         "ind_impf": "tenía tenías tenía teníamos teníais tenían",
     }),
+    "ir": (6, {
+        "ind_pret": "fui fuiste fue fuimos fuisteis fueron",
+        "ind_pres": "voy vas va vamos vais van",
+        "ind_impf": "iba ibas iba íbamos ibais iban",
+        "ind_fut": "iré irás irá iremos iréis irán",
+    }),
+    "ver": (7, {"ind_pret": "vi viste vio vimos visteis vieron"}),
+    "dar": (8, {"ind_pret": "di diste dio dimos disteis dieron"}),
+    "parecer": (9, {"ind_pres": "parezco pareces parece parecemos parecéis parecen"}),
+    "hacer": (10, {"ind_pret": "hice hiciste hizo hicimos hicisteis hicieron"}),
+    "decir": (11, {"ind_pret": "dije dijiste dijo dijimos dijisteis dijeron"}),
     "hablar": (4, {
         "ind_pret": "hablé hablaste habló hablamos hablasteis hablaron",
         "ind_pres": "hablo hablas habla hablamos habláis hablan",
@@ -83,6 +94,47 @@ def test_irregular_tenses():
     # spelling change only counts
     assert verb_slots.irregular_tenses("buscar", "es") == ["ind_pret"]
     assert verb_slots.irregular_tenses("nope", "es") == []
+
+
+def test_ir_two_letter_infinitive():
+    assert verb_slots.regular_form("ir", "ind_pres", "1p") == "imos"
+    assert verb_slots.regular_form("ir", "ind_pret", "3s") == "ió"
+    assert verb_slots.regular_form("ir", "ind_fut", "1s") == "iré"
+    assert verb_slots.irregular_tenses("ir", "es") == ["ind_pret", "ind_pres", "ind_impf"]
+    words = [c["word_zh"] for c in verb_slots.form_card_candidates("es")]
+    for w in ("ir · Indefinido", "ir · Presente", "ir · Imperfecto"):
+        assert w in words
+
+
+def _note(lemma, tense):
+    row = TABLE[lemma][1][tense].split()
+    return verb_slots.pattern_note(lemma, tense, row, "es")
+
+
+def test_pret_notes_strong_only_for_real_strong_forms():
+    assert "Starkes Indefinido" not in _note("ser", "ind_pret")
+    assert _note("ir", "ind_pret").startswith("ser und ir haben dasselbe Indefinido")
+    assert "Einsilbige Formen ohne Akzent (vi, vio)" in _note("ver", "ind_pret")
+    dar = _note("dar", "ind_pret")
+    assert "(di, dio)" in dar and "dar konjugiert wie ein -er/-ir-Verb" in dar
+    assert "Starkes Indefinido" in _note("hacer", "ind_pret")
+    assert "3. Pl. auf -eron" in _note("decir", "ind_pret")
+
+
+def test_zco_pattern():
+    assert "yo-Form auf -zco." in _note("parecer", "ind_pres")
+
+
+def test_no_double_periods_and_wie_only_for_real_patterns():
+    cands = verb_slots.form_card_candidates("es", max_verbs=50, limit=200)
+    assert cands
+    for c in cands:
+        assert ".." not in c["note_de"], c["note_de"]
+        if c["note_de"].startswith(("Unregelmäßig in", "Einsilbige", "ser und ir")):
+            assert "Wie:" not in c["note_de"], c["note_de"]
+    by = {c["word_zh"]: c["note_de"] for c in cands}
+    assert "Wie:" in by["tener · Indefinido"]  # shares the strong pattern with hacer
+    assert "hacer" in by["tener · Indefinido"]
 
 
 def test_word_roundtrip_and_non_matching():
