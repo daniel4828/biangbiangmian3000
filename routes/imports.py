@@ -582,6 +582,66 @@ def add_word_to_list(word_zh: str, lang: str = "zh") -> dict:
     }
 
 
+def seed_es_irregular_form_cards() -> dict:
+    """Create the Spanish irregular-verb form cards (#1296) in Español ★ List.
+
+    One entry per (irregular verb, irregular tense) — "tener · Indefinido" —
+    with a single suspended `creating` card in the Spanish Saved deck, so
+    nothing reaches the review queue until it is promoted from Browse. Never
+    calls the AI: headword, the six forms and the German pattern note all come
+    from verb_slots (lexicon + rules). Idempotent — an existing headword is
+    skipped, so a second run creates nothing.
+
+    The entry is written with database.insert_word()/insert_card() directly
+    instead of going through importer.import_yaml_content(): the importer's
+    romance path is built for AI-generated dictionary entries (examples,
+    conjugation tables, day decks) and would add nothing here except an
+    intermediate Daily deck to move the card out of again.
+
+    Returns {"created": [word_zh], "skipped": [word_zh], "errors": [str]}.
+    """
+    import lexicon
+    import verb_slots
+
+    created: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+    saved_deck_id = database.get_or_create_saved_deck("es")
+    for cand in verb_slots.form_card_candidates("es"):
+        word_zh = cand["word_zh"]
+        try:
+            existing = database.get_word_by_zh(word_zh)
+            if existing and (existing.get("lang") or DEFAULT_LANG) == "es":
+                skipped.append(word_zh)
+                continue
+            info = lexicon.lemma_info(cand["lemma"], "es") or {}
+            entry_id = database.insert_word({
+                "word_zh": word_zh,
+                "lang": "es",
+                "note_type": "grammar",
+                "pos": "Verbform",
+                "definition": info.get("gloss_en") or "",
+                "definition_de": ", ".join(cand["row"]),
+                "notes": cand["note_de"],
+                "source": "irregular-forms",
+            })
+            database.insert_card(entry_id, "creating", saved_deck_id, state="suspended")
+            created.append(word_zh)
+        except Exception as e:
+            logger.exception("irregular form card %r failed: %s", word_zh, e)
+            errors.append(f"{word_zh}: {e}")
+    return {"created": created, "skipped": skipped, "errors": errors}
+
+
+@router.post("/api/es/irregular-form-cards")
+def create_es_irregular_form_cards():
+    """Create the irregular-verb form cards in Español ★ List (#1296)."""
+    import lexicon
+    if not lexicon.available("es"):
+        raise HTTPException(status_code=400, detail="Spanish lexicon is not available")
+    return seed_es_irregular_form_cards()
+
+
 @router.get("/api/add-word-ai/progress/{job_id}")
 def add_word_ai_progress(job_id: str):
     """Poll status for a background add-word job started by /api/add-word-ai."""

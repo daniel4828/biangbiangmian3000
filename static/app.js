@@ -3830,6 +3830,26 @@ async function setDailyTargetEnabled(enabled) {
   }
 }
 
+// ── Spanish irregular verb form cards (issue #1296) ─────────────────────────
+async function createEsIrregularFormCards() {
+  const btn = document.getElementById('es-irregular-btn');
+  const msg = document.getElementById('es-irregular-msg');
+  if (!btn || !msg) return;
+  btn.disabled = true;
+  msg.textContent = 'Creating…';
+  try {
+    const r = await api('POST', '/api/es/irregular-form-cards');
+    let text = `Created ${r.created.length}, skipped ${r.skipped.length}`;
+    if (r.errors && r.errors.length) text += `, ${r.errors.length} errors: ${r.errors.join('; ')}`;
+    msg.textContent = text;
+  } catch (e) {
+    msg.textContent = '';
+    showError('Could not create the cards: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Languages on/off (issue #1252) ──────────────────────────────────────────
 let _langSettings = null;       // GET /api/lang-settings; null = not loaded (or failed)
 let _langSettingsFailed = false;
@@ -4012,6 +4032,14 @@ function renderSettings() {
       <h2 class="keymap-heading">Morning pre-generation</h2>
       <p class="keymap-hint">Story type generated automatically each morning, per category. Independent of the style you pick when regenerating during the day. <b>Off</b> = repeat whatever you last generated manually.</p>
       <div id="pregen-config-body">Loading…</div>
+    </div>
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Spanish</h2>
+      <p class="keymap-hint">One card per irregular verb × tense, ~60 cards, no AI cost; they land in Español ★ List — promote them from Browse.</p>
+      <div class="keymap-row">
+        <button class="keymap-reset-all" id="es-irregular-btn" onclick="createEsIrregularFormCards()">Create irregular verb cards (★ List)</button>
+        <span id="es-irregular-msg" class="keymap-label"></span>
+      </div>
     </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Server logs</h2>
