@@ -236,7 +236,7 @@ def _pattern(lemma: str, tense: str, row: list[str]) -> tuple[str, str]:
         reg1 = (regular_form(lemma, tense, "1s") or "").lower()
         first = row[0].lower()
         if lemma in ("ser", "ir"):
-            return "pret_serir", ("ser und ir haben dasselbe Indefinido: "
+            return "", ("ser und ir haben dasselbe Indefinido: "
                                   "fui, fuiste, fue, fuimos, fuisteis, fueron.")
         if len(first) < 3:
             # vi/di: monosyllables lose the accent; not a pretérito fuerte.
