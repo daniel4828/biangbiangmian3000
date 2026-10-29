@@ -194,6 +194,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 ├── books/                 # 书籍阅读器（#836）：epub.py（纯标准库 zipfile+ElementTree）、
 │                          #   pdf.py（pypdf，按页抽文字层+记真实页码，不做 OCR）、paginate.py（定长切页）、
 │                          #   __init__.py 的 ingest_file() 是唯一入库入口
+├── lexicon.py             # 按语言的词形→原形词汇表（#1293）：读 resources/{lang}-lexicon.json.gz（目前只有 es），由 scripts/build_es_lexicon.py 离线生成；缺文件 = 没有词汇表，从不抛异常
 ├── zh_annotate.py         # 生词标注（#638，零 AI）：HSK 表+词库+jieba+pypinyin+谷歌翻译
 ├── translator.py          # 翻译：**三条通道依次降级**——谷歌 /m 网页（UA 必须伪装成浏览器，#890）→
 │                          #   谷歌 translate_a/single JSON（#1140）→ **自家 DeepSeek**（#1144）
@@ -527,6 +528,16 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 ## ★ List 中文词频排序（#1246）
 
 Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名越小越靠前，未收录词排最后；每行显示排名或 unlisted。离开中文 Saved 视图恢复默认排序。`word_frequency.py` 缓存读取 `resources/subtlex-ch-ranks.json`（SUBTLEX-CH，99,121 词，电影字幕语料）；`database/browse.py` 按词条语言返回 `frequency_rank`，非中文返回 null。无数据库迁移，无运行时下载。来源和重建方式见 `resources/README.md`。
+
+## 西班牙语词汇表：词形→原形（#1293）
+
+之前罗曼语阅读器完全不认原形：点 `fui` 会把变位形原样丢给谷歌翻译，没存过的变位形全算"生词"，加词时发的也是变位形。现在仓库自带一份西班牙语词汇表 `resources/es-lexicon.json.gz`（词形→原形、动词时态/人称、频率排名、名词性别、英文释义），做法同 #1246：静态资源，运行时零网络、零 AI。来源（doozan/spanish_data 的频率表和维基词典、Fred Jehle 动词表）、许可和校验和见 `resources/README.md`；由 `scripts/build_es_lexicon.py` 离线生成，不在运行时构建。
+
+- **`lexicon.py`（仓库根目录）按语言通用**：只要 `resources/{lang}-lexicon.json.gz` 存在，该语言就"有词汇表"。API：`available` / `lemmas_of(form, lang)` / `lemma_info` / `verb_tags` / `grammar_label`（如 `ser/ir · Indefinido · 1. Sg.`）。**所有函数都不抛异常**：文件缺失（仅 debug 日志）或损坏（warning）都退化成空词汇表
+- **`annotate/romance.py` 的"已认识"判定多了一层**：原有的词形精确匹配不变，另外把每个词的全部候选原形拿去查 `forms_lookup` / `known_words` / 基线词表 / 功能词表，**任一原形已认识就算已认识**。多义词形（`fui` → ser/ir）同理，不猜是哪一个。新词和 `mode=all` 两条路共用同一个 `_word_dicts()`，所以字段一致
+- **词条字典新增字段**：`lemma`（候选原形唯一时是原形，否则仍是词形）、`lemmas`（全部候选）、`grammar`、`definition`（英文释义兜底）。`word` 永远是词形——前端靠它定位点击。德语释义对唯一原形去翻译，多义/未知词形仍翻词形
+- **★ List 和 ✓ Known 发的是 `lemma`**（`_addWordFromDict` / `_markKnownFromDict`），点 `hablamos` 加进去的是 `hablar`。`routes/knowledge.py` 的 `_with_entry_ids` 在词形查不到条目时再按原形查一次
+- **法语不受影响**：没有 `fr-lexicon.json.gz` 就没有 `lemmas`/`grammar` 字段，`lemma == word`，行为与以前逐字节相同；以后给法语做一个同格式文件（再加一个 build 脚本）即可启用，不用改 `romance.py`
 
 ## 每日 50 张卡自动补充（#1281）
 

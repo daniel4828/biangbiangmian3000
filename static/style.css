@@ -6407,6 +6407,8 @@ body.gloss-on [data-gloss-tr]::after {
   cursor: pointer;
 }
 .word-actions-gloss { margin: 6px 0 0; color: var(--text); font-size: 14px; }
+/* #1293: lemma / tense / person line from the bundled lexicon. */
+.word-actions-grammar { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 /* #1140: the "the lookup failed" state — present, but plainly not a gloss. */
 .word-actions-gloss-missing { color: var(--muted); font-style: italic; }
 .word-actions-buttons { display: flex; gap: 8px; margin-top: 12px; }

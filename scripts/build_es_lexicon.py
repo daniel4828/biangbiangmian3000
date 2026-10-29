@@ -183,13 +183,22 @@ def parse_jehle(path: Path):
 
 
 def _gloss_for(blocks: list[dict], pos: str) -> str | None:
-    wanted = GLOSS_POS.get(pos)
-    block = next((b for b in blocks if b["pos"] == wanted), None) if wanted else None
-    if block is None:
-        block = blocks[0] if blocks else None
-    if block is None or not block["glosses"]:
+    # Frequency-file pos tags (n, v, adj, adv, conj, pron, prep, art, num,
+    # determiner, interj, prop) are spelled the same in wiktionary, so the
+    # lemma's pos is the block pos. Several blocks of that pos are merged and
+    # duplicate gloss lines dropped (tener lists "to have; to possess" twice).
+    # Fallback: the first non-proper-noun block — never a `prop` block unless
+    # the lemma itself is one (como/conj must not become "Como, a city in
+    # Lombardy").
+    wanted = GLOSS_POS.get(pos, pos)
+    chosen = [b for b in blocks if b["pos"] == wanted]
+    if not chosen:
+        first = next((b for b in blocks if b["pos"] != "prop"), None)
+        chosen = [first] if first else []
+    glosses = list(dict.fromkeys(g for b in chosen for g in b["glosses"]))
+    if not glosses:
         return None
-    text = "; ".join(block["glosses"][:MAX_GLOSSES])
+    text = "; ".join(glosses[:MAX_GLOSSES])
     return text[:MAX_GLOSS_CHARS].rstrip()
 
 

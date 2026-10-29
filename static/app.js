@@ -9777,6 +9777,16 @@ function _isLetter(ch) {
   return !!ch && /[\p{L}\p{M}]/u.test(ch);
 }
 
+// The grammar line under the panel head (#1293): the lexicon's label for an
+// inflected form ("ir/ser · Indefinido · 1. Sg."), else a bare "→ lemma" when
+// the annotator only resolved a lemma. Empty for Chinese and for languages
+// without a lexicon. The text is server data, so it is escaped like any other.
+function _wordGrammarHtml(w, word) {
+  if (w.grammar) return `<p class="word-actions-grammar">${_escHtml(w.grammar)}</p>`;
+  if (w.lemma && w.lemma !== word) return `<p class="word-actions-grammar">→ ${_escHtml(w.lemma)}</p>`;
+  return '';
+}
+
 // The tap target's own little panel: what the word means, and the same two
 // actions as its table row. Both buttons hand off to the table's handlers —
 // there is exactly one add path in this application (#643) and exactly one
@@ -9803,6 +9813,7 @@ function _openWordActions(idx, anchor) {
       ${w.pinyin ? `<span class="word-actions-pinyin">${_escHtml(w.pinyin)}</span>` : ''}
       <button class="word-actions-close" aria-label="Close">✕</button>
     </div>
+    ${_wordGrammarHtml(w, word)}
     ${glossHtml}
     <div class="word-actions-buttons">
       <button class="word-table-btn" id="word-actions-add">★ List</button>
@@ -9857,6 +9868,7 @@ function _openKnownWordActions(key, anchor) {
       ${w.pinyin ? `<span class="word-actions-pinyin">${_escHtml(w.pinyin)}</span>` : ''}
       <button class="word-actions-close" aria-label="Close">✕</button>
     </div>
+    ${_wordGrammarHtml(w, w.word || '')}
     ${glossHtml}
     <div class="word-actions-buttons">${w.word_id
       ? `<button class="word-table-btn" id="word-actions-detail">📖 Details</button>`
