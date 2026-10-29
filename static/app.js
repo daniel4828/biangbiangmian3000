@@ -9047,7 +9047,10 @@ function doWordTableAdd(idx, extraBtn) {
 // point at, but goes through this very same path — one add pipeline (#643).
 function _addWordFromDict(w, btns) {
   if (!w || !btns.length) return;
-  const wordZh = w.word || w.word_zh || '';
+  // #1293: send the lemma, not the inflected form. `lemma` is a real lemma only
+  // when the lexicon found exactly one (else it equals `word`; Chinese entries
+  // carry none), so this is a no-op for everything but unambiguous Spanish forms.
+  const wordZh = w.lemma || w.word || w.word_zh || '';
   if (!wordZh) return;
 
   _setWordBtns(btns, '…', { disabled: true });
@@ -9163,7 +9166,8 @@ function _generateEntryFromDict(w, btn) {
 // table row when there is one.
 function _markKnownFromDict(w, btns, rowIdx) {
   if (!w || !btns.length) return;
-  const wordZh = w.word || w.word_zh || '';
+  // #1293: mark the lemma known, so "fui"-type forms retire the whole word.
+  const wordZh = w.lemma || w.word || w.word_zh || '';
   if (!wordZh) return;
 
   _setWordBtns(btns, '…', { disabled: true });

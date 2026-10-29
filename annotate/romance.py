@@ -20,6 +20,7 @@ import re
 
 import database
 import languages
+import lexicon
 
 from . import baseline
 
@@ -139,15 +140,29 @@ def _annotate(text: str, lang: str) -> tuple[str, list[dict]]:
     known = (database.forms_lookup(order, lang)
              | database.known_words_exists(order, lang)
              | (set(order) & baseline.baseline_words(lang)))
+
+    # #1293: with a lexicon, "known" also means "some lemma of this form is
+    # known" — a conjugated form of a verb Daniel studies (or that sits in the
+    # baseline / stopword lists) is not a new word, even though that exact
+    # surface form was never stored. An ambiguous form (fui -> ser/ir) counts
+    # as known if ANY candidate lemma is. No lexicon (French today) -> the
+    # map is empty and everything below is the old behavior, byte for byte.
+    lemma_map = _lemma_map(order, lang)
+    if lemma_map:
+        lemma_pool = sorted({lm for lms in lemma_map.values() for lm in lms})
+        if lemma_pool:
+            known_lemmas = (database.forms_lookup(lemma_pool, lang)
+                            | database.known_words_exists(lemma_pool, lang)
+                            | (set(lemma_pool) & baseline.baseline_words(lang))
+                            | (set(lemma_pool) & stop))
+            known = set(known) | {w for w, lms in lemma_map.items()
+                                  if any(lm in known_lemmas for lm in lms)}
+
     new_cores = [w for w in order if w not in known]
     if not new_cores:
         return text, []
 
-    glosses = _glosses(new_cores, lang)
-    new_words = [
-        {"word": w, "lemma": w, "definition_de": glosses.get(w) or None}
-        for w in new_cores
-    ]
+    new_words = _word_dicts(new_cores, lang, lemma_map)
 
     # #1001: the text is returned untouched. The glosses used to be written
     # into it after the first occurrence of each new word; they now live on
@@ -186,8 +201,56 @@ def _annotate_all(text: str, lang: str) -> list[dict]:
     if not order:
         return []
 
-    glosses = _glosses(order, lang)
-    return [{"word": w, "lemma": w, "definition_de": glosses.get(w) or None} for w in order]
+    return _word_dicts(order, lang, _lemma_map(order, lang))
+
+
+def _lemma_map(words: list[str], lang: str) -> dict[str, list[str]]:
+    """{surface form: candidate lemmas} for the forms the lexicon knows (#1293).
+    Empty when `lang` has no lexicon, which is what keeps French untouched."""
+    if not lexicon.available(lang):
+        return {}
+    out = {}
+    for w in words:
+        lemmas = lexicon.lemmas_of(w, lang)
+        if lemmas:
+            out[w] = lemmas
+    return out
+
+
+def _word_dicts(words: list[str], lang: str, lemma_map: dict[str, list[str]]) -> list[dict]:
+    """The shared enrichment step for _annotate (new words) and _annotate_all
+    (every word) — one place decides what a word dict carries (#1293).
+
+    "word" stays the surface form: the frontend locates taps by it. "lemma" is
+    the single lemma when the form is unambiguous, else the surface form (the
+    ★ List / ✓ Known buttons send it, and an ambiguous fui must not silently
+    pick ser or ir). The German gloss is requested for that same string:
+    unambiguous forms are translated by their lemma ("hablamos" -> "hablar"),
+    ambiguous or unknown ones keep the surface form. One batched translate
+    call over the de-duplicated strings, failure contract as _glosses()."""
+    use_lex = lexicon.available(lang)
+    queries = {}
+    for w in words:
+        lemmas = lemma_map.get(w) or []
+        queries[w] = lemmas[0] if len(lemmas) == 1 else w
+    glosses = _glosses(list(dict.fromkeys(queries.values())), lang)
+
+    out = []
+    for w in words:
+        q = queries[w]
+        d = {"word": w, "lemma": q, "definition_de": glosses.get(q) or None}
+        if use_lex:
+            lemmas = lemma_map.get(w) or []
+            if lemmas:
+                d["lemmas"] = list(lemmas)
+                info = lexicon.lemma_info(lemmas[0], lang)
+                if info and info.get("gloss_en"):
+                    d["definition"] = info["gloss_en"]
+            grammar = lexicon.grammar_label(w, lang)
+            if grammar:
+                d["grammar"] = grammar
+        out.append(d)
+    return out
 
 
 def all_words(text: str, lang: str) -> list[dict]:

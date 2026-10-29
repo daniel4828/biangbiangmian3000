@@ -277,6 +277,22 @@ def _with_entry_ids(words: list[dict], lang: str) -> list[dict]:
         wid = ids.get(w.get("word", ""))
         if wid:
             w["word_id"] = wid
+
+    # #1293: a conjugated form ("hablamos") has no entry of its own unless it
+    # was stored verbatim, but its lemma may. Second batched lookup, only for
+    # words still without an id whose unambiguous lemma differs from the form.
+    pending = [w for w in words
+               if not w.get("word_id") and w.get("lemma") and w["lemma"] != w.get("word")]
+    if pending:
+        try:
+            lemma_ids = database.entry_ids_for_forms([w["lemma"] for w in pending], lang)
+        except Exception as e:
+            logger.warning("new-words: lemma entry id lookup failed for lang=%s — %s", lang, e)
+            return words
+        for w in pending:
+            wid = lemma_ids.get(w["lemma"])
+            if wid:
+                w["word_id"] = wid
     return words
 
 
