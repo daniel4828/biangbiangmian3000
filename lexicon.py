@@ -49,6 +49,9 @@ _TENSE_LABELS = {
     "imp_neg": "Imperativo negativo",
     "ger": "Gerundio",
     "part": "Participio",
+    # Composed tense (haber + participle), not a lexicon code: only used by the
+    # story verb-slot rotation (#1295, verb_slots.py).
+    "perf": "Perfecto",
 }
 _PERSON_LABELS = {"1s": "1. Sg.", "2s": "2. Sg.", "3s": "3. Sg.",
                   "1p": "1. Pl.", "2p": "2. Pl.", "3p": "3. Pl."}
@@ -58,11 +61,15 @@ _MAX_TAG_GROUPS = 3
 def clear_cache() -> None:
     """Forget every loaded lexicon (test hook)."""
     _cache.clear()
+    _form_index.clear()
+    _forms_of_index.clear()
 
 
 def inject(lang: str, data: dict | None) -> None:
     """Install `data` as the lexicon for `lang` (test hook); None = no lexicon."""
     _cache[lang] = _normalise(data) if data is not None else _EMPTY
+    _form_index.pop(lang, None)
+    _forms_of_index.pop(lang, None)
 
 
 def _normalise(data) -> dict:
@@ -132,6 +139,65 @@ def verb_tags(form: str, lang: str) -> list[tuple[str, str, str]]:
         return []
 
 
+def slot_label(tense: str, person: str) -> str:
+    """Label of one (tense, person) slot: ("ind_pret", "3s") -> "Indefinido · 3. Sg.".
+
+    Same maps as grammar_label() (#1295) so the card tag and the tap panel
+    never name a tense differently. Person "" (participle/gerund) -> tense only."""
+    label = _TENSE_LABELS.get(tense, tense)
+    person_label = _PERSON_LABELS.get(person)
+    return f"{label} · {person_label}" if person_label else label
+
+
+# Lazy reverse indexes per language (#1295). Built once from the loaded
+# lexicon; tests that inject()/clear_cache() must also drop these — both hooks do.
+_form_index: dict[str, dict] = {}
+_forms_of_index: dict[str, dict] = {}
+
+
+def form_for(lemma: str, tense: str, person: str, lang: str) -> str | None:
+    """The conjugated form of `lemma` for (tense, person), or None. Never raises.
+
+    Reverse of verb_tags(): when several forms share a slot (voseo variants,
+    alternative spellings) the first one in file order wins."""
+    try:
+        index = _form_index.get(lang)
+        if index is None:
+            index = {}
+            for form, tags in _load(lang)["verbs"].items():
+                for t in tags:
+                    index.setdefault((t[0], t[1], t[2]), form)
+            _form_index[lang] = index
+        return index.get(((lemma or "").lower(), tense, person))
+    except Exception:
+        return None
+
+
+def forms_of(lemma: str, lang: str) -> list[str]:
+    """Every known form of `lemma` (including the lemma itself). Never raises."""
+    try:
+        lemma = (lemma or "").lower()
+        index = _forms_of_index.get(lang)
+        if index is None:
+            index = {}
+            lex = _load(lang)
+            for form, lemmas in lex["forms"].items():
+                for lem in lemmas or []:
+                    index.setdefault(lem, []).append(form)
+            for form, tags in lex["verbs"].items():
+                for t in tags:
+                    bucket = index.setdefault(t[0], [])
+                    if form not in bucket:
+                        bucket.append(form)
+            _forms_of_index[lang] = index
+        out = list(index.get(lemma, []))
+        if lemma and lemma in _load(lang)["lemmas"] and lemma not in out:
+            out.insert(0, lemma)
+        return out
+    except Exception:
+        return []
+
+
 def grammar_label(form: str, lang: str) -> str | None:
     """Short human label for the tap panel: "ir/ser · Indefinido · 1. Sg.".
 
@@ -145,9 +211,7 @@ def grammar_label(form: str, lang: str) -> str | None:
 
         groups: list[str] = []
         for _lemma, tense, person in tags:
-            label = _TENSE_LABELS.get(tense, tense)
-            person_label = _PERSON_LABELS.get(person)
-            text = f"{label} · {person_label}" if person_label else label
+            text = slot_label(tense, person)
             if text not in groups:
                 groups.append(text)
         groups = groups[:_MAX_TAG_GROUPS]

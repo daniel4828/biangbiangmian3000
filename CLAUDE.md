@@ -194,6 +194,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 ├── books/                 # 书籍阅读器（#836）：epub.py（纯标准库 zipfile+ElementTree）、
 │                          #   pdf.py（pypdf，按页抽文字层+记真实页码，不做 OCR）、paginate.py（定长切页）、
 │                          #   __init__.py 的 ingest_file() 是唯一入库入口
+├── verb_slots.py          # 西语动词时态×人称轮换（#1295）：为动词卡挑最少用过的槽位，故事句子必须用该变位形
 ├── lexicon.py             # 按语言的词形→原形词汇表（#1293）：读 resources/{lang}-lexicon.json.gz（目前只有 es），由 scripts/build_es_lexicon.py 离线生成；缺文件 = 没有词汇表，从不抛异常
 ├── zh_annotate.py         # 生词标注（#638，零 AI）：HSK 表+词库+jieba+pypinyin+谷歌翻译
 ├── translator.py          # 翻译：**三条通道依次降级**——谷歌 /m 网页（UA 必须伪装成浏览器，#890）→
@@ -540,6 +541,20 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **西班牙语 A1 基线词表（#1294）**：Daniel 的分级测试结果是扎实的 A1，所以 `annotate/baseline_es.txt` 把词频排名前 300 的原形（排除专有名词）当作"已认识"。默认故意取紧：分级测试里排名 336 的 `ayer`、438 的 `lograr` 他仍不认识，给太宽会把真正的生词藏起来。这是**近似**：真正的 A1 表应是 ELELex（CEFRLex 西语），但构建环境下载不到。只存原形不存变位形——#1293 之后罗曼语标注器按原形判定。重建：`python scripts/build_es_baseline.py [--top 300]`
 - **名词带冠词显示（#1294）**：测试里出现过 "la clima" 这类性别错误，所以西语名词词头在复习卡背面和词条详情页显示为 "el clima" / "la cuenta"。`languages.article_for(word, gender, lang)` 按 `languages.py` 里的 `articles` 表取冠词；以 stressed a/ha 开头的阴性名词（`agua`、`águila`、`alma`、`arma`……，显式词表）单数用 `el`；`mf` 给 `el/la`；不抛异常。`GET /api/word/{id}` 多返回 `article` 字段，**只用于显示**：存库的 `word_zh` 仍是裸词，编辑框也不带冠词。法语暂不做（要处理 `l'` 省音）
 - **法语不受影响**：没有 `fr-lexicon.json.gz` 就没有 `lemmas`/`grammar` 字段，`lemma == word`，行为与以前逐字节相同；以后给法语做一个同格式文件（再加一个 build 脚本）即可启用，不用改 `romance.py`
+
+## 西班牙语动词：时态×人称轮换（#1295）
+
+中文里"认识一个词 = 会用它"；西语里认识 `ir` ≠ 会说 `fui`。分级测试：现在时没问题，过去时完全没有。而故事提示词原来要求目标词"必须以给定形式出现"，动词因此永远是不定式，变位从没练过。
+
+- **不加新卡**：动词仍是三张卡。每次为动词卡生成故事句子时，选一个（时态, 人称）槽位，要求句子**恰好**用那个变位形。卡片上显示小标签（如 `Indefinido · 3. Sg.`），因为德语 "ich spielte" 对应 jugué/jugaba 有歧义
+- **槽位选法**（`verb_slots.assign_slots()`）：全局用得最少的槽位优先（跨所有西语动词），并列取最久没用的（从没用过算最久），再并列随机；同一篇故事内每选一次就给本地计数 +1，所以一篇故事会铺开到不同槽位。**历史就是 `story_sentences.verb_slot` 列**（`database.verb_slot_usage(lang)` 聚合），不建新表
+- **启用哪些时态在 `languages.py` 的 `es["verb_slots"]`**：现在是 Presente → Indefinido → Imperfecto → Perfecto。解锁 Futuro 就在 `tenses` 里追加 `"ind_fut"`（Subjuntivo 之后再说）。法语没有 `verb_slots` → 功能关闭，提示词逐字不变
+- **Perfecto 是组合出来的**（`perf` 不是词汇表里的时态码）：`haber` 现在时对应人称 + 过去分词（`ha hablado`）。只覆盖词汇表里的 637 个常用动词（Jehle）；没有该形式的槽位自动跳过
+- **自反动词暂不支持**（`quejarse` 等以 `se` 结尾的不定式）：代词要挪到变位形前面（`me quejé`），平表做不出来
+- **匹配规则**：句子含目标形式（词边界、不分大小写）→ 记下 `verb_slot`/`grammar_hint`；AI 写了别的形式但仍能匹配（不定式、`surface_forms`）→ 卡片照收、**不挂标签**（标签会撒谎）。补漏句（`_patch_missing`）同样无槽位
+- **`database.surface_forms()` 对非中文并入 `lexicon.forms_of()`**：AI 生成的 `entry_forms` 不全时，高亮/填空/知识模式匹配照样认得变位形
+- **只在 story/qa/expository 三个模式生效**（`ai.generate_story` 的非中文分支）；知识模式和 Again 单句重生成不变，因此那些句子没有标签
+- 前端：`static/app.js` 的 `_renderGrammarHint()` 填正面 `#grammar-hint` 和背面 `#grammar-hint-back`（只用 `textContent`），每张卡都重置；测试见 `tests/test_verb_slots.py`
 
 ## 每日 50 张卡自动补充（#1281）
 

@@ -319,6 +319,11 @@ def init_db() -> None:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN source_url TEXT")
     if "context_de" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN context_de TEXT")
+    # Verb slot rotation: which (tense, person) the sentence drills (#1295).
+    if "verb_slot" not in ss_cols:
+        conn.execute("ALTER TABLE story_sentences ADD COLUMN verb_slot TEXT")
+    if "grammar_hint" not in ss_cols:
+        conn.execute("ALTER TABLE story_sentences ADD COLUMN grammar_hint TEXT")
     if "source_title" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN source_title TEXT")
     if "source_name" not in ss_cols:

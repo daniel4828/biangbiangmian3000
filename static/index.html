@@ -230,6 +230,9 @@
                     onclick="toggleAlwaysWordDef()" title="Always show translation hint">👀</span>
             </div>
             <!-- Reading / Cloze: Chinese sentence on front (reading shows full, cloze shows blanked) -->
+            <!-- Verb slot tag (#1295): which tense/person this sentence drills; the
+                 front side-front container is shown for all three categories. -->
+            <div id="grammar-hint" class="grammar-hint-tag" style="display:none"></div>
             <div class="sentence" id="sentence-front"></div>
             <div class="creating-input-wrap" id="creating-input-wrap">
               <div class="input-label" id="creating-input-label">Fill in the blank</div>
@@ -307,6 +310,7 @@
                  above the target sentence (replaces the old light bulb, issue #452) -->
             <div class="news-back-source" id="news-back-source" style="display:none"></div>
             <!-- 1. Sentence (listening/reading back; hidden for creating) -->
+            <div id="grammar-hint-back" class="grammar-hint-tag" style="display:none"></div>
             <div class="sentence-row" id="sentence-row-back">
               <div class="sentence" id="sentence-back"></div>
             </div>

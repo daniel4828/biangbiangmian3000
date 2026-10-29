@@ -1974,6 +1974,20 @@ body.ra-fullscreen-open #error-banner {
 .quick-add-banner.qa-success { background: var(--good-solid, #1e8e3e); color: #fff; }
 .quick-add-banner.qa-info    { background: var(--info-solid, #555); color: #fff; }
 
+/* Verb slot tag (#1295): small pill naming the tense/person a sentence drills. */
+.grammar-hint-tag {
+  align-self: center;
+  margin: 4px auto;
+  padding: 2px 10px;
+  width: fit-content;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
 /* ── Creating: front input ───────────────────────────── */
 /* Row wraps the translation text + the mobile tap toggle. Hidden entirely
    outside creating mode; visible (flex) in creating mode regardless of
