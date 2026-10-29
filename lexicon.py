@@ -79,6 +79,43 @@ def _normalise(data) -> dict:
             for key in ("lemmas", "forms", "verbs")}
 
 
+# Conjugations the bundled table lacks (#1301): the Jehle table has no haber,
+# so it would never get slots, form cards or "he/has/ha" tags. Applied only to
+# the file-loaded lexicon (not inject(), so test fixtures stay exact), and only
+# for lemmas without any verbs tag. Rows are persons 1s 2s 3s 1p 2p 3p.
+_PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
+_SUPPLEMENT = {
+    "es": {
+        "haber": {
+            "ind_pres": ("he", "has", "ha", "hemos", "habéis", "han"),
+            "ind_pret": ("hube", "hubiste", "hubo", "hubimos", "hubisteis", "hubieron"),
+            "ind_impf": ("había", "habías", "había", "habíamos", "habíais", "habían"),
+            "ind_fut": ("habré", "habrás", "habrá", "habremos", "habréis", "habrán"),
+            "ind_cond": ("habría", "habrías", "habría", "habríamos", "habríais", "habrían"),
+            "subj_pres": ("haya", "hayas", "haya", "hayamos", "hayáis", "hayan"),
+            "subj_impf": ("hubiera", "hubieras", "hubiera", "hubiéramos", "hubierais", "hubieran"),
+            "part": {"": "habido"},
+            "ger": {"": "habiendo"},
+        },
+    },
+}
+
+
+def _apply_supplement(lang: str, data: dict) -> None:
+    verbs = data["verbs"]
+    with_tags = {t[0] for tags in verbs.values() for t in tags}
+    for lemma, tenses in _SUPPLEMENT.get(lang, {}).items():
+        if lemma in with_tags:
+            continue
+        for tense, forms in tenses.items():
+            rows = forms.items() if isinstance(forms, dict) else zip(_PERSONS, forms)
+            for person, form in rows:
+                tag = [lemma, tense, person]
+                bucket = verbs.setdefault(form, [])
+                if tag not in bucket:
+                    bucket.append(tag)
+
+
 def _load(lang: str) -> dict:
     cached = _cache.get(lang)
     if cached is not None:
@@ -91,6 +128,7 @@ def _load(lang: str) -> dict:
         try:
             with gzip.open(path, "rt", encoding="utf-8") as f:
                 data = _normalise(json.load(f))
+            _apply_supplement(lang, data)
         except Exception as e:
             logger.warning("lexicon: cannot read %s — %s", path, e)
     _cache[lang] = data
