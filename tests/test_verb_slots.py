@@ -18,7 +18,7 @@ LEXICON = {
     "lemmas": {
         "hablar": _verb("to speak"), "comer": _verb("to eat"),
         "haber": _verb("to have"), "ir": _verb("to go"),
-        "quejarse": _verb("to complain"),
+        "quejar": _verb("to complain"),
         "casa": {"r": 50, "p": "n", "g": "f", "en": "house"},
     },
     "forms": {"habló": ["hablar"], "hablo": ["hablar"], "fui": ["ir", "ser"]},
@@ -41,7 +41,9 @@ LEXICON = {
         "han": [["haber", "ind_pres", "3p"]],
         "voy": [["ir", "ind_pres", "1s"]],
         "fui": [["ir", "ind_pret", "1s"]],
-        "quejo": [["quejarse", "ind_pres", "1s"]],
+        "quejo": [["quejar", "ind_pres", "1s"]],
+        "quejé": [["quejar", "ind_pret", "1s"]],
+        "quejado": [["quejar", "part", ""]],
     },
 }
 
@@ -90,10 +92,39 @@ def test_target_form_simple_and_perfect():
 def test_is_slottable_verb():
     assert verb_slots.is_slottable_verb("hablar", "es")
     assert not verb_slots.is_slottable_verb("casa", "es")
-    assert not verb_slots.is_slottable_verb("quejarse", "es")
+    assert verb_slots.is_slottable_verb("quejarse", "es")  # reflexive (#1301)
+    assert not verb_slots.is_slottable_verb("casarse", "es")  # base not a known verb
     assert not verb_slots.is_slottable_verb("ir a casa", "es")
     assert not verb_slots.is_slottable_verb("hablar", "fr")
     assert verb_slots.config("fr") is None
+
+
+def test_target_form_reflexive():
+    assert verb_slots.target_form("quejarse", "ind_pret", "1s", "es") == "me quejé"
+    assert verb_slots.target_form("quejarse", "perf", "1s", "es") == "me he quejado"
+    assert verb_slots.target_form("quejarse", "ind_pret", "3s", "es") is None  # no such form
+
+
+def test_assign_slots_reflexive():
+    usage = _full_usage(**{"ind_pret:1s": (0, None)})
+    out = verb_slots.assign_slots([_card(1, "quejarse")], "es", usage=usage)
+    assert out[1]["form"] == "me quejé"
+
+
+def test_config_enables_future_and_subjunctive():
+    tenses = verb_slots.config("es")["tenses"]
+    assert "ind_fut" in tenses and "subj_pres" in tenses and "subj_impf" in tenses
+    assert "subjunctive" in verb_slots.describe("subj_pres:1s")
+
+
+@pytest.mark.skipif(not (lexicon._RESOURCE_DIR / "es-lexicon.json.gz").exists(),
+                    reason="bundled es lexicon missing")
+def test_real_lexicon_has_haber_supplement():
+    lexicon.clear_cache()
+    assert lexicon.form_for("haber", "ind_pret", "1s", "es") == "hube"
+    assert lexicon.form_for("haber", "part", "", "es") == "habido"
+    cands = verb_slots.form_card_candidates("es", max_verbs=200, limit=1000)
+    assert "haber" in {c["lemma"] for c in cands}
 
 
 def _full_usage(n=1, **overrides):

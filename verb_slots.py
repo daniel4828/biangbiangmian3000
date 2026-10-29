@@ -12,9 +12,9 @@ Slot codes are "tense:person" ("ind_pret:3s"). Tense codes are the lexicon's
 (lexicon.py, #1293) plus the composed "perf" (haber + participle). Which
 tenses/persons are enabled lives in languages.py ("verb_slots").
 
-Known limit: reflexive infinitives (quejarse) are skipped — the pronoun has to
-move in front of the conjugated form ("me quejé"), which the plain form table
-cannot produce.
+Reflexive infinitives (quejarse, #1301) are supported: the forms come from the
+base verb (quejar) and the reflexive pronoun is put in front by person
+("me quejé", "te quejas", "me he quejado").
 
 Everything on the generation path is total: failures log a warning and degrade
 to "no slots" (the story is generated as before).
@@ -38,7 +38,13 @@ _TENSE_EN = {
     "ind_fut": "Futuro (future)",
     "ind_cond": "Condicional (conditional)",
     "perf": "Pretérito perfecto (present perfect)",
+    "subj_pres": "Presente de subjuntivo (present subjunctive — the sentence needs a "
+                 "trigger such as 'que', 'ojalá', 'para que')",
+    "subj_impf": "Imperfecto de subjuntivo (imperfect subjunctive, -ra form — needs a "
+                 "trigger such as 'si', 'quería que', 'como si')",
 }
+# Reflexive pronoun in front of the conjugated form (#1301).
+_REFLEXIVE_PRONOUN = {"1s": "me", "2s": "te", "3s": "se", "1p": "nos", "2p": "os", "3p": "se"}
 _PERSON_EN = {"1s": "1st person singular", "2s": "2nd person singular",
               "3s": "3rd person singular", "1p": "1st person plural",
               "2p": "2nd person plural", "3p": "3rd person plural"}
@@ -61,8 +67,8 @@ def is_slottable_verb(word: str, lang: str) -> bool:
         w = (word or "").strip().lower()
         if not w or len(w.split()) != 1:
             return False
-        if w.endswith("se"):  # reflexive — known limit, see module docstring
-            return False
+        if w.endswith("se") and len(w) > 4:  # reflexive: judge the base verb (#1301)
+            w = w[:-2]
         info = lexicon.lemma_info(w, lang)
         if not info or info.get("pos") != "v":
             return False
@@ -72,13 +78,27 @@ def is_slottable_verb(word: str, lang: str) -> bool:
 
 
 def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
-    """The exact string a sentence must contain for this slot, or None."""
+    """The exact string a sentence must contain for this slot, or None.
+
+    Reflexive infinitives (quejarse) use the base verb's form with the
+    pronoun in front: "me quejé", "me he quejado" (#1301)."""
     try:
+        lemma = (lemma or "").strip().lower()
+        pronoun = ""
+        if lemma.endswith("se") and len(lemma) > 4:
+            pronoun = _REFLEXIVE_PRONOUN.get(person, "")
+            if not pronoun:
+                return None
+            lemma = lemma[:-2]
         if tense == "perf":
             aux = lexicon.form_for("haber", "ind_pres", person, lang) or _HABER_PRES.get(person)
             part = lexicon.form_for(lemma, "part", "", lang)
-            return f"{aux} {part}" if aux and part else None
-        return lexicon.form_for(lemma, tense, person, lang)
+            form = f"{aux} {part}" if aux and part else None
+        else:
+            form = lexicon.form_for(lemma, tense, person, lang)
+        if not form:
+            return None
+        return f"{pronoun} {form}" if pronoun else form
     except Exception:
         return None
 
@@ -292,11 +312,6 @@ def form_card_candidates(lang: str, max_verbs: int = 25, max_tenses: int = 3,
 
     Each item: {lemma, tense, word_zh, row (6 forms), note_de}. Deterministic.
 
-    Note on haber: it only shows up if the lexicon's verbs index carries it.
-    The story code keeps a hard-coded present-tense fallback for haber
-    (_HABER_PRES) precisely because the Jehle-derived table may lack it; when
-    it has no forms there is nothing to build a row from, so it is simply left
-    out rather than hand-listed (irregularity is derived from data, #1296).
     Never raises — [] without a lexicon."""
     items: list[dict] = []
     keys: list[str] = []
