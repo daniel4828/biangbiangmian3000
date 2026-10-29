@@ -366,6 +366,20 @@ def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
         forms.extend(lexicon.forms_of(word, lang))
     except Exception as e:
         logger.debug("lexicon forms unavailable for %s — %s", word, e)
+    try:
+        # Irregular-verb form card "tener · Indefinido" (#1296): the forms that
+        # count are the six of that tense (plus the lemma) — this is what makes
+        # highlight/cloze work on those cards.
+        import verb_slots
+        parsed = verb_slots.parse_form_card(word)
+        if parsed:
+            import lexicon
+            lemma, tense = parsed
+            forms.append(lemma)
+            forms.extend(f for f in (lexicon.form_for(lemma, tense, p, lang)
+                                     for p in verb_slots.PERSONS) if f)
+    except Exception as e:
+        logger.debug("form-card forms unavailable for %s — %s", word, e)
     return sorted({f for f in forms if f}, key=len, reverse=True)
 
 

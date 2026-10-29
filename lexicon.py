@@ -198,6 +198,28 @@ def forms_of(lemma: str, lang: str) -> list[str]:
         return []
 
 
+def verb_lemmas(lang: str) -> list[str]:
+    """Verb lemmas (pos 'v') that have at least one conjugated form in the
+    verbs index, most frequent first (rank ascending, unranked last). Never
+    raises; [] without a lexicon (#1296)."""
+    try:
+        lex = _load(lang)
+        conjugated = set()
+        for tags in lex["verbs"].values():
+            for t in tags:
+                conjugated.add(t[0])
+        out = []
+        for lemma in conjugated:
+            entry = lex["lemmas"].get(lemma)
+            if isinstance(entry, dict) and entry.get("p") == "v":
+                rank = entry.get("r")
+                out.append((rank is None, rank if rank is not None else 0, lemma))
+        out.sort()
+        return [lemma for _, _, lemma in out]
+    except Exception:
+        return []
+
+
 def grammar_label(form: str, lang: str) -> str | None:
     """Short human label for the tap panel: "ir/ser · Indefinido · 1. Sg.".
 

@@ -556,6 +556,18 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **只在 story/qa/expository 三个模式生效**（`ai.generate_story` 的非中文分支）；知识模式和 Again 单句重生成不变，因此那些句子没有标签
 - 前端：`static/app.js` 的 `_renderGrammarHint()` 填正面 `#grammar-hint` 和背面 `#grammar-hint-back`（只用 `textContent`），每张卡都重置；测试见 `tests/test_verb_slots.py`
 
+## 西班牙语不规则动词形态卡（#1296）
+
+不规则动词需要专门练：每个（不规则动词 × 不规则时态）一张卡，如 `tener · Indefinido`，**不是每人称一张**；人称在卡内轮换。约 25 个最常用不规则动词 × 至多 3 个不规则时态，≤60 张。
+
+- **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=六个人称的完整一行（逗号分隔）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
+- **不规则性由数据推出，不手写清单**：`verb_slots.irregular_tenses()` 把词汇表（Jehle）里的形式与 `regular_form()` 规则生成的规则形式逐人称比较；**拼写变化（busqué、leyó）也算不规则**，这是有意的——它们正是值得练的。考察的时态 `FORM_CARD_TENSES` = pret → pres → fut → impf
+- **人称轮换复用 `assign_slots()`**：词头能被 `parse_form_card()` 解析成形态卡时，时态固定、只在六个人称里按"全局最少用、并列取最久没用"挑；`es["verb_slots"]` 启用的时态配置对形态卡不起作用。规则动词完全不变
+- `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
+- **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选
+- **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升
+- 测试见 `tests/test_irregular_forms.py`
+
 ## 每日 50 张卡自动补充（#1281）
 
 设置页的 **Daily card target** 开关默认开启；仅针对中文，按现有 Anki 学习日边界计算。当天到期且可学习的不同卡片与当天已经作答的不同卡片合计不足 50 时，从 Leech、★ List 交替补入，两个列表内部按 SUBTLEX-CH 整词词频排名升序（未收录排末尾）；一方耗尽后继续使用另一方。重复作答只算一张卡。为遵守同词卡片的埋藏规则，每天每词最多自动补一张，且跳过当天已经安排或作答的词；候选不足时只补现有可用的卡。
@@ -1154,6 +1166,7 @@ GET    /api/dict/history[?q=&limit=]                 → 历史列表（不含 r
 GET    /api/dict/history/{id} ；DELETE /api/dict/history/{id}  → 单条 / 删除；不存在均 404（不假装成功）
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它
 GET  /api/add-word-ai/progress/{job_id}              → 轮询后台生成+导入的结果
+POST /api/es/irregular-form-cards                    → 创建西语不规则动词形态卡进 Español ★ List（#1296）：{created[], skipped[], errors[]}；零 AI、幂等；无 es 词汇表 → 400
 GET  /api/browse                                     → {deck_id?, category?, state?, q?, lang?}
 GET  /api/browse-words[?lang=] ；GET /api/search-words?q=[&lang=]  → Browse 页的词表/搜索（#815）：按 **entries.lang** 过滤（不是 decks.lang——无卡片的 reference 词条也要出现），不传则返回全部；前端还按语言过滤侧栏牌组树、非中文时隐藏 Hanzi 区
 DELETE /api/word/{id}                                → Browse 单行 🗑：硬删除词条及其全部卡片（级联，不进垃圾桶）；不存在返回 404（不假装成功）
