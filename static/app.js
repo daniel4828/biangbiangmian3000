@@ -11580,6 +11580,7 @@ function loadCard(c, counts) {
     // Push the freshly-found `sentence` into the visible UI (reading / cloze / sentence-note).
     const applySentenceToUI = () => {
       _updateStoryInfoRow();
+      _renderGrammarHint(sentence);
       const isListening  = category === 'listening';
       const isCreating   = category === 'creating';
       const isSentenceNt = card.note_type === 'sentence';
@@ -11802,6 +11803,7 @@ function showFront() {
   const sentFront = document.getElementById('sentence-front');
   sentFront.style.display = !isListening && !isCreating ? 'flex' : 'none';
   if (!isListening && !isCreating) sentFront.innerHTML = renderSentence();
+  _renderGrammarHint(sentence);  // always reset: no stale tag from the previous card
 
   // Kontextsummary: the Chinese sentence is clickable — open the sentence's
   // source article in a new tab (issue #444). Context + source line are rendered
@@ -15363,6 +15365,18 @@ function _wireKnowledgeSourceLink(container, s) {
     e.stopPropagation();
     openKnowledgeSummaryPopup(epId, s?.source_title || '');
   };
+}
+
+// Verb slot tag (#1295): "Indefinido · 3. Sg." on front and back of the card.
+// textContent only; called on every card so no tag survives onto the next card.
+function _renderGrammarHint(s) {
+  const text = s?.grammar_hint || '';
+  for (const id of ['grammar-hint', 'grammar-hint-back']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.textContent = text;
+    el.style.display = text ? '' : 'none';
+  }
 }
 
 // Front side: context (above the Chinese sentence) + source line (below it).

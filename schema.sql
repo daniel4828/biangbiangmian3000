@@ -460,6 +460,9 @@ CREATE TABLE IF NOT EXISTS story_sentences (
     -- phrasing worth fixing in the prompt (#854, the mirror image of starred)
     flagged     INTEGER NOT NULL DEFAULT 0,
     flagged_at  TEXT,
+    -- verb slot rotation (#1295): "ind_pret:3s" + its card label ("Indefinido · 3. Sg.")
+    verb_slot   TEXT,
+    grammar_hint TEXT,
     UNIQUE(story_id, position)
 );
 

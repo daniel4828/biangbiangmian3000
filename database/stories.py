@@ -87,12 +87,13 @@ def create_story(date_str: str, category: str, deck_id: int,
         tokens_json = json.dumps(s["tokens"], ensure_ascii=False) if s.get("tokens") else None
         sent_cur = conn.execute(
             """INSERT INTO story_sentences
-               (story_id, position, sentence_zh, sentence_en, sentence_de, sentence_fr, tokens, concept_en, concept_zh, reasoning_zh, source_url, context_de, source_title, source_name)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (story_id, position, sentence_zh, sentence_en, sentence_de, sentence_fr, tokens, concept_en, concept_zh, reasoning_zh, source_url, context_de, source_title, source_name, verb_slot, grammar_hint)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (story_id, s["position"], s["sentence_zh"],
              s.get("sentence_en", ""), s.get("sentence_de"), s.get("sentence_fr"), tokens_json,
              s.get("concept_en"), s.get("concept_zh"), s.get("reasoning_zh"), s.get("source_url"),
-             s.get("context_de"), s.get("source_title"), s.get("source_name")),
+             s.get("context_de"), s.get("source_title"), s.get("source_name"),
+             s.get("verb_slot"), s.get("grammar_hint")),
         )
         sentence_id = sent_cur.lastrowid
         for word_id in s.get("word_ids", []):
@@ -103,6 +104,23 @@ def create_story(date_str: str, category: str, deck_id: int,
     conn.commit()
     conn.close()
     return story_id
+
+
+def verb_slot_usage(lang: str) -> dict[str, tuple[int, str | None]]:
+    """How often each verb slot has been drilled in `lang` stories (#1295).
+
+    {"ind_pret:3s": (count, last_generated_at)} over every story sentence with a
+    verb_slot — the whole history is the rotation's memory, no extra table."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT ss.verb_slot AS slot, COUNT(*) AS n, MAX(s.generated_at) AS last
+           FROM story_sentences ss JOIN stories s ON s.id = ss.story_id
+           WHERE ss.verb_slot IS NOT NULL AND s.lang = ?
+           GROUP BY ss.verb_slot""",
+        (lang,),
+    ).fetchall()
+    conn.close()
+    return {r["slot"]: (r["n"], r["last"]) for r in rows}
 
 
 def get_sentence_for_word(story_id: int, word_id: int) -> dict | None:

@@ -632,9 +632,25 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
             return all(c in sentence_zh for c in chars)
         return word_zh in sentence_zh
 
+    # Verb slot rotation (#1295, non-zh with verb_slots config only): verb cards get
+    # a (tense, person) slot and the sentence must use exactly that conjugated form.
+    # {} for zh/fr, so their prompts stay byte-identical.
+    slots: dict[int, dict] = {}
+    if lang != "zh":
+        import verb_slots
+        slots = verb_slots.assign_slots(cards, lang) if verb_slots.config(lang) else {}
+
+    def _slot_form_in_sentence(form: str, sentence: str) -> bool:
+        return re.search(rf"(?<!\w){re.escape(form)}(?!\w)", sentence, re.IGNORECASE) is not None
+
     word_list_lines = []
     for i, c in enumerate(cards):
-        if _is_sentence(c['word_zh']):
+        slot = slots.get(c["word_id"])
+        if slot:
+            word_list_lines.append(
+                f"{i + 1}. {c['word_zh']} → write exactly \"{slot['form']}\" "
+                f"({verb_slots.describe(slot['slot'])})")
+        elif _is_sentence(c['word_zh']):
             word_list_lines.append(f"{i + 1}. [SENTENCE] {c['word_zh']}")
         else:
             word_list_lines.append(f"{i + 1}. {c['word_zh']}")
@@ -687,6 +703,11 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
             topic_clause = f"- The story should be set around this topic or theme: {topic}\n" if topic else ""
             style_rule = f"{topic_clause}- The sentences must form a coherent narrative with the same recurring characters"
 
+        slot_rule = (
+            "\n- For items marked with →: the sentence MUST contain exactly the quoted "
+            "conjugated form (not the infinitive); you may add a subject pronoun or "
+            "other words around it"
+        ) if slots else ""
         prompt = f"""{task_line}
 
 {grammar_first}Target words (each must appear verbatim in at least one sentence):
@@ -700,7 +721,7 @@ Rules:
 - Use only simple {background_vocab} level vocabulary for non-target words; each sentence must contain exactly ONE target word from the list — do not use other target words from the list in that sentence
 - Keep each sentence short and simple (max {cfg["sentence_limit"]})
 {style_rule}
-- Each target word must appear in exactly the given form; you may adapt or drop its leading article (le/la/les/un/une) to fit the sentence
+- Each target word must appear in exactly the given form; you may adapt or drop its leading article (le/la/les/un/une) to fit the sentence{slot_rule}
 - NEVER highlight, quote, or mark target words in any way — no "quotes", no 「brackets」, no （parentheses）, no bold, no underline; write them as plain text embedded naturally in the sentence
 - NEVER use markdown formatting (**bold**, _italic_, etc.) anywhere in the output — write plain text only
 
@@ -750,18 +771,38 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
         parsed = []
         for s_zh in sentences_zh:
             word_ids = []
+            entry = {"word_ids": word_ids, "sentence_zh": s_zh, "tokens": []}
             for card in cards:
                 wid = card["word_id"]
-                if wid not in seen_ids and _word_in_sentence(card["word_zh"], s_zh):
-                    word_ids.append(wid)
-                    seen_ids.add(wid)
-                    break  # one target word per sentence
-            parsed.append({"word_ids": word_ids, "sentence_zh": s_zh, "tokens": []})
+                if wid in seen_ids:
+                    continue
+                slot = slots.get(wid)
+                if slot and _slot_form_in_sentence(slot["form"], s_zh):
+                    entry["verb_slot"] = slot["slot"]
+                    entry["grammar_hint"] = slot["label"]
+                elif slot:
+                    # Wrong form: still accept the card (don't lose the sentence)
+                    # but attach no slot/tag — it would lie about what is drilled.
+                    if not (_word_in_sentence(card["word_zh"], s_zh) or any(
+                            _slot_form_in_sentence(f, s_zh)
+                            for f in database.surface_forms(wid, card["word_zh"], lang))):
+                        continue
+                elif not _word_in_sentence(card["word_zh"], s_zh):
+                    continue
+                word_ids.append(wid)
+                seen_ids.add(wid)
+                break  # one target word per sentence
+            parsed.append(entry)
 
         missing_ids = [wid for wid in word_id_set if wid not in seen_ids]
         if missing_ids:
             missing_words = [card_by_id[wid]["word_zh"] for wid in missing_ids if wid in card_by_id]
             logger.warning("generate_story: attempt %d — words missing: %s", attempt + 1, missing_words)
+            # Slotted verbs: the retry hint names the required conjugated form (#1295).
+            hint_words = [
+                f"{card_by_id[wid]['word_zh']} (as \"{slots[wid]['form']}\")" if wid in slots
+                else card_by_id[wid]["word_zh"]
+                for wid in missing_ids if wid in card_by_id]
             _set_progress(progress_key, phase="warning", attempt=attempt + 1,
                           msg=f"⚠ Attempt {attempt + 1}: missing {missing_words} — retrying",
                           percent=0)
@@ -777,7 +818,7 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
                 return parsed, prompt
             missing_hint = (
                 f"\n\nIMPORTANT: Your previous attempt was missing these words "
-                f"— each MUST appear verbatim in a sentence: {', '.join(missing_words)}"
+                f"— each MUST appear verbatim in a sentence: {', '.join(hint_words)}"
             )
             continue
 

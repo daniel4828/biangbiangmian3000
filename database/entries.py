@@ -358,7 +358,14 @@ def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
                 forms.extend(f for f in slots.values() if f)
     except Exception as e:
         logger.warning("could not load stored forms for word %s — %s", word_id, e)
-        return [word]
+        forms = [word]
+    try:
+        # The bundled lexicon (#1293/#1295) knows every conjugated form even when
+        # the AI-generated entry_forms table is incomplete.
+        import lexicon
+        forms.extend(lexicon.forms_of(word, lang))
+    except Exception as e:
+        logger.debug("lexicon forms unavailable for %s — %s", word, e)
     return sorted({f for f in forms if f}, key=len, reverse=True)
 
 

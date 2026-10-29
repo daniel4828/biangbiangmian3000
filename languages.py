@@ -140,6 +140,15 @@ LANGUAGES = {
         # in the placement test). French is deliberately absent: it needs
         # elision (l'eau) and is out of scope for now.
         "articles": {"m": "el", "f": "la"},
+        # Verb slot rotation (#1295): story sentences for verb cards must use a
+        # specific (tense, person) form. Unlock order: Presente -> Indefinido ->
+        # Imperfecto -> Perfecto -> Futuro (append "ind_fut" later), Subjuntivo
+        # later still. "perf" is composed (haber + participle). French has no
+        # verb_slots -> feature off.
+        "verb_slots": {
+            "tenses": ["ind_pres", "ind_pret", "ind_impf", "perf"],
+            "persons": ["1s", "2s", "3s", "1p", "2p", "3p"],
+        },
         "features": {**_ROMANCE_BASE["features"]},
     },
 }
