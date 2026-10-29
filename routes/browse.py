@@ -4,6 +4,7 @@ import logging
 import ai
 import database
 import importer
+import languages
 from fastapi import APIRouter, HTTPException
 from pypinyin import pinyin as _pinyin, Style
 from .utils import queue_mgr as _queue_mgr
@@ -23,6 +24,13 @@ def get_word_detail(word_id: int):
     word = database.get_word_full(word_id)
     if word:
         word["cards"] = database.get_cards_for_word(word_id)
+        # Article for noun headwords (#1294, "el clima"); display only — the
+        # stored word_zh stays the bare lemma.
+        if (word.get("note_type") or "vocabulary") == "vocabulary":
+            article = languages.article_for(
+                word.get("word_zh"), word.get("gender"), word.get("lang"))
+            if article:
+                word["article"] = article
     return word
 
 

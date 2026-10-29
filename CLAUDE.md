@@ -537,6 +537,8 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **`annotate/romance.py` 的"已认识"判定多了一层**：原有的词形精确匹配不变，另外把每个词的全部候选原形拿去查 `forms_lookup` / `known_words` / 基线词表 / 功能词表，**任一原形已认识就算已认识**。多义词形（`fui` → ser/ir）同理，不猜是哪一个。新词和 `mode=all` 两条路共用同一个 `_word_dicts()`，所以字段一致
 - **词条字典新增字段**：`lemma`（候选原形唯一时是原形，否则仍是词形）、`lemmas`（全部候选）、`grammar`、`definition`（英文释义兜底）。`word` 永远是词形——前端靠它定位点击。德语释义对唯一原形去翻译，多义/未知词形仍翻词形
 - **★ List 和 ✓ Known 发的是 `lemma`**（`_addWordFromDict` / `_markKnownFromDict`），点 `hablamos` 加进去的是 `hablar`。`routes/knowledge.py` 的 `_with_entry_ids` 在词形查不到条目时再按原形查一次
+- **西班牙语 A1 基线词表（#1294）**：Daniel 的分级测试结果是扎实的 A1，所以 `annotate/baseline_es.txt` 把词频排名前 300 的原形（排除专有名词）当作"已认识"。默认故意取紧：分级测试里排名 336 的 `ayer`、438 的 `lograr` 他仍不认识，给太宽会把真正的生词藏起来。这是**近似**：真正的 A1 表应是 ELELex（CEFRLex 西语），但构建环境下载不到。只存原形不存变位形——#1293 之后罗曼语标注器按原形判定。重建：`python scripts/build_es_baseline.py [--top 300]`
+- **名词带冠词显示（#1294）**：测试里出现过 "la clima" 这类性别错误，所以西语名词词头在复习卡背面和词条详情页显示为 "el clima" / "la cuenta"。`languages.article_for(word, gender, lang)` 按 `languages.py` 里的 `articles` 表取冠词；以 stressed a/ha 开头的阴性名词（`agua`、`águila`、`alma`、`arma`……，显式词表）单数用 `el`；`mf` 给 `el/la`；不抛异常。`GET /api/word/{id}` 多返回 `article` 字段，**只用于显示**：存库的 `word_zh` 仍是裸词，编辑框也不带冠词。法语暂不做（要处理 `l'` 省音）
 - **法语不受影响**：没有 `fr-lexicon.json.gz` 就没有 `lemmas`/`grammar` 字段，`lemma == word`，行为与以前逐字节相同；以后给法语做一个同格式文件（再加一个 build 脚本）即可启用，不用改 `romance.py`
 
 ## 每日 50 张卡自动补充（#1281）

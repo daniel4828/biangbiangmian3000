@@ -6,7 +6,9 @@ word?" Until now the answer came only from what he had studied here
 (known_words). That leaves every ordinary beginner word — `manger`, `maison` —
 flagged as new, drowning a French rendition in parentheses.
 
-These lists are the missing floor: French CEFR A1-A2 and Chinese HSK 3.0 1-4.
+These lists are the missing floor: French CEFR A1-A2, Chinese HSK 3.0 1-4 and
+(#1294) Spanish A1, the latter an approximation (top-300 lemmas, lemmas only —
+see scripts/build_es_baseline.py).
 They are a static linguistic fact about a proficiency level, not a personal
 per-word mark, which is why they live in the repo rather than in the known_words
 table:
@@ -36,7 +38,7 @@ def baseline_words(lang: str) -> frozenset[str]:
 
     Chinese entries are stored as-is; every other language's are lowercased,
     matching how the romance annotator builds its lookup key. A language with no
-    baseline file (Spanish, for now) simply gets an empty set."""
+    baseline file simply gets an empty set."""
     if lang in _cache:
         return _cache[lang]
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"baseline_{lang}.txt")
