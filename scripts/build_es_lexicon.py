@@ -195,7 +195,11 @@ def _gloss_for(blocks: list[dict], pos: str) -> str | None:
     if not chosen:
         first = next((b for b in blocks if b["pos"] != "prop"), None)
         chosen = [first] if first else []
-    glosses = list(dict.fromkeys(g for b in chosen for g in b["glosses"]))
+    # Gloss lines themselves contain ";"-separated senses ("to have; to
+    # possess"), so dedupe and count the parts, not the lines.
+    glosses = list(dict.fromkeys(
+        part for b in chosen for line in b["glosses"]
+        for part in (p.strip() for p in line.split(";")) if part))
     if not glosses:
         return None
     text = "; ".join(glosses[:MAX_GLOSSES])

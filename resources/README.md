@@ -22,17 +22,20 @@ PLOS ONE, 5(6), e10729. https://doi.org/10.1371/journal.pone.0010729
 
 1. `frequency.csv` —— doozan/spanish_data，https://github.com/doozan/spanish_data ，
    CC BY-SA 3.0；数据派生自 hermitdave/FrequencyWords（OpenSubtitles）。提供原形清单、词性、频率排名，
-   以及每个原形见过的全部词形（`usage` 列）。SHA-256：`SHA256_FREQ`
+   以及每个原形见过的全部词形（`usage` 列）。SHA-256：`f2b644108082e551c7559dc5c33faf4f5bf3e5a59e7598b55f8ba47e35c6ed75`
 2. `es-en.data` —— 同一仓库，来自英文维基词典（en.wiktionary）的西英词条，CC BY-SA。
-   提供名词性别和简短英文释义。SHA-256：`SHA256_DATA`
+   提供名词性别和简短英文释义。SHA-256：`7cb53827e68a6d8fabcc40c3072adf25c6279500d116bafd3c4a7aad70a0347f`
 3. `jehle_verb_database.csv` —— Fred Jehle 的西班牙语动词表，
    https://github.com/ghidinelli/fred-jehle-spanish-verbs 。提供 637 个动词的时态 × 人称，
-   频率表给不出这些。SHA-256：`SHA256_JEHLE`
+   频率表给不出这些。SHA-256：`f77f01d536cd351584051d76902ff8051ab1b945a38e69c7ed02da78ab082ea8`
 
 文件内容（gzip 压缩的 JSON，键排序、mtime=0，同样输入产出逐字节相同的文件）：
 `lemmas`（原形 → 排名 `r`、词性 `p`、名词性别 `g`、英文释义 `en`）、
 `forms`（词形 → 候选原形，按频率排序；只有一个候选且就是自己的不存）、
 `verbs`（词形 → `[原形, 时态, 人称]` 列表）。复合时态不收；否定命令式去掉前面的 `no`。
+
+规模（约数，来自 2026-10-29 的构建）：19,255 个原形、141,683 个非平凡词形、25,878 个带动词标注的词形，文件约 1.07 MB。
+英文释义取该词性的全部词条块、去重后的前 3 条；找不到同词性块时取第一个非专有名词块，绝不回退到专有名词（`prop`）块，除非原形本身就是专有名词。
 
 静态资源：运行时只读本地文件（`lexicon.py`），不联网、不调 AI、不改数据库。
 文件不存在或损坏时该语言按"没有词汇表"处理，不报错。

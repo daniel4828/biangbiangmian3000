@@ -127,8 +127,8 @@ def test_build_lemmas(sources):
 def test_gloss_dedupes_and_never_falls_back_to_proper_noun(tmp_path):
     data = tmp_path / "d.data"
     data.write_text(
-        "tener\npos: v\n  gloss: to have\n  gloss: to possess\n"
-        "pos: v\n  gloss: to have\n  gloss: to possess\n  gloss: to hold\n  gloss: to hold on\n"
+        "tener\npos: v\n  gloss: to have; to possess\n"
+        "pos: v\n  gloss: to have; to possess; to be (a condition or quality)\n  gloss: to hold\n"
         "_____\n"
         "como\npos: prop\n  gloss: Como (a city)\npos: adv\n  gloss: as\n"
         "_____\n"
@@ -137,7 +137,7 @@ def test_gloss_dedupes_and_never_falls_back_to_proper_noun(tmp_path):
         "Madrid\npos: prop\n  gloss: capital of Spain\n",
         encoding="utf-8")
     blocks = build_script.parse_wiktionary(data)
-    assert build_script._gloss_for(blocks["tener"], "v") == "to have; to possess; to hold"
+    assert build_script._gloss_for(blocks["tener"], "v") == "to have; to possess; to be (a condition or quality)"
     # conj has no block of its own -> first non-prop block, not the city.
     assert build_script._gloss_for(blocks["como"], "conj") == "as"
     # Only prop blocks and a non-prop lemma -> no gloss at all.
