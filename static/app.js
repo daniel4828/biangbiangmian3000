@@ -11894,6 +11894,10 @@ function loadCard(c, counts) {
       if (!d) return;
       wordDetails = d;
       renderWordFreq();
+      // Badge lives on the back side: set it now, not only when the back is
+      // already showing — the fetch usually wins the race against the flip.
+      _setVerbBadge(document.getElementById('card-verb-badge'),
+        wordDetails?.id === card.word_id ? wordDetails : null);
       // If back is already showing (user flipped before fetch completed), re-render with full data
       if (document.getElementById('side-back').style.display !== 'none') {
         // Re-render interactive word-zh now that components are available
@@ -11905,8 +11909,6 @@ function loadCard(c, counts) {
         } else if (!isMultiWord && wordDetails.id === card.word_id) {
           wzEl.textContent = _withArticle(card.word_zh, wordDetails.article);
         }
-        _setVerbBadge(document.getElementById('card-verb-badge'),
-          wordDetails?.id === card.word_id ? wordDetails : null);
         renderVocabDetail();
         renderNotesSection();
         renderConjugationSection();
