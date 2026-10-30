@@ -185,6 +185,10 @@ def is_valid_lang(lang: str | None) -> bool:
     return lang in LANGUAGES
 
 
+# Artikelwörter, an denen ein bereits mit Artikel gespeicherter Lemma erkannt wird
+_ARTICLE_WORDS = {"es": ("el", "la", "los", "las", "un", "una", "unos", "unas")}
+
+
 def article_for(word: str | None, gender: str | None, lang: str | None) -> str | None:
     """Definite article to show before a noun headword (#1294), or None.
 
@@ -199,6 +203,10 @@ def article_for(word: str | None, gender: str | None, lang: str | None) -> str |
         g = (gender or "").strip().lower()
         w = (word or "").strip()
         if not articles or not g or not w:
+            return None
+        # Lemma schon mit Artikel gespeichert ("la ventaja") → nicht doppelt
+        first = w.split(maxsplit=1)[0].lower()
+        if " " in w and first in _ARTICLE_WORDS.get(lang, ()):
             return None
         has_m, has_f = "m" in g, "f" in g
         if has_m and has_f:
