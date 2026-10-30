@@ -14227,77 +14227,73 @@ async function _buildWordBank() {
   wordBankTokens = shuffled;
 }
 
-function _parseWordBankInput(text) {
-  // Segment into tokens without requiring spaces:
-  // - CJK runs → one token (target word)
-  // - Digits: greedy 2-digit if it's a valid token number, else single digit
-  const isCjk = ch => /[\u3000-\u9FFF\uF900-\uFAFF]/.test(ch);
-  const chars = [...text.replace(/\s+/g, '')];
-  const raw = [];
+// Split the word-bank input into two queues: digits (and punctuation that
+// matches a tile) pick tiles, everything else is typed text for the target
+// gap. Numbers never land in the gap and letters never land in a tile slot,
+// regardless of where in the input they were typed ("2es31" → tiles 2,3,1 +
+// target "es").
+function _splitWordBankInput(text) {
+  const tiles = [], texts = [];
+  const chars = [...text];
+  let buf = '';
+  const flush = () => {
+    const t = currentCardLang() === 'zh' ? buf.replace(/\s+/g, '') : buf.trim().replace(/\s+/g, ' ');
+    if (t) texts.push(t);
+    buf = '';
+  };
   let i = 0;
   while (i < chars.length) {
-    if (isCjk(chars[i])) {
-      let s = chars[i++];
-      while (i < chars.length && isCjk(chars[i])) s += chars[i++];
-      raw.push(s);
-    } else if (/\d/.test(chars[i])) {
-      // Try 2-digit match first
+    const ch = chars[i];
+    if (/\d/.test(ch)) {
+      flush();
+      // Greedy 2-digit match if it's a valid tile number, else single digit
       if (i + 1 < chars.length && /\d/.test(chars[i + 1])) {
-        const two = parseInt(chars[i] + chars[i + 1], 10);
-        if (wordBankTokens.some(t => t.num === two)) { raw.push(String(two)); i += 2; continue; }
+        const two = parseInt(ch + chars[i + 1], 10);
+        if (wordBankTokens.some(t => t.num === two)) { tiles.push(String(two)); i += 2; continue; }
       }
-      raw.push(chars[i++]);
+      tiles.push(ch); i++;
+    } else if (!/[\p{L}\s]/u.test(ch) && wordBankTokens.some(t => t.char === ch)) {
+      // Punctuation that matches a tile char (e.g. ，。、)
+      flush(); tiles.push(ch); i++;
+    } else if (/\s/.test(ch) && !buf) {
+      i++; // separator between numbers
     } else {
-      // Include punctuation that matches a tile char (e.g. ，。、)
-      const ch = chars[i];
-      if (wordBankTokens.some(t => t.char === ch)) raw.push(ch);
-      i++;
+      buf += ch; i++;
     }
   }
-  // Walk wordBankOrder: pre-placed tokens auto-fill; tiles and target come from user input in order
-  let rawIdx = 0;
-  const result = [];
-  for (const tok of wordBankOrder) {
-    if (tok.type === 'pre') { result.push(tok.char); continue; }
-    if (rawIdx >= raw.length) break; // user hasn't typed this far yet
-    const part = raw[rawIdx++];
+  flush();
+  return { tiles, texts };
+}
+
+// Walk wordBankOrder and resolve each slot: tile slots take the next tile
+// pick, target slots the next typed text. Returns [{tok, value}] per token
+// (value null = slot not filled yet).
+function _resolveWordBankSlots(text) {
+  const { tiles, texts } = _splitWordBankInput(text);
+  let ti = 0, xi = 0;
+  return wordBankOrder.map(tok => {
+    if (tok.type === 'pre') return { tok, value: tok.char };
     if (tok.type === 'char') {
+      if (ti >= tiles.length) return { tok, value: null };
+      const part = tiles[ti++];
       const n = parseInt(part, 10);
       const tile = isNaN(n) ? null : wordBankTokens.find(t => t.num === n);
-      result.push(tile ? tile.char : part);
-    } else {
-      result.push(part); // target: pass CJK through
+      return { tok, value: tile ? tile.char : part, num: tile?.num };
     }
-  }
-  return result;
+    return { tok, value: xi < texts.length ? texts[xi++] : null };
+  });
+}
+
+function _parseWordBankInput(text) {
+  const slots = _resolveWordBankSlots(text);
+  // Stop after the last filled slot: pre-placed tokens past what the user
+  // typed don't count as part of the answer.
+  let last = -1;
+  slots.forEach((s, i) => { if (s.tok.type !== 'pre' && s.value != null) last = i; });
+  return slots.slice(0, last + 1).filter(s => s.value != null).map(s => s.value);
 }
 
 function updateWordBankPreview(text) {
-  // Compute slot values by walking wordBankOrder with parsed user tokens
-  const isCjk = ch => /[\u3000-\u9FFF\uF900-\uFAFF]/.test(ch);
-  const chars = [...text.replace(/\s+/g, '')];
-  const raw = [];
-  let i = 0;
-  while (i < chars.length) {
-    if (isCjk(chars[i])) {
-      let s = chars[i++];
-      while (i < chars.length && isCjk(chars[i])) s += chars[i++];
-      raw.push(s);
-    } else if (/\d/.test(chars[i])) {
-      if (i + 1 < chars.length && /\d/.test(chars[i + 1])) {
-        const two = parseInt(chars[i] + chars[i + 1], 10);
-        if (wordBankTokens.some(t => t.num === two)) { raw.push(String(two)); i += 2; continue; }
-      }
-      raw.push(chars[i++]);
-    } else {
-      const ch = chars[i];
-      if (wordBankTokens.some(t => t.char === ch)) raw.push(ch);
-      i++;
-    }
-  }
-
-  // Walk wordBankOrder to assign values to numbered slots
-  let rawIdx = 0, slotIdx = 0;
   const usedNums = new Set();
   // Reset: empty target slot falls back to its faint German hint, others to ＿
   document.querySelectorAll('.wb-skel-blank[data-slot]').forEach(span => {
@@ -14305,20 +14301,15 @@ function updateWordBankPreview(text) {
     else span.textContent = '＿';
   });
 
-  for (const tok of wordBankOrder) {
+  let slotIdx = 0;
+  for (const { tok, value, num } of _resolveWordBankSlots(text)) {
     if (tok.type === 'pre') continue;
     const span = document.querySelector(`.wb-skel-blank[data-slot="${slotIdx++}"]`);
-    if (rawIdx >= raw.length) continue;
-    const part = raw[rawIdx++];
-    if (tok.type === 'char') {
-      const n = parseInt(part, 10);
-      const tile = isNaN(n) ? null : wordBankTokens.find(t => t.num === n);
-      if (tile) { usedNums.add(tile.num); if (span) span.textContent = tile.char; }
-      else if (span) span.textContent = part;
-    } else {
-      // target word filled: replace faint German hint with the typed text
-      if (span) { span.textContent = part; span.classList.remove('wb-de-hint'); }
-    }
+    if (value == null || !span) continue;
+    if (num != null) usedNums.add(num);
+    span.textContent = value;
+    // target word filled: replace faint German hint with the typed text
+    if (tok.type !== 'char') span.classList.remove('wb-de-hint');
   }
 
   // Grey out used tile buttons
