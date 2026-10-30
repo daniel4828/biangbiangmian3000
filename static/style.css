@@ -3486,6 +3486,26 @@ a.nav-btn { text-decoration: none; }
 .keymap-reset-all { margin-top: 16px; align-self: flex-start; padding: 8px 14px; border: 1px solid var(--border,#ccc); border-radius: 6px; background: none; color: inherit; cursor: pointer; }
 .keymap-reset-all:hover { border-color: var(--primary); color: var(--primary); }
 
+/* #1323：设置页分组。全部限定在 #view-settings-content 下，因为 .keymap-panel 也在知识库视图里用。 */
+#view-settings-content .settings-nav { position: sticky; top: 0; z-index: 5; background: var(--bg); display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; margin-bottom: 8px; }
+#view-settings-content .settings-nav-chip { padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--text); text-decoration: none; background: var(--card); }
+#view-settings-content .settings-nav-chip:hover { border-color: var(--primary); color: var(--primary); }
+#view-settings-content .settings-section { margin: 20px 0 28px; scroll-margin-top: 56px; }
+#view-settings-content .settings-section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim,#888); margin: 0 0 10px; }
+#view-settings-content .keymap-panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+#view-settings-content .keymap-heading { font-size: 16px; }
+#view-settings-content .keymap-panel .keymap-row:last-child { border-bottom: none; }
+#view-settings-content .keymap-reset-all { margin-top: 8px; }
+#view-settings-content .settings-collapse > summary { cursor: pointer; font-size: 16px; font-weight: 700; list-style: none; }
+#view-settings-content .settings-collapse > summary::-webkit-details-marker { display: none; }
+#view-settings-content .settings-collapse > summary::before { content: "▸"; display: inline-block; margin-right: 6px; transition: transform .15s; }
+#view-settings-content .settings-collapse[open] > summary::before { transform: rotate(90deg); }
+#view-settings-content .settings-collapse[open] > summary { margin-bottom: 8px; }
+@media (max-width: 600px) {
+  #view-settings-content .keymap-panel { padding: 12px; }
+  #view-settings-content .keymap-row { flex-wrap: wrap; }
+}
+
 /* — Podcasts view (#480) — */
 #view-podcast { display: none; }
 #view-podcast-content { max-width: 720px; margin: 0 auto; padding: 16px; }
@@ -8025,19 +8045,6 @@ body #version-badge { bottom: calc(var(--search-bar-h) + env(safe-area-inset-bot
   --card-bg: #1d2733;
   --text-dim: #a2b1c4;
 }
-#theme-select {
-  flex: 0 0 auto;
-  width: 82px;
-  min-height: 34px;
-  padding: 5px 6px;
-  font: inherit;
-  font-size: 12px;
-  color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  cursor: pointer;
-}
 /* SVG 中的系统媒体查询继承此 color-scheme，手动选择也能控制标志。 */
 #header-logo { color-scheme: inherit; }
 :root[data-theme="dark"] header { border-bottom-color: var(--border); }
@@ -8052,9 +8059,6 @@ body #version-badge { bottom: calc(var(--search-bar-h) + env(safe-area-inset-bot
 :root[data-theme="dark"] .hcal-seg-btn.active,
 :root[data-theme="dark"] .listening-row-play-btn,
 :root[data-theme="dark"] #add-word-submit { color: #141b24; }
-@media (max-width: 560px) {
-  #theme-select { width: 75px; min-height: 40px; }
-}
 /* 深色下亮色评级按钮、词汇筛选和日历提示的文字对比度。 */
 :root[data-theme="dark"] {
   --text-muted: #a2b1c4;

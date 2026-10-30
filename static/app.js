@@ -3785,6 +3785,7 @@ async function openStats() {
 // ── Settings (customize review shortcuts) ────────────────────────────────────
 let _capturingAction = null;
 let _settingsMsg = '';
+let _settingsShortcutsOpen = false;
 let _dayCutoffHour = 5;
 function openSettings() {
   navPush('settings');
@@ -4069,48 +4070,32 @@ function renderSettings() {
   }).join('');
   const msg = _settingsMsg ? `<div class="keymap-msg">${_settingsMsg}</div>` : '';
   const nfZh = _newsflowLang === 'zh';
+  const themeChoice = window.getThemeChoice ? window.getThemeChoice() : 'system';
+  const navChips = ['Appearance', 'Review', 'Stories', 'Spanish', 'Advanced'].map(n =>
+    `<a href="#" class="settings-nav-chip" onclick="event.preventDefault();document.getElementById('settings-sec-${n.toLowerCase()}').scrollIntoView({behavior:'smooth',block:'start'})">${n}</a>`).join('');
   document.getElementById('view-settings-content').innerHTML = `
-    <div class="keymap-panel" style="margin-bottom:24px">
+    <nav class="settings-nav">${navChips}</nav>
+    <section class="settings-section" id="settings-sec-appearance">
+    <h2 class="settings-section-title">Appearance</h2>
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Theme</h2>
+      <p class="keymap-hint">System follows your device's light/dark setting. Saved in this browser only.</p>
+      <div class="keymap-row">
+        <span class="keymap-label">Color theme</span>
+        <select class="opt-input" id="theme-select" aria-label="Color theme" onchange="setThemeChoice(this.value)">
+          ${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) =>
+            `<option value="${v}" ${v === themeChoice ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="keymap-panel">
       <h2 class="keymap-heading">Languages</h2>
       <p class="keymap-hint">A language that is switched off does not appear in the language tab bar and its cards stay out of the current review. Words and progress are kept — switch it back on any time. Chinese cannot be switched off.</p>
       ${_langSettingsRowsHtml()}
     </div>
-    <div class="keymap-panel">
-      <h2 class="keymap-heading">Review shortcuts</h2>
-      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed.</p>
-      ${msg}
-      ${groups}
-      <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
-    </div>
-    <div class="keymap-panel">
-      <h2 class="keymap-heading">Again → new sentence</h2>
-      <p class="keymap-hint">Rating a card <b>Again</b> regenerates its sentence in the background, so it looks different when the card comes back. <b>Off</b> = the card keeps its original sentence (and costs no AI call) — better when the sentence was fine and only the recall failed. The <b>New sentence</b> button (${_keyLabel(_key('new-sentence'))}) always regenerates, switch or not.</p>
-      <div class="keymap-row">
-        <span class="keymap-label">Regenerate after Again</span>
-        <label class="switch-wrap">
-          <input type="checkbox" id="again-regen-switch" ${_againRegenEnabled ? 'checked' : ''}
-                 onchange="setAgainRegenEnabled(this.checked)" style="width:18px;height:18px;cursor:pointer">
-          <span>${_againRegenEnabled ? 'On' : 'Off'}</span>
-        </label>
-      </div>
-    </div>
-    <div class="keymap-panel">
-      <h2 class="keymap-heading">Kontextsummary</h2>
-      <p class="keymap-hint">Language of the context and source titles on Kontextsummary cards. Publisher names stay as-is. Toggle during review with <b>g</b>.</p>
-      <div class="keymap-row">
-        <span class="keymap-label">Context &amp; titles in Chinese</span>
-        <label class="switch-wrap">
-          <input type="checkbox" id="newsflow-lang-switch" ${nfZh ? 'checked' : ''}
-                 onchange="setNewsflowLangFromSwitch(this.checked)" style="width:18px;height:18px;cursor:pointer">
-          <span id="newsflow-lang-value">${nfZh ? '中文' : 'Original (DE)'}</span>
-        </label>
-      </div>
-    </div>
-    <div class="keymap-panel">
-      <h2 class="keymap-heading">Stages</h2>
-      <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. HSK N hides level N and below (Chinese only).</p>
-      <div id="hint-stage-options">${_hintStageOptionsHtml()}</div>
-    </div>
+    </section>
+    <section class="settings-section" id="settings-sec-review">
+    <h2 class="settings-section-title">Review</h2>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Daily card target</h2>
       <p class="keymap-hint">When fewer than 50 different Chinese cards are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
@@ -4129,12 +4114,56 @@ function renderSettings() {
       </div>
     </div>
     <div class="keymap-panel">
+      <h2 class="keymap-heading">Stages</h2>
+      <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. HSK N hides level N and below (Chinese only).</p>
+      <div id="hint-stage-options">${_hintStageOptionsHtml()}</div>
+    </div>
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Again → new sentence</h2>
+      <p class="keymap-hint">Rating a card <b>Again</b> regenerates its sentence in the background, so it looks different when the card comes back. <b>Off</b> = the card keeps its original sentence (and costs no AI call) — better when the sentence was fine and only the recall failed. The <b>New sentence</b> button (${_keyLabel(_key('new-sentence'))}) always regenerates, switch or not.</p>
+      <div class="keymap-row">
+        <span class="keymap-label">Regenerate after Again</span>
+        <label class="switch-wrap">
+          <input type="checkbox" id="again-regen-switch" ${_againRegenEnabled ? 'checked' : ''}
+                 onchange="setAgainRegenEnabled(this.checked)" style="width:18px;height:18px;cursor:pointer">
+          <span>${_againRegenEnabled ? 'On' : 'Off'}</span>
+        </label>
+      </div>
+    </div>
+    <div class="keymap-panel">
+      <details class="settings-collapse" ${(_settingsShortcutsOpen || _capturingAction || _settingsMsg) ? 'open' : ''} ontoggle="_settingsShortcutsOpen=this.open">
+      <summary>Review shortcuts</summary>
+      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed.</p>
+      ${msg}
+      ${groups}
+      <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
+      </details>
+    </div>
+    </section>
+    <section class="settings-section" id="settings-sec-stories">
+    <h2 class="settings-section-title">Stories</h2>
+    <div class="keymap-panel">
       <h2 class="keymap-heading">Morning pre-generation</h2>
       <p class="keymap-hint">Story type generated automatically each morning, per category. Independent of the style you pick when regenerating during the day. <b>Off</b> = repeat whatever you last generated manually.</p>
       <div id="pregen-config-body">Loading…</div>
     </div>
     <div class="keymap-panel">
-      <h2 class="keymap-heading">Spanish</h2>
+      <h2 class="keymap-heading">Kontextsummary</h2>
+      <p class="keymap-hint">Language of the context and source titles on Kontextsummary cards. Publisher names stay as-is. Toggle during review with <b>g</b>.</p>
+      <div class="keymap-row">
+        <span class="keymap-label">Context &amp; titles in Chinese</span>
+        <label class="switch-wrap">
+          <input type="checkbox" id="newsflow-lang-switch" ${nfZh ? 'checked' : ''}
+                 onchange="setNewsflowLangFromSwitch(this.checked)" style="width:18px;height:18px;cursor:pointer">
+          <span id="newsflow-lang-value">${nfZh ? '中文' : 'Original (DE)'}</span>
+        </label>
+      </div>
+    </div>
+    </section>
+    <section class="settings-section" id="settings-sec-spanish">
+    <h2 class="settings-section-title">Spanish</h2>
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Irregular verb cards</h2>
       <p class="keymap-hint">One card per irregular verb × tense, ~60 cards, no AI cost; they land in Español ★ List — promote them from Browse.</p>
       <div class="keymap-row">
         <button class="keymap-reset-all" id="es-irregular-btn" onclick="createEsIrregularFormCards()">Create irregular verb cards (★ List)</button>
@@ -4144,11 +4173,15 @@ function renderSettings() {
       <p class="keymap-hint">Higher = appears more often. 0 = never. Defaults from subtitle corpus frequencies.</p>
       ${_esSlotWeightsHtml()}
     </div>
+    </section>
+    <section class="settings-section" id="settings-sec-advanced">
+    <h2 class="settings-section-title">Advanced</h2>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Server logs</h2>
       <p class="keymap-hint">View the last lines of the server log (helpful for debugging story generation, TTS, etc). Shortcut: Option+L (Alt+L).</p>
       <button class="keymap-reset-all" onclick="openLogsViewer()">Open logs</button>
-    </div>`;
+    </div>
+    </section>`;
   _loadPregenSettings();
 }
 

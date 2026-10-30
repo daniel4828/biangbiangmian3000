@@ -8,8 +8,8 @@
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
   <meta name="theme-color" content="#f1f5f9">
-  <script src="/static/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=21">
+  <script src="/static/theme.js?v=2"></script>
+  <link rel="stylesheet" href="/static/style.css?v=22">
   <!-- Dictionary-result styling, shared with the standalone /dict page
        (#1055): the header search box renders lookups with shared.js's
        renderDictResult(), so both pages must load the same sheet. -->
@@ -70,11 +70,6 @@
     <button class="undo-btn" id="session-graph-btn" onclick="openSessionSummary()" title="Graph of cards reviewed this session">📈 Session</button>
   </div>
   <div class="header-right">
-    <select id="theme-select" aria-label="Color theme" title="Color theme">
-      <option value="system">System</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-    </select>
     <!-- Background-task indicator (#821). Hidden while nothing is running;
          _renderTasks() fills the badge and the dropdown from GET /api/tasks. -->
     <div id="tasks-wrap" style="display:none">
@@ -845,7 +840,7 @@
 <div id="word-tip" style="display:none"></div>
 <script src="/static/shared.js?v=6"></script>
 <script src="/static/home-discovery.js?v=2"></script>
-<script src="/static/app.js?v=28"></script>
+<script src="/static/app.js?v=29"></script>
 
 <!-- Edit card modal -->
 <div id="edit-modal-overlay" onclick="closeEditCard()" style="display:none"></div>
