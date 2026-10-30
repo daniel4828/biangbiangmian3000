@@ -3784,6 +3784,95 @@ function openSettings() {
   _loadAgainRegenEnabled();
   _loadLangSettings();
   _loadDailyTarget();
+  _loadEsSlotWeights();
+}
+
+// ── Spanish verb slot weights (issue #1306) ─────────────────────────────────
+let _esSlotWeights = null;      // GET /api/es/verb-slot-weights; null = not loaded
+let _esSlotWeightsFailed = false;
+let _esSlotWeightsBusy = false;
+let _esSlotDraft = null;        // typed-but-unsaved values, survives re-renders
+
+async function _loadEsSlotWeights() {
+  try {
+    _esSlotWeights = await api('GET', '/api/es/verb-slot-weights');
+    _esSlotWeightsFailed = false;
+    _esSlotDraft = null;
+  } catch (e) {
+    _esSlotWeights = null;
+    _esSlotWeightsFailed = true;
+  }
+  renderSettings();
+}
+
+function _esSlotWeightsHtml() {
+  if (_esSlotWeightsFailed) return '<div class="keymap-label">Could not load</div>';
+  if (!_esSlotWeights) return '<div class="keymap-label">Loading…</div>';
+  const group = (part, title) => {
+    const rows = Object.keys(_esSlotWeights.labels[part]).map(code => {
+      const v = _esSlotDraft?.[part]?.[code] ?? _esSlotWeights.weights[part][code];
+      return `<div class="keymap-row">
+        <span class="keymap-label">${_escHtml(_esSlotWeights.labels[part][code])}</span>
+        <input type="number" min="0" step="any" value="${_escHtml(String(v))}" style="width:80px"
+          data-slot-part="${part}" data-slot-code="${_escHtml(code)}"
+          oninput="_esSlotWeightInput(this)" ${_esSlotWeightsBusy ? 'disabled' : ''}>
+      </div>`;
+    }).join('');
+    return `<div class="keymap-label"><b>${title}</b></div>${rows}`;
+  };
+  return `${group('tenses', 'Tenses')}${group('persons', 'Persons')}
+    <div class="keymap-row">
+      <button class="keymap-reset-all" onclick="saveEsSlotWeights()" ${_esSlotWeightsBusy ? 'disabled' : ''}>Save</button>
+      <button class="keymap-reset-all" onclick="resetEsSlotWeights()" ${_esSlotWeightsBusy ? 'disabled' : ''}>Reset to defaults</button>
+    </div>`;
+}
+
+function _esSlotWeightInput(el) {
+  if (!_esSlotDraft) _esSlotDraft = { tenses: {}, persons: {} };
+  _esSlotDraft[el.dataset.slotPart][el.dataset.slotCode] = el.value;
+}
+
+async function saveEsSlotWeights() {
+  if (!_esSlotWeights || _esSlotWeightsBusy) return;
+  const body = { tenses: {}, persons: {} };
+  document.querySelectorAll('input[data-slot-part]').forEach(el => {
+    const raw = el.value.trim();
+    body[el.dataset.slotPart][el.dataset.slotCode] = raw === '' ? NaN : Number(raw);
+  });
+  for (const part of ['tenses', 'persons']) {
+    for (const [code, v] of Object.entries(body[part])) {
+      if (!Number.isFinite(v)) {
+        showError(`Weight for ${_esSlotWeights.labels[part][code]} must be a number`);
+        return;
+      }
+    }
+  }
+  _esSlotWeightsBusy = true;
+  renderSettings();
+  try {
+    _esSlotWeights = await api('PUT', '/api/es/verb-slot-weights', body);
+    _esSlotDraft = null;
+  } catch (e) {
+    showError('Verb slot weights could not be saved: ' + e.message);
+  } finally {
+    _esSlotWeightsBusy = false;
+    renderSettings();
+  }
+}
+
+async function resetEsSlotWeights() {
+  if (!_esSlotWeights || _esSlotWeightsBusy) return;
+  _esSlotWeightsBusy = true;
+  renderSettings();
+  try {
+    _esSlotWeights = await api('DELETE', '/api/es/verb-slot-weights');
+    _esSlotDraft = null;
+  } catch (e) {
+    showError('Verb slot weights could not be reset: ' + e.message);
+  } finally {
+    _esSlotWeightsBusy = false;
+    renderSettings();
+  }
 }
 
 // ── Daily card target (issue #1281) ─────────────────────────────────────────
@@ -4040,6 +4129,9 @@ function renderSettings() {
         <button class="keymap-reset-all" id="es-irregular-btn" onclick="createEsIrregularFormCards()">Create irregular verb cards (★ List)</button>
         <span id="es-irregular-msg" class="keymap-label"></span>
       </div>
+      <h3 class="keymap-heading">Verb slot weights</h3>
+      <p class="keymap-hint">Higher = appears more often. 0 = never. Defaults from subtitle corpus frequencies.</p>
+      ${_esSlotWeightsHtml()}
     </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Server logs</h2>

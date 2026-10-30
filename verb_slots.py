@@ -4,9 +4,12 @@ For Chinese, knowing a word = being able to use it. For Spanish, knowing "ir"
 is not knowing "fui": a story that always shows verbs as infinitives never
 practises conjugation. So each time a story sentence is generated for a verb
 card we pick a (tense, person) SLOT and require the sentence to use exactly
-that form. The slot is the one used least so far across ALL verbs (history =
-story_sentences.verb_slot, no extra table), so the whole grid gets covered
-over time. Verbs keep their three cards; nothing new is scheduled.
+that form. Slots are rotated by weighted fair rotation (#1306): the slot with
+the smallest (times used + 1) / weight across ALL verbs wins (history =
+story_sentences.verb_slot, no extra table), so the long-run share of a slot is
+about its share of the total weight (tense weight x person weight, defaults
+from corpus frequency, editable in Settings); weight 0 = never. Verbs keep
+their three cards; nothing new is scheduled.
 
 Slot codes are "tense:person" ("ind_pret:3s"). Tense codes are the lexicon's
 (lexicon.py, #1293) plus the composed "perf" (haber + participle). Which
@@ -19,7 +22,9 @@ base verb (quejar) and the reflexive pronoun is put in front by person
 Everything on the generation path is total: failures log a warning and degrade
 to "no slots" (the story is generated as before).
 """
+import json
 import logging
+import math
 import random
 
 import database
@@ -350,13 +355,112 @@ def form_card_candidates(lang: str, max_verbs: int = 25, max_tenses: int = 3,
     return items
 
 
+# ---------------------------------------------------------------------------
+# Slot weights (#1306)
+#
+# Not every slot is equally worth drilling: "seréis" is far rarer than "habla".
+# Config carries default weights (languages.py); Settings can override them
+# (app_settings JSON). A slot's weight = tense weight x person weight; form
+# cards (fixed tense) use the person weight only.
+# ---------------------------------------------------------------------------
+
+SETTING_KEY = "es_verb_slot_weights"
+MAX_WEIGHT = 1000
+_FALLBACK_TENSE_WEIGHTS = {"ind_cond": 3.0}
+
+
+def default_weights(lang: str) -> dict:
+    """{"tenses": {code: w}, "persons": {code: w}} from the config, in config
+    order. Codes without a configured weight get 1.0. {} when the feature is off."""
+    cfg = config(lang)
+    if not cfg:
+        return {}
+    tw, pw = cfg.get("tense_weights") or {}, cfg.get("person_weights") or {}
+    return {
+        "tenses": {t: float(tw.get(t, _FALLBACK_TENSE_WEIGHTS.get(t, 1.0))) for t in cfg["tenses"]},
+        "persons": {p: float(pw.get(p, 1.0)) for p in cfg["persons"]},
+    }
+
+
+def _valid_weight(v) -> bool:
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and 0 <= v <= MAX_WEIGHT)
+
+
+def weights(lang: str) -> dict:
+    """Effective weights: defaults overlaid with the stored override (Spanish
+    only). Broken stored data is ignored with a warning. Never raises."""
+    try:
+        out = default_weights(lang)
+        if not out or lang != _FORM_LANG:
+            return out
+        raw = database.get_app_setting(SETTING_KEY)
+        if not raw:
+            return out
+        try:
+            stored = json.loads(raw)
+        except ValueError:
+            logger.warning("verb slot weights: stored value is not JSON, using defaults")
+            return out
+        if not isinstance(stored, dict):
+            logger.warning("verb slot weights: stored value is not an object, using defaults")
+            return out
+        for part in ("tenses", "persons"):
+            sub = stored.get(part)
+            if not isinstance(sub, dict):
+                logger.warning("verb slot weights: %r missing or broken, using defaults", part)
+                continue
+            for code, v in sub.items():
+                if code in out[part] and _valid_weight(v):
+                    out[part][code] = float(v)
+        return out
+    except Exception as e:
+        logger.warning("verb slot weights failed, using defaults — %s", e)
+        try:
+            return default_weights(lang)
+        except Exception:
+            return {}
+
+
+def validate_weights(lang: str, data) -> dict:
+    """Validate an API payload; return the full normalized set of floats.
+    Raises ValueError with a readable reason."""
+    defaults = default_weights(lang)
+    if not defaults:
+        raise ValueError(f"verb slot weights are not available for {lang!r}")
+    if not isinstance(data, dict):
+        raise ValueError("body must be an object with 'tenses' and 'persons'")
+    out = {}
+    for part in ("tenses", "persons"):
+        sub = data.get(part)
+        if not isinstance(sub, dict):
+            raise ValueError(f"'{part}' must be an object")
+        merged = dict(defaults[part])
+        for code, v in sub.items():
+            if code not in merged:
+                raise ValueError(f"unknown {part[:-1]} code {code!r}")
+            if not _valid_weight(v):
+                raise ValueError(f"weight for {code!r} must be a number between 0 and {MAX_WEIGHT}")
+            merged[code] = float(v)
+        if not any(w > 0 for w in merged.values()):
+            raise ValueError(f"at least one of the {part} needs a weight above 0")
+        out[part] = merged
+    return out
+
+
 def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
-                 rng: random.Random | None = None) -> dict[int, dict]:
+                 rng: random.Random | None = None,
+                 weights: dict | None = None) -> dict[int, dict]:
     """Pick a slot for every slottable verb card: {word_id: {slot, form, label}}.
 
-    Least-used slot first (count across all stories), ties -> least recently
-    used (never used = oldest), remaining ties -> random. The local count is
-    bumped after each pick so one story spreads over several slots. Never raises.
+    Weighted fair rotation (#1306): the slot with the smallest
+    (times used + 1) / weight wins, so the long-run share of a slot is about
+    its share of the total weight; weight 0 = never. Ties -> larger weight,
+    then least recently used (never used = oldest), then random. A slot's
+    weight is tense weight x person weight; form cards (fixed tense) use the
+    person weight only. `weights` = {"tenses": {...}, "persons": {...}}, default
+    = weights(lang). The local count is bumped after each pick so one story
+    spreads over several slots. Never raises.
     """
     try:
         cfg = config(lang)
@@ -364,6 +468,10 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
             return {}
         if usage is None:
             usage = database.verb_slot_usage(lang)
+        if weights is None:
+            weights = globals()["weights"](lang)  # the parameter shadows the function
+        w_tense = (weights or {}).get("tenses") or {}
+        w_person = (weights or {}).get("persons") or {}
         rng = rng or random.Random()
         counts = {k: v[0] for k, v in usage.items()}
         last = {k: (v[1] or "") for k, v in usage.items()}
@@ -381,21 +489,28 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                 for person in PERSONS:
                     form = lexicon.form_for(lemma, tense, person, lang)
                     if form:
-                        options.append((f"{tense}:{person}", form))
+                        options.append((f"{tense}:{person}", form, w_person.get(person, 1.0)))
             elif is_slottable_verb(word, lang):
                 lemma = word.strip().lower()
                 for slot in slots:
                     tense, _, person = slot.partition(":")
                     form = target_form(lemma, tense, person, lang)
                     if form:
-                        options.append((slot, form))
+                        options.append((slot, form,
+                                        w_tense.get(tense, 1.0) * w_person.get(person, 1.0)))
             else:
                 continue
+            options = [o for o in options if o[2] > 0]  # weight 0 = never
             if not options:
                 continue
-            best = min((counts.get(s, 0), last.get(s, "")) for s, _ in options)
-            tied = [o for o in options if (counts.get(o[0], 0), last.get(o[0], "")) == best]
-            slot, form = rng.choice(tied)
+
+            def key(o):
+                # rounded so float noise can't break ties
+                return (round((counts.get(o[0], 0) + 1) / o[2], 9), -round(o[2], 9),
+                        last.get(o[0], ""))
+            best = min(key(o) for o in options)
+            tied = [o for o in options if key(o) == best]
+            slot, form, _w = rng.choice(tied)
             counts[slot] = counts.get(slot, 0) + 1
             tense, _, person = slot.partition(":")
             result[card["word_id"]] = {"slot": slot, "form": form,

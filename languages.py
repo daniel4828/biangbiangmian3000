@@ -149,6 +149,14 @@ LANGUAGES = {
             "tenses": ["ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut",
                        "subj_pres", "subj_impf"],
             "persons": ["1s", "2s", "3s", "1p", "2p", "3p"],
+            # Relative weights (percent) for the slot rotation (#1306). Source:
+            # doozan/spanish_data frequency.csv (OpenSubtitles) aggregated by
+            # es-lexicon tags. Editable in Settings (app_settings override).
+            "tense_weights": {"ind_pres": 62, "ind_pret": 14, "ind_impf": 8,
+                              "subj_pres": 7, "ind_fut": 5, "perf": 4,
+                              "subj_impf": 1.3},
+            "person_weights": {"3s": 47, "1s": 22.5, "2s": 12, "3p": 11,
+                               "1p": 7, "2p": 0.4},
         },
         "features": {**_ROMANCE_BASE["features"]},
     },

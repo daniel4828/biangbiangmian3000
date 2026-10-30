@@ -3,6 +3,7 @@ import random
 from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 
 import ai
 import database
@@ -107,7 +108,7 @@ def test_target_form_reflexive():
 
 def test_assign_slots_reflexive():
     usage = _full_usage(**{"ind_pret:1s": (0, None)})
-    out = verb_slots.assign_slots([_card(1, "quejarse")], "es", usage=usage)
+    out = verb_slots.assign_slots([_card(1, "quejarse")], "es", usage=usage, weights=_UNIFORM)
     assert out[1]["form"] == "me quejé"
 
 
@@ -136,22 +137,33 @@ def _full_usage(n=1, **overrides):
     return usage
 
 
+_TENSES = ("ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf")
+_PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
+_UNIFORM = {"tenses": {t: 1.0 for t in _TENSES}, "persons": {p: 1.0 for p in _PERSONS}}
+
+
+def _w(tenses=None, persons=None):
+    """Weights with every code at 0 except the given ones."""
+    return {"tenses": {t: float((tenses or {}).get(t, 0)) for t in _TENSES},
+            "persons": {p: float((persons or {}).get(p, 0)) for p in _PERSONS}}
+
+
 def test_assign_slots_least_used_first():
     usage = _full_usage(**{"ind_pret:3s": (0, None)})
-    out = verb_slots.assign_slots([_card(1, "hablar")], "es", usage=usage)
+    out = verb_slots.assign_slots([_card(1, "hablar")], "es", usage=usage, weights=_UNIFORM)
     assert out[1] == {"slot": "ind_pret:3s", "form": "habló", "label": "Indefinido · 3. Sg."}
 
 
 def test_assign_slots_ties_least_recent():
     usage = _full_usage(**{"ind_impf:1s": (1, "2025-01-01T00:00:00")})
-    out = verb_slots.assign_slots([_card(1, "hablar")], "es", usage=usage)
+    out = verb_slots.assign_slots([_card(1, "hablar")], "es", usage=usage, weights=_UNIFORM)
     assert out[1]["slot"] == "ind_impf:1s"
 
 
 def test_assign_slots_spreads_within_batch_and_skips_non_verbs():
     usage = _full_usage(**{"ind_pret:3s": (0, None), "ind_impf:1s": (0, None)})
     cards = [_card(1, "hablar"), _card(2, "casa"), _card(3, "hablar")]
-    out = verb_slots.assign_slots(cards, "es", usage=usage)
+    out = verb_slots.assign_slots(cards, "es", usage=usage, weights=_UNIFORM)
     assert set(out) == {1, 3}
     assert {out[1]["slot"], out[3]["slot"]} == {"ind_pret:3s", "ind_impf:1s"}
 
@@ -163,6 +175,143 @@ def test_assign_slots_seeded_rng_deterministic_and_error_safe():
     assert a == b and a
     assert verb_slots.assign_slots(cards, "es", usage=42) == {}
     assert verb_slots.assign_slots(cards, "fr", usage={}) == {}
+
+
+# --- weights (#1306) -----------------------------------------------------------
+
+def test_assign_slots_weighted_distribution():
+    # hablar in 3s: ind_pres (weight 3) vs ind_pret (weight 1); perf weight 0.
+    w = _w(tenses={"ind_pres": 3, "ind_pret": 1}, persons={"3s": 1})
+    cards = [_card(i, "hablar") for i in range(1, 41)]
+    out = verb_slots.assign_slots(cards, "es", usage={}, rng=random.Random(1), weights=w)
+    slots = [v["slot"] for v in out.values()]
+    assert slots.count("ind_pres:3s") == 30
+    assert slots.count("ind_pret:3s") == 10
+    assert len(slots) == 40
+
+
+def test_assign_slots_zero_weight_never_chosen():
+    w = _w(tenses={"ind_pres": 1, "ind_pret": 0}, persons={"3s": 1, "1s": 0})
+    cards = [_card(i, "hablar") for i in range(1, 11)]
+    out = verb_slots.assign_slots(cards, "es", usage={}, weights=w)
+    assert {v["slot"] for v in out.values()} == {"ind_pres:3s"}
+
+
+def test_assign_slots_all_options_zero_skips_card():
+    w = _w(tenses={"ind_fut": 1}, persons={"3s": 1})  # hablar has no future form
+    assert verb_slots.assign_slots([_card(1, "hablar")], "es", usage={}, weights=w) == {}
+
+
+def test_assign_slots_first_pick_is_highest_weight():
+    w = _w(tenses={"ind_pres": 1, "ind_pret": 5}, persons={"3s": 1, "1s": 1})
+    out = verb_slots.assign_slots([_card(1, "hablar")], "es", usage={}, weights=w)
+    assert out[1]["slot"] == "ind_pret:3s"
+
+
+def test_assign_slots_form_card_uses_person_weights_only():
+    lex = dict(LEXICON)
+    lex["lemmas"] = {**LEXICON["lemmas"], "tener": _verb("to have")}
+    lex["verbs"] = {**LEXICON["verbs"],
+                    "tuve": [["tener", "ind_pret", "1s"]],
+                    "tuvo": [["tener", "ind_pret", "3s"]]}
+    lexicon.inject("es", lex)
+    assert verb_slots.parse_form_card("tener · Indefinido") == ("tener", "ind_pret")
+    # tense weight of the card's own tense is 0 and must not block it
+    w = _w(persons={"3s": 3, "1s": 1})
+    cards = [_card(i, "tener · Indefinido") for i in range(1, 5)]
+    out = verb_slots.assign_slots(cards, "es", usage={}, weights=w)
+    slots = [v["slot"] for v in out.values()]
+    assert slots.count("ind_pret:3s") == 3 and slots.count("ind_pret:1s") == 1
+
+
+def test_default_weights_follow_config():
+    d = verb_slots.default_weights("es")
+    assert list(d["tenses"]) == verb_slots.config("es")["tenses"]
+    assert list(d["persons"]) == verb_slots.config("es")["persons"]
+    assert d["tenses"]["ind_pres"] == 62 and d["persons"]["3s"] == 47
+    assert verb_slots.default_weights("fr") == {}
+
+
+def test_weights_override_merge(tmp_db):
+    assert verb_slots.weights("es") == verb_slots.default_weights("es")
+    database.set_app_setting(
+        verb_slots.SETTING_KEY,
+        '{"tenses": {"ind_pres": 5, "bogus": 3, "ind_pret": -1}, "persons": {"3s": 2}}')
+    got = verb_slots.weights("es")
+    assert got["tenses"]["ind_pres"] == 5.0
+    assert got["tenses"]["ind_pret"] == 14.0  # invalid value ignored
+    assert "bogus" not in got["tenses"]
+    assert got["persons"]["3s"] == 2.0 and got["persons"]["1s"] == 22.5
+
+
+def test_weights_broken_setting_falls_back_to_defaults(tmp_db):
+    for raw in ("not json", "[1, 2]", '{"tenses": 3}'):
+        database.set_app_setting(verb_slots.SETTING_KEY, raw)
+        assert verb_slots.weights("es") == verb_slots.default_weights("es")
+    database.set_app_setting(verb_slots.SETTING_KEY, "")
+    assert verb_slots.weights("es") == verb_slots.default_weights("es")
+
+
+def test_validate_weights():
+    ok = verb_slots.validate_weights("es", {"tenses": {"ind_pres": 2}, "persons": {"3s": 0}})
+    assert ok["tenses"]["ind_pres"] == 2.0 and ok["tenses"]["ind_pret"] == 14.0
+    assert ok["persons"]["3s"] == 0.0
+    bad = [
+        {"tenses": {"nope": 1}, "persons": {}},
+        {"tenses": {"ind_pres": -1}, "persons": {}},
+        {"tenses": {"ind_pres": True}, "persons": {}},
+        {"tenses": {"ind_pres": "3"}, "persons": {}},
+        {"tenses": {"ind_pres": float("nan")}, "persons": {}},
+        {"tenses": {"ind_pres": 1001}, "persons": {}},
+        {"tenses": {}, "persons": {p: 0 for p in _PERSONS}},
+        {"tenses": {t: 0 for t in _TENSES}, "persons": {}},
+        {"tenses": {}},
+        [],
+    ]
+    for data in bad:
+        with pytest.raises(ValueError):
+            verb_slots.validate_weights("es", data)
+    with pytest.raises(ValueError):
+        verb_slots.validate_weights("fr", {"tenses": {}, "persons": {}})
+
+
+# --- weights API ---------------------------------------------------------------
+
+@pytest.fixture
+def client(tmp_db):
+    import main
+    return TestClient(main.app)
+
+
+def test_weights_api_get_put_delete(client):
+    r = client.get("/api/es/verb-slot-weights")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["weights"] == body["defaults"]
+    assert body["labels"]["tenses"]["ind_pret"] == "Indefinido"
+    assert body["labels"]["tenses"]["perf"] == "Perfecto"
+    assert body["labels"]["persons"]["3s"] == "3. Sg."
+
+    r = client.put("/api/es/verb-slot-weights",
+                   json={"tenses": {"ind_pres": 1}, "persons": {"2p": 9}})
+    assert r.status_code == 200
+    assert r.json()["weights"]["tenses"]["ind_pres"] == 1.0
+    assert verb_slots.weights("es")["persons"]["2p"] == 9.0
+    assert client.get("/api/es/verb-slot-weights").json()["weights"]["persons"]["2p"] == 9.0
+
+    r = client.delete("/api/es/verb-slot-weights")
+    assert r.status_code == 200
+    assert r.json()["weights"] == r.json()["defaults"]
+    assert verb_slots.weights("es") == verb_slots.default_weights("es")
+
+
+def test_weights_api_put_invalid_is_400_and_stores_nothing(client):
+    r = client.put("/api/es/verb-slot-weights",
+                   json={"tenses": {"ind_pres": -2}, "persons": {}})
+    assert r.status_code == 400 and "ind_pres" in r.json()["detail"]
+    r = client.put("/api/es/verb-slot-weights", json={"tenses": {"x": 1}, "persons": {}})
+    assert r.status_code == 400
+    assert verb_slots.weights("es") == verb_slots.default_weights("es")
 
 
 # --- database ----------------------------------------------------------------

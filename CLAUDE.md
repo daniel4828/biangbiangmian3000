@@ -548,7 +548,9 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 中文里"认识一个词 = 会用它"；西语里认识 `ir` ≠ 会说 `fui`。分级测试：现在时没问题，过去时完全没有。而故事提示词原来要求目标词"必须以给定形式出现"，动词因此永远是不定式，变位从没练过。
 
 - **不加新卡**：动词仍是三张卡。每次为动词卡生成故事句子时，选一个（时态, 人称）槽位，要求句子**恰好**用那个变位形。卡片上显示小标签（如 `Indefinido · 3. Sg.`），因为德语 "ich spielte" 对应 jugué/jugaba 有歧义
-- **槽位选法**（`verb_slots.assign_slots()`）：全局用得最少的槽位优先（跨所有西语动词），并列取最久没用的（从没用过算最久），再并列随机；同一篇故事内每选一次就给本地计数 +1，所以一篇故事会铺开到不同槽位。**历史就是 `story_sentences.verb_slot` 列**（`database.verb_slot_usage(lang)` 聚合），不建新表
+- **槽位选法（#1306 起加权）**（`verb_slots.assign_slots()`）：选 `(已用次数+1)/权重` 最小的槽位（次数跨所有西语动词），所以长期占比≈权重占比；并列 → 权重大的 → 最久没用的（从没用过算最久）→ 随机；权重 0 = 永不选。槽位权重 = 时态权重 × 人称权重，**形态卡（#1296，时态固定）只用人称权重**。同一篇故事内每选一次就给本地计数 +1，所以一篇故事会铺开到不同槽位。**历史就是 `story_sentences.verb_slot` 列**（`database.verb_slot_usage(lang)` 聚合），不建新表
+- **默认权重**在 `languages.py` 的 `es["verb_slots"]`（`tense_weights` / `person_weights`，百分比）：时态 ind_pres 62 / ind_pret 14 / ind_impf 8 / subj_pres 7 / ind_fut 5 / perf 4 / subj_impf 1.3；人称 3s 47 / 1s 22.5 / 2s 12 / 3p 11 / 1p 7 / 2p 0.4。来源：doozan/spanish_data 的 frequency.csv（OpenSubtitles）按 es-lexicon 标签汇总。配置里没有权重的时态按 1（`ind_cond` 按 3）
+- **设置页可改权重**：设置页 Spanish 块的 "Verb slot weights"，覆盖值存 `app_settings.es_verb_slot_weights`（JSON `{"tenses":{},"persons":{}}`），`verb_slots.weights(lang)` = 默认值叠加覆盖值（只认已知代码、值须为 0–1000 的有限数；存的数据损坏就忽略并回落默认）；`GET/PUT/DELETE /api/es/verb-slot-weights`（PUT 校验失败 400，DELETE = 恢复默认）
 - **启用哪些时态在 `languages.py` 的 `es["verb_slots"]`**：现在是 Presente → Indefinido → Imperfecto → Perfecto。解锁 Futuro 就在 `tenses` 里追加 `"ind_fut"`（Subjuntivo 之后再说）。法语没有 `verb_slots` → 功能关闭，提示词逐字不变
 - **Perfecto 是组合出来的**（`perf` 不是词汇表里的时态码）：`haber` 现在时对应人称 + 过去分词（`ha hablado`）。覆盖词汇表里约 2,900 个动词（#1305 起来自 Wiktionary 变位表）；没有该形式的槽位自动跳过
 - **自反动词暂不支持**（`quejarse` 等以 `se` 结尾的不定式）：代词要挪到变位形前面（`me quejé`），平表做不出来
@@ -1168,6 +1170,9 @@ GET    /api/dict/history/{id} ；DELETE /api/dict/history/{id}  → 单条 / 删
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它
 GET  /api/add-word-ai/progress/{job_id}              → 轮询后台生成+导入的结果
 POST /api/es/irregular-form-cards                    → 创建西语不规则动词形态卡进 Español ★ List（#1296）：{created[], skipped[], errors[]}；零 AI、幂等；无 es 词汇表 → 400
+GET    /api/es/verb-slot-weights                     → 西语动词槽位权重（#1306）：{weights, defaults, labels{tenses,persons}}
+PUT    /api/es/verb-slot-weights                     → body {tenses:{code:w}, persons:{code:w}}；未知代码/负数/非数字/整组全 0 → 400；返回同 GET
+DELETE /api/es/verb-slot-weights                     → 恢复默认权重；返回同 GET
 GET  /api/browse                                     → {deck_id?, category?, state?, q?, lang?}
 GET  /api/browse-words[?lang=] ；GET /api/search-words?q=[&lang=]  → Browse 页的词表/搜索（#815）：按 **entries.lang** 过滤（不是 decks.lang——无卡片的 reference 词条也要出现），不传则返回全部；前端还按语言过滤侧栏牌组树、非中文时隐藏 Hanzi 区
 DELETE /api/word/{id}                                → Browse 单行 🗑：硬删除词条及其全部卡片（级联，不进垃圾桶）；不存在返回 404（不假装成功）
