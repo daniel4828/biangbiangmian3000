@@ -363,6 +363,7 @@
               <!-- Top-right corner: HSK level + frequency rank side by side (#1285) -->
               <div class="vocab-corner">
                 <button id="card-hsk-badge" class="card-hsk-badge" onclick="enrichCard()" title="Ask AI to fill HSK level &amp; character data" style="display:none"></button>
+                <span class="card-hsk-badge verb-reg-badge" id="card-verb-badge" hidden></span>
                 <span class="word-freq" id="word-freq" hidden title="SUBTLEX-CH whole-word frequency rank (film subtitles): lower = more common"></span>
               </div>
               <div class="word-big" id="word-zh"></div>
@@ -542,6 +543,7 @@
       <div id="wd-def-block">
         <div class="wd-pos-def-row">
           <span class="word-pos" id="wd-pos" style="display:none"></span>
+          <span class="card-hsk-badge verb-reg-badge" id="wd-verb-badge" hidden></span>
           <span class="word-register" id="wd-register" style="display:none"></span>
           <span id="wd-def-regen"></span>
         </div>

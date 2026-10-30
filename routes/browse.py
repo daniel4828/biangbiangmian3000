@@ -5,6 +5,7 @@ import ai
 import database
 import importer
 import languages
+import verb_slots
 from fastapi import APIRouter, HTTPException
 from pypinyin import pinyin as _pinyin, Style
 from .utils import queue_mgr as _queue_mgr
@@ -31,6 +32,10 @@ def get_word_detail(word_id: int):
                 word.get("word_zh"), word.get("gender"), word.get("lang"))
             if article:
                 word["article"] = article
+            # Verben: regelmäßig/unregelmäßig als Etikett (#1315)
+            regularity = verb_slots.verb_regularity(word.get("word_zh"), word.get("lang"))
+            if regularity:
+                word["verb_regularity"] = regularity
     return word
 
 

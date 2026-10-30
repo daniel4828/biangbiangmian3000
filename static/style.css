@@ -8001,3 +8001,10 @@ body.gloss-on [data-gloss-tr]::after {
 :root[data-theme="dark"] #knowledge-toast button { color: var(--primary); }
 :root[data-theme="dark"] #ra-fs-toggle,
 :root[data-theme="dark"] #ra-fs-step.is-on:hover { color: var(--on-primary); }
+
+/* Verb-Etikett reg./irreg. (#1315) */
+.verb-reg-badge { cursor: default; }
+.verb-reg-badge.irregular {
+  color: var(--warning, #c2410c);
+  background: color-mix(in srgb, var(--warning, #c2410c) 12%, transparent);
+}

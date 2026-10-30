@@ -3357,7 +3357,18 @@ function _withArticle(word, article) {
   return article ? `${article} ${word}` : word;
 }
 
+// Verb-Etikett „reg.“ / „irreg.“ (#1315); ohne verb_regularity ausgeblendet
+function _setVerbBadge(el, word) {
+  if (!el) return;
+  const r = word?.verb_regularity;
+  el.hidden = !r;
+  el.textContent = r === 'irregular' ? 'irreg.' : r === 'regular' ? 'reg.' : '';
+  el.classList.toggle('irregular', r === 'irregular');
+  el.title = r === 'irregular' ? 'verbo irregular' : r === 'regular' ? 'verbo regular' : '';
+}
+
 function renderWordDetail(word) {
+  _setVerbBadge(document.getElementById('wd-verb-badge'), word);
   document.getElementById('wd-edit-btn').onclick = () => openWordEditModal(word);
   const regenAllBtn = document.getElementById('wd-regen-all-btn');
   if (regenAllBtn) regenAllBtn.onclick = () => word.id && regenAllFields(word.id);
@@ -11797,6 +11808,7 @@ function loadCard(c, counts) {
   // CEFR languages show "B1" etc. when the entry has a level, otherwise the
   // badge is hidden (AI-enrich is a Chinese-only feature) — issue #596.
   const hskBadge = document.getElementById('card-hsk-badge');
+  _setVerbBadge(document.getElementById('card-verb-badge'), null);
   const _cardLang = currentCardLang();
   if (_cardLang !== 'zh') {
     if (card.hsk_level) {
@@ -11845,6 +11857,8 @@ function loadCard(c, counts) {
         } else if (!isMultiWord && wordDetails.id === card.word_id) {
           wzEl.textContent = _withArticle(card.word_zh, wordDetails.article);
         }
+        _setVerbBadge(document.getElementById('card-verb-badge'),
+          wordDetails?.id === card.word_id ? wordDetails : null);
         renderVocabDetail();
         renderNotesSection();
         renderConjugationSection();
