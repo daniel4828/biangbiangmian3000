@@ -95,3 +95,10 @@ def test_baseline_script(tmp_path):
     assert lines[0].startswith("#")
     words = [l for l in lines if l and not l.startswith("#")]
     assert words == ["de", "ser", "casa"]  # rank order, prop excluded, rank 5 cut
+
+
+def test_article_for_skips_headword_with_article():
+    # 生产里出现 "la la ventaja"：词头已带冠词时不再重复
+    assert languages.article_for("la ventaja", "f", "es") is None
+    assert languages.article_for("El clima", "m", "es") is None
+    assert languages.article_for("lado", "m", "es") == "el"
