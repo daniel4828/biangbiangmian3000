@@ -2172,7 +2172,7 @@ a.news-source-line:hover {
   align-items: center;
   gap: 2px;
 }
-.wb-skel-pre { color: #000; }
+.wb-skel-pre { color: var(--text); }
 .wb-skel-blank {
   color: var(--primary);
   font-weight: 700;
