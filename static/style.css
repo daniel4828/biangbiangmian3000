@@ -6629,11 +6629,14 @@ header #header-search-panel {
 main { padding-bottom: calc(var(--search-bar-h) + 24px + env(safe-area-inset-bottom)); }
 main.browse-open { padding-bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom)); }
 body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom))); }
-body:not(.ra-fullscreen-open) #gloss-toggle-btn {
-  bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)));
-}
-body.mini-player-visible:not(.ra-fullscreen-open) #gloss-toggle-btn {
-  bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)) + 80px);
+/* On wider screens the centered pill doesn't reach the bottom-left corner, so the button keeps its base position (#1330). */
+@media (max-width: 600px) {
+  body:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)));
+  }
+  body.mini-player-visible:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)) + 80px);
+  }
 }
 @media (max-width: 560px) {
   /* Same iOS rule as #add-word-input above: under 16px, focusing the field
