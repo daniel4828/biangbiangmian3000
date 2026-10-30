@@ -18384,7 +18384,17 @@ document.addEventListener('keydown', async e => {
       closeWordDetailPopup();
       return;
     }
-    const sessOverlay = document.getElementById('session-summary-overlay');
+    // The header-search dictionary popup (#1055/#1321): Esc closes it wherever
+    // focus is. When the search input itself has focus, onHeaderSearchKey
+    // already handled this Esc (closing the suggestion panel first) — don't
+    // also close the popup on the same keypress.
+    if (document.body.classList.contains('dict-result-open') &&
+        e.target !== _headerSearchInput()) {
+      e.preventDefault();
+      closeDictResultModal();
+      return;
+    }
+    const sessOverlay =document.getElementById('session-summary-overlay');
     if (sessOverlay && sessOverlay.style.display !== 'none') {
       e.preventDefault();
       closeSessionSummary();
