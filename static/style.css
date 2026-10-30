@@ -6545,9 +6545,68 @@ body.gloss-on [data-gloss-tr]::after {
 }
 
 @media (max-width: 560px) {
+  /* #1317: on phones the header is too crowded and the 150px search box got
+     truncated. Make it a full-width bar fixed to the bottom (like Safari's
+     address bar) — that's where the thumb is. Scoped with `header ` so the
+     rules stop applying when the full-screen player (#1109) moves the box
+     into #ra-fs-search-slot. The header's glass background lives on ::before
+     because backdrop-filter would make the header the containing block of
+     the fixed bar. */
+  :root { --search-bar-h: 60px; }
+  header {
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--glass-header, rgba(255,255,255,.82));
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+  }
+  header #header-search-wrap {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 89;
+    padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+    background: var(--glass-header, rgba(255,255,255,.86));
+    backdrop-filter: saturate(180%) blur(18px);
+    -webkit-backdrop-filter: saturate(180%) blur(18px);
+    border-top: 1px solid rgba(15,23,42,.08);
+  }
   /* Same iOS rule as #add-word-input above: under 16px, focusing the field
      zooms the whole page in. */
-  #header-search-input { font-size: 16px; width: min(150px, 34vw); }
+  header #header-search-input {
+    width: 100%;
+    font-size: 16px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    box-sizing: border-box;
+  }
+  header #header-search-panel {
+    top: auto;
+    bottom: calc(100% + 6px);
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-height: min(55vh, 420px);
+  }
+  /* Keep page content and other fixed corner widgets clear of the bar. */
+  body { padding-bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom)); }
+  body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom))); }
+  body:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)));
+  }
+  body.mini-player-visible:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)) + 80px);
+  }
+  body #version-badge { bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom) + 4px); }
 }
 
 /* Sentence-question modal (#853) — same shell as #add-word-modal */
