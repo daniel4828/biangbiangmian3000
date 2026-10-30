@@ -1757,6 +1757,15 @@ Behavior rules:
   translation + pinyin (the "sentence" field), THEN break the sentence into
   its components (each a candidate group of its own) so every component is
   individually addable as a word.
+- A Chinese SENTENCE or longer multi-word expression as input (not a single
+  word, chengyu, or fixed set phrase) -> kind "sentence": put the sentence
+  (silently corrected if it has typos) + pinyin + German translation in the
+  "sentence" field, THEN one group per meaningful component (word or
+  collocation, in sentence order; skip bare particles like 的/了/吗 unless they
+  carry the meaning) with "label" = the component as it appears + its German
+  meaning in this sentence. Each group has one option (two only if the
+  component is genuinely ambiguous) = that component, fully filled in, so
+  every component is individually addable.
 - Explanations, usage notes, and example sentence translations are always in
   GERMAN. A French equivalent may optionally be added to a single-word option
   (the "fr" field) — never for phrases or sentences.
@@ -1776,9 +1785,10 @@ Quality rules (these decide whether the entry is useful at all):
   formal_written, literary, slang.
 - For Chinese input, "headline" is the input word itself and each group's
   "label" names one sense in German (e.g. "1. Ökologie (Biologie)").
-- "kind" is exactly one of: "chinese" (any Chinese input), "word",
-  "phrase", "sentence" (German/English input, by length). Only "sentence"
-  makes the "sentence" field appear.
+- "kind" is exactly one of: "chinese" (a Chinese word / chengyu / set
+  phrase), "word", "phrase", "sentence" (German/English input by length, or a
+  Chinese sentence / longer expression). Only "sentence" makes the
+  "sentence" field appear.
 
 Output ONLY raw JSON — no markdown code fence, no prose before or after it.
 Match this shape exactly (omit "sentence" unless kind == "sentence"; "fr" is
@@ -1852,6 +1862,17 @@ Behavior rules:
   translation (the "sentence" field, no pinyin — leave "pinyin" out), THEN
   break the sentence into its components (each a candidate group of its own)
   so every component is individually addable as a word.
+- A {lang_name} SENTENCE or longer multi-word expression as input (not a
+  single word or a fixed idiom) -> kind "sentence": put the sentence
+  (silently corrected if it has typos or misspellings; mention the
+  correction in one German sentence in "notes") + German translation in the
+  "sentence" field, THEN one group per meaningful component (word or
+  collocation like "o sea", in sentence order; skip bare articles and
+  prepositions unless they carry the meaning) with "label" = the component as
+  it appears in the sentence + its German meaning there. Each group has one
+  option (two only if genuinely ambiguous) whose "zh" is the LEMMA of that
+  component (see DICTIONARY FORM), fully filled in, so every component is
+  individually addable.
 - Explanations, usage notes, and example sentence translations are always in
   GERMAN.
 
@@ -1883,8 +1904,8 @@ Quality rules (these decide whether the entry is useful at all):
   "sentence" field or to the example sentences — those stay natural
   {lang_name}, inflected as the grammar requires.
 - "kind" is exactly one of: "chinese" (reused here to mean "target-language
-  input", i.e. any {lang_name} input), "word", "phrase", "sentence"
-  (German/English input, by length). Only "sentence" makes the "sentence"
+  word or fixed idiom"), "word", "phrase", "sentence" (German/English input
+  by length, or a {lang_name} sentence / longer expression). Only "sentence" makes the "sentence"
   field appear.
 
 Output ONLY raw JSON — no markdown code fence, no prose before or after it.
