@@ -16,16 +16,11 @@
   const onSystemChange = () => { if (choice === 'system') apply(); };
   if (media.addEventListener) media.addEventListener('change', onSystemChange);
   else if (media.addListener) media.addListener(onSystemChange);
-  const bind = () => {
-    const selector = document.getElementById('theme-select');
-    if (!selector) return;
-    selector.value = choice;
-    selector.addEventListener('change', () => {
-      choice = ['system', 'light', 'dark'].includes(selector.value) ? selector.value : 'system';
-      try { localStorage.setItem('theme', choice); } catch (_) { /* 保留当前页面的选择。 */ }
-      apply();
-    });
+  // #1323：选择器搬到设置页（app.js 渲染），这里只暴露读写接口。
+  window.getThemeChoice = () => choice;
+  window.setThemeChoice = (value) => {
+    choice = ['system', 'light', 'dark'].includes(value) ? value : 'system';
+    try { localStorage.setItem('theme', choice); } catch (_) { /* 保留当前页面的选择。 */ }
+    apply();
   };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
-  else bind();
 })();
