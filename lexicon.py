@@ -9,7 +9,8 @@ File format (written by scripts/build_{lang}_lexicon.py, see
 resources/README.md):
 
     {"version": 1,
-     "lemmas": {lemma: {"r": rank, "p": pos, "g": gender, "en": gloss}},
+     "lemmas": {lemma: {"r": rank, "p": pos, "g": gender, "en": gloss,
+                           "de": german gloss}},   # g, en, de optional
      "forms":  {form: [lemma, ...]},        # lemma list ordered by frequency
      "verbs":  {form: [[lemma, tense, person], ...]}}
 
@@ -79,10 +80,10 @@ def _normalise(data) -> dict:
             for key in ("lemmas", "forms", "verbs")}
 
 
-# Conjugations the bundled table lacks (#1301): the Jehle table has no haber,
-# so it would never get slots, form cards or "he/has/ha" tags. Applied only to
-# the file-loaded lexicon (not inject(), so test fixtures stay exact), and only
-# for lemmas without any verbs tag. Rows are persons 1s 2s 3s 1p 2p 3p.
+# Fallback conjugations (#1301): the older Jehle-based table had no haber. The
+# Wiktionary build (#1305) now tags haber itself, so this is skipped whenever
+# the lemma already has tags and only matters for a file lacking them. Applied
+# only to the file-loaded lexicon (not inject(), so test fixtures stay exact). Rows are persons 1s 2s 3s 1p 2p 3p.
 _PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
 _SUPPLEMENT = {
     "es": {
@@ -164,7 +165,8 @@ def lemma_info(lemma: str, lang: str) -> dict | None:
         if not isinstance(entry, dict):
             return None
         return {"rank": entry.get("r"), "pos": entry.get("p"),
-                "gender": entry.get("g"), "gloss_en": entry.get("en")}
+                "gender": entry.get("g"), "gloss_en": entry.get("en"),
+                "gloss_de": entry.get("de")}
     except Exception:
         return None
 

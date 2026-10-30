@@ -224,21 +224,30 @@ def _word_dicts(words: list[str], lang: str, lemma_map: dict[str, list[str]]) ->
     "word" stays the surface form: the frontend locates taps by it. "lemma" is
     the single lemma when the form is unambiguous, else the surface form (the
     ★ List / ✓ Known buttons send it, and an ambiguous fui must not silently
-    pick ser or ir). The German gloss is requested for that same string:
-    unambiguous forms are translated by their lemma ("hablamos" -> "hablar"),
-    ambiguous or unknown ones keep the surface form. One batched translate
-    call over the de-duplicated strings, failure contract as _glosses()."""
+    pick ser or ir). The German gloss: an unambiguous lemma that the lexicon
+    already has a German gloss for (#1305, Wiktionary) uses it and never
+    reaches Google. Otherwise the gloss is requested for the same string as
+    "lemma": unambiguous forms are translated by their lemma ("hablamos" ->
+    "hablar"), ambiguous or unknown ones keep the surface form. One batched
+    translate call over the remaining de-duplicated strings (skipped when none
+    remain), failure contract as _glosses()."""
     use_lex = lexicon.available(lang)
     queries = {}
+    lexicon_de = {}
     for w in words:
         lemmas = lemma_map.get(w) or []
         queries[w] = lemmas[0] if len(lemmas) == 1 else w
-    glosses = _glosses(list(dict.fromkeys(queries.values())), lang)
+        if len(lemmas) == 1:
+            info = lexicon.lemma_info(lemmas[0], lang)
+            if info and info.get("gloss_de"):
+                lexicon_de[w] = info["gloss_de"]
+    to_translate = list(dict.fromkeys(q for w, q in queries.items() if w not in lexicon_de))
+    glosses = _glosses(to_translate, lang) if to_translate else {}
 
     out = []
     for w in words:
         q = queries[w]
-        d = {"word": w, "lemma": q, "definition_de": glosses.get(q) or None}
+        d = {"word": w, "lemma": q, "definition_de": lexicon_de.get(w) or glosses.get(q) or None}
         if use_lex:
             lemmas = lemma_map.get(w) or []
             if lemmas:

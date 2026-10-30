@@ -7,7 +7,6 @@ built from tiny fixture files in tmp_path or injected as a dict, and the
 annotator's database / translation calls are stubbed.
 """
 
-import csv
 import gzip
 import importlib.util
 import json
@@ -51,6 +50,7 @@ FREQUENCY = """count,spanish,pos,flags,usage
 50,cuenta,v,,5:cuenta|4:cuentan
 40,basura,none,,10:zzz
 30,hablar,v,,3:habló|2:ca.
+20,tener,v,,2:tengo
 """
 
 WIKT = """cuenta
@@ -74,26 +74,104 @@ pos: v
   gloss: to talk
 """
 
-JEHLE_HEADER = ["infinitive", "infinitive_english", "mood", "mood_english", "tense", "tense_english",
-                "verb_english", "form_1s", "form_2s", "form_3s", "form_1p", "form_2p", "form_3p",
-                "gerund", "gerund_english", "pastparticiple", "pastparticiple_english"]
+def _f(form, tags, source="conjugation"):
+    item = {"form": form, "tags": tags}
+    if source:
+        item["source"] = source
+    return item
 
 
-def _jehle_row(inf, mood, tense, forms, gerund="", part=""):
-    return [inf, "to x", mood, "m", tense, "t", "v", *forms, gerund, "g", part, "p"]
-
-
-JEHLE_ROWS = [
-    _jehle_row("hablar", "Indicativo", "Presente", ["hablo", "hablas", "habla", "hablamos", "habláis", "hablan"],
-               "hablando", "hablado"),
-    _jehle_row("hablar", "Indicativo", "Pretérito", ["hablé", "hablaste", "habló", "hablamos", "hablasteis", "hablaron"],
-               "hablando", "hablado"),
-    _jehle_row("hablar", "Indicativo", "Presente perfecto", ["he hablado", "has hablado", "ha hablado",
-                                                              "hemos hablado", "", ""]),
-    _jehle_row("hablar", "Imperativo Negativo", "Presente", ["", "no hables", "no hable", "no hablemos", "", ""]),
-    _jehle_row("ir", "Indicativo", "Pretérito", ["fui", "fuiste", "fue", "fuimos", "fuisteis", "fueron"]),
-    _jehle_row("tener", "Indicativo", "Pretérito", ["tuve", "tuviste", "tuvo", "tuvimos", "tuvisteis", "tuvieron"]),
+# kaikki.org en.wiktionary Spanish extract, trimmed to what the build reads.
+KAIKKI_ES = [
+    {"word": "hablar", "pos": "verb", "forms": [
+        _f("hablo", ["first-person", "present", "singular"], source=None),   # head template: ignored
+        _f("no-table-tags", ["table-tags"]),
+        _f("es-conj", ["inflection-template"]),
+        _f("hablar", ["infinitive"]),
+        _f("hablando", ["gerund"]),
+        _f("hablado", ["masculine", "participle", "past", "singular"]),
+        _f("hablada", ["feminine", "participle", "past", "singular"]),
+        _f("hablados", ["masculine", "participle", "past", "plural"]),
+        _f("hablamos", ["first-person", "indicative", "plural", "present"]),
+        _f("hablamos", ["first-person", "indicative", "plural", "preterite"]),
+        _f("hablaría", ["conditional", "first-person", "indicative", "singular"]),
+        _f("hable", ["first-person", "present", "singular", "subjunctive"]),
+        _f("hable", ["present", "singular", "subjunctive", "third-person"]),
+        _f("hable", ["formal", "imperative", "second-person-semantically", "singular", "third-person"]),
+        _f("habla", ["imperative", "second-person", "singular"]),
+        _f("no hables", ["imperative", "negative", "second-person", "singular"]),
+        _f("hablara", ["first-person", "imperfect", "singular", "subjunctive"]),
+        _f("hablase", ["first-person", "imperfect-se", "singular", "subjunctive"]),
+        _f("hablás", ["indicative", "present", "second-person", "singular", "vos-form"]),
+        _f("háblame", ["combined-form", "imperative", "second-person", "singular"]),
+        _f("hablá", ["imperative", "second-person", "singular", "with-vos"]),
+    ]},
+    # A second etymology of the same word merges into the first.
+    {"word": "hablar", "pos": "verb", "forms": [
+        _f("hablaré", ["first-person", "future", "indicative", "singular"]),
+    ]},
+    {"word": "hablar", "pos": "noun", "forms": [_f("hablares", ["plural"])]},
+    {"word": "ir", "pos": "verb", "forms": [
+        _f("fui", ["first-person", "indicative", "preterite", "singular"]),
+    ]},
+    {"word": "ser", "pos": "verb", "forms": [
+        _f("fui", ["first-person", "indicative", "preterite", "singular"]),
+    ]},
+    {"word": "tener", "pos": "verb", "forms": [
+        _f("tuve", ["first-person", "indicative", "preterite", "singular"]),
+        _f("tuviese", ["first-person", "imperfect-se", "singular", "subjunctive"]),
+    ]},
+    # "cuenta" is a noun first in the frequency file but has a `v` row too.
+    {"word": "cuenta", "pos": "verb", "forms": [
+        _f("cuentan", ["indicative", "plural", "present", "third-person"]),
+    ]},
+    # Not in the frequency file: ignored.
+    {"word": "andar", "pos": "verb", "forms": [
+        _f("anduve", ["first-person", "indicative", "preterite", "singular"]),
+    ]},
 ]
+
+# kaikki.org de.wiktionary Spanish extract.
+KAIKKI_DE_ES = [
+    {"word": "hablar", "pos": "verb", "lang_code": "es", "translations": [
+        {"word": "sprechen", "lang_code": "de"}, {"word": "reden", "lang_code": "de"},
+        {"word": "speak", "lang_code": "en"}], "senses": [{"glosses": ["ignored, there are translations"]}]},
+    # No translations: the first gloss of each sense.
+    {"word": "tener", "pos": "verb", "lang_code": "es", "senses": [
+        {"glosses": ["haben"]}, {"glosses": ["besitzen", "nicht das"]}]},
+    {"word": "ser", "pos": "verb", "lang_code": "es", "translations": [
+        {"word": "sein", "lang_code": "de"}]},
+    {"word": "andar", "pos": "verb", "lang_code": "es", "translations": [
+        {"word": "gehen", "lang_code": "de"}]},
+    # Inflected-form entry + form-of sense next to a real one: never a gloss.
+    {"word": "cuenta", "pos": "verb", "lang_code": "es", "senses": [
+        {"tags": ["active", "form-of"], "form_of": [{"word": "contar"}],
+         "glosses": ["3. Person Singular Indikativ Präsens Aktiv des Verbs contar"]}]},
+    {"word": "comer", "pos": "verb", "lang_code": "es", "senses": [
+        {"tags": ["form-of"], "glosses": ["Form des Verbs"]},
+        {"glosses": ["essen"]}]},
+]
+
+
+def _de(word, *spanish):
+    return {"word": word, "pos": "noun", "lang_code": "de",
+            "translations": [{"word": s, "lang_code": "es"} for s in spanish]
+                            + [{"word": "x", "lang_code": "fr"}]}
+
+
+# kaikki.org de.wiktionary German extract (inverted by the build).
+KAIKKI_DE_DE = [
+    _de("sprechen", "hablar"), _de("reden", "hablar"),
+    _de("plaudern", "hablar"), _de("plaudern", "hablar"),
+    _de("Haben", "tener"), _de("Halten", "tener"), _de("Halten", "tener"), _de("Tragen", "tener"),
+    _de("Konto", "cuenta"), _de("Rechnung", "cuenta"), _de("Rechnung", "cuenta"), _de("Rechnung", "cuenta"),
+    _de("Sprache", "habla"),               # not a lemma of the frequency file: ignored
+]
+
+
+def _write_jsonl(path, rows):
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+    return path
 
 
 @pytest.fixture
@@ -102,26 +180,49 @@ def sources(tmp_path):
     freq.write_text(FREQUENCY, encoding="utf-8")
     data = tmp_path / "es-en.data"
     data.write_text(WIKT, encoding="utf-8")
-    jehle = tmp_path / "jehle.csv"
-    with open(jehle, "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-        writer.writerow(JEHLE_HEADER)
-        writer.writerows(JEHLE_ROWS)
-    return freq, data, jehle
+    return (freq, data,
+            _write_jsonl(tmp_path / "kaikki-es.jsonl", KAIKKI_ES),
+            _write_jsonl(tmp_path / "kaikki-de-es.jsonl", KAIKKI_DE_ES),
+            _write_jsonl(tmp_path / "kaikki-de-de.jsonl", KAIKKI_DE_DE))
 
 
 def test_build_lemmas(sources):
     lex = build_script.build_lexicon(*sources)
     lemmas = lex["lemmas"]
     # Dense rank by first appearance; the second "cuenta" row (pos v) loses.
-    assert lemmas["ser"] == {"r": 1, "p": "v"}
-    assert lemmas["cuenta"] == {"r": 5, "p": "n", "g": "f", "en": "count, tally; operation; bill"}
+    assert lemmas["ser"] == {"r": 1, "p": "v", "de": "sein"}
+    assert lemmas["cuenta"] == {"r": 5, "p": "n", "g": "f", "en": "count, tally; operation; bill",
+                                "de": "Rechnung, Konto"}
     assert lemmas["hablar"]["en"] == "to speak; to talk"
     assert "g" not in lemmas["hablar"]
     # pos "none" rows are dropped entirely.
     assert "basura" not in lemmas and "zzz" not in lex["forms"]
-    # Jehle infinitives missing from the frequency file: no rank, pos v.
-    assert lemmas["tener"] == {"p": "v"}
+    # Lemmas outside the frequency file (kaikki-only) are not added.
+    assert "andar" not in lemmas
+    assert lemmas["tener"] == {"r": 7, "p": "v", "de": "haben, besitzen, Halten"}
+    # No German source at all -> no "de" key.
+    assert "de" not in lemmas["ir"]
+
+
+def test_german_gloss_direct_first_then_inverse_by_count(sources):
+    lemmas = build_script.build_lexicon(*sources)["lemmas"]
+    # Direct translations first, inverse ones (plaudern x2) fill up to three;
+    # an inverse duplicate of a direct gloss (sprechen) is not repeated.
+    assert lemmas["hablar"]["de"] == "sprechen, reden, plaudern"
+    # Direct from sense glosses; "Haben" is a case-insensitive duplicate of "haben".
+    assert lemmas["tener"]["de"] == "haben, besitzen, Halten"
+    # Inverse only, by count descending; the pure inflection entry adds nothing.
+    assert lemmas["cuenta"]["de"] == "Rechnung, Konto"
+    # form-of sense skipped, the real sense of the same word kept.
+    assert lemmas["comer"]["de"] == "essen"
+
+
+def test_german_gloss_limits_and_skips_the_lemma():
+    gloss = build_script.german_gloss
+    assert gloss("x", ["a", "b", "c", "d"], {"e": 9}) == "a, b, c"
+    assert gloss("casa", ["Casa", "Haus"], {"CASA": 3, "haus": 1}) == "Haus"
+    assert gloss("casa", [], {}) is None
+    assert len(gloss("x", ["a" * 200], {})) <= build_script.MAX_GLOSS_CHARS
 
 
 def test_gloss_dedupes_and_never_falls_back_to_proper_noun(tmp_path):
@@ -151,9 +252,15 @@ def test_build_forms(sources):
     assert forms["fui"] == ["ser", "ir"]
     # A form that is itself a lemma lists that lemma too.
     assert forms["como"] == ["comer", "como"]
-    # Jehle-only form maps to its infinitive.
+    # Wiktionary-only form maps to its infinitive.
     assert forms["tuve"] == ["tener"]
     assert forms["cuentas"] == ["cuenta"]
+    # Untagged variants are still known forms: -se subjunctive, other participles.
+    assert forms["hablase"] == ["hablar"] and forms["tuviese"] == ["tener"]
+    assert forms["hablada"] == ["hablar"] and forms["hablados"] == ["hablar"]
+    # Voseo / clitic-combined forms and head-template forms are skipped entirely.
+    for skipped in ("hablás", "hablá", "háblame", "hablo", "anduve", "hablares"):
+        assert skipped not in forms
     # Trivial [form] entries are dropped (implied at lookup time) ...
     for trivial in ("ser", "ir", "comer", "hablar"):
         assert trivial not in forms
@@ -164,14 +271,29 @@ def test_build_forms(sources):
 def test_build_verbs(sources):
     verbs = build_script.build_lexicon(*sources)["verbs"]
     assert ["tener", "ind_pret", "1s"] in verbs["tuve"]
-    assert verbs["fui"] == [["ir", "ind_pret", "1s"]]
+    # Two lemmas share a form: ordered by lemma rank (ser 1, ir 2).
+    assert verbs["fui"] == [["ser", "ind_pret", "1s"], ["ir", "ind_pret", "1s"]]
     # Same surface form, two readings, tense order then person order.
     assert verbs["hablamos"] == [["hablar", "ind_pres", "1p"], ["hablar", "ind_pret", "1p"]]
     assert verbs["hablando"] == [["hablar", "ger", ""]]
     assert verbs["hablado"] == [["hablar", "part", ""]]
-    # Negative imperative is stored without its "no"; compound tenses are skipped.
+    assert verbs["hablaría"] == [["hablar", "ind_cond", "1s"]]
+    assert verbs["hablaré"] == [["hablar", "ind_fut", "1s"]]       # merged second entry
+    assert verbs["hablara"] == [["hablar", "subj_impf", "1s"]]
+    # Subjunctive and the formal imperative (-> 3s) share "hable".
+    assert verbs["hable"] == [["hablar", "subj_pres", "1s"], ["hablar", "subj_pres", "3s"],
+                              ["hablar", "imp_aff", "3s"]]
+    assert verbs["habla"] == [["hablar", "imp_aff", "2s"]]
+    # Negative imperative is stored without its "no".
     assert verbs["hables"] == [["hablar", "imp_neg", "2s"]]
-    assert "he" not in verbs and "hemos" not in verbs and "hablado" in verbs
+    # A verb whose first frequency row is a noun still gets tags.
+    assert verbs["cuentan"] == [["cuenta", "ind_pres", "3p"]]
+    # Never tagged: -se variants, feminine/plural participles, voseo, clitics,
+    # head-template forms, lemmas outside the frequency file, infinitives.
+    for untagged in ("hablase", "tuviese", "hablada", "hablados", "hablás", "hablá",
+                     "háblame", "hablo", "anduve", "hablar"):
+        assert untagged not in verbs
+    assert verbs["tuve"] == [["tener", "ind_pret", "1s"]]
     assert all(" " not in form for form in verbs)
 
 
@@ -204,8 +326,10 @@ LEX = {
         "hablar": {"r": 6, "p": "v", "en": "to speak"},
         "viajar": {"r": 700, "p": "v", "en": "to travel"},
         "casa": {"r": 3, "p": "n", "g": "f"},
+        "comer": {"r": 50, "p": "v", "en": "to eat", "de": "essen"},
     },
     "forms": {
+        "comemos": ["comer"],
         "fui": ["ser", "ir"],
         "cuentas": ["cuenta", "contar"],
         "hablamos": ["hablar"],
@@ -235,7 +359,9 @@ def test_lemmas_of(es_lexicon):
 
 
 def test_lemma_info_and_verb_tags(es_lexicon):
-    assert lexicon.lemma_info("cuenta", "es") == {"rank": 5, "pos": "n", "gender": "f", "gloss_en": "count"}
+    assert lexicon.lemma_info("cuenta", "es") == {"rank": 5, "pos": "n", "gender": "f", "gloss_en": "count",
+                                                  "gloss_de": None}
+    assert lexicon.lemma_info("comer", "es")["gloss_de"] == "essen"
     assert lexicon.lemma_info("casa", "es")["gloss_en"] is None
     assert lexicon.lemma_info("nada", "es") is None
     assert lexicon.verb_tags("hablamos", "es") == [("hablar", "ind_pres", "1p"), ("hablar", "ind_pret", "1p")]
@@ -347,6 +473,31 @@ def test_unknown_verb_form_carries_lemma_grammar_and_lemma_gloss(annotator):
     assert word["definition_de"] == "DE:viajar"
     asked = [w for call in annotator["calls"] for w in call]
     assert "viajar" in asked and "viajamos" not in asked
+
+
+def test_lexicon_german_gloss_skips_google(annotator):
+    """#1305: an unambiguous lemma with a German gloss in the lexicon uses it;
+    only the remaining queries reach the translator."""
+    word = _new("Comemos y viajamos.")["comemos"]
+    assert word["lemma"] == "comer"
+    assert word["definition_de"] == "essen"
+    asked = [w for call in annotator["calls"] for w in call]
+    assert "comer" not in asked and "comemos" not in asked and "viajar" in asked
+    # Nothing left to translate -> no Google call at all.
+    annotator["calls"].clear()
+    assert _new("Comemos.")["comemos"]["definition_de"] == "essen"
+    assert annotator["calls"] == []
+
+
+def test_ambiguous_form_still_goes_to_google_despite_lexicon_gloss(annotator):
+    LEX["lemmas"]["cuenta"]["de"] = "Rechnung"
+    try:
+        lexicon.inject("es", LEX)
+        word = _new("Las cuentas.")["cuentas"]
+        assert word["definition_de"] == "DE:cuentas"
+    finally:
+        del LEX["lemmas"]["cuenta"]["de"]
+        lexicon.inject("es", LEX)
 
 
 def test_ambiguous_form_keeps_surface_form_for_lemma_and_gloss(annotator):

@@ -532,8 +532,9 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 
 ## 西班牙语词汇表：词形→原形（#1293）
 
-之前罗曼语阅读器完全不认原形：点 `fui` 会把变位形原样丢给谷歌翻译，没存过的变位形全算"生词"，加词时发的也是变位形。现在仓库自带一份西班牙语词汇表 `resources/es-lexicon.json.gz`（词形→原形、动词时态/人称、频率排名、名词性别、英文释义），做法同 #1246：静态资源，运行时零网络、零 AI。来源（doozan/spanish_data 的频率表和维基词典、Fred Jehle 动词表）、许可和校验和见 `resources/README.md`；由 `scripts/build_es_lexicon.py` 离线生成，不在运行时构建。
+之前罗曼语阅读器完全不认原形：点 `fui` 会把变位形原样丢给谷歌翻译，没存过的变位形全算"生词"，加词时发的也是变位形。现在仓库自带一份西班牙语词汇表 `resources/es-lexicon.json.gz`（词形→原形、动词时态/人称、频率排名、名词性别、英文释义、德语释义），做法同 #1246：静态资源，运行时零网络、零 AI。来源（doozan/spanish_data 的频率表和维基词典；#1305 起变位与德语释义来自 kaikki.org 的 Wiktionary 抽取，取代原来只有 637 个动词的 Jehle 表）、许可和校验和见 `resources/README.md`；由 `scripts/build_es_lexicon.py` 离线生成，不在运行时构建。
 
+- **Wiktionary 构建（#1305）**：变位取 en.wiktionary 的完整变位表（只收词频表里的动词；voseo、带代词的组合形式不收，`-se` 式虚拟式过去时和阴性/复数分词只进 `forms` 不打标签——`form_for()` 取文件里第一个形式，一个槽位只能有一个带标签的形式）。德语释义 `lemmas[*].de`：de.wiktionary 西语词条的译词优先（跳过 form-of 义项，否则会冒出「3. Person Singular … des Verbs contar」），不够再用德语词条里的西语译词反查、按出现次数排序。`annotate/romance.py` 对能唯一还原原形且有 `gloss_de` 的词直接用它，**只把其余的词送谷歌翻译**
 - **`lexicon.py`（仓库根目录）按语言通用**：只要 `resources/{lang}-lexicon.json.gz` 存在，该语言就"有词汇表"。API：`available` / `lemmas_of(form, lang)` / `lemma_info` / `verb_tags` / `grammar_label`（如 `ser/ir · Indefinido · 1. Sg.`）。**所有函数都不抛异常**：文件缺失（仅 debug 日志）或损坏（warning）都退化成空词汇表
 - **`annotate/romance.py` 的"已认识"判定多了一层**：原有的词形精确匹配不变，另外把每个词的全部候选原形拿去查 `forms_lookup` / `known_words` / 基线词表 / 功能词表，**任一原形已认识就算已认识**。多义词形（`fui` → ser/ir）同理，不猜是哪一个。新词和 `mode=all` 两条路共用同一个 `_word_dicts()`，所以字段一致
 - **词条字典新增字段**：`lemma`（候选原形唯一时是原形，否则仍是词形）、`lemmas`（全部候选）、`grammar`、`definition`（英文释义兜底）。`word` 永远是词形——前端靠它定位点击。德语释义对唯一原形去翻译，多义/未知词形仍翻词形
@@ -549,7 +550,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **不加新卡**：动词仍是三张卡。每次为动词卡生成故事句子时，选一个（时态, 人称）槽位，要求句子**恰好**用那个变位形。卡片上显示小标签（如 `Indefinido · 3. Sg.`），因为德语 "ich spielte" 对应 jugué/jugaba 有歧义
 - **槽位选法**（`verb_slots.assign_slots()`）：全局用得最少的槽位优先（跨所有西语动词），并列取最久没用的（从没用过算最久），再并列随机；同一篇故事内每选一次就给本地计数 +1，所以一篇故事会铺开到不同槽位。**历史就是 `story_sentences.verb_slot` 列**（`database.verb_slot_usage(lang)` 聚合），不建新表
 - **启用哪些时态在 `languages.py` 的 `es["verb_slots"]`**：现在是 Presente → Indefinido → Imperfecto → Perfecto。解锁 Futuro 就在 `tenses` 里追加 `"ind_fut"`（Subjuntivo 之后再说）。法语没有 `verb_slots` → 功能关闭，提示词逐字不变
-- **Perfecto 是组合出来的**（`perf` 不是词汇表里的时态码）：`haber` 现在时对应人称 + 过去分词（`ha hablado`）。只覆盖词汇表里的 637 个常用动词（Jehle）；没有该形式的槽位自动跳过
+- **Perfecto 是组合出来的**（`perf` 不是词汇表里的时态码）：`haber` 现在时对应人称 + 过去分词（`ha hablado`）。覆盖词汇表里约 2,900 个动词（#1305 起来自 Wiktionary 变位表）；没有该形式的槽位自动跳过
 - **自反动词暂不支持**（`quejarse` 等以 `se` 结尾的不定式）：代词要挪到变位形前面（`me quejé`），平表做不出来
 - **匹配规则**：句子含目标形式（词边界、不分大小写）→ 记下 `verb_slot`/`grammar_hint`；AI 写了别的形式但仍能匹配（不定式、`surface_forms`）→ 卡片照收、**不挂标签**（标签会撒谎）。补漏句（`_patch_missing`）同样无槽位
 - **`database.surface_forms()` 对非中文并入 `lexicon.forms_of()`**：AI 生成的 `entry_forms` 不全时，高亮/填空/知识模式匹配照样认得变位形
@@ -561,7 +562,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 不规则动词需要专门练：每个（不规则动词 × 不规则时态）一张卡，如 `tener · Indefinido`，**不是每人称一张**；人称在卡内轮换。约 25 个最常用不规则动词 × 至多 3 个不规则时态，≤60 张。
 
 - **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=六个人称的完整一行（逗号分隔）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
-- **不规则性由数据推出，不手写清单**：`verb_slots.irregular_tenses()` 把词汇表（Jehle）里的形式与 `regular_form()` 规则生成的规则形式逐人称比较；**拼写变化（busqué、leyó）也算不规则**，这是有意的——它们正是值得练的。考察的时态 `FORM_CARD_TENSES` = pret → pres → fut → impf
+- **不规则性由数据推出，不手写清单**：`verb_slots.irregular_tenses()` 把词汇表里的形式与 `regular_form()` 规则生成的规则形式逐人称比较；**拼写变化（busqué、leyó）也算不规则**，这是有意的——它们正是值得练的。考察的时态 `FORM_CARD_TENSES` = pret → pres → fut → impf
 - **人称轮换复用 `assign_slots()`**：词头能被 `parse_form_card()` 解析成形态卡时，时态固定、只在六个人称里按"全局最少用、并列取最久没用"挑；`es["verb_slots"]` 启用的时态配置对形态卡不起作用。规则动词完全不变
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
 - **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选

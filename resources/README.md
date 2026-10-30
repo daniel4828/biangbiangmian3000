@@ -18,28 +18,43 @@ PLOS ONE, 5(6), e10729. https://doi.org/10.1371/journal.pone.0010729
 
 # 西班牙语词汇表（词形→原形）
 
-`es-lexicon.json.gz`（#1293）由三份公开数据合并而成，下载日期 2026-10-29。署名是 CC-BY-SA 的要求，不要删：
+`es-lexicon.json.gz`（#1293，#1305 起动词变位与德语释义来自维基词典）由五份公开数据合并而成。署名是 CC-BY-SA 的要求，不要删。
+`frequency.csv` 和 `es-en.data` 下载于 2026-10-29，三份 kaikki 文件下载于 2026-10-30：
 
 1. `frequency.csv` —— doozan/spanish_data，https://github.com/doozan/spanish_data ，
    CC BY-SA 3.0；数据派生自 hermitdave/FrequencyWords（OpenSubtitles）。提供原形清单、词性、频率排名，
    以及每个原形见过的全部词形（`usage` 列）。SHA-256：`f2b644108082e551c7559dc5c33faf4f5bf3e5a59e7598b55f8ba47e35c6ed75`
 2. `es-en.data` —— 同一仓库，来自英文维基词典（en.wiktionary）的西英词条，CC BY-SA。
    提供名词性别和简短英文释义。SHA-256：`7cb53827e68a6d8fabcc40c3072adf25c6279500d116bafd3c4a7aad70a0347f`
-3. `jehle_verb_database.csv` —— Fred Jehle 的西班牙语动词表，
-   https://github.com/ghidinelli/fred-jehle-spanish-verbs 。提供 637 个动词的时态 × 人称，
-   频率表给不出这些。SHA-256：`f77f01d536cd351584051d76902ff8051ab1b945a38e69c7ed02da78ab082ea8`
+3. `kaikki-es.jsonl` —— kaikki.org 的英文维基词典西班牙语词条抽取，
+   https://kaikki.org/dictionary/Spanish/kaikki.org-dictionary-Spanish.jsonl ，约 1.1 GB。
+   只用动词词条里 `source` 为 `conjugation` 的变位形式，给频率表里每个动词原形补上时态 × 人称。
+   SHA-256：`357d407e62ae702fc8ef3c494223b17ba0774904fc28c2a9952fa9ae279c26f9`；大小：约 1.1 GB
+4. `kaikki-de-es.jsonl` —— 德语维基词典（de.wiktionary）的西班牙语词条抽取，
+   https://kaikki.org/dewiktionary/Spanisch/kaikki.org-dictionary-Spanisch.jsonl 。
+   提供原形的德语译词（没有译词时取每个义项的第一条释义）。SHA-256：`1b2d475db0b04a424e770cdfbf478b7c44274bc276e42d6b0227df35fa3bee43`；大小：约 8.8 MB
+5. `kaikki-de-de.jsonl` —— 德语维基词典的德语词条抽取，
+   https://kaikki.org/dewiktionary/Deutsch/kaikki.org-dictionary-Deutsch.jsonl ，约 3.4 GB。
+   每个德语词条列出西班牙语译词，反过来用作西班牙语原形的补充德语释义。SHA-256：`4343f625fa554df70bd5d102b4418f70fc954667613969f6546f41c35177f695`；大小：约 3.4 GB
+
+kaikki 数据由 wiktextract 从维基词典抽取（Tatu Ylonen, "Wiktextract: Wiktionary as Machine-Readable Structured Data", LREC 2022），
+维基词典内容采用 CC BY-SA 4.0 许可（署名-相同方式共享）。
 
 文件内容（gzip 压缩的 JSON，键排序、mtime=0，同样输入产出逐字节相同的文件）：
-`lemmas`（原形 → 排名 `r`、词性 `p`、名词性别 `g`、英文释义 `en`）、
+`lemmas`（原形 → 排名 `r`、词性 `p`、名词性别 `g`、英文释义 `en`、德语释义 `de`；`g`/`en`/`de` 可缺）、
 `forms`（词形 → 候选原形，按频率排序；只有一个候选且就是自己的不存）、
 `verbs`（词形 → `[原形, 时态, 人称]` 列表）。复合时态不收；否定命令式去掉前面的 `no`。
+只收频率表里的原形；只要频率表里有任意一行词性是 `v`，该原形就算动词（`cuenta` 第一行是名词，但也有变位）。
+`forms` 收全部变位形式；`verbs` 每个槽位只标一个形式（`lexicon.form_for()` 取文件顺序第一个），
+所以 `-se` 虚拟式（tuviese）、阴性/复数分词只进 `forms` 不标注，voseo（`vos-form`/`with-vos`）和带代词的合成形式（`combined-form`，如 dámelo）整个跳过。
+德语释义：先取直接译词，不足 3 个时用反向译词（按出现次数降序）补齐，大小写不敏感去重，最多 3 个，用 `, ` 连接。
 
-规模（约数，来自 2026-10-29 的构建）：19,255 个原形、141,683 个非平凡词形、25,878 个带动词标注的词形，文件约 1.07 MB。
+规模（约数，来自 2026-10-30 的构建）：19,177 个原形（12,147 个带德语释义）、214,708 个非平凡词形、132,907 个带动词标注的词形（2,933 个动词原形），文件约 2.1 MB。
 英文释义取该词性的全部词条块、去重后的前 3 条；找不到同词性块时取第一个非专有名词块，绝不回退到专有名词（`prop`）块，除非原形本身就是专有名词。
 
 静态资源：运行时只读本地文件（`lexicon.py`），不联网、不调 AI、不改数据库。
 文件不存在或损坏时该语言按"没有词汇表"处理，不报错。
 
-重建：下载三份文件后运行
-`python scripts/build_es_lexicon.py frequency.csv es-en.data jehle_verb_database.csv`
+重建：下载五份文件后运行
+`python scripts/build_es_lexicon.py frequency.csv es-en.data kaikki-es.jsonl kaikki-de-es.jsonl kaikki-de-de.jsonl`
 （脚本会打印每份输入的 SHA-256，写入上面的占位处）。
