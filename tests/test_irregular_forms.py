@@ -228,3 +228,12 @@ def test_endpoint_requires_lexicon(tmp_db):
     with pytest.raises(HTTPException) as exc:
         imports_routes.create_es_irregular_form_cards()
     assert exc.value.status_code == 400
+
+
+def test_verb_regularity_tag():
+    # #1315：卡片上的 reg./irreg. 标签
+    import verb_slots
+    assert verb_slots.verb_regularity("hablar", "es") == "regular"
+    assert verb_slots.verb_regularity("tener", "es") == "irregular"
+    assert verb_slots.verb_regularity("casa", "es") is None
+    assert verb_slots.verb_regularity("hablar", "fr") is None

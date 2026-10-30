@@ -194,6 +194,24 @@ def irregular_tenses(lemma: str, lang: str) -> list[str]:
     return out
 
 
+def verb_regularity(lemma: str, lang: str) -> str | None:
+    """"regular" / "irregular" for a verb headword, None when it is no verb
+    the lexicon knows (#1315: Etikett "reg."/"irreg." auf der Karte).
+
+    Same definition as irregular_tenses() — orthographic changes count as
+    irregular. Never raises."""
+    try:
+        if lang != _FORM_LANG:
+            return None
+        lemma = (lemma or "").strip().lower()
+        if not any(f for t in FORM_CARD_TENSES for f in _lexicon_row(lemma, t)):
+            return None
+        return "irregular" if irregular_tenses(lemma, lang) else "regular"
+    except Exception as e:
+        logger.debug("verb_regularity(%r) failed — %s", lemma, e)
+        return None
+
+
 def form_card_word(lemma: str, tense: str) -> str:
     """Headword of a form card: ("tener", "ind_pret") -> "tener · Indefinido"."""
     return f"{lemma}{_SEP}{lexicon._TENSE_LABELS.get(tense, tense)}"
