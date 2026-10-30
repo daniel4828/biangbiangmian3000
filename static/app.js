@@ -12148,6 +12148,10 @@ function revealAnswer() {
       }
       document.getElementById('correct-answer-text').innerHTML = renderSentence();
     }
+    // #1311: same as the listening back below — the answer is out, so every
+    // word in it may be looked up.
+    setWordTable([], currentCardLang());
+    _makeWordsTappable(document.getElementById('correct-answer-text'));
   } else {
     document.getElementById('creating-answer-section').style.display = 'none';
     document.getElementById('sentence-row-back').style.display = 'flex';
@@ -13611,6 +13615,9 @@ function _hintSavedDefault() {
   return ids.includes(n) ? n : ids[0];
 }
 function _hintKeepWord(stage, word) {
+  // Function words (#1311) were never in the all-words list before and so
+  // stayed visible as "uncovered" positions; keep that.
+  if (word.function_word) return true;
   const level = word.hint_hsk ?? word.hsk;
   return stage === 9 ? !word.word_id : level == null || level > stage - 2;
 }
