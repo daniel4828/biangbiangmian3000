@@ -3787,9 +3787,18 @@ let _capturingAction = null;
 let _settingsMsg = '';
 let _settingsShortcutsOpen = false;
 let _dayCutoffHour = 5;
+let _settingsPage = null; // null = index; else 'appearance'|'review'|'stories'|'spanish'|'advanced'
+function openSettingsPage(key) {
+  _settingsPage = key;
+  renderSettings();
+  window.scrollTo(0, 0);
+  const m = document.querySelector('main');
+  if (m) m.scrollTop = 0;
+}
 function openSettings() {
   navPush('settings');
   _capturingAction = null; _settingsMsg = '';
+  _settingsPage = null;
   showView('settings');
   renderSettings();
   _loadDayCutoffHour();
@@ -4034,6 +4043,7 @@ async function _loadDayCutoffHour() {
 async function saveDayCutoffHour() {
   const input = document.getElementById('day-cutoff-hour-input');
   const msg = document.getElementById('day-cutoff-msg');
+  if (!input) return;
   const hour = parseInt(input.value, 10);
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
     if (msg) msg.textContent = 'Enter 0–23';
@@ -4071,12 +4081,8 @@ function renderSettings() {
   const msg = _settingsMsg ? `<div class="keymap-msg">${_settingsMsg}</div>` : '';
   const nfZh = _newsflowLang === 'zh';
   const themeChoice = window.getThemeChoice ? window.getThemeChoice() : 'system';
-  const navChips = ['Appearance', 'Review', 'Stories', 'Spanish', 'Advanced'].map(n =>
-    `<a href="#" class="settings-nav-chip" onclick="event.preventDefault();document.getElementById('settings-sec-${n.toLowerCase()}').scrollIntoView({behavior:'smooth',block:'start'})">${n}</a>`).join('');
-  document.getElementById('view-settings-content').innerHTML = `
-    <nav class="settings-nav">${navChips}</nav>
-    <section class="settings-section" id="settings-sec-appearance">
-    <h2 class="settings-section-title">Appearance</h2>
+  const pages = {};
+  pages.appearance = { title: 'Appearance', icon: '🎨', desc: 'Theme, languages', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Theme</h2>
       <p class="keymap-hint">System follows your device's light/dark setting. Saved in this browser only.</p>
@@ -4092,10 +4098,8 @@ function renderSettings() {
       <h2 class="keymap-heading">Languages</h2>
       <p class="keymap-hint">A language that is switched off does not appear in the language tab bar and its cards stay out of the current review. Words and progress are kept — switch it back on any time. Chinese cannot be switched off.</p>
       ${_langSettingsRowsHtml()}
-    </div>
-    </section>
-    <section class="settings-section" id="settings-sec-review">
-    <h2 class="settings-section-title">Review</h2>
+    </div>` };
+  pages.review = { title: 'Review', icon: '🃏', desc: 'Daily target, day boundary, hint stages, shortcuts', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Daily card target</h2>
       <p class="keymap-hint">When fewer than 50 different Chinese cards are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
@@ -4138,10 +4142,8 @@ function renderSettings() {
       ${groups}
       <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
       </details>
-    </div>
-    </section>
-    <section class="settings-section" id="settings-sec-stories">
-    <h2 class="settings-section-title">Stories</h2>
+    </div>` };
+  pages.stories = { title: 'Stories', icon: '📖', desc: 'Morning pre-generation, Kontextsummary', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Morning pre-generation</h2>
       <p class="keymap-hint">Story type generated automatically each morning, per category. Independent of the style you pick when regenerating during the day. <b>Off</b> = repeat whatever you last generated manually.</p>
@@ -4158,10 +4160,8 @@ function renderSettings() {
           <span id="newsflow-lang-value">${nfZh ? '中文' : 'Original (DE)'}</span>
         </label>
       </div>
-    </div>
-    </section>
-    <section class="settings-section" id="settings-sec-spanish">
-    <h2 class="settings-section-title">Spanish</h2>
+    </div>` };
+  pages.spanish = { title: 'Spanish', icon: '🇪🇸', desc: 'Irregular verb cards, verb slot weights', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Irregular verb cards</h2>
       <p class="keymap-hint">One card per irregular verb × tense, ~60 cards, no AI cost; they land in Español ★ List — promote them from Browse.</p>
@@ -4172,17 +4172,32 @@ function renderSettings() {
       <h3 class="keymap-heading">Verb slot weights</h3>
       <p class="keymap-hint">Higher = appears more often. 0 = never. Defaults from subtitle corpus frequencies.</p>
       ${_esSlotWeightsHtml()}
-    </div>
-    </section>
-    <section class="settings-section" id="settings-sec-advanced">
-    <h2 class="settings-section-title">Advanced</h2>
+    </div>` };
+  pages.advanced = { title: 'Advanced', icon: '🛠', desc: 'Server logs', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Server logs</h2>
       <p class="keymap-hint">View the last lines of the server log (helpful for debugging story generation, TTS, etc). Shortcut: Option+L (Alt+L).</p>
       <button class="keymap-reset-all" onclick="openLogsViewer()">Open logs</button>
+    </div>` };
+  const page = pages[_settingsPage];
+  const root = document.getElementById('view-settings-content');
+  if (!page) {
+    root.innerHTML = `<div class="settings-index">${Object.entries(pages).map(([key, p]) => `
+      <button class="settings-index-row" onclick="openSettingsPage('${key}')">
+        <span class="settings-index-icon">${p.icon}</span>
+        <span class="settings-index-text"><span class="settings-index-title">${p.title}</span><span class="settings-index-desc">${p.desc}</span></span>
+        <span class="settings-index-chevron">›</span>
+      </button>`).join('')}
+    </div>`;
+    return;
+  }
+  root.innerHTML = `
+    <div class="settings-page-head">
+      <button class="settings-back" onclick="openSettingsPage(null)">‹ Settings</button>
+      <h2 class="settings-page-title">${page.title}</h2>
     </div>
-    </section>`;
-  _loadPregenSettings();
+    ${page.html}`;
+  if (_settingsPage === 'stories') _loadPregenSettings();
 }
 
 // ── Morning pre-generation config (issue #473) ──────────────────────────────
