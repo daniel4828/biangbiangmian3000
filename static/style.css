@@ -6549,11 +6549,24 @@ body.gloss-on [data-gloss-tr]::after {
    it on the computer too). Scoped with `header ` so the rules stop applying
    when the full-screen player (#1109) moves the box into #ra-fs-search-slot.
    The header's glass background lives on ::before because backdrop-filter
-   would make the header the containing block of the fixed bar. */
+   would make the header the containing block of the fixed bar.
+   #1321 turned the bar into a floating pill (Safari address-bar style): the
+   page stays visible left, right and below the field; the wrap is just the
+   pill's box and the glass look lives on the input. */
 :root {
-  --search-bar-h: 60px;
-  --search-bar-side: max(12px, calc((100vw - 720px) / 2));
+  --search-bar-h: 72px;
+  /* pill as wide as the page content: main is 500px wide with 16px padding */
+  --search-bar-side: max(16px, calc((100vw - 500px) / 2 + 16px));
 }
+/* #1321: while the dictionary popup is open its dim overlay (z 900) would
+   cover the pill. The header is a stacking context, so lift the whole header
+   above the overlay, hide everything in it except the pill, and let clicks
+   fall through to the overlay everywhere else. */
+body.dict-result-open header { z-index: 902; pointer-events: none; }
+body.dict-result-open header::before { display: none; }
+body.dict-result-open header > * { visibility: hidden; }
+body.dict-result-open header #header-search-wrap { visibility: visible; pointer-events: auto; }
+body.dict-result-open header #header-search-input { background: var(--card); }
 header {
   background: transparent;
   backdrop-filter: none;
@@ -6571,30 +6584,35 @@ header::before {
 }
 header #header-search-wrap {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: var(--search-bar-side);
+  right: var(--search-bar-side);
+  bottom: max(12px, env(safe-area-inset-bottom));
   z-index: 89;
-  padding: 8px var(--search-bar-side) max(8px, env(safe-area-inset-bottom));
-  background: var(--glass-header, rgba(255,255,255,.86));
-  backdrop-filter: saturate(180%) blur(18px);
-  -webkit-backdrop-filter: saturate(180%) blur(18px);
-  border-top: 1px solid rgba(15,23,42,.08);
 }
 header #header-search-input {
   width: 100%;
-  font-size: 15px;
-  padding: 10px 14px;
-  border-radius: 12px;
   box-sizing: border-box;
+  font-size: 15px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  background: var(--glass-header, rgba(255,255,255,.86));
+  backdrop-filter: saturate(180%) blur(18px);
+  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border: 1px solid rgba(15,23,42,.08);
+  box-shadow: var(--shadow-lg);
+}
+header #header-search-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring), var(--shadow-lg);
 }
 header #header-search-panel {
   top: auto;
-  bottom: calc(100% + 6px);
-  left: var(--search-bar-side);
-  right: var(--search-bar-side);
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
   width: auto;
   max-height: min(55vh, 420px);
+  border-radius: 16px;
 }
 /* Keep page content and other fixed corner widgets clear of the bar. */
 body { padding-bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom)); }
@@ -7893,10 +7911,14 @@ body #version-badge { bottom: calc(var(--search-bar-h) + env(safe-area-inset-bot
 }
 #dict-result-modal {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(560px, 94vw);
+  /* #1321: a sheet directly above the floating search pill (58px = pill 46 +
+     12 gap), same width as the pill, so he can search the next word. */
+  top: auto;
+  transform: none;
+  left: var(--search-bar-side);
+  right: var(--search-bar-side);
+  width: auto;
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 58px);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -7907,7 +7929,8 @@ body #version-badge { bottom: calc(var(--search-bar-h) + env(safe-area-inset-bot
 #dict-result-modal .edit-modal-header { padding: 16px 16px 0; }
 #dict-result-body {
   padding: 16px;
-  max-height: 70vh;
+  max-height: calc(100vh - 58px - max(12px, env(safe-area-inset-bottom)) - 120px);
+  max-height: calc(100dvh - 58px - max(12px, env(safe-area-inset-bottom)) - 120px);
   overflow-y: auto;
 }
 /* #1271：内嵌词典始终跟随应用选择；独立 /dict 仍由系统决定。 */
@@ -7927,18 +7950,8 @@ body #version-badge { bottom: calc(var(--search-bar-h) + env(safe-area-inset-bot
 }
 
 @media (max-width: 560px) {
-  #dict-result-modal {
-    top: auto;
-    bottom: 0;
-    left: 0;
-    transform: none;
-    width: 100%;
-    border-radius: 16px 16px 0 0;
-    border-bottom: none;
-    padding-bottom: env(safe-area-inset-bottom);
-  }
   #dict-result-modal .edit-modal-header { padding: 14px 14px 0; }
-  #dict-result-body { padding: 14px 14px 18px; max-height: 78vh; }
+  #dict-result-body { padding: 14px 14px 18px; }
 }
 
 /* Configurable listening hint stages (#1224). */

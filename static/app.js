@@ -13398,6 +13398,14 @@ function onHeaderSearchInput() {
 
 function onHeaderSearchKey(e) {
   if (e.key === 'Escape') {
+    // #1321: with the suggestion panel closed, Escape dismisses the dictionary
+    // popup first; the panel (if open) still closes on its own first.
+    const panel = _headerSearchPanelEl();
+    const panelOpen = panel && panel.style.display === 'block';
+    if (!panelOpen && document.body.classList.contains('dict-result-open')) {
+      closeDictResultModal();
+      return;
+    }
     closeHeaderSearchPanel();
     _headerSearchInput().blur();
     return;
@@ -13435,14 +13443,23 @@ function closeDictResultModal() {
   document.getElementById('dict-result-overlay').style.display = 'none';
   document.getElementById('dict-result-modal').style.display = 'none';
   document.getElementById('dict-result-body').replaceChildren();
+  document.body.classList.remove('dict-result-open');
 }
 
 // The /dict pipeline (#746), rendered in place by the very same function that
 // page uses (shared.js renderDictResult, extracted in #1055) — star buttons
 // included, so adding from here still goes through the one add-word pipeline
 // (#643).
+// #1321: he can type the next word while the popup is open, so a slow earlier
+// lookup must not paint over the newer word's answer.
+let _dictLookupSeq = 0;
 async function headerSearchLookup(q) {
   closeHeaderSearchPanel();
+  // #1321: a suggestion fetch still debouncing from the last keystroke (or in
+  // flight) would reopen the panel over the popup — cancel and outdate it.
+  clearTimeout(_headerSearchTimer);
+  _headerSearchSeq++;
+  const seq = ++_dictLookupSeq;
   const body = document.getElementById('dict-result-body');
   document.getElementById('dict-result-title').textContent = q;
   body.replaceChildren();
@@ -13452,14 +13469,22 @@ async function headerSearchLookup(q) {
   body.appendChild(msg);
   document.getElementById('dict-result-overlay').style.display = 'block';
   document.getElementById('dict-result-modal').style.display = 'block';
+  // #1321: lifts the search pill above the overlay (see style.css).
+  document.body.classList.add('dict-result-open');
+  // Keep the text selected so typing replaces the old query. Never call
+  // focus(): its focus listener would reopen the suggestion panel over the popup.
+  const input = _headerSearchInput();
+  if (document.activeElement === input) input.select();
   const lang = _headerSearchLang();
   try {
     const record = await api('POST', '/api/dict/lookup', { query: q, lang });
+    if (seq !== _dictLookupSeq) return;
     // No onRepeat here: a repeat overwrites the stored answer (#777), and the
     // history that belongs to lives on /dict — that page is where re-asking
     // has a meaning. Here it would silently rewrite a row he cannot see.
     renderDictResult(body, record, { addLang: lang });
   } catch (e) {
+    if (seq !== _dictLookupSeq) return;
     body.replaceChildren();
     const err = document.createElement('div');
     err.className = 'hs-msg';
