@@ -19142,40 +19142,6 @@ async function _restartServer() {
   setTimeout(poll, 600);
 }
 
-// ── Running-version badge (issue #450) ──────────────────────────────────────
-// Bottom-right corner: branch@commit · deploy time. Hover shows the commit
-// message (title); a click/tap toggles it inline for mobile.
-// Deploy time is always shown in Daniel's own timezone (#706), same rule as
-// podcast episode dates (#532) — the server runs on Asia/Shanghai and the
-// phone travels, so neither of those is the timezone the badge is read in.
-// Intl does the conversion; hand-rolling it from getHours() would just read
-// back whatever timezone the browser happens to be in.
-function _formatBerlin(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  return new Intl.DateTimeFormat('de-DE', {
-    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-    timeZone: 'Europe/Berlin',
-  }).format(d);
-}
-
-async function _loadVersionBadge() {
-  try {
-    const v = await api('GET', '/api/version');
-    const el = document.getElementById('version-badge');
-    if (!el || !v.commit) return;
-    const when = v.deployed_at ? _formatBerlin(v.deployed_at) : '';
-    const short = `${v.branch}@${v.commit}${when ? ` · ${when}` : ''}`;
-    el.textContent = short;
-    el.title = v.message ? `${v.message}\n(deployed ${when || v.deployed_at})` : '';
-    el.onclick = () => {
-      const expanded = el.classList.toggle('expanded');
-      el.textContent = expanded && v.message ? `${short} — ${v.message}` : short;
-    };
-    el.style.display = 'block';
-  } catch (e) { /* badge is best-effort — never break the app over it */ }
-}
-
 // ── Boot ─────────────────────────────────────────────────────────────────────
 // Index 0 of the nav history (#1009). Without a state object on the entry the
 // app starts from, the first popstate would arrive with `null` and we could
@@ -19201,7 +19167,6 @@ if (/^#(?:podcast|knowledge)-feed-\d+$/.test(location.hash)
 } else {
   loadDecks();
 }
-_loadVersionBadge();
 _startTasksPolling();
 _syncShortcutTitles();
 initHeaderSearch();

@@ -6171,18 +6171,6 @@ table.fsrs-table td.ivl { font-weight: 700; }
   border-color: #f59e0b; background: var(--amber-bg, #fffbeb);
 }
 
-/* Running-version badge (issue #450) — bottom-right, unobtrusive */
-#version-badge {
-  position: fixed; right: 8px; bottom: 5px; z-index: 400;
-  font-size: 10px; line-height: 1.3; color: var(--ink-muted, #64748b); opacity: 0.5;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  cursor: pointer; user-select: none; max-width: 80vw;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-#version-badge:hover, #version-badge.expanded { opacity: 1; }
-/* (#1260) 它叠在播放器控件上，播放器出现时让位 */
-body.ra-fullscreen-open #version-badge, body.mini-player-visible #version-badge { display: none !important; }
-
 .podcast-tr-pair {
   margin: 0 0 10px;
   padding: 0 0 8px;
@@ -6641,13 +6629,15 @@ header #header-search-panel {
 main { padding-bottom: calc(var(--search-bar-h) + 24px + env(safe-area-inset-bottom)); }
 main.browse-open { padding-bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom)); }
 body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom))); }
-body:not(.ra-fullscreen-open) #gloss-toggle-btn {
-  bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)));
+/* On wider screens the centered pill doesn't reach the bottom-left corner, so the button keeps its base position (#1330). */
+@media (max-width: 600px) {
+  body:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)));
+  }
+  body.mini-player-visible:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)) + 80px);
+  }
 }
-body.mini-player-visible:not(.ra-fullscreen-open) #gloss-toggle-btn {
-  bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)) + 80px);
-}
-body #version-badge { bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom) + 4px); }
 @media (max-width: 560px) {
   /* Same iOS rule as #add-word-input above: under 16px, focusing the field
      zooms the whole page in. */
