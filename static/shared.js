@@ -402,12 +402,22 @@ async function markWordKnown(word, lang) {
 // pipeline (#643). Each button tracks its own state so several can be
 // "running" (~30s each) at once without blocking one another — addWordViaAi
 // already polls its own job, we just need to not share state.
-function _dictStarButton(zh, wordLang) {
+// day: 'list' (★ List) | 'today' | 'tomorrow' — the same three targets the
+// add-word endpoint already accepts (#636/#677).
+const _DICT_ADD_TARGETS = {
+  list:     { icon: '★', title: 'to your ★ List' },
+  today:    { icon: 'T', title: "to today's deck" },
+  tomorrow: { icon: 'T+1', title: "to tomorrow's deck" },
+};
+
+function _dictStarButton(zh, wordLang, day) {
+  day = day || 'list';
+  const target = _DICT_ADD_TARGETS[day];
   const btn = document.createElement('button');
-  btn.className = 'dr-star';
+  btn.className = 'dr-star' + (day === 'list' ? '' : ' dr-day');
   btn.type = 'button';
-  btn.textContent = '★';
-  btn.title = `Add "${zh}" to your ★ List`;
+  btn.textContent = target.icon;
+  btn.title = `Add "${zh}" ${target.title}`;
   const errMsg = document.createElement('div');
   errMsg.className = 'dr-star-err-msg';
   errMsg.style.display = 'none';
@@ -417,7 +427,7 @@ function _dictStarButton(zh, wordLang) {
     btn.classList.add('dr-running');
     btn.textContent = '…';
     errMsg.style.display = 'none';
-    addWordViaAi(zh, 'list', (state, text) => {
+    addWordViaAi(zh, day, (state, text) => {
       if (state === 'running') {
         btn.classList.add('dr-running');
         btn.textContent = '…';
@@ -437,7 +447,7 @@ function _dictStarButton(zh, wordLang) {
         // Cancelled the "already in your collection" confirmation (#888) —
         // nothing happened, so put the button back to its start state.
         btn.classList.remove('dr-running');
-        btn.textContent = '★';
+        btn.textContent = target.icon;
         btn.disabled = false;
       }
     }, wordLang);
@@ -447,6 +457,14 @@ function _dictStarButton(zh, wordLang) {
   wrap.style.flexShrink = '0';
   wrap.append(btn, errMsg);
   return wrap;
+}
+
+// ★ List / today / tomorrow side by side — each its own independent button.
+function _dictAddButtons(zh, wordLang) {
+  const col = document.createElement('div');
+  col.className = 'dr-add-btns';
+  for (const day of ['list', 'today', 'tomorrow']) col.append(_dictStarButton(zh, wordLang, day));
+  return col;
 }
 
 function _dictTextEl(tag, cls, text) {
@@ -494,7 +512,7 @@ function _dictOption(opt, wordLang) {
   }
 
   row.append(body);
-  if (opt.zh) row.append(_dictStarButton(opt.zh, wordLang));
+  if (opt.zh) row.append(_dictAddButtons(opt.zh, wordLang));
   return row;
 }
 
@@ -550,7 +568,7 @@ function renderDictResult(container, record, opts) {
     if (r.sentence.pinyin) text.append(_dictTextEl('div', 'dr-sent-pinyin', r.sentence.pinyin));
     if (r.sentence.de) text.append(_dictTextEl('div', 'dr-sent-de', r.sentence.de));
     card.append(text);
-    if (r.sentence.zh) card.append(_dictStarButton(r.sentence.zh, wordLang));
+    if (r.sentence.zh) card.append(_dictAddButtons(r.sentence.zh, wordLang));
     container.append(card);
   }
 

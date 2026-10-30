@@ -88,3 +88,7 @@
 .dr-root button.dr-star.dr-done { background: var(--dr-ok-bg); border-color: var(--dr-ok); color: var(--dr-ok); }
 .dr-root button.dr-star.dr-error { background: var(--dr-err-bg); border-color: var(--dr-err); color: var(--dr-err); }
 .dr-root .dr-star-err-msg { font-size: .78rem; color: var(--dr-err); margin-top: .3rem; overflow-wrap: anywhere; }
+
+/* ★ List / T(oday) / T+1 (tomorrow) — stacked so the option text keeps its width on phones */
+.dr-root .dr-add-btns { display: flex; flex-direction: column; gap: .3rem; flex-shrink: 0; }
+.dr-root button.dr-star.dr-day { font-size: .78rem; font-weight: 600; }
