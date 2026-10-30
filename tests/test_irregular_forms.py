@@ -180,7 +180,8 @@ def test_candidates_order_and_caps():
 def test_assign_slots_fixes_tense_and_rotates_persons():
     cards = [{"word_id": 1, "word_zh": "tener · Indefinido"},
              {"word_id": 2, "word_zh": "tener · Indefinido"}]
-    res = verb_slots.assign_slots(cards, "es", usage={}, rng=random.Random(0))
+    uniform = {"tenses": {}, "persons": {p: 1 for p in PERSONS}}  # #1306: no weighting
+    res = verb_slots.assign_slots(cards, "es", usage={}, rng=random.Random(0), weights=uniform)
     assert res[1]["slot"].startswith("ind_pret:")
     assert res[2]["slot"].startswith("ind_pret:")
     assert res[1]["slot"] != res[2]["slot"]  # local count bumped

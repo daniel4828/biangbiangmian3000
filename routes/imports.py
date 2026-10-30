@@ -642,6 +642,46 @@ def create_es_irregular_form_cards():
     return seed_es_irregular_form_cards()
 
 
+def _verb_slot_weights_payload() -> dict:
+    """Shared response of the verb-slot-weights endpoints (#1306)."""
+    import lexicon
+    import verb_slots
+    defaults = verb_slots.default_weights("es")
+    if not defaults:
+        raise HTTPException(status_code=400, detail="Verb slot weights are not available")
+    tense_labels = {t: lexicon._TENSE_LABELS.get(t) or ("Perfecto" if t == "perf" else t)
+                    for t in defaults["tenses"]}
+    person_labels = {p: verb_slots._PERSON_DE.get(p, p) for p in defaults["persons"]}
+    return {"weights": verb_slots.weights("es"), "defaults": defaults,
+            "labels": {"tenses": tense_labels, "persons": person_labels}}
+
+
+@router.get("/api/es/verb-slot-weights")
+def get_es_verb_slot_weights():
+    """Effective + default weights of the Spanish verb slot rotation (#1306)."""
+    return _verb_slot_weights_payload()
+
+
+@router.put("/api/es/verb-slot-weights")
+def put_es_verb_slot_weights(body: dict):
+    """Store a weight override, body {"tenses": {...}, "persons": {...}} (#1306)."""
+    import verb_slots
+    try:
+        clean = verb_slots.validate_weights("es", body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    database.set_app_setting(verb_slots.SETTING_KEY, json.dumps(clean))
+    return _verb_slot_weights_payload()
+
+
+@router.delete("/api/es/verb-slot-weights")
+def reset_es_verb_slot_weights():
+    """Drop the override: back to the configured defaults (#1306)."""
+    import verb_slots
+    database.set_app_setting(verb_slots.SETTING_KEY, "")
+    return _verb_slot_weights_payload()
+
+
 @router.get("/api/add-word-ai/progress/{job_id}")
 def add_word_ai_progress(job_id: str):
     """Poll status for a background add-word job started by /api/add-word-ai."""
