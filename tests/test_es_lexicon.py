@@ -518,6 +518,12 @@ def test_all_words_is_enriched_too(annotator):
     assert len(annotator["calls"]) == 1
 
 
+def test_all_words_includes_function_words_flagged(annotator):
+    words = {w["word"]: w for w in romance.all_words("En el hotel, la cuenta era pequeña.", "es")}
+    assert words["era"]["function_word"] is True
+    assert not words["pequeña"].get("function_word")
+
+
 def test_french_is_unchanged_without_a_lexicon(annotator):
     """No fr lexicon file: no lemma/grammar keys, lemma == word, gloss asked
     for the surface form — the pre-#1293 result exactly."""
@@ -525,7 +531,8 @@ def test_french_is_unchanged_without_a_lexicon(annotator):
     new = _new("Cela va amoindrir le risque.", lang="fr")
     assert new["amoindrir"] == {"word": "amoindrir", "lemma": "amoindrir", "definition_de": "DE:amoindrir"}
     words = romance.all_words("Cela va amoindrir le risque.", "fr")
-    assert all(set(w) == {"word", "lemma", "definition_de"} and w["lemma"] == w["word"] for w in words)
+    # #1311: function words now come back too, flagged with an optional function_word key.
+    assert all(set(w) - {"function_word"} == {"word", "lemma", "definition_de"} and w["lemma"] == w["word"] for w in words)
 
 
 # ---------------------------------------------------------------------------

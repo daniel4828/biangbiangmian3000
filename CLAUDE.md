@@ -541,6 +541,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **★ List 和 ✓ Known 发的是 `lemma`**（`_addWordFromDict` / `_markKnownFromDict`），点 `hablamos` 加进去的是 `hablar`。`routes/knowledge.py` 的 `_with_entry_ids` 在词形查不到条目时再按原形查一次
 - **西班牙语 A1 基线词表（#1294）**：Daniel 的分级测试结果是扎实的 A1，所以 `annotate/baseline_es.txt` 把词频排名前 300 的原形（排除专有名词）当作"已认识"。默认故意取紧：分级测试里排名 336 的 `ayer`、438 的 `lograr` 他仍不认识，给太宽会把真正的生词藏起来。这是**近似**：真正的 A1 表应是 ELELex（CEFRLex 西语），但构建环境下载不到。只存原形不存变位形——#1293 之后罗曼语标注器按原形判定。重建：`python scripts/build_es_baseline.py [--top 300]`
 - **名词带冠词显示（#1294）**：测试里出现过 "la clima" 这类性别错误，所以西语名词词头在复习卡背面和词条详情页显示为 "el clima" / "la cuenta"。`languages.article_for(word, gender, lang)` 按 `languages.py` 里的 `articles` 表取冠词；以 stressed a/ha 开头的阴性名词（`agua`、`águila`、`alma`、`arma`……，显式词表）单数用 `el`；`mf` 给 `el/la`；不抛异常。`GET /api/word/{id}` 多返回 `article` 字段，**只用于显示**：存库的 `word_zh` 仍是裸词，编辑框也不带冠词。法语暂不做（要处理 `l'` 省音）
+- **全部词模式包含功能词（#1311）**：`_annotate_all()` 不再跳过 `stopwords_*.txt`（`era` 是 ser 的 Imperfecto，正是要查的词），这些词带 `function_word: true`；听力提示 `_hintKeepWord()` 对它们恒保持可见，与之前一致。Creating 卡背答案句 `#correct-answer-text` 同样 `_makeWordsTappable()`。
 - **法语不受影响**：没有 `fr-lexicon.json.gz` 就没有 `lemmas`/`grammar` 字段，`lemma == word`，行为与以前逐字节相同；以后给法语做一个同格式文件（再加一个 build 脚本）即可启用，不用改 `romance.py`
 
 ## 西班牙语动词：时态×人称轮换（#1295）

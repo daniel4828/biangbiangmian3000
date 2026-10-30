@@ -175,9 +175,11 @@ def _annotate_all(text: str, lang: str) -> list[dict]:
     """Every annotatable word token of `text` (not filtered to "new") with a
     German gloss — counterpart to _annotate()'s new_cores for the "gloss
     every word" gesture (#996) extended past the new-word table (#1018).
-    Still skips stopwords and proper nouns — those either have no useful
-    gloss or aren't "a word" in the sense this reader cares about — so the
-    result matches the reader's tap-word mechanism 1:1."""
+    Function words are included (#1311; e.g. Spanish `era` is the imperfect
+    of ser — exactly what a learner taps), flagged `function_word` so the
+    listening hint keeps them visible as before. Still skips proper nouns
+    and one-letter tokens, so the result matches the reader's tap-word
+    mechanism 1:1."""
     stop = stopwords(lang)
     tag_spans = [(m.start(), m.end()) for m in _TAG_RE.finditer(text)]
 
@@ -195,13 +197,17 @@ def _annotate_all(text: str, lang: str) -> list[dict]:
         core = _strip_elision(raw)
         low = core.lower()
         is_proper = core[:1].isupper() and not _is_sentence_start(text, m.start())
-        if len(low) >= 2 and low not in stop and not is_proper and low not in seen:
+        if len(low) >= 2 and not is_proper and low not in seen:
             seen.add(low)
             order.append(low)
     if not order:
         return []
 
-    return _word_dicts(order, lang, _lemma_map(order, lang))
+    dicts = _word_dicts(order, lang, _lemma_map(order, lang))
+    for d in dicts:
+        if d["word"] in stop:
+            d["function_word"] = True
+    return dicts
 
 
 def _lemma_map(words: list[str], lang: str) -> dict[str, list[str]]:
