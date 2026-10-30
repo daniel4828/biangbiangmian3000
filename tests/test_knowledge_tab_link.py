@@ -101,7 +101,7 @@ def test_boot_consumes_the_hash_so_later_reloads_go_home():
     location: after acting on it the boot code must clear it, otherwise the
     next reload reopens the same thing instead of the deck list (#792)."""
     boot = APP_JS[APP_JS.index("// \u2500\u2500 Boot"):]
-    boot = boot[:boot.index("_loadVersionBadge();")]
+    boot = boot[:boot.index("_startTasksPolling();")]
     assert "_openKnowledgeFromHash();" in boot
     # The clear has to sit in the branch that consumed the hash, before the
     # else-branch that just loads the decks.
