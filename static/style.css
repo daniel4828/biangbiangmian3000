@@ -6614,8 +6614,12 @@ header #header-search-panel {
   max-height: min(55vh, 420px);
   border-radius: 16px;
 }
-/* Keep page content and other fixed corner widgets clear of the bar. */
-body { padding-bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom)); }
+/* Keep page content and other fixed corner widgets clear of the bar.
+   main is the scroll container, so the room for the pill goes on main's
+   bottom padding: content scrolls under the pill and the last item can still
+   scroll clear of it (#1324). */
+main { padding-bottom: calc(var(--search-bar-h) + 24px + env(safe-area-inset-bottom)); }
+main.browse-open { padding-bottom: calc(var(--search-bar-h) + env(safe-area-inset-bottom)); }
 body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom))); }
 body:not(.ra-fullscreen-open) #gloss-toggle-btn {
   bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)));
