@@ -171,6 +171,24 @@ def lemma_info(lemma: str, lang: str) -> dict | None:
         return None
 
 
+def cefr_from_rank(rank) -> int | None:
+    """CEFR level (A1=1 ... C2=6) from a lexicon frequency rank, or None.
+
+    A frequency-rank approximation, not an official CEFR list (#1369):
+    <=500 -> 1, <=1000 -> 2, <=2000 -> 3, <=4000 -> 4, <=8000 -> 5, else 6.
+    Never raises."""
+    try:
+        r = int(rank)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(rank, bool) or r < 1:
+        return None
+    for limit, level in ((500, 1), (1000, 2), (2000, 3), (4000, 4), (8000, 5)):
+        if r <= limit:
+            return level
+    return 6
+
+
 def verb_tags(form: str, lang: str) -> list[tuple[str, str, str]]:
     try:
         raw = _load(lang)["verbs"].get((form or "").lower()) or []

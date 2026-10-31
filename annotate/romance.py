@@ -264,6 +264,15 @@ def _word_dicts(words: list[str], lang: str, lemma_map: dict[str, list[str]]) ->
             grammar = lexicon.grammar_label(w, lang)
             if grammar:
                 d["grammar"] = grammar
+            # #1369: frequency-based CEFR (A1=1) from the most frequent candidate lemma.
+            ranks = []
+            for lem in lemmas:
+                lem_info = lexicon.lemma_info(lem, lang)
+                if lem_info and isinstance(lem_info.get("rank"), int):
+                    ranks.append(lem_info["rank"])
+            cefr = lexicon.cefr_from_rank(min(ranks)) if ranks else None
+            if cefr is not None:
+                d["cefr"] = cefr
         out.append(d)
     return out
 
