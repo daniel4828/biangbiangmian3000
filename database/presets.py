@@ -86,6 +86,12 @@ def delete_preset(preset_id: int) -> None:
     if in_use:
         conn.close()
         raise ValueError("Preset is still assigned to one or more decks")
+    bound = conn.execute(
+        "SELECT COUNT(*) FROM category_presets WHERE preset_id = ?", (preset_id,)
+    ).fetchone()[0]
+    if bound:
+        conn.close()
+        raise ValueError("Preset is still bound to one or more language categories")
     conn.execute("DELETE FROM deck_presets WHERE id = ?", (preset_id,))
     conn.commit()
     conn.close()
@@ -105,15 +111,85 @@ def get_preset(preset_id: int) -> dict:
     return dict(row) if row else None
 
 
-def get_preset_for_deck(deck_id: int, category: str | None = None) -> dict:
+def effective_preset_id_sql(deck_alias: str, category_expr: str) -> str:
+    """SQL fragment: the preset id that governs scheduling for a deck/card of
+    the given category (#1372). A (lang, category) binding in category_presets
+    wins; otherwise the deck's own preset_id (unchanged legacy behaviour)."""
+    return (
+        "COALESCE((SELECT cp.preset_id FROM category_presets cp "
+        f"WHERE cp.lang = COALESCE({deck_alias}.lang, 'zh') "
+        f"AND cp.category = {category_expr}), {deck_alias}.preset_id)"
+    )
+
+
+_VALID_BINDING_CATEGORIES = ("listening", "reading", "creating")
+
+
+def get_category_binding(lang: str, category: str) -> int | None:
     conn = get_db()
     row = conn.execute(
-        """SELECT p.*,
-                  d.new_review_order_override AS deck_nro_override,
-                  d.bury_quick_mode           AS deck_bury_quick_mode
-           FROM deck_presets p JOIN decks d ON d.preset_id = p.id WHERE d.id = ?""",
-        (deck_id,),
+        "SELECT preset_id FROM category_presets WHERE lang = ? AND category = ?",
+        (lang, category),
     ).fetchone()
+    conn.close()
+    return row["preset_id"] if row else None
+
+
+def set_category_preset(lang: str, category: str, preset_id: int | None) -> None:
+    """Bind (lang, category) to a preset; preset_id=None removes the binding."""
+    if category not in _VALID_BINDING_CATEGORIES:
+        raise ValueError(f"Invalid category: {category!r}")
+    conn = get_db()
+    try:
+        if preset_id is None:
+            conn.execute(
+                "DELETE FROM category_presets WHERE lang = ? AND category = ?",
+                (lang, category),
+            )
+        else:
+            exists = conn.execute(
+                "SELECT 1 FROM deck_presets WHERE id = ?", (preset_id,)
+            ).fetchone()
+            if not exists:
+                raise ValueError(f"Preset {preset_id} does not exist")
+            conn.execute(
+                "INSERT OR REPLACE INTO category_presets (lang, category, preset_id) VALUES (?, ?, ?)",
+                (lang, category, preset_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_category_preset(lang: str, category: str) -> tuple[dict | None, bool]:
+    """Preset to show in the UI for (lang, category): (preset, bound)."""
+    bound_id = get_category_binding(lang, category)
+    if bound_id is not None:
+        preset = get_preset(bound_id)
+        if preset:
+            return preset, True
+    return get_lang_preset(lang), False
+
+
+def get_preset_for_deck(deck_id: int, category: str | None = None) -> dict:
+    conn = get_db()
+    if category:
+        join_id = effective_preset_id_sql("d", "?")
+        row = conn.execute(
+            f"""SELECT p.*,
+                      d.new_review_order_override AS deck_nro_override,
+                      d.bury_quick_mode           AS deck_bury_quick_mode
+               FROM decks d JOIN deck_presets p ON p.id = {join_id} WHERE d.id = ?""",
+            (category, deck_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """SELECT p.*,
+                      d.new_review_order_override AS deck_nro_override,
+                      d.bury_quick_mode           AS deck_bury_quick_mode
+               FROM deck_presets p JOIN decks d ON d.preset_id = p.id WHERE d.id = ?""",
+            (deck_id,),
+        ).fetchone()
     if not row:
         conn.close()
         return None

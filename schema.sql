@@ -624,6 +624,19 @@ CREATE TABLE IF NOT EXISTS preset_category_overrides (
 );
 
 -- ---------------------------------------------------------------------------
+-- category_presets (#1372)
+-- Binds (language, category) to a preset. When a row exists, cards/decks of
+-- that category in that language use the bound preset instead of
+-- decks.preset_id. decks.preset_id is never rewritten.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS category_presets (
+    lang      TEXT NOT NULL,
+    category  TEXT NOT NULL CHECK (category IN ('listening','reading','creating')),
+    preset_id INTEGER NOT NULL REFERENCES deck_presets(id),
+    PRIMARY KEY (lang, category)
+);
+
+-- ---------------------------------------------------------------------------
 -- Performance indexes
 -- ---------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_cards_deck_cat_state

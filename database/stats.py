@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
 from .core import get_db, anki_today
+from .presets import effective_preset_id_sql
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +451,7 @@ def get_retention_bulk(days: int = 30, lang: str | None = None) -> dict:
            FROM review_log rl
            JOIN cards c ON c.id = rl.card_id
            JOIN decks d ON d.id = c.deck_id
-           JOIN deck_presets p ON p.id = d.preset_id
+           JOIN deck_presets p ON p.id = {effective_preset_id_sql("d", "d.category")}
            WHERE date(datetime(rl.reviewed_at, 'localtime')) >= ?
              AND rl.state = 'review'
              AND (rl.last_interval IS NULL OR rl.last_interval >= p.learned_interval)
@@ -511,7 +512,7 @@ def get_calendar_stats(days: int = 365, deck_id: int | None = None) -> dict:
             FROM review_log rl
             JOIN cards c ON c.id = rl.card_id
             JOIN decks d ON d.id = c.deck_id
-            JOIN deck_presets p ON p.id = d.preset_id
+            JOIN deck_presets p ON p.id = {effective_preset_id_sql("d", "c.category")}
             WHERE {day_expr} >= ? {deck_filter}""",
         params,
     ).fetchall()
@@ -687,13 +688,13 @@ def get_card_evolution(days: int = 365, deck_id: int | None = None, lang: str | 
 
     # Learning/relearning step counts per deck (category override wins)
     preset_rows = conn.execute(
-        """SELECT d.id AS deck_id,
+        f"""SELECT d.id AS deck_id,
                   p.learning_steps, p.relearning_steps,
                   o.learning_steps AS o_ls, o.relearning_steps AS o_rs
            FROM decks d
-           JOIN deck_presets p ON p.id = d.preset_id
+           JOIN deck_presets p ON p.id = {effective_preset_id_sql("d", "d.category")}
            LEFT JOIN preset_category_overrides o
-                  ON o.preset_id = d.preset_id AND o.category = d.category"""
+                  ON o.preset_id = p.id AND o.category = d.category"""
     ).fetchall()
     conn.close()
 

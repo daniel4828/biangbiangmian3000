@@ -648,7 +648,11 @@
   <div class="modal-box">
     <div class="modal-title" id="modal-title">Deck Options</div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-deck opt-hint">
+      <div class="cat-tiles-hint">Scheduling (steps, intervals, daily limits) is set per category — use ⚙ on the Listening / Creating pill.</div>
+    </div>
+
+    <div class="opt-group opt-sched">
       <div class="opt-group-label">Preset</div>
       <div class="opt-row" style="gap:6px">
         <select class="opt-input" id="opt-preset-select" style="flex:1" onchange="switchPreset(this.value)"></select>
@@ -658,13 +662,13 @@
       </div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-sched">
       <div class="opt-group-label">Daily Limits</div>
       <div class="opt-row"><span class="opt-label">New / day</span>    <input class="opt-input" id="opt-new-per-day"     type="number" min="0"></div>
       <div class="opt-row"><span class="opt-label">Reviews / day</span><input class="opt-input" id="opt-reviews-per-day" type="number" min="0"></div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-sched">
       <div class="opt-group-label">Learning</div>
       <div class="opt-row"><span class="opt-label">Steps (minutes, space-separated) <span class="info-i" data-info="learning_steps">i</span></span><input class="opt-input wide" id="opt-learn-steps"  type="text"></div>
       <div class="opt-row sched-sm2"><span class="opt-label">Graduating interval (days) <span class="info-i" data-info="graduating_interval">i</span></span>       <input class="opt-input" id="opt-grad-int"     type="number" min="1"></div>
@@ -676,7 +680,7 @@
       </div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-sched">
       <div class="opt-group-label">Scheduler</div>
       <div class="opt-row">
         <span class="opt-label">Enable FSRS <span class="info-i" data-info="enable_fsrs">i</span><br><span style="font-weight:400;font-size:11px;color:var(--muted)">off = legacy SM-2 (ease-based)</span></span>
@@ -694,7 +698,7 @@
       <div class="opt-row sched-fsrs"><span class="opt-label">Maximum interval (days) <span class="info-i" data-info="maximum_interval">i</span><br><span style="font-weight:400;font-size:11px;color:var(--muted)">cap on how far out a review is scheduled</span></span><input class="opt-input" id="opt-max-int" type="number" min="1" step="1"></div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-sched">
       <div class="opt-group-label">Lapses</div>
       <div class="opt-row"><span class="opt-label">Relearning steps (minutes)</span><input class="opt-input wide" id="opt-relearn-steps" type="text"></div>
       <div class="opt-row"><span class="opt-label">Leech threshold (review lapses)</span>  <input class="opt-input" id="opt-leech"         type="number" min="1"></div>
@@ -705,7 +709,7 @@
       <div class="opt-row learning-leech-row"><span class="opt-label">Learning leech threshold (Again presses)</span>  <input class="opt-input" id="opt-learning-leech" type="number" min="1"></div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-deck">
       <div class="opt-group-label">Categories</div>
       <!-- Three tap-anywhere tiles (#879). The original checkboxes are still
            here, only visually hidden: app.js reads and writes these exact ids
@@ -737,12 +741,12 @@
       </div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-deck">
       <div class="opt-group-label">Audio</div>
     </div>
 
-    <div class="opt-group">
-      <div class="opt-group-label">Category Overrides <span style="font-weight:400;font-size:11px;color:var(--muted)">— leave blank to use preset default</span></div>
+    <div class="opt-group opt-sched">
+      <div class="opt-group-label">Category Overrides<span style="font-weight:400;font-size:11px;color:var(--muted)">— leave blank to use preset default</span></div>
       <div id="cat-overrides-container">
         <!-- Listening -->
         <details class="cat-override-details" data-cat="listening">
@@ -783,7 +787,7 @@
       </div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-deck">
       <div class="opt-group-label">Display Order</div>
       <div class="opt-row"><span class="opt-label">New card gather order</span>
         <select class="opt-input" id="opt-new-gather-order">
@@ -836,7 +840,7 @@
       </div>
     </div>
 
-    <div class="opt-group">
+    <div class="opt-group opt-deck">
       <div class="opt-group-label">Burying</div>
       <div class="opt-row">
         <span class="opt-label">Bury new siblings</span>

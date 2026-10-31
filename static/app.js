@@ -91,6 +91,8 @@ let _browseSelected = new Set();  // selected word IDs (multiselect)
 let _browseDecks = [];            // flat deck list for move dropdown
 let _browseDeckTree = [];         // top-level user decks (children of All) for sidebar tree
 let optDeckId    = null; // deck whose options modal is open
+let optCategory  = null; // category whose scheduling the modal edits (null = deck mode, #1372)
+let optLang      = null; // language of that category binding (category mode only)
 const collapsed  = new Set(JSON.parse(localStorage.getItem('collapsedDecks') || '[]'));  // parent deck IDs that are collapsed
 let _retentionData = null;  // cached result from GET /api/retention
 let _cachedDecks = null;       // last fetched deck tree (for toggle re-renders)
@@ -2029,7 +2031,7 @@ function _catPillGroup(id, cat, label, safeName, c, allSusp, noStory, rr) {
   const regenBtn = (!noStory && !_offlineMode)
     ? `<button class="cat-pill-regen" onclick="event.stopPropagation();regenerateStoryFromList(${id},'${cat}')" title="Regenerate ${label} story">↺</button>`
     : '';
-  return `<span class="cat-pill-group"><button class="${badgeClass}" onclick="event.stopPropagation();toggleCategorySuspension(${id},'${cat}')" title="${title}">${badgeIcon}</button><span class="cat-pill-wrap"><button class="${pillClass}" onclick="event.stopPropagation();startReview(${id},'${cat}','${safeName}',${!!noStory})"><span class="cat-pill-label">${label}</span><span class="cat-pill-counts">${countHtml(c)}</span>${_catRRSpan(rr)}</button><button class="cat-pill-quick" onclick="event.stopPropagation();startReview(${id},'${cat}','${safeName}',${!!noStory},true)" title="Speed mode — words only, no sentences">⚡</button><button class="cat-pill-gear" onclick="event.stopPropagation();openOptions(${id})" title="Options">⚙</button>${regenBtn}</span></span>`;
+  return `<span class="cat-pill-group"><button class="${badgeClass}" onclick="event.stopPropagation();toggleCategorySuspension(${id},'${cat}')" title="${title}">${badgeIcon}</button><span class="cat-pill-wrap"><button class="${pillClass}" onclick="event.stopPropagation();startReview(${id},'${cat}','${safeName}',${!!noStory})"><span class="cat-pill-label">${label}</span><span class="cat-pill-counts">${countHtml(c)}</span>${_catRRSpan(rr)}</button><button class="cat-pill-quick" onclick="event.stopPropagation();startReview(${id},'${cat}','${safeName}',${!!noStory},true)" title="Speed mode — words only, no sentences">⚡</button><button class="cat-pill-gear" onclick="event.stopPropagation();openOptions(${id},'${cat}')" title="Options">⚙</button>${regenBtn}</span></span>`;
 }
 
 // Build 3 inline pills (L/R/C) for any deck. Uses direct cat leaves if present, else aggregates.
@@ -11124,32 +11126,85 @@ function _collectCategoryOverrides() {
 function _optLangQ() { return _langQ() ? `?${_langQ()}` : ''; }
 
 
+// selectedId: preset id to select, or null = "Language default" (category mode only, #1372)
 function renderPresetSelect(selectedId) {
   const sel = document.getElementById('opt-preset-select');
-  sel.innerHTML = allPresets.map(p =>
-    `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${p.name}${p.is_default ? ' ★' : ''}</option>`
+  const defaultOpt = optCategory
+    ? `<option value="" ${selectedId == null ? 'selected' : ''}>Language default</option>`
+    : '';
+  sel.innerHTML = defaultOpt + allPresets.map(p =>
+    `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${_escHtml(p.name)}${p.is_default ? ' ★' : ''}</option>`
   ).join('');
 }
 
-async function openOptions(deckId) {
+// Category mode shows only the one category's override block (#1372).
+function _showOnlyCategoryOverride(cat) {
+  for (const details of document.querySelectorAll('.cat-override-details')) {
+    const show = !cat || details.dataset.cat === cat;
+    details.style.display = show ? '' : 'none';
+    if (cat && show) details.open = true;
+  }
+}
+
+function _applyOptionsMode() {
+  const box = document.querySelector('#modal-overlay .modal-box');
+  box.dataset.optMode = optCategory ? 'category' : 'deck';
+  // "Set as default" would change the default (Chinese) preset from a per-category dialog
+  document.getElementById('btn-set-default').style.display = optCategory ? 'none' : '';
+}
+
+async function openOptions(deckId, cat = null) {
   optDeckId = deckId;
+  optCategory = cat;
+  optLang = null;
   try {
-    const [preset, presets] = await Promise.all([
-      api('GET', `/api/decks/${deckId}/preset${_optLangQ()}`),
-      api('GET', '/api/presets'),
-    ]);
-    allPresets = presets;
-    renderPresetSelect(preset.id);
-    loadPresetFields(preset);
+    if (cat) {
+      const [resp, presets] = await Promise.all([
+        api('GET', `/api/category-preset?category=${cat}&deck_id=${deckId}${_langQP('&')}`),
+        api('GET', '/api/presets'),
+      ]);
+      allPresets = presets;
+      optLang = resp.lang;
+      const catName = cat.charAt(0).toUpperCase() + cat.slice(1);
+      document.getElementById('modal-title').textContent = `${catName} options (${resp.lang})`;
+      _applyOptionsMode();
+      renderPresetSelect(resp.bound ? resp.id : null);
+      loadPresetFields(resp);
+      _showOnlyCategoryOverride(cat);
+    } else {
+      const [preset, presets] = await Promise.all([
+        api('GET', `/api/decks/${deckId}/preset${_optLangQ()}`),
+        api('GET', '/api/presets'),
+      ]);
+      allPresets = presets;
+      document.getElementById('modal-title').textContent = 'Deck options';
+      _applyOptionsMode();
+      renderPresetSelect(preset.id);
+      loadPresetFields(preset);
+      _showOnlyCategoryOverride(null);
+    }
     document.getElementById('modal-overlay').classList.add('open');
   } catch (e) {
+    optCategory = null;
+    optLang = null;
     showError('Could not load options: ' + e.message);
   }
 }
 
-async function switchPreset(presetId) {
-  presetId = parseInt(presetId);
+async function switchPreset(value) {
   try {
+    if (optCategory) {
+      const resp = await api('PUT', '/api/category-preset', {
+        lang: optLang,
+        category: optCategory,
+        preset_id: value === '' || value == null ? null : parseInt(value),
+      });
+      renderPresetSelect(resp.bound ? resp.id : null);
+      loadPresetFields(resp);
+      _showOnlyCategoryOverride(optCategory);
+      return;
+    }
+    const presetId = parseInt(value);
     await api('PUT', `/api/decks/${optDeckId}/preset/assign?preset_id=${presetId}`);
     const preset = await api('GET', `/api/decks/${optDeckId}/preset${_optLangQ()}`);
     loadPresetFields(preset);
@@ -11161,7 +11216,8 @@ async function switchPreset(presetId) {
 async function addPreset() {
   const name = prompt('Preset name:');
   if (!name) return;
-  const currentId = parseInt(document.getElementById('opt-preset-select').value);
+  // The select may read "" (Language default); currentPresetId is always the effective preset.
+  const currentId = currentPresetId;
   try {
     const preset = await api('POST', `/api/presets?name=${encodeURIComponent(name)}&clone_from_id=${currentId}`);
     allPresets = await api('GET', '/api/presets');
@@ -11173,14 +11229,14 @@ async function addPreset() {
 }
 
 async function renamePreset() {
-  const currentId = parseInt(document.getElementById('opt-preset-select').value);
+  const currentId = currentPresetId;
   const current = allPresets.find(p => p.id === currentId);
   const name = prompt('New name:', current?.name || '');
   if (!name || name === current?.name) return;
   try {
-    await api('PUT', `/api/decks/${optDeckId}/preset`, { name });
+    await api('PUT', `/api/presets/${currentId}`, { name });
     allPresets = await api('GET', '/api/presets');
-    renderPresetSelect(currentId);
+    renderPresetSelect(optCategory && document.getElementById('opt-preset-select').value === '' ? null : currentId);
   } catch (e) {
     showError('Failed to rename: ' + e.message);
   }
@@ -11188,8 +11244,31 @@ async function renamePreset() {
 
 async function deletePreset() {
   if (allPresets.length <= 1) return;
-  const currentId = parseInt(document.getElementById('opt-preset-select').value);
+  const currentId = currentPresetId;
   const current = allPresets.find(p => p.id === currentId);
+  if (optCategory) {
+    if (!confirm(`Delete preset "${current?.name}"?`)) return;
+    const wasBound = document.getElementById('opt-preset-select').value !== '';
+    try {
+      if (wasBound) {
+        await api('PUT', '/api/category-preset', { lang: optLang, category: optCategory, preset_id: null });
+      }
+      await api('DELETE', `/api/presets/${currentId}`);
+    } catch (e) {
+      showError('Delete failed: ' + e.message);
+      return;
+    }
+    try {
+      allPresets = await api('GET', '/api/presets');
+      const resp = await api('GET', `/api/category-preset?category=${optCategory}&lang=${optLang}`);
+      renderPresetSelect(resp.bound ? resp.id : null);
+      loadPresetFields(resp);
+      _showOnlyCategoryOverride(optCategory);
+    } catch (e) {
+      showError('Could not reload options: ' + e.message);
+    }
+    return;
+  }
   if (!confirm(`Delete preset "${current?.name}"? Decks using it will be reassigned to the default preset.`)) return;
   // First reassign all decks using this preset to the default
   const defaultPreset = allPresets.find(p => p.is_default && p.id !== currentId) || allPresets.find(p => p.id !== currentId);
@@ -11207,11 +11286,15 @@ async function deletePreset() {
 function closeModal() {
   document.getElementById('modal-overlay').classList.remove('open');
   optDeckId = null;
+  optCategory = null;
+  optLang = null;
 }
 
 async function saveOptions() {
   if (!optDeckId) return;
-  const fields = {
+  // Scheduling fields (saved on the preset bound to the category) vs deck-level
+  // fields (display order, burying, category switches), #1372.
+  const schedFields = {
     new_per_day:         parseInt(document.getElementById('opt-new-per-day').value),
     reviews_per_day:     parseInt(document.getElementById('opt-reviews-per-day').value),
     learning_steps:      document.getElementById('opt-learn-steps').value.trim(),
@@ -11223,7 +11306,14 @@ async function saveOptions() {
     leech_threshold:     parseInt(document.getElementById('opt-leech').value),
     learning_leech_threshold: parseInt(document.getElementById('opt-learning-leech').value),
     enable_learning_leech:    document.getElementById('opt-enable-learning-leech').checked ? 1 : 0,
-    new_gather_order:               document.getElementById('opt-new-gather-order').value,
+    enable_fsrs:            document.getElementById('opt-enable-fsrs').checked ? 1 : 0,
+    learning_hard_1d:       document.getElementById('opt-hard-1d').checked ? 1 : 0,
+    learning_hard_days:     Math.max(0.1, parseFloat(document.getElementById('opt-hard-days').value) || 1),
+    desired_retention:      Math.min(0.99, Math.max(0.70, (parseInt(document.getElementById('opt-desired-retention').value) || 90) / 100)),
+    maximum_interval:       Math.max(1, parseInt(document.getElementById('opt-max-int').value) || 36500),
+  };
+  const deckFields = {
+    new_gather_order:              document.getElementById('opt-new-gather-order').value,
     new_sort_order:                 document.getElementById('opt-new-sort-order').value,
     new_review_order:               document.getElementById('opt-new-review-order').value,
     interday_learning_review_order: document.getElementById('opt-interday-learning-order').value,
@@ -11233,31 +11323,25 @@ async function saveOptions() {
     bury_interday_siblings: document.getElementById('opt-bury-interday').checked ? 1 : 0,
     sibling_separation:     parseInt(document.getElementById('opt-sibling-sep').value) || 3,
     sibling_factor:         parseFloat(document.getElementById('opt-sibling-factor').value) || 0.2,
-    enable_fsrs:            document.getElementById('opt-enable-fsrs').checked ? 1 : 0,
-    learning_hard_1d:       document.getElementById('opt-hard-1d').checked ? 1 : 0,
-    learning_hard_days:     Math.max(0.1, parseFloat(document.getElementById('opt-hard-days').value) || 1),
-    desired_retention:      Math.min(0.99, Math.max(0.70, (parseInt(document.getElementById('opt-desired-retention').value) || 90) / 100)),
-    maximum_interval:       Math.max(1, parseInt(document.getElementById('opt-max-int').value) || 36500),
     category_order: _getCategoryOrderUI(),
     reading_enabled:        document.getElementById('opt-reading-enabled').checked ? 1 : 0,
     listening_enabled:      document.getElementById('opt-listening-enabled').checked ? 1 : 0,
     creating_enabled:       document.getElementById('opt-creating-enabled').checked ? 1 : 0,
   };
   try {
-    const [savedPreset] = await Promise.all([
-      api('PUT', `/api/decks/${optDeckId}/preset${_optLangQ()}`, fields),
-    ]);
-    const presetId = currentPresetId;
-    // Save category overrides
-    const catOverrides = _collectCategoryOverrides();
-    const cats = ['listening', 'reading', 'creating'];
-    await Promise.all(cats.map(cat => {
-      if (catOverrides[cat]) {
-        return api('PUT', `/api/presets/${presetId}/categories/${cat}`, catOverrides[cat]);
+    if (optCategory) {
+      const presetId = currentPresetId;
+      await api('PUT', `/api/presets/${presetId}`, schedFields);
+      // Only this category's override block is on screen
+      const catOverrides = _collectCategoryOverrides();
+      if (catOverrides[optCategory]) {
+        await api('PUT', `/api/presets/${presetId}/categories/${optCategory}`, catOverrides[optCategory]);
       } else {
-        return api('DELETE', `/api/presets/${presetId}/categories/${cat}`).catch(() => {});
+        await api('DELETE', `/api/presets/${presetId}/categories/${optCategory}`);
       }
-    }));
+    } else {
+      await api('PUT', `/api/decks/${optDeckId}/preset${_optLangQ()}`, deckFields);
+    }
     closeModal();
     // Options can be opened mid-review (the `o` shortcut), and loadDecks()
     // would otherwise showView('decks') and throw the session away. Refresh
@@ -19135,7 +19219,7 @@ document.addEventListener('keydown', async e => {
       reviewCardAction('leech');
     } else if (e.key === _key('deck-options')) {
       e.preventDefault();
-      if (deckId) openOptions(deckId);
+      if (deckId) openOptions(deckId, (card && card.category) || null);
     } else if (e.key === _key('reasoning')) {
       e.preventDefault();
       // Kahneman cards keep g for the reasoning popup; everything else uses g to

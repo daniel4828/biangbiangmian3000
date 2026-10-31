@@ -392,6 +392,13 @@ decks → stories → story_sentences → entries（外键）
 
 **生产实测参数（2026-08-08，#629）：** 内置默认权重对 Daniel 系统性乐观——实测遗忘率 `creating` 31%、`listening` 21%，且遗忘率随间隔的曲线是**平的**（1-3 天就忘 20.7%）。平坦曲线 = 整体校准偏差，不是长期衰退；连 1-3 天都记不住说明卡片毕业时根本没学扎实。已把 preset 2 改为 `desired_retention=0.95`、`learning_steps='1m 10m 1d 3d'`、`relearning_steps='10m 1d'`，并写入用 `scripts/fsrs_optimize.py` 训练出的个人权重（验证集 log loss +3.0%）。想重训直接跑该脚本（默认只读，`--write` 才写库）。
 
+### 按类别的调度预设（#1372）
+
+`category_presets(lang, category, preset_id)` 把（语言, 类别）绑定到一个预设：有绑定时，该语言该类别的卡一律用它调度（`get_card`、`get_preset_for_deck(d, cat)`、`_get_presets_bulk(ids, cat)`、统计里的 learned_interval/步骤），**不改写 `decks.preset_id`**——SQL 统一用 `database.effective_preset_id_sql()`。没有绑定 = 原行为，中文默认无绑定（preset 2 不动）。
+- 类别胶囊的 ⚙ 打开**类别模式**：只显示调度字段，换预设只改绑定（`GET/PUT /api/category-preset`），保存走 `PUT /api/presets/{id}`；「Language default」= 解绑。
+- 牌组 ⚙ 是**牌组模式**：只有显示顺序、埋藏、启用类别、类别顺序、音频，没有调度。
+- 启用/停用类别的开关不受绑定影响（`_CATEGORY_DISABLED_SQL` 仍读牌组自己的 preset）。被绑定的预设不能删。
+
 ### 状态机
 `new` → `learning`（学习步骤）→ `review`（毕业）；`review` 评 Again → `relearn` → 完成步骤后回 `review`。
 

@@ -403,6 +403,15 @@ def create_preset(name: str, clone_from_id: int | None = None):
     return database.get_preset(database.insert_preset(src))
 
 
+@router.put("/api/presets/{preset_id}")
+def update_preset(preset_id: int, fields: dict):
+    if not database.get_preset(preset_id):
+        raise HTTPException(status_code=404, detail="Preset not found")
+    database.update_preset(preset_id, fields)
+    queue_mgr.invalidate()
+    return database.get_preset(preset_id)
+
+
 @router.delete("/api/presets/{preset_id}")
 def delete_preset(preset_id: int):
     try:
@@ -513,3 +522,50 @@ def delete_preset_category_override(preset_id: int, category: str):
     database.delete_category_override(preset_id, category)
     queue_mgr.invalidate()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Per-(language, category) preset binding (#1372)
+# ---------------------------------------------------------------------------
+
+def _category_preset_payload(lang: str, category: str) -> dict:
+    preset, bound = database.get_category_preset(lang, category)
+    if not preset:
+        # language tree has no preset of its own yet: show the default one (read-only view)
+        preset = database.get_default_preset()
+    if not preset:
+        raise HTTPException(status_code=404, detail="No preset found")
+    result = dict(preset)
+    result["category_overrides"] = database.get_category_overrides(preset["id"])
+    result["bound"] = bound
+    result["lang"] = lang
+    result["category"] = category
+    return result
+
+
+@router.get("/api/category-preset")
+def get_category_preset(category: str, lang: str | None = None, deck_id: int | None = None):
+    if category not in VALID_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Invalid category")
+    if not lang:
+        lang = database.get_deck_lang(deck_id) if deck_id else languages.DEFAULT_LANG
+    return _category_preset_payload(lang, category)
+
+
+class CategoryPresetBody(BaseModel):
+    lang: str
+    category: str
+    preset_id: int | None = None
+
+
+@router.put("/api/category-preset")
+def put_category_preset(body: CategoryPresetBody):
+    if body.category not in VALID_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Invalid category")
+    if not languages.is_valid_lang(body.lang):
+        raise HTTPException(status_code=400, detail="Invalid language")
+    if body.preset_id is not None and not database.get_preset(body.preset_id):
+        raise HTTPException(status_code=404, detail="Preset not found")
+    database.set_category_preset(body.lang, body.category, body.preset_id)
+    queue_mgr.invalidate()
+    return _category_preset_payload(body.lang, body.category)
