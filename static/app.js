@@ -4268,7 +4268,7 @@ function renderSettings() {
     </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Stages</h2>
-      <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. HSK N hides level N and below (Chinese only).</p>
+      <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. Shows the stages of the current language tab: HSK N (Chinese) or A1–B2 (Spanish) hides that level and below.</p>
       <div id="hint-stage-options">${_hintStageOptionsHtml()}</div>
     </div>
     <div class="keymap-panel">
@@ -14050,10 +14050,16 @@ function _hintCurrentStage() {
 }
 // The stage list lives on the Settings page (#1232), not on the card: it is
 // set once, and on the card it pushed the sentence around. There is no card
-// there, so every stage is listed; HSK stops are skipped at review time for
-// non-Chinese cards (_hintEnabledStages).
+// there, so it lists the stages of the language tab in use (#1372): HSK for
+// Chinese, CEFR for Spanish. Hidden stages keep their place in the shared
+// order; ↑/↓ jump over them.
+function _hintVisibleStageIds() {
+  const lang = activeLang();
+  return _hintStageConfig().filter(s => _hintStageAvailable(s.id, lang)).map(s => s.id);
+}
 function _hintStageOptionsHtml() {
-  const rows = _hintStageConfig();
+  const visible = _hintVisibleStageIds();
+  const rows = _hintStageConfig().filter(s => visible.includes(s.id));
   const enabled = rows.filter(s => s.enabled);
   const previousWord = `<div class="hint-stage-option"><label><input type="checkbox"
     ${_hintPreviousWordEnabled() ? 'checked' : ''}
@@ -14077,7 +14083,8 @@ function _saveHintStages(config) {
 }
 function changeHintStage(id, enabled) {
   const config = _hintStageConfig();
-  if (!enabled && config.filter(s => s.enabled).length === 1) return;
+  const visible = _hintVisibleStageIds();
+  if (!enabled && config.filter(s => s.enabled && visible.includes(s.id)).length === 1) return;
   config.find(s => s.id === id).enabled = enabled;
   _saveHintStages(config);
 }
@@ -14088,9 +14095,15 @@ function changeHintPreviousWord(enabled) {
 }
 function moveHintStage(id, delta) {
   const config = _hintStageConfig();
-  const a = config.findIndex(s => s.id === id), b = a + delta;
-  if (b < 0 || b >= config.length) return;
-  [config[a], config[b]] = [config[b], config[a]];
+  const visible = _hintVisibleStageIds();
+  const a = config.findIndex(s => s.id === id);
+  let b = a + delta;
+  while (b >= 0 && b < config.length && !visible.includes(config[b].id)) b += delta;
+  if (a < 0 || b < 0 || b >= config.length) return;
+  // Move, don't swap: a swap would drag the neighbour across the other
+  // language's hidden stages and reorder that language too.
+  const [item] = config.splice(a, 1);
+  config.splice(b, 0, item);
   _saveHintStages(config);
 }
 
