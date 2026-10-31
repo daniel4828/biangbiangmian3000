@@ -236,4 +236,8 @@ def test_verb_regularity_tag():
     assert verb_slots.verb_regularity("hablar", "es") == "regular"
     assert verb_slots.verb_regularity("tener", "es") == "irregular"
     assert verb_slots.verb_regularity("casa", "es") is None
+    # #1352：反身动词按原形判定
+    assert verb_slots.verb_regularity("hablarse", "es") == "regular"
+    assert verb_slots.verb_regularity("buscarse", "es") == "irregular"
+    assert verb_slots.verb_regularity("casarse", "es") is None  # casar fehlt
     assert verb_slots.verb_regularity("hablar", "fr") is None

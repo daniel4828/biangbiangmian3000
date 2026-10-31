@@ -204,6 +204,9 @@ def verb_regularity(lemma: str, lang: str) -> str | None:
         if lang != _FORM_LANG:
             return None
         lemma = (lemma or "").strip().lower()
+        # Reflexiv (rendirse, quejarse): Regularität des Grundverbs gilt (#1352)
+        if len(lemma) > 4 and lemma.endswith(("arse", "erse", "irse")):
+            lemma = lemma[:-2]
         if not any(f for t in FORM_CARD_TENSES for f in _lexicon_row(lemma, t)):
             return None
         return "irregular" if irregular_tenses(lemma, lang) else "regular"
