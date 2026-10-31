@@ -2012,7 +2012,7 @@ body.ra-fullscreen-open #error-banner {
   color: var(--muted);
   letter-spacing: 0.2px;
 }
-#card-toggle-bar-front { margin: 0 0 6px; }
+#card-toggle-bar-front { margin: 2px 0 6px; }
 /* News flow: German context of the preceding summary sentences (readable at a glance) */
 .sentence-context-de {
   font-size: 16px;

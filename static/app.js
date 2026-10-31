@@ -12055,6 +12055,12 @@ function showFront() {
   document.getElementById('word-bank-wrap').style.display      = isCloze ? 'flex' : 'none';
   if (isCloze) _initWordBankSlider();
   _renderGrammarHint(sentence);  // re-place the tag now that word-bank visibility is known
+  // Front toolbar sits right above whichever input is active (below the tiles
+  // in word-bank mode), so it is next to where the thumb already is (#1359).
+  if (isCreating) {
+    const _inp = document.getElementById(isCloze ? 'word-bank-input' : 'creating-input');
+    _inp.parentNode.insertBefore(document.getElementById('card-toggle-bar-front'), _inp);
+  }
 
   // Creating: target-word translation hint (🇬🇧/🇫🇷/🇩🇪). Hidden by default;
   // press k to toggle, or the eye icon to make it always show (see toggleWordDef).
