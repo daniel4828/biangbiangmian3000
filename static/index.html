@@ -209,12 +209,19 @@
             </div>
             <!-- Creating: English/German context sentence (shown above Chinese for cloze).
                  Hidden by default (no space reserved); press t to toggle, or tap the
-                 🇩🇪 button — needed on mobile where there's no keyboard (#515). -->
+                 译文 button in the front toolbar — needed on mobile where there's no
+                 keyboard (#515). -->
+            <!-- Front toolbar: mirrors the back bar (#card-toggle-bar) minus 拼音 —
+                 the pinyin of the full sentence would spoil the answer. -->
+            <div class="card-toggle-bar" id="card-toggle-bar-front" style="display:none">
+              <button class="card-toggle-btn" id="toggle-trans-btn-front" onclick="toggleCreatingFrontTranslation()"
+                      data-shortcut-action="translation" data-shortcut-title="Toggle translation" title="Toggle translation (t)">译文</button>
+              <button class="card-toggle-btn card-star-btn" id="toggle-star-btn-front" onclick="toggleSentenceStar()" style="display:none" title="Star this sentence as a good example (Shift+F)">☆</button>
+              <button class="card-toggle-btn card-flag-btn" id="toggle-flag-btn-front" onclick="toggleSentenceFlag()" style="display:none" title="Flag this sentence as a bad example (Shift+G)">⚐</button>
+              <button class="card-toggle-btn" id="toggle-question-btn-front" onclick="openSentenceQuestionModal()" style="display:none" title="Ask AI about this sentence">？</button>
+            </div>
             <div class="sentence-en-front-row" id="sentence-en-front-row" style="display:none">
               <div class="sentence-en-front" id="sentence-en-front"></div>
-              <span class="sentence-en-front-toggle" id="sentence-en-front-toggle" role="button" tabindex="0"
-                    onclick="toggleCreatingFrontTranslation()"
-                    data-shortcut-action="translation" data-shortcut-title="Toggle translation" title="Toggle translation (t)">🇩🇪</span>
             </div>
             <!-- Creating: target word translation hint (FR > DE > EN).
                  Hidden by default; press k to toggle. The eye icon controls the

@@ -1993,7 +1993,7 @@ body.ra-fullscreen-open #error-banner {
 }
 
 /* ── Creating: front input ───────────────────────────── */
-/* Row wraps the translation text + the mobile tap toggle. Hidden entirely
+/* Row wraps the translation text (the toggle lives in #card-toggle-bar-front). Hidden entirely
    outside creating mode; visible (flex) in creating mode regardless of
    whether the translation text itself is shown (#515). */
 .sentence-en-front-row {
@@ -2003,7 +2003,7 @@ body.ra-fullscreen-open #error-banner {
   gap: 8px;
 }
 /* Hidden by default (no min-height reserved) — press t to reveal, or tap the
-   toggle button below on mobile. No more blur-on-hover (#515). */
+   译文 button in the front toolbar on mobile. No more blur-on-hover (#515). */
 .sentence-en-front {
   display: none;
   font-size: 13px;
@@ -2012,20 +2012,7 @@ body.ra-fullscreen-open #error-banner {
   color: var(--muted);
   letter-spacing: 0.2px;
 }
-.sentence-en-front-toggle {
-  flex: 0 0 auto;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  opacity: 0.3;
-  filter: grayscale(1);
-  transition: opacity 0.15s, filter 0.15s;
-  user-select: none;
-}
-.sentence-en-front-toggle.active {
-  opacity: 1;
-  filter: none;
-}
+#card-toggle-bar-front { margin: 0 0 6px; }
 /* News flow: German context of the preceding summary sentences (readable at a glance) */
 .sentence-context-de {
   font-size: 16px;

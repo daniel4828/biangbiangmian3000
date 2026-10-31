@@ -12045,9 +12045,10 @@ function showFront() {
 
   // Creating: show translation row + appropriate input. The translation text
   // itself starts hidden (no blur-on-hover any more, #515) — press t to reveal
-  // it, or tap the 🇩🇪 button on mobile; shown by default only when the
+  // it, or tap 译文 in the front toolbar; shown by default only when the
   // persistent "always show translation" preference is on.
   document.getElementById('sentence-en-front-row').style.display = isCreating ? 'flex' : 'none';
+  _syncCardToggleBarFront();
   document.getElementById('sentence-en-front').style.display     = 'none';
   document.getElementById('creating-input-wrap').style.display = (isCreating && !isCloze) ? 'flex' : 'none';
   document.getElementById('word-bank-wrap').style.display      = isCloze ? 'flex' : 'none';
@@ -12105,7 +12106,7 @@ function showFront() {
       renderWordBankUI();
     }
     // Default visibility: shown when "always show translation" is on, else hidden
-    // (press t to toggle, or tap the 🇩🇪 button on mobile).
+    // (press t to toggle, or tap 译文 in the front toolbar).
     const _enFront = document.getElementById('sentence-en-front');
     _enFront.style.display = (_alwaysTranslation && _enFront.textContent) ? 'block' : 'none';
     _syncFrontTransToggle();
@@ -14846,19 +14847,47 @@ function _syncCardToggleBar() {
   bar.style.display = (pinAvail || transAvail || starAvail || flagAvail || questionAvail) ? '' : 'none';
 }
 
+// Front-side toolbar for creating cards: same buttons as the back bar minus
+// pinyin (it would spoil the answer). Hides itself outside creating mode.
+function _syncCardToggleBarFront() {
+  const bar = document.getElementById('card-toggle-bar-front');
+  if (!bar) return;
+  if (category !== 'creating') { bar.style.display = 'none'; return; }
+
+  const transAvail = !!document.getElementById('sentence-en-front')?.textContent;
+  const starAvail = !!sentence?.id;
+  const flagAvail = starAvail;
+  const questionAvail = starAvail && !_offlineMode;
+
+  const show = (id, avail) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = avail ? '' : 'none';
+  };
+  show('toggle-trans-btn-front', transAvail);
+  show('toggle-star-btn-front', starAvail);
+  show('toggle-flag-btn-front', flagAvail);
+  show('toggle-question-btn-front', questionAvail);
+  _syncStarBtn();
+  _syncFlagBtn();
+
+  bar.style.display = (transAvail || starAvail || flagAvail || questionAvail) ? '' : 'none';
+}
+
 // ── Starred sentences (#692) ─────────────────────────────────────────────────
 // While reviewing, a sentence is either good or it isn't — and that judgement is
 // only available in the second you read it. Starring collects those good ones as
 // positive examples for tuning the generation prompts later (Browse → ★).
 
 function _syncStarBtn() {
-  const btn = document.getElementById('toggle-star-btn');
-  if (!btn) return;
   const on = !!sentence?.starred;
-  btn.textContent = on ? '★' : '☆';
-  btn.classList.toggle('active', on);
-  btn.title = on ? 'Starred — click to unstar (Shift+F)'
-                 : 'Star this sentence as a good example (Shift+F)';
+  for (const id of ['toggle-star-btn', 'toggle-star-btn-front']) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.textContent = on ? '★' : '☆';
+    btn.classList.toggle('active', on);
+    btn.title = on ? 'Starred — click to unstar (Shift+F)'
+                   : 'Star this sentence as a good example (Shift+F)';
+  }
 }
 
 async function toggleSentenceStar() {
@@ -14954,13 +14983,15 @@ async function submitSentenceQuestion() {
 // not a three-way toggle.
 
 function _syncFlagBtn() {
-  const btn = document.getElementById('toggle-flag-btn');
-  if (!btn) return;
   const on = !!sentence?.flagged;
-  btn.textContent = on ? '⚑' : '⚐';
-  btn.classList.toggle('active', on);
-  btn.title = on ? 'Flagged — click to unflag (Shift+G)'
-                 : 'Flag this sentence as a bad example (Shift+G)';
+  for (const id of ['toggle-flag-btn', 'toggle-flag-btn-front']) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.textContent = on ? '⚑' : '⚐';
+    btn.classList.toggle('active', on);
+    btn.title = on ? 'Flagged — click to unflag (Shift+G)'
+                   : 'Flag this sentence as a bad example (Shift+G)';
+  }
 }
 
 async function toggleSentenceFlag() {
@@ -15041,7 +15072,7 @@ function setAlwaysTranslation(on) {
 // ── Creating-mode front translation toggle (replaces the old blur-on-hover, #515) ──
 // Same shortcut ('t') and persistent "always show" preference as the back-side
 // toggle above — pressing t on the front (creating mode, card not flipped) or
-// tapping the 🇩🇪 button (mobile, no keyboard) shows/hides this element only.
+// tapping 译文 in the front toolbar (mobile, no keyboard) shows/hides this element only.
 function toggleCreatingFrontTranslation() {
   const front = document.getElementById('sentence-en-front');
   if (!front || !front.textContent) return;
@@ -15055,14 +15086,17 @@ function toggleCreatingFrontTranslation() {
   _syncFrontTransToggle();
 }
 
-// The tap button stays visible at all times in creating mode (it's the only way to
-// reveal the translation on mobile), but highlights when the translation is showing.
+// The 译文 button (front toolbar) is the only way to reveal the translation on
+// mobile; it highlights when the translation is showing and hides when the card
+// has no translation text.
 function _syncFrontTransToggle() {
   const front = document.getElementById('sentence-en-front');
-  const btn   = document.getElementById('sentence-en-front-toggle');
+  const btn   = document.getElementById('toggle-trans-btn-front');
   if (!btn) return;
   const visible = !!(front && front.textContent && front.style.display !== 'none');
+  btn.style.display = (front && front.textContent) ? '' : 'none';
   btn.classList.toggle('active', visible);
+  _syncCardToggleBarFront();
 }
 
 // ── Creating-mode translation hint toggle (🇬🇧/🇫🇷/🇩🇪) ───────────────────────
