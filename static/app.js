@@ -14422,7 +14422,11 @@ function _resolveWordBankSlots(text) {
 function _parseWordBankInput(text) {
   const slots = _resolveWordBankSlots(text);
   // Stop after the last filled slot: pre-placed tokens past what the user
-  // typed don't count as part of the answer.
+  // typed don't count as part of the answer — unless every slot is filled:
+  // then the sentence is complete and its pre-placed tail ("mar tranquilo.")
+  // belongs to the answer too (otherwise a fully correct answer scores ~70%).
+  const allFilled = slots.every(s => s.tok.type === 'pre' || s.value != null);
+  if (allFilled) return slots.map(s => s.value);
   let last = -1;
   slots.forEach((s, i) => { if (s.tok.type !== 'pre' && s.value != null) last = i; });
   return slots.slice(0, last + 1).filter(s => s.value != null).map(s => s.value);
