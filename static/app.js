@@ -236,6 +236,7 @@ const KEYMAP_DEFAULTS = {
   examples:       'e',
   notes:          'n',
   'word-analysis':'w',
+  conjugation:    'j',
   'regen-all':    'C',
   // review-only
   'suspend-reading':   'f',
@@ -287,7 +288,8 @@ const KEYMAP_ACTIONS = [
   { id: 'examples',       label: 'Toggle examples',            scope: 'shared' },
   { id: 'notes',           label: 'Toggle notes',               scope: 'shared' },
   { id: 'word-analysis',   label: 'Toggle word analysis / etymology', scope: 'shared' },
-  { id: 'regen-all',       label: 'Regenerate all fields',      scope: 'shared' },
+  { id: 'conjugation',     label: 'Toggle conjugation',         scope: 'shared' },
+  { id: 'regen-all',      label: 'Regenerate all fields',      scope: 'shared' },
 
   { id: 'suspend-reading',   label: 'Suspend/resume reading',     scope: 'review' },
   { id: 'suspend-listening', label: 'Suspend/resume listening',   scope: 'review' },
@@ -4143,6 +4145,19 @@ function renderSettings() {
       <h2 class="keymap-heading">Stages</h2>
       <p class="keymap-hint">Stops of the <b>Hint</b> slider on listening cards: tick the ones you want and set their order. HSK N hides level N and below (Chinese only).</p>
       <div id="hint-stage-options">${_hintStageOptionsHtml()}</div>
+    </div>
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Section defaults</h2>
+      <p class="keymap-hint">Initial state when a card or word page opens. Saved in this browser.</p>
+      ${(() => { const cur = _loadSectionDefaults(); return SECTION_SETTING_LABELS.map(([k, l]) => `
+      <div class="keymap-row">
+        <span class="keymap-label">${l}</span>
+        <select class="opt-input" aria-label="${l} initial state" onchange="_saveSectionDefault('${k}', this.value)">
+          ${[['open', 'Open'], ['peek', 'Peek'], ['closed', 'Closed']].map(([v, vl]) =>
+            `<option value="${v}" ${v === cur[k] ? 'selected' : ''}>${vl}</option>`).join('')}
+        </select>
+      </div>`).join(''); })()}
+      <button class="keymap-reset-all" onclick="resetSectionDefaults()">Reset</button>
     </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Again → new sentence</h2>
@@ -12411,6 +12426,53 @@ function revealAnswer() {
   playSentence();
 }
 
+// ── Initial state of the collapsible card/word sections (#1356) ──────────────
+// 'analysis' covers Word Analysis AND Etymology (one shortcut, one slot).
+const SECTION_DEFAULTS = { examples: 'closed', notes: 'peek', analysis: 'open', conjugation: 'open', inflection: 'closed' };
+const SECTION_STATES = ['open', 'peek', 'closed'];
+const SECTION_SETTING_LABELS = [
+  ['examples', 'Examples'], ['notes', 'Notes'], ['analysis', 'Word analysis / Etymology'],
+  ['conjugation', 'Conjugation'], ['inflection', 'Inflection'],
+];
+const SECTION_ARROWS = { open: '▼', peek: '▷', closed: '▶' };
+// User overrides merged ONTO the defaults; unknown keys / invalid values ignored.
+function _loadSectionDefaults() {
+  const out = { ...SECTION_DEFAULTS };
+  try {
+    const saved = JSON.parse(localStorage.getItem('sectionDefaults') || '{}');
+    if (saved && typeof saved === 'object') {
+      for (const k of Object.keys(SECTION_DEFAULTS)) {
+        if (SECTION_STATES.includes(saved[k])) out[k] = saved[k];
+      }
+    }
+  } catch (e) {}
+  return out;
+}
+function _saveSectionDefault(key, state) {
+  if (!(key in SECTION_DEFAULTS) || !SECTION_STATES.includes(state)) return;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('sectionDefaults') || '{}') || {}; } catch (e) {}
+  saved[key] = state;
+  try { localStorage.setItem('sectionDefaults', JSON.stringify(saved)); } catch (e) {}
+}
+function resetSectionDefaults() {
+  try { localStorage.removeItem('sectionDefaults'); } catch (e) {}
+  renderSettings();
+}
+// Attribute string for a section body div + the arrow char for its header.
+// Three-state cycle (data-peek) only where peek makes sense: notes/analysis
+// always had it, others only when the user picked "peek" — otherwise a
+// shortcut press would land on peek instead of open (#1356).
+function _sectionInit(key, extraClass = '') {
+  const state = _loadSectionDefaults()[key];
+  const peekable = state === 'peek' || key === 'notes' || key === 'analysis';
+  const cls = [extraClass, state === 'peek' ? 'section-peek' : state === 'open' ? 'section-open' : '']
+    .filter(Boolean).join(' ');
+  const attrs = (cls ? `class="${cls}" ` : '') + (peekable ? `data-peek="1" data-state="${state}"` : '') +
+    (state === 'closed' ? ' style="display:none"' : '');
+  return { attrs, arrow: SECTION_ARROWS[state] };
+}
+
 // ── Populate vocab detail (chars + examples) ────────────────────────────────
 function toggleSection(id) {
   const body = document.getElementById(id);
@@ -12904,10 +12966,11 @@ function renderVocabDetail(container, examples, wordId) {
         return h;
       }).join('')
     : `<div class="section-empty">—</div>`;
+  const init = _sectionInit('examples');
   el.innerHTML =
     `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
-      `<span><span id="${bodyId}-arrow">▶</span> Examples</span>${regenBtn}</div>` +
-    `<div id="${bodyId}" style="display:none">${html}</div>`;
+      `<span><span id="${bodyId}-arrow">${init.arrow}</span> Examples</span>${regenBtn}</div>` +
+    `<div id="${bodyId}" ${init.attrs}>${html}</div>`;
 }
 
 function renderNotesSection(container, notes, wordId) {
@@ -12919,10 +12982,11 @@ function renderNotesSection(container, notes, wordId) {
   const bodyContent = text
     ? `<div class="notes-body" lang="de">${renderMarkdown(text)}</div>`
     : `<div class="section-empty">—</div>`;
+  const init = _sectionInit('notes');
   el.innerHTML =
     `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
-      `<span><span id="${bodyId}-arrow">▷</span> Notes</span>${regenBtn}</div>` +
-    `<div id="${bodyId}" class="section-peek" data-peek="1" data-state="peek">${bodyContent}</div>`;
+      `<span><span id="${bodyId}-arrow">${init.arrow}</span> Notes</span>${regenBtn}</div>` +
+    `<div id="${bodyId}" ${init.attrs}>${bodyContent}</div>`;
   el.style.display = '';
 }
 
@@ -12948,10 +13012,11 @@ function renderEtymologySection(container, wordData, wordId) {
   const bodyContent = text
     ? `<div class="notes-body" lang="de">${renderMarkdown(text)}</div>`
     : `<div class="section-empty">—</div>`;
+  const init = _sectionInit('analysis');
   el.innerHTML =
     `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
-      `<span><span id="${bodyId}-arrow">▼</span> Etymology</span>${regenBtn}</div>` +
-    `<div id="${bodyId}" class="section-open" data-peek="1" data-state="open">${bodyContent}</div>`;
+      `<span><span id="${bodyId}-arrow">${init.arrow}</span> Etymology</span>${regenBtn}</div>` +
+    `<div id="${bodyId}" ${init.attrs}>${bodyContent}</div>`;
   el.style.display = '';
 }
 
@@ -12987,10 +13052,15 @@ function renderConjugationSection(container, wordData) {
     byTense.get(c.tense).push(c);
   });
   const bodyId = el.id + '-body';
+  // #1356: practice counts per tense / per form (absent → render as before).
+  const stats = (wordData ?? wordDetails)?.conjugation_stats || {};
+  const countSpan = c => c.practice_count != null
+    ? `<span class="conj-cell-count${c.practice_count === 0 ? ' is-zero' : ''}" title="Practised ${Number(c.practice_count)}×">${Number(c.practice_count)}</span>`
+    : '';
   // #1340: one collapsible <details> per tense, only the first is open.
   const cell = c =>
     `<div class="conj-cell"><span class="conj-person">${_escHtml(c.person)}</span>` +
-    `<span class="conj-form">${_escHtml(c.form)}</span></div>`;
+    `<span class="conj-form">${_escHtml(c.form)}${countSpan(c)}</span></div>`;
   const cards = tenses.map((t, i) => {
     const list = byTense.get(t);
     let body;
@@ -13001,20 +13071,31 @@ function renderConjugationSection(container, wordData) {
     } else {
       body = list.map(c =>
         c.person
-          ? `<div class="conj-row"><span class="conj-person">${_escHtml(c.person)}</span><span class="conj-form">${_escHtml(c.form)}</span></div>`
-          : `<div class="conj-row"><span class="conj-form">${_escHtml(c.form)}</span></div>`
+          ? `<div class="conj-row"><span class="conj-person">${_escHtml(c.person)}</span><span class="conj-form">${_escHtml(c.form)}</span>${countSpan(c)}</div>`
+          : `<div class="conj-row"><span class="conj-form">${_escHtml(c.form)}</span>${countSpan(c)}</div>`
       ).join('');
     }
     const preview = list.map(c => _escHtml(c.form)).join(' · ');
+    const st = stats[t];
+    let badge = '';
+    if (st && st.total != null) {
+      const n = Number(st.total);
+      const shared = st.scope === 'regular';
+      const tip = shared
+        ? `Practised ${n}× — shared count of all verbs that are regular in this tense`
+        : `Practised ${n}× with this verb (irregular in this tense)`;
+      badge = `<span class="conj-count${shared ? ' conj-count-shared' : ''}${n === 0 ? ' is-zero' : ''}" title="${_escHtml(tip)}">×${n}</span>`;
+    }
     return `<details class="conj-tense"${i === 0 ? ' open' : ''}>` +
-      `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}</span>` +
+      `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}</span>${badge}` +
       `<span class="conj-tense-preview">${preview}</span><span class="conj-chevron">›</span></summary>` +
       `<div class="conj-tense-body">${body}</div></details>`;
   }).join('');
+  const init = _sectionInit('conjugation');
   el.innerHTML =
     `<div class="section-label section-toggle" onclick="toggleSection('${bodyId}')">` +
-      `<span id="${bodyId}-arrow">▶</span> Conjugation</div>` +
-    `<div id="${bodyId}" style="display:none"><div class="conj-list">${cards}</div></div>`;
+      `<span id="${bodyId}-arrow">${init.arrow}</span> Conjugation</div>` +
+    `<div id="${bodyId}" ${init.attrs}><div class="conj-list">${cards}</div></div>`;
 }
 
 // Noun/adjective inflection section (issue #805) — plural, gender agreement.
@@ -13055,10 +13136,11 @@ function renderInflectionSection(container, wordData) {
 
   const bodyId = el.id + '-body';
   const genderCard = genderRow ? `<div class="conj-tense-card">${genderRow}</div>` : '';
+  const init = _sectionInit('inflection');
   el.innerHTML =
     `<div class="section-label section-toggle" onclick="toggleSection('${bodyId}')">` +
-      `<span id="${bodyId}-arrow">▶</span> Inflection</div>` +
-    `<div id="${bodyId}" style="display:none"><div class="conj-grid">${genderCard}${cards}</div></div>`;
+      `<span id="${bodyId}-arrow">${init.arrow}</span> Inflection</div>` +
+    `<div id="${bodyId}" ${init.attrs}><div class="conj-grid">${genderCard}${cards}</div></div>`;
 }
 
 function renderWordAnalysis(container, wordData, wordId) {
@@ -13109,11 +13191,12 @@ function renderWordAnalysis(container, wordData, wordId) {
   const wid = wordId ?? _getActiveWordId();
   const regenBtnWA = wid ? `<button class="field-regen-btn" onclick="event.stopPropagation();regenFields(${wid},['etymology','compounds','other_meanings'],'${el.id}')" title="Regenerate etymology, compounds &amp; meanings">↺</button>` : '';
 
+  const initWA = _sectionInit('analysis', 'wa-list');
   if (wordGroups.length === 0) {
     el.innerHTML =
       `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
-        `<span><span id="${bodyId}-arrow">▼</span> Word Analysis</span>${regenBtnWA}</div>` +
-      `<div id="${bodyId}" class="wa-list section-open" data-peek="1" data-state="open"><div class="section-empty">—</div></div>`;
+        `<span><span id="${bodyId}-arrow">${initWA.arrow}</span> Word Analysis</span>${regenBtnWA}</div>` +
+      `<div id="${bodyId}" ${initWA.attrs}><div class="section-empty">—</div></div>`;
     return;
   }
 
@@ -13197,8 +13280,8 @@ function renderWordAnalysis(container, wordData, wordId) {
 
   el.innerHTML =
     `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
-      `<span><span id="${bodyId}-arrow">▼</span> Word Analysis</span>${regenBtnWA}</div>` +
-    `<div id="${bodyId}" class="wa-list section-open" data-peek="1" data-state="open">${wordCards}</div>`;
+      `<span><span id="${bodyId}-arrow">${initWA.arrow}</span> Word Analysis</span>${regenBtnWA}</div>` +
+    `<div id="${bodyId}" ${initWA.attrs}>${wordCards}</div>`;
 }
 
 function _callRenderWordAnalysis() {
@@ -18739,6 +18822,11 @@ document.addEventListener('keydown', async e => {
       e.preventDefault(); _toggleAndScroll('examples-section-body', 'examples-section');
     } else if (backVisible && e.key === _key('notes')) {
       e.preventDefault(); _toggleAndScroll('notes-section-body', 'notes-section');
+    } else if (backVisible && e.key === _key('conjugation')) {
+      e.preventDefault();
+      // Chinese words have no conjugation section — nothing to toggle (#1356).
+      if (document.getElementById('conjugation-section-body'))
+        _toggleAndScroll('conjugation-section-body', 'conjugation-section');
     } else if (backVisible && e.key === _key('word-analysis')) {
       e.preventDefault(); _toggleAnalysisSlot('');
     } else if (e.key === _key('hint-minus')) {
@@ -18796,6 +18884,10 @@ document.addEventListener('keydown', async e => {
       e.preventDefault(); _toggleAndScroll('wd-examples-section-body', 'wd-examples-section');
     } else if (e.key === _key('notes')) {
       e.preventDefault(); _toggleAndScroll('wd-notes-section-body', 'wd-notes-section');
+    } else if (e.key === _key('conjugation')) {
+      e.preventDefault();
+      if (document.getElementById('wd-conjugation-section-body'))
+        _toggleAndScroll('wd-conjugation-section-body', 'wd-conjugation-section');
     } else if (e.key === _key('word-analysis')) {
       e.preventDefault(); _toggleAnalysisSlot('wd-');
     } else if (e.key === _key('regen-all')) {
