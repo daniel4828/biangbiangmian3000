@@ -694,6 +694,14 @@
         <span class="opt-label">Hard delay (days) <span class="info-i" data-info="hard_days">i</span><br><span style="font-weight:400;font-size:11px;color:var(--muted)">how many days Hard delays (when enabled above)</span></span>
         <input class="opt-input" id="opt-hard-days" type="number" min="0.1" step="0.5">
       </div>
+      <div class="opt-row">
+        <span class="opt-label">Good between Hard and Easy <br><span style="font-weight:400;font-size:11px;color:var(--muted)">when Hard and Good would both show 1d, Good graduates early</span></span>
+        <input type="checkbox" id="opt-good-compromise" style="width:18px;height:18px;cursor:pointer">
+      </div>
+      <div class="opt-row">
+        <span class="opt-label">Good position (% from Hard to Easy) <br><span style="font-weight:400;font-size:11px;color:var(--muted)">0 = right after Hard, 100 = right before Easy</span></span>
+        <input class="opt-input" id="opt-good-compromise-pct" type="number" min="0" max="100" step="5">
+      </div>
       <div class="opt-row sched-fsrs"><span class="opt-label">Desired retention (%) <span class="info-i" data-info="desired_retention">i</span><br><span style="font-weight:400;font-size:11px;color:var(--muted)">target recall; higher = shorter intervals</span></span><input class="opt-input" id="opt-desired-retention" type="number" min="70" max="99" step="1"></div>
       <div class="opt-row sched-fsrs"><span class="opt-label">Maximum interval (days) <span class="info-i" data-info="maximum_interval">i</span><br><span style="font-weight:400;font-size:11px;color:var(--muted)">cap on how far out a review is scheduled</span></span><input class="opt-input" id="opt-max-int" type="number" min="1" step="1"></div>
     </div>

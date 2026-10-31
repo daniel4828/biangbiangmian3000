@@ -31,6 +31,8 @@ def default_preset() -> dict:
         "enable_fsrs": 1,
         "learning_hard_1d": 1,
         "learning_hard_days": 1,
+        "learning_good_compromise": 1,
+        "learning_good_compromise_pct": 35,
         "new_gather_order": "ascending_position",
         "new_sort_order": "card_type_gathered",
         "new_review_order": "mixed",
@@ -290,6 +292,8 @@ def insert_preset(preset: dict) -> int:
     preset.setdefault("enable_fsrs", 1)
     preset.setdefault("learning_hard_1d", 1)
     preset.setdefault("learning_hard_days", 1)
+    preset.setdefault("learning_good_compromise", 1)
+    preset.setdefault("learning_good_compromise_pct", 35)
     preset.setdefault("learned_interval", 4)
     preset.setdefault("enable_probation", 1)
     preset.setdefault("reading_enabled", 0)
@@ -305,6 +309,7 @@ def insert_preset(preset: dict) -> int:
             enable_probation, insertion_order,
             bury_siblings, randomize_story_order, leech_threshold, learning_leech_threshold, enable_learning_leech, leech_action,
             desired_retention, maximum_interval, fsrs_weights, enable_fsrs, learning_hard_1d, learning_hard_days,
+            learning_good_compromise, learning_good_compromise_pct,
             new_gather_order, new_sort_order, new_review_order,
             interday_learning_review_order, review_sort_order,
             bury_new_siblings, bury_review_siblings, bury_interday_siblings,
@@ -316,6 +321,7 @@ def insert_preset(preset: dict) -> int:
                    :enable_probation, :insertion_order,
                    :bury_siblings, :randomize_story_order, :leech_threshold, :learning_leech_threshold, :enable_learning_leech, :leech_action,
                    :desired_retention, :maximum_interval, :fsrs_weights, :enable_fsrs, :learning_hard_1d, :learning_hard_days,
+                   :learning_good_compromise, :learning_good_compromise_pct,
                    :new_gather_order, :new_sort_order, :new_review_order,
                    :interday_learning_review_order, :review_sort_order,
                    :bury_new_siblings, :bury_review_siblings, :bury_interday_siblings,
@@ -337,6 +343,7 @@ def update_preset(preset_id: int, fields: dict) -> None:
         "enable_probation", "insertion_order",
         "bury_siblings", "randomize_story_order", "leech_threshold", "learning_leech_threshold", "enable_learning_leech", "leech_action",
         "desired_retention", "maximum_interval", "fsrs_weights", "enable_fsrs", "learning_hard_1d", "learning_hard_days",
+        "learning_good_compromise", "learning_good_compromise_pct",
         "new_gather_order", "new_sort_order", "new_review_order",
         "interday_learning_review_order", "review_sort_order",
         "bury_new_siblings", "bury_review_siblings", "bury_interday_siblings",

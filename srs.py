@@ -65,7 +65,13 @@ def _learning_good_compromise(card: dict, preset: dict, steps: list[int],
 
     The card graduates early so Good can sit between a 1d Hard and Easy's
     longer graduation interval. Other step schedules keep their usual flow.
+    The position is learning_good_compromise_pct (default 35, % of the way
+    from Hard's 1 day to Easy); learning_good_compromise=0 switches it off
+    (#1376).
     """
+    on = preset.get("learning_good_compromise", 1)
+    if on is not None and not on:
+        return None
     if _fmt_min(_learning_hard_delay(steps, idx, preset)) != "1d":
         return None
     cfg = {**card, **preset}
@@ -78,7 +84,16 @@ def _learning_good_compromise(card: dict, preset: dict, steps: list[int],
                  _graduate_interval(cfg, 4))
     if easy_days < 3:
         return None  # No whole-day interval strictly between Hard and Easy.
-    return max(2, (1 + easy_days) // 2)
+    pct = preset.get("learning_good_compromise_pct", 35)
+    try:
+        pct = 35.0 if pct is None else float(pct)
+    except (TypeError, ValueError):
+        pct = 35.0
+    if pct != pct:  # NaN
+        pct = 35.0
+    pct = max(0.0, min(100.0, pct))
+    good = round(1 + (easy_days - 1) * pct / 100)
+    return max(2, min(good, easy_days - 1))
 
 
 def _elapsed_days(card: dict) -> int:
@@ -450,6 +465,8 @@ def apply_review(card_id: int, rating: int,
         "enable_fsrs":         card.get("enable_fsrs", 1),
         "learning_hard_1d":    card.get("learning_hard_1d", 1),
         "learning_hard_days":  card.get("learning_hard_days", 1),
+        "learning_good_compromise":     card.get("learning_good_compromise", 1),
+        "learning_good_compromise_pct": card.get("learning_good_compromise_pct", 35),
     }
 
     if card["state"] in ("learning", "relearn") and card.get("probation"):

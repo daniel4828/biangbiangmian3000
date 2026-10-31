@@ -187,12 +187,30 @@ class TestHandleRelearn:
                 "stability": 5.5, "difficulty": 5.0}
 
         assert srs.preview_intervals(card) == {
-            1: "10m", 2: "1d", 3: "7d", 4: "13d",
+            1: "10m", 2: "1d", 3: "5d", 4: "13d",
         }
         result = srs._handle_relearn(card, preset, rating=3)
         assert result["state"] == "review"
-        assert result["interval"] == 7
-        assert result["due"] == srs.next_review_due(7)
+        assert result["interval"] == 5
+        assert result["due"] == srs.next_review_due(5)
+
+    def test_relearn_compromise_custom_pct_and_switch_off(self, monkeypatch):
+        monkeypatch.setattr(srs, "_fuzz_interval", lambda days: days)
+        base = {**FSRS_PRESET, "relearning_steps": "10m 1d",
+                "learning_hard_1d": 1}
+
+        def make(extra):
+            preset = {**base, **extra}
+            return preset, {**make_card(state="relearn", step_index=0), **preset,
+                            "stability": 5.5, "difficulty": 5.0}
+
+        preset, card = make({"learning_good_compromise_pct": 50})
+        assert srs.preview_intervals(card)[3] == "7d"
+        assert srs._handle_relearn(card, preset, rating=3)["interval"] == 7
+
+        preset, card = make({"learning_good_compromise": 0})
+        assert srs.preview_intervals(card)[3] == "1d"
+        assert srs._handle_relearn(card, preset, rating=3)["interval"] == 1
 
     def test_good_compromise_never_fuzzes_back_to_one_day(self, monkeypatch):
         monkeypatch.setattr(srs, "_fuzz_interval", lambda days: 1)
@@ -313,10 +331,40 @@ class TestLearningShortTermMemory:
         card = {**make_card(state="learning", step_index=0), **preset,
                 "stability": 5.5, "difficulty": 5.0}
 
-        assert srs.preview_intervals(card)[3] == "7d"
+        assert srs.preview_intervals(card)[3] == "5d"
         result = srs._handle_learning(card, preset, rating=3)
         assert result["state"] == "review"
-        assert result["interval"] == 7
+        assert result["interval"] == 5
+
+    def test_compromise_pct_positions_and_clamping(self):
+        # easy_interval 13d -> Hard 1d .. Easy 13d
+        preset = {**FSRS_PRESET, "learning_steps": "10m 1d",
+                  "learning_hard_1d": 1}
+        card = {**make_card(state="learning", step_index=0), **preset,
+                "stability": 5.5, "difficulty": 5.0}
+        assert srs._graduate_interval({**card, **preset}, 4) == 13
+        cases = {None: 5, 35: 5, 50: 7, 0: 2, 100: 12, 250: 12, -10: 2,
+                 "bad": 5}
+        for pct, expected in cases.items():
+            cfg = {**preset, "learning_good_compromise_pct": pct}
+            got = srs._learning_good_compromise(card, cfg, [10, 1440], 0, False)
+            assert got == expected, (pct, got)
+
+    def test_compromise_switch_off_restores_normal_good(self, monkeypatch):
+        monkeypatch.setattr(srs, "_fuzz_interval", lambda days: days)
+        preset = {**FSRS_PRESET, "learning_steps": "10m 1d",
+                  "learning_hard_1d": 1, "learning_good_compromise": 0}
+        card = {**make_card(state="learning", step_index=0), **preset,
+                "stability": 5.5, "difficulty": 5.0}
+        assert srs._learning_good_compromise(card, preset, [10, 1440], 0, False) is None
+        assert srs.preview_intervals(card)[3] == "1d"
+        result = srs._handle_learning(card, preset, rating=3)
+        assert result["state"] == "learning"
+        assert result["step_index"] == 1
+
+        # None counts as "on"
+        on = {**preset, "learning_good_compromise": None}
+        assert srs._learning_good_compromise(card, on, [10, 1440], 0, False) == 5
 
     def test_learning_again_seeds_memory(self):
         card = make_card(state="new", step_index=0)

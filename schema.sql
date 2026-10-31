@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS deck_presets (
     -- How many days "Hard" delays a learning/relearn card when learning_hard_1d
     -- is on. Fractional allowed (e.g. 0.5 = half a day).
     learning_hard_days      REAL NOT NULL DEFAULT 1,
+    -- When 1, Good graduates early between a 1d Hard and Easy if Hard and the
+    -- normal Good would both show 1d (#1242). 0 = Good keeps its normal step.
+    learning_good_compromise     INTEGER NOT NULL DEFAULT 1,
+    -- Where that early Good sits, as % of the way from Hard (1d) to Easy (#1376).
+    learning_good_compromise_pct REAL NOT NULL DEFAULT 35,
 
     -- New card insertion order (legacy; superseded by new_gather_order)
     insertion_order         TEXT NOT NULL DEFAULT 'sequential'

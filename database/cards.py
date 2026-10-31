@@ -215,6 +215,7 @@ def get_card(card_id: int) -> dict | None:
                   p.leech_threshold, p.learning_leech_threshold, p.enable_learning_leech, p.leech_action,
                   p.desired_retention, p.maximum_interval, p.fsrs_weights, p.enable_fsrs,
                   p.learning_hard_1d, p.learning_hard_days,
+                  p.learning_good_compromise, p.learning_good_compromise_pct,
                   p.new_per_day, p.reviews_per_day
            FROM cards c
            JOIN entries w ON w.id = c.word_id
