@@ -443,6 +443,34 @@ def _new(text, lang="es"):
     return {w["word"]: w for w in romance.annotate_summary(text, lang)[1]}
 
 
+def test_cefr_from_rank_boundaries():
+    """#1369: frequency-rank approximation of CEFR, never raises."""
+    cases = [(1, 1), (500, 1), (501, 2), (1000, 2), (1001, 3), (2000, 3),
+             (2001, 4), (4000, 4), (4001, 5), (8000, 5), (8001, 6), (99999, 6)]
+    for rank, level in cases:
+        assert lexicon.cefr_from_rank(rank) == level, rank
+    for bad in (None, "x", 0, -3, True, [], {}):
+        assert lexicon.cefr_from_rank(bad) is None, bad
+
+
+def test_word_dicts_carry_cefr_from_lowest_rank(annotator):
+    words = {w["word"]: w for w in romance.all_words("Ayer hablamos y viajamos. Las cuentas.", "es")}
+    assert words["hablamos"]["cefr"] == 1      # hablar, rank 6
+    assert words["viajamos"]["cefr"] == 2      # viajar, rank 700
+    assert words["cuentas"]["cefr"] == 1       # cuenta (5) / contar (9) -> lowest rank
+
+
+def test_word_dicts_omit_cefr_without_rank(annotator):
+    LEX["lemmas"]["viajar"].pop("r")
+    try:
+        lexicon.inject("es", LEX)
+        words = {w["word"]: w for w in romance.all_words("Ayer viajamos.", "es")}
+        assert "cefr" not in words["viajamos"]
+    finally:
+        LEX["lemmas"]["viajar"]["r"] = 700
+        lexicon.inject("es", LEX)
+
+
 def test_inflection_of_a_studied_lemma_is_not_new(annotator):
     annotator["forms"] = {"hablar"}          # only the lemma was ever stored
     assert "hablamos" not in _new("Ayer hablamos y viajamos.")

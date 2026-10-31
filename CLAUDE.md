@@ -821,6 +821,7 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
 - 默认顺序：Show all → HSK 1–6 → New words only → Unsaved words → Hide all。
 - HSK N 隐藏 N 级及以下，显示更高级和表外词；仅中文可用。`all_words` 返回每词的 `hsk`。
 - #1244：HSK 提示使用 `all_words.hint_hsk`（旧响应回退 `hsk`）。完整词表等级优先；未收录的代词复数（他们等）、词表内动词加给/到/完/过/着/了，按基础词和尾字的最高等级估算。原始 `hsk` 不变，不按单字最低等级猜所有组合词，无法判断的表外词仍显示。已有句子读取时即生效，无需重新生成。
+- **西语 CEFR 阶段（#1369）**：A1/A2/B1/B2（stage id 10–13，仅 es），规则同 HSK：CEFR N 隐藏 ≤N 级词。词级 `cefr` 由 `lexicon.cefr_from_rank()` 按词频排名近似（≤500 A1、≤1000 A2、≤2000 B1、≤4000 B2、≤8000 C1、其余 C2），取候选原形中最常用的那个；不是官方 CEFR 表。旧的已存阶段配置缺少的新阶段插在默认位置，不排到最后。非中文卡的目标遮挡走 `resolveTargetSurfaces()` + `card.word_forms`，否则变位形（ser → eres）永远露出来。
 - Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断。所有阶段继续隐藏目标答案。
 - 所有会遮挡文字的阶段默认保留目标词前一个词作为回忆提示；Stages 设置可关闭，浏览器用 `listenHintPreviousWord` 保存。
 - 浏览器 `listenHintStages` 保存顺序及启用状态；`listenHintState` 保存稳定阶段 ID，兼容旧 0/1/2 默认值。取消默认阶段时使用第一个可用阶段；重新启用可恢复原默认。设置只在当前浏览器保存。

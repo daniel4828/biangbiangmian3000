@@ -13941,8 +13941,11 @@ function submitAddWord() {
 // known while reviewing.
 const _HINT_MIN = 0;
 const _HINT_LABELS = ['Show all', 'New words only', 'Hide all',
-  'HSK 1', 'HSK 2', 'HSK 3', 'HSK 4', 'HSK 5', 'HSK 6', 'Unsaved words'];
-const _HINT_ORDER = [0, 3, 4, 5, 6, 7, 8, 1, 9, 2];
+  'HSK 1', 'HSK 2', 'HSK 3', 'HSK 4', 'HSK 5', 'HSK 6', 'Unsaved words',
+  'A1', 'A2', 'B1', 'B2'];
+// #1369: ids 10-13 are CEFR A1-B2 (Spanish only, like HSK 3-8 for Chinese):
+// "A1" hides words of word.cefr <= 1 and keeps harder and unlisted ones.
+const _HINT_ORDER = [0, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 1, 9, 2];
 
 function _hintStageConfig() {
   let saved;
@@ -13952,12 +13955,27 @@ function _hintStageConfig() {
     if (item && _HINT_ORDER.includes(item.id) && !result.some(s => s.id === item.id))
       result.push({id: item.id, enabled: item.enabled !== false});
   }
-  for (const id of _HINT_ORDER) if (!result.some(s => s.id === id)) result.push({id, enabled: true});
+  // #1369: a missing id goes right after its nearest predecessor in _HINT_ORDER
+  // that is already present (else first), not at the end.
+  _HINT_ORDER.forEach((id, i) => {
+    if (result.some(s => s.id === id)) return;
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const pos = result.findIndex(s => s.id === _HINT_ORDER[j]);
+      if (pos >= 0) { at = pos + 1; break; }
+    }
+    result.splice(at, 0, {id, enabled: true});
+  });
   return result;
 }
+function _hintStageAvailable(id, lang) {
+  if (id >= 3 && id <= 8) return lang === 'zh';
+  if (id >= 10 && id <= 13) return lang === 'es';
+  return true;
+}
 function _hintEnabledStages() {
-  const ids = _hintStageConfig().filter(s => s.enabled &&
-    (currentCardLang() === 'zh' || s.id < 3 || s.id > 8)).map(s => s.id);
+  const lang = currentCardLang();
+  const ids = _hintStageConfig().filter(s => s.enabled && _hintStageAvailable(s.id, lang)).map(s => s.id);
   return ids.length ? ids : [0];
 }
 function _hintSavedDefault() {
@@ -13969,6 +13987,7 @@ function _hintKeepWord(stage, word) {
   // Function words (#1311) were never in the all-words list before and so
   // stayed visible as "uncovered" positions; keep that.
   if (word.function_word) return true;
+  if (stage >= 10 && stage <= 13) return word.cefr == null || word.cefr > stage - 9;
   const level = word.hint_hsk ?? word.hsk;
   return stage === 9 ? !word.word_id : level == null || level > stage - 2;
 }
@@ -14191,6 +14210,18 @@ function _getTargetPositions(zh) {
     }
   }
   const positions = new Set();
+  // #1369: non-Chinese targets show up as conjugated/inflected forms
+  // (ser -> eres), which the literal search below never finds.
+  const lang = currentCardLang();
+  if (lang !== 'zh') {
+    const addForms = (word, forms) => {
+      if (!word) return;
+      for (const [s, e] of resolveTargetSurfaces(zh, word, forms || [], lang))
+        for (let k = s; k < e; k++) positions.add(k);
+    };
+    addForms(card?.word_zh, card?.word_forms);
+    for (const w of (sentence?.words || [])) addForms(w.word_zh, w.word_forms);
+  }
   for (const tw of targetWords) {
     // Separable words like "由...组成" — search each part independently
     const parts = tw.includes('...') ? tw.split('...').filter(p => p.length > 0) : [tw];
@@ -14256,7 +14287,7 @@ function _renderListenHint(level) {
   let keep = null;
   if (level === 2) {
     keep = new Set();
-  } else if (level >= 3) {
+  } else if (level >= 3) { // HSK 3-8, Unsaved 9, CEFR 10-13 (#1369)
     const words = _allWordsSync(zh, lang);
     keep = _allWordsErrors.has(_allWordsKey(zh, lang)) ? null
       : _markWordPositions(zh, (words || []).filter(w => _hintKeepWord(level, w)).map(w => w.word), isZh);

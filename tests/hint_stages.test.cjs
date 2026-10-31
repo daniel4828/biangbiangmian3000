@@ -2,8 +2,8 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-function setup(saved = {}) {
- const context = {localStorage: {getItem: k => saved[k] ?? null, setItem: (k,v) => saved[k] = String(v)}, currentCardLang: () => 'zh'};
+function setup(saved = {}, lang = 'zh') {
+ const context = {localStorage: {getItem: k => saved[k] ?? null, setItem: (k,v) => saved[k] = String(v)}, currentCardLang: () => lang};
  vm.createContext(context);
  const source = fs.readFileSync('static/app.js','utf8');
  vm.runInContext(source.slice(source.indexOf('const _HINT_MIN'), source.indexOf('// The new words of the sentence')), context);
@@ -32,7 +32,7 @@ test('reordering and disabling persist from settings', () => {
  const saved={}; const c=setup(saved);
  const options={innerHTML:''};
  c.document={getElementById:()=>options};
- c.moveHintStage(1,-1);
+ c.moveHintStage(1,-5); // jumps over the four CEFR stages (zh-hidden) and HSK 6
  assert.equal(c._hintEnabledStages()[6],1);
  c.changeHintStage(1,false);
  assert.ok(!setup(saved)._hintEnabledStages().includes(1));
@@ -45,6 +45,44 @@ test('non-Chinese skips HSK and last available stage cannot be disabled', () => 
  c.document={getElementById:()=>({value:0,innerHTML:''})}; c.onListenHintSlider=()=>{};
  for(const id of [1,9,2,0]) c.changeHintStage(id,false);
  assert.equal(Array.from(c._hintEnabledStages()).join(','),'0');
+});
+// #1369: CEFR stages for Spanish
+test('Spanish gets CEFR stages and no HSK; Chinese gets HSK and no CEFR', () => {
+ assert.equal(Array.from(setup({}, 'es')._hintEnabledStages()).join(','),'0,10,11,12,13,1,9,2');
+ assert.equal(Array.from(setup({}, 'zh')._hintEnabledStages()).join(','),'0,3,4,5,6,7,8,1,9,2');
+ assert.equal(Array.from(setup({}, 'fr')._hintEnabledStages()).join(','),'0,1,9,2');
+});
+test('CEFR threshold keeps harder and unlisted words', () => {
+ const c=setup({}, 'es');
+ assert.equal(c._hintKeepWord(10,{cefr:1}),false);
+ assert.equal(c._hintKeepWord(10,{cefr:2}),true);
+ assert.equal(c._hintKeepWord(13,{cefr:4}),false);
+ assert.equal(c._hintKeepWord(13,{cefr:5}),true);
+ assert.equal(c._hintKeepWord(13,{cefr:null}),true);
+ assert.equal(c._hintKeepWord(13,{}),true);
+ assert.equal(c._hintKeepWord(11,{cefr:1,function_word:true}),true);
+});
+test('legacy saved config gets CEFR stages inserted after HSK 6, not at the end', () => {
+ const legacy=[0,3,4,5,6,7,8,1,9,2].map(id=>({id,enabled:true}));
+ const c=setup({listenHintStages:JSON.stringify(legacy)}, 'es');
+ assert.equal(Array.from(c._hintStageConfig().map(s=>s.id)).join(','),'0,3,4,5,6,7,8,10,11,12,13,1,9,2');
+ const custom=setup({listenHintStages:JSON.stringify([{id:2,enabled:true},{id:0,enabled:false}])});
+ const ids=Array.from(custom._hintStageConfig().map(s=>s.id));
+ assert.equal(ids.slice(0,2).join(','),'2,0');
+ assert.ok(ids.indexOf(10)>ids.indexOf(8) && ids.indexOf(13)<ids.indexOf(1));
+ assert.ok(custom._hintStageConfig().every(s=>s.id===0?!s.enabled:true));
+});
+test('_getTargetPositions finds the conjugated form on non-Chinese cards', () => {
+ const source=fs.readFileSync('static/app.js','utf8');
+ const run=lang=>{
+  const c=setup({}, lang);
+  vm.runInContext(source.slice(source.indexOf('const _ROMANCE_ARTICLE_PREFIXES'),source.indexOf('// ── Word bank: locate the target word')),c);
+  vm.runInContext(source.slice(source.indexOf('function _getTargetPositions'),source.indexOf('// Every position covered by any of')),c);
+  c.card={word_zh:'ser',word_forms:['ser','eres','es']}; c.sentence={words:[]};
+  return Array.from(c._getTargetPositions('Ana, eres una buena amiga.')).sort((a,b)=>a-b);
+ };
+ assert.deepEqual(run('es'),[5,6,7,8]);
+ assert.deepEqual(run('zh'),[]); // Chinese stays a literal search only
 });
 test('render hides basic HSK and saved words while never revealing answer', () => {
  const c=setup(); const el={innerHTML:''};
