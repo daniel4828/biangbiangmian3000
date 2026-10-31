@@ -6766,6 +6766,7 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
 }
 .sc-msg.sc-ai {
   align-self: flex-start;
+  white-space: normal;
   background: var(--bg);
   border: 1px solid var(--border);
 }
@@ -6847,6 +6848,9 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   white-space: pre-wrap;
   color: var(--text);
 }
+.sc-msg.sc-ai p, .sentence-test-answer p { margin: 0; }
+.sc-msg.sc-ai ul, .sentence-test-answer ul { margin: 2px 0; padding-left: 20px; }
+.sc-msg.sc-ai code, .sentence-test-answer code { font-size: 0.92em; padding: 0 3px; border-radius: 4px; background: var(--card); }
 .sentence-test-answer.sq-error { color: var(--again); }
 
 #sync-modal-overlay {
