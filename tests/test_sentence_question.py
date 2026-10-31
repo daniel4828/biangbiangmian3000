@@ -52,7 +52,23 @@ def test_empty_question_defaults_to_quality_check(tmp_db):
     with patch.object(ai, "_call_api", side_effect=_fake_call_api):
         r = client.post("/api/sentence-question", json={"sentence_zh": "他每天去公司上班。"})
     assert r.status_code == 200, r.text
-    assert "这句话有没有问题" in captured["prompt"]
+    assert "Ist an diesem Satz etwas falsch?" in captured["prompt"]
+
+
+def test_ask_about_sentence_answers_in_german_for_every_lang():
+    """#1344: Spanish cards got Chinese answers; every language answers German."""
+    prompts = {}
+    for lang, sentence in (("zh", "他每天去公司上班。"), ("es", "Luis se quejaba del calor.")):
+        def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
+            prompts[lang] = messages[0]["content"]
+            return "answer"
+
+        with patch.object(ai, "_call_api", side_effect=_fake_call_api):
+            ai.ask_about_sentence(sentence, lang=lang)
+
+    assert "GERMAN" in prompts["zh"] and "Mandarin Chinese" in prompts["zh"]
+    assert "GERMAN" in prompts["es"] and "Spanish" in prompts["es"]
+    assert "SIMPLE CHINESE" not in prompts["es"]
 
 
 def test_empty_sentence_is_rejected(tmp_db):
@@ -112,4 +128,20 @@ def test_ask_about_sentence_default_question_when_blank():
     with patch.object(ai, "_call_api", side_effect=_fake_call_api):
         ai.ask_about_sentence("他每天去公司上班。")
 
-    assert "这句话有没有问题" in captured["prompt"]
+    assert "Ist an diesem Satz etwas falsch?" in captured["prompt"]
+
+
+def test_ask_about_sentence_answers_in_german_for_every_lang():
+    """#1344: Spanish cards got Chinese answers; every language answers German."""
+    prompts = {}
+    for lang, sentence in (("zh", "他每天去公司上班。"), ("es", "Luis se quejaba del calor.")):
+        def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
+            prompts[lang] = messages[0]["content"]
+            return "answer"
+
+        with patch.object(ai, "_call_api", side_effect=_fake_call_api):
+            ai.ask_about_sentence(sentence, lang=lang)
+
+    assert "GERMAN" in prompts["zh"] and "Mandarin Chinese" in prompts["zh"]
+    assert "GERMAN" in prompts["es"] and "Spanish" in prompts["es"]
+    assert "SIMPLE CHINESE" not in prompts["es"]

@@ -2020,10 +2020,11 @@ def dictionary_lookup(query: str, lang: str = "zh", model: str | None = None) ->
     return result, use_model
 
 
-SENTENCE_QUESTION_PROMPT = """You are helping Daniel, a German-speaking Chinese
-learner (HSK 4-5), understand a sentence from his flashcard review. Story
-sentences are AI-generated and occasionally come out grammatically wrong or
-unnatural — this feature exists precisely so he can catch that.
+SENTENCE_QUESTION_PROMPT = """You are helping Daniel, a native German speaker
+learning {lang_name} ({learner_level}), understand a sentence from his flashcard
+review. Story sentences are AI-generated and occasionally come out
+grammatically wrong or unnatural — this feature exists precisely so he can
+catch that.
 
 Sentence: {sentence_zh}
 Target word being reviewed: {word_zh}
@@ -2036,10 +2037,9 @@ Answer in two parts, in this order:
    a problem.
 2. Then answer this question about the sentence: {question}
 
-Write your whole answer in SIMPLE CHINESE using only HSK 4-5 vocabulary or
-easier. Never use Japanese. If you need a word above that level, append its
-reading and German meaning in parentheses right after it, like this:
-比较（bǐjiào - vergleichsweise）. Keep the answer short — a few sentences, not
+Write your whole answer in GERMAN, whatever language the sentence or the
+question is in. Quote words and phrases from the sentence in the original
+{lang_name}. Never use Japanese. Keep the answer short — a few sentences, not
 an essay. Plain text only, no markdown, no JSON."""
 
 
@@ -2053,12 +2053,14 @@ def ask_about_sentence(sentence_zh: str, question: str = "", word_zh: str | None
     answering whatever Daniel actually typed; an empty question defaults to
     "is anything wrong with this sentence?".
 
-    lang is accepted for future non-Chinese decks but the answer language is
-    always simple Chinese per the issue — there is nothing to switch on yet.
-    Returns plain text (not JSON); callers render it with textContent.
+    The answer is always German, for every deck language (#1344) — lang only
+    names the sentence's language in the prompt. Returns plain text (not
+    JSON); callers render it with textContent.
     """
-    q = question.strip() if question else "这句话有没有问题？"
+    cfg = languages.get_lang_config(lang)
+    q = question.strip() if question else "Ist an diesem Satz etwas falsch?"
     prompt = SENTENCE_QUESTION_PROMPT.format(
+        lang_name=cfg["name_en"], learner_level=cfg["learner_level"],
         sentence_zh=sentence_zh, word_zh=word_zh or "(none)", question=q,
     )
     logger.info("[%s] ask_about_sentence: %s", model, sentence_zh)
