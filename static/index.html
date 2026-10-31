@@ -330,8 +330,24 @@
                       title="Flag this sentence as a bad example (Shift+G)">⚐</button>
               <!-- Ask AI about this sentence (#853): grammar/naturalness questions,
                    right where the sentence is. -->
-              <button class="card-toggle-btn" id="toggle-question-btn" onclick="openSentenceQuestionModal()"
+              <button class="card-toggle-btn" id="toggle-question-btn" onclick="toggleSentenceChat()"
                       style="display:none" title="Ask AI about this sentence">？</button>
+              <button class="card-toggle-btn" id="toggle-tense-question-btn" onclick="askTenseQuestion()"
+                      style="display:none" title="Ask why this tense is used">⏱ Zeitform?</button>
+            </div>
+            <!-- Inline chat about this sentence (#1362): opens below the toggle bar,
+                 no overlay, so the page keeps scrolling. -->
+            <div id="sentence-chat" class="sentence-chat" hidden>
+              <div id="sentence-chat-log" class="sentence-chat-log"></div>
+              <div class="sentence-chat-quick">
+                <button id="sentence-chat-tense" type="button" onclick="askTenseQuestion()"
+                        style="display:none">⏱ Zeitform?</button>
+              </div>
+              <div class="sentence-chat-row">
+                <textarea id="sentence-chat-input" rows="1" placeholder="Frage zu diesem Satz…"
+                          autocomplete="off"></textarea>
+                <button id="sentence-chat-send" type="button">Send</button>
+              </div>
             </div>
 
             <!-- 2. Pinyin row (hidden by default; press p to toggle) -->
@@ -1168,26 +1184,6 @@
     <button class="edit-modal-close" onclick="closeDictResultModal()">✕</button>
   </div>
   <div id="dict-result-body"></div>
-</div>
-
-<!-- Sentence-question modal (#853): ask AI about the sentence on the current
-     card's back — grammar/naturalness check, or a free-form question. -->
-<div id="sentence-question-overlay" onclick="closeSentenceQuestionModal()" style="display:none"></div>
-<div id="sentence-question-modal" style="display:none">
-  <div class="edit-modal-header">
-    <span class="edit-modal-title">Ask about this sentence</span>
-    <button class="edit-modal-close" onclick="closeSentenceQuestionModal()">✕</button>
-  </div>
-  <div id="sentence-question-body">
-    <div id="sentence-question-sentence"></div>
-    <div id="sentence-question-row">
-      <input id="sentence-question-input" type="text"
-             placeholder="Optional — leave blank to just check the sentence" autocomplete="off"
-             onkeydown="if (event.key === 'Enter') submitSentenceQuestion()">
-      <button id="sentence-question-submit" type="button" onclick="submitSentenceQuestion()">Ask</button>
-    </div>
-    <div id="sentence-question-answer"></div>
-  </div>
 </div>
 
 <!-- Import modal -->

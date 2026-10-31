@@ -1,4 +1,4 @@
-"""Tests for asking AI about a review sentence (issue #853).
+"""Tests for the sentence chat (issue #853, multi-turn + editable template #1362).
 
 The AI is stubbed at ai._call_api — the single choke point every provider
 goes through (see tests/test_add_word.py / tests/test_dictionary.py for why
@@ -18,6 +18,8 @@ import routes.review
 
 client = TestClient(main.app)
 
+SENTENCE = "他每天去公司上班。"
+
 
 @pytest.fixture
 def tmp_db(tmp_path, monkeypatch):
@@ -29,51 +31,70 @@ def tmp_db(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_ask_about_sentence_returns_plain_text_answer(tmp_db):
-    with patch.object(ai, "_call_api", return_value="这句话没问题，很自然。"):
-        r = client.post("/api/sentence-question", json={
-            "sentence_zh": "他每天去公司上班。",
-            "question": "为什么用去不用来？",
-            "word_zh": "上班",
-        })
+def _capture(captured, answer="answer"):
+    def _fake(model, messages, max_tokens, purpose, thinking=False):
+        captured["messages"] = messages
+        captured["purpose"] = purpose
+        return answer
+    return _fake
+
+
+def _post(**body):
+    body.setdefault("sentence_zh", SENTENCE)
+    return client.post("/api/sentence-question", json=body)
+
+
+def test_single_question_uses_default_template(tmp_db):
+    cap = {}
+    with patch.object(ai, "_call_api", side_effect=_capture(cap, " 好的 ")):
+        r = _post(question="为什么用去？", word_zh="上班")
     assert r.status_code == 200, r.text
-    assert r.json()["answer"] == "这句话没问题，很自然。"
+    assert r.json()["answer"] == "好的"
+    msgs = cap["messages"]
+    assert len(msgs) == 1 and msgs[0]["role"] == "user"
+    content = msgs[0]["content"]
+    assert content.startswith("Bitte hilf mir, Chinesisch zu lernen")
+    assert SENTENCE in content
+    assert content.endswith("为什么用去？")
+    assert "natürlich" not in content.lower()
+    assert cap["purpose"] == "sentence_question"
 
 
-def test_empty_question_defaults_to_quality_check(tmp_db):
-    """No question typed → the prompt still asks "is anything wrong", never a
-    400 for a missing question (only sentence_zh is required)."""
-    captured = {}
-
-    def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
-        captured["prompt"] = messages[0]["content"]
-        return "句子没问题。"
-
-    with patch.object(ai, "_call_api", side_effect=_fake_call_api):
-        r = client.post("/api/sentence-question", json={"sentence_zh": "他每天去公司上班。"})
+def test_spanish_language_name(tmp_db):
+    cap = {}
+    with patch.object(ai, "_call_api", side_effect=_capture(cap)):
+        r = _post(sentence_zh="Ayer fui al cine.", question="Warum?", lang="es")
     assert r.status_code == 200, r.text
-    assert "Ist an diesem Satz etwas falsch?" in captured["prompt"]
+    assert "Bitte hilf mir, Spanisch zu lernen" in cap["messages"][0]["content"]
 
 
-def test_ask_about_sentence_answers_in_german_for_every_lang():
-    """#1344: Spanish cards got Chinese answers; every language answers German."""
-    prompts = {}
-    for lang, sentence in (("zh", "他每天去公司上班。"), ("es", "Luis se quejaba del calor.")):
-        def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
-            prompts[lang] = messages[0]["content"]
-            return "answer"
+def test_multi_turn_template_only_in_first_message(tmp_db):
+    cap = {}
+    history = [
+        {"role": "user", "content": "Frage 1"},
+        {"role": "assistant", "content": "Antwort 1"},
+        {"role": "user", "content": "Frage 2"},
+    ]
+    with patch.object(ai, "_call_api", side_effect=_capture(cap)):
+        r = _post(messages=history)
+    assert r.status_code == 200, r.text
+    msgs = cap["messages"]
+    assert len(msgs) == 3
+    assert msgs[0]["content"].startswith("Bitte hilf mir")
+    assert msgs[0]["content"].endswith("Frage 1")
+    assert msgs[1] == {"role": "assistant", "content": "Antwort 1"}
+    assert msgs[2] == {"role": "user", "content": "Frage 2"}
+    # caller's list is not mutated
+    assert history[0]["content"] == "Frage 1"
 
-        with patch.object(ai, "_call_api", side_effect=_fake_call_api):
-            ai.ask_about_sentence(sentence, lang=lang)
 
-    assert "GERMAN" in prompts["zh"] and "Mandarin Chinese" in prompts["zh"]
-    assert "GERMAN" in prompts["es"] and "Spanish" in prompts["es"]
-    assert "SIMPLE CHINESE" not in prompts["es"]
+def test_no_question_and_no_messages_is_rejected(tmp_db):
+    assert _post().status_code == 400
+    assert _post(question="  ", messages=[]).status_code == 400
 
 
 def test_empty_sentence_is_rejected(tmp_db):
-    r = client.post("/api/sentence-question", json={"sentence_zh": "  "})
-    assert r.status_code == 400
+    assert _post(sentence_zh="  ", question="x").status_code == 400
 
 
 def test_missing_sentence_field_is_rejected(tmp_db):
@@ -83,65 +104,83 @@ def test_missing_sentence_field_is_rejected(tmp_db):
 
 def test_ai_disabled_is_rejected(tmp_db, monkeypatch):
     monkeypatch.setattr(routes.review, "ai_disabled", lambda: True)
-    r = client.post("/api/sentence-question", json={"sentence_zh": "他每天去公司上班。"})
-    assert r.status_code == 400
+    assert _post(question="x").status_code == 400
 
 
 def test_ai_failure_surfaces_as_500_not_silent(tmp_db):
-    """A raised exception from the AI layer must not be swallowed — the whole
-    point of this feature is trustworthy feedback, never a silent failure."""
     with patch.object(ai, "_call_api", side_effect=RuntimeError("provider down")):
-        r = client.post("/api/sentence-question", json={"sentence_zh": "他每天去公司上班。"})
+        r = _post(question="x")
     assert r.status_code == 500
     assert "provider down" in r.json()["detail"]
 
 
+def test_invalid_messages_are_rejected(tmp_db):
+    with patch.object(ai, "_call_api", side_effect=_capture({})) as m:
+        r = _post(messages=[{"role": "user", "content": "a"},
+                            {"role": "assistant", "content": "b"}])
+        assert r.status_code == 400
+        r = _post(messages=[{"role": "system", "content": "a"}])
+        assert r.status_code == 400
+        r = _post(messages=[{"role": "user", "content": "  "}])
+        assert r.status_code == 400
+    m.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
-# ai.ask_about_sentence() itself
+# Editable template
 # ---------------------------------------------------------------------------
 
-def test_ask_about_sentence_prompt_includes_sentence_and_word():
-    captured = {}
-
-    def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
-        captured["prompt"] = messages[0]["content"]
-        captured["purpose"] = purpose
-        return "answer"
-
-    with patch.object(ai, "_call_api", side_effect=_fake_call_api):
-        result = ai.ask_about_sentence("他每天去公司上班。", question="为什么？", word_zh="上班")
-
-    assert result == "answer"
-    assert "他每天去公司上班。" in captured["prompt"]
-    assert "上班" in captured["prompt"]
-    assert "为什么？" in captured["prompt"]
-    assert captured["purpose"] == "sentence_question"
+def test_prompt_get_default(tmp_db):
+    r = client.get("/api/sentence-question/prompt")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["template"] == d["default"] == ai.DEFAULT_SENTENCE_QUESTION_TEMPLATE
+    assert d["is_custom"] is False
+    assert d["variables"] == ["{language}", "{sentence}", "{word}"]
 
 
-def test_ask_about_sentence_default_question_when_blank():
-    captured = {}
+def test_stored_template_is_used_and_reset(tmp_db):
+    r = client.put("/api/sentence-question/prompt",
+                   json={"template": "Lerne {language}: {sentence} / Wort: {word}"})
+    assert r.status_code == 200
+    assert r.json()["is_custom"] is True
+    assert client.get("/api/sentence-question/prompt").json()["is_custom"] is True
 
-    def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
-        captured["prompt"] = messages[0]["content"]
-        return "answer"
+    cap = {}
+    with patch.object(ai, "_call_api", side_effect=_capture(cap)):
+        _post(question="Q", word_zh="上班")
+    assert cap["messages"][0]["content"] == f"Lerne Chinesisch: {SENTENCE} / Wort: 上班\n\nQ"
 
-    with patch.object(ai, "_call_api", side_effect=_fake_call_api):
-        ai.ask_about_sentence("他每天去公司上班。")
+    r = client.delete("/api/sentence-question/prompt")
+    assert r.status_code == 200
+    assert r.json()["is_custom"] is False
+    assert r.json()["template"] == ai.DEFAULT_SENTENCE_QUESTION_TEMPLATE
 
-    assert "Ist an diesem Satz etwas falsch?" in captured["prompt"]
+    cap.clear()
+    with patch.object(ai, "_call_api", side_effect=_capture(cap)):
+        _post(question="Q")
+    assert cap["messages"][0]["content"].startswith("Bitte hilf mir")
 
 
-def test_ask_about_sentence_answers_in_german_for_every_lang():
-    """#1344: Spanish cards got Chinese answers; every language answers German."""
-    prompts = {}
-    for lang, sentence in (("zh", "他每天去公司上班。"), ("es", "Luis se quejaba del calor.")):
-        def _fake_call_api(model, messages, max_tokens, purpose, thinking=False):
-            prompts[lang] = messages[0]["content"]
-            return "answer"
+def test_put_empty_template_is_rejected(tmp_db):
+    assert client.put("/api/sentence-question/prompt", json={"template": "  "}).status_code == 400
+    assert client.put("/api/sentence-question/prompt", json={}).status_code == 400
 
-        with patch.object(ai, "_call_api", side_effect=_fake_call_api):
-            ai.ask_about_sentence(sentence, lang=lang)
 
-    assert "GERMAN" in prompts["zh"] and "Mandarin Chinese" in prompts["zh"]
-    assert "GERMAN" in prompts["es"] and "Spanish" in prompts["es"]
-    assert "SIMPLE CHINESE" not in prompts["es"]
+def test_body_template_overrides_stored(tmp_db):
+    client.put("/api/sentence-question/prompt", json={"template": "STORED {sentence}"})
+    cap = {}
+    with patch.object(ai, "_call_api", side_effect=_capture(cap)):
+        r = _post(question="Q", template="TEST {sentence}")
+    assert r.status_code == 200, r.text
+    assert cap["messages"][0]["content"] == f"TEST {SENTENCE}\n\nQ"
+    # and nothing was saved by the test
+    assert client.get("/api/sentence-question/prompt").json()["template"] == "STORED {sentence}"
+
+
+def test_template_with_other_braces_does_not_crash(tmp_db):
+    cap = {}
+    with patch.object(ai, "_call_api", side_effect=_capture(cap)):
+        r = _post(question="Q", template="{foo} {sentence} {0} {")
+    assert r.status_code == 200, r.text
+    assert cap["messages"][0]["content"] == f"{{foo}} {SENTENCE} {{0}} {{\n\nQ"
