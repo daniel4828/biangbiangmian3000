@@ -165,6 +165,28 @@ class TestPrompts:
         assert "belongs in the note" not in prompt
         assert "\n  etymology: |" in example
 
+    def test_es_yaml_prompt_asks_for_french_comparison_but_fr_does_not(self):
+        assert "French equivalent" in ai._ENTRY_YAML_TEMPLATES["es"][0]
+        assert "French equivalent" not in ai._ENTRY_YAML_TEMPLATES["fr"][0]
+
+    @pytest.mark.parametrize("lang,word,expected", [
+        ("es", "noche", True),
+        ("fr", "nuit", False),
+    ])
+    def test_regenerate_etymology_french_comparison_only_for_es(
+            self, monkeypatch, lang, word, expected):
+        captured = []
+
+        def fake(model, messages, **kw):
+            captured.append(messages[0]["content"])
+            return "Some prose."
+
+        monkeypatch.setattr(ai, "_call_api", fake)
+        ai.generate_entry_etymology(
+            {"lang": lang, "word_zh": word, "definition_de": "Nacht"})
+        assert len(captured) == 1
+        assert ("French equivalent" in captured[0]) is expected
+
     def test_chinese_prompt_is_untouched(self):
         prompt, example = ai._ENTRY_YAML_TEMPLATES["zh"]
         # Chinese etymology stays nested under word_analyses, per character.
@@ -192,3 +214,13 @@ class TestFrontend:
         # Character-level fields for Chinese, the entry-level column otherwise.
         assert "'compounds'" in body and "'entry_etymology'" in body
         assert re.search(r"_entryLang\(wordData\) === 'zh'", body)
+
+
+@pytest.mark.parametrize("lang", ["fr", "es"])
+def test_romance_prompt_requires_german_note_and_etymology(lang):
+    # recordar came back with note + etymology in Spanish: etymology was
+    # missing from the "MUST be German" list.
+    prompt = ai._ENTRY_YAML_TEMPLATES[lang][0]
+    rules = prompt.split("LANGUAGE RULES")[1].split("CONTENT:")[0]
+    assert "etymology" in rules
+    assert "note" in rules

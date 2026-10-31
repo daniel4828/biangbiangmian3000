@@ -1056,6 +1056,14 @@ def generate_entry_etymology(word: dict, model: str = DEFAULT_MODEL) -> str:
     headword = word.get("word_zh", "")
     gloss = word.get("definition_de") or word.get("definition") or ""
 
+    extra = (
+        "ALWAYS add one sentence comparing it with the French equivalent "
+        "(the learner speaks French): name the French word in *asterisks* "
+        "and say whether it shares the source (*noche* ~ frz. *nuit*, beide "
+        "< lat. *nox*) or comes from a different root (*hablar* < lat. "
+        "*fabulari*, aber frz. *parler* < *parabolare*). "
+    ) if lang == "es" else ""
+
     prompt = (
         f"You are an etymologist writing for a German-speaking learner of "
         f"{cfg['name_en']} ({cfg['learner_level']}).\n\n"
@@ -1066,7 +1074,8 @@ def generate_entry_etymology(word: dict, model: str = DEFAULT_MODEL) -> str:
         "points, no heading, no markdown fences. Cover the source word "
         "(Latin, Greek, Frankish, Arabic, …) with its original meaning, the "
         "path into the modern language, how the meaning shifted, and any "
-        "German or English cognate the learner already knows. Mark foreign "
+        "German or English cognate the learner already knows. " + extra +
+        "Mark foreign "
         "source words with *asterisks*. If the origin is genuinely disputed "
         "or unknown, say that in one sentence — never invent one.\n\n"
         "Return ONLY the prose."
@@ -1399,7 +1408,10 @@ REQUIRED FIELDS: type, the headword key, english, german, level, date: "{today}"
     still needs its plural "roses" if that changes).
 
 LANGUAGE RULES — these fields MUST be German:
-  note, explanations, synonyms[].meaning, antonyms[].meaning, examples[].german
+  note, explanations, etymology, synonyms[].meaning, antonyms[].meaning,
+  examples[].german — every sentence of them, start to finish. Never switch
+  into the target language mid-text; quote target-language words in
+  *asterisks* or «guillemets» inside the German prose.
   examples[].english is English; the headword and examples[].fr are French.
 
 CONTENT:
@@ -1635,7 +1647,10 @@ REQUIRED FIELDS: type, the headword key, english, german, level, date: "{today}"
     forms that genuinely differ from the headword.
 
 LANGUAGE RULES — these fields MUST be German:
-  note, explanations, synonyms[].meaning, antonyms[].meaning, examples[].german
+  note, explanations, etymology, synonyms[].meaning, antonyms[].meaning,
+  examples[].german — every sentence of them, start to finish. Never switch
+  into the target language mid-text; quote target-language words in
+  *asterisks* or «guillemets» inside the German prose.
   examples[].english is English; the headword and examples[].es are Spanish.
 
 CONTENT:
@@ -1648,7 +1663,12 @@ CONTENT:
     Latin/Greek/Arabic/Gothic … source word with its original meaning, the
     path into Spanish, how the meaning shifted, and — this is the part that
     makes a word stick — related German or English cognates the learner
-    already knows (*ojalá* < arab. *inšāʾ Allāh*). Mark foreign source words
+    already knows (*ojalá* < arab. *inšāʾ Allāh*). ALWAYS add one sentence
+    comparing it with the French equivalent (the learner speaks French): name
+    the French word in *asterisks* and say whether it shares the source
+    (*noche* ~ frz. *nuit*, beide < lat. *nox*) or comes from a different
+    root (*hablar* < lat. *fabulari*, aber frz. *parler* < *parabolare*).
+    Mark foreign source words
     with *asterisks*. If the origin is genuinely unclear, say so in one
     sentence instead of inventing one.
   - examples: 2-4 sentences, EACH with all three keys es, english, german
