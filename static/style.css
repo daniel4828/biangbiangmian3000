@@ -4177,6 +4177,9 @@ a.nav-btn { text-decoration: none; }
 .opt-group {
   margin-bottom: 16px;
 }
+/* #1372: category mode shows only scheduling groups, deck mode only the rest */
+.modal-box[data-opt-mode="category"] .opt-deck { display: none; }
+.modal-box[data-opt-mode="deck"] .opt-sched { display: none; }
 .opt-group-label {
   font-size: 10px;
   font-weight: 700;

@@ -494,6 +494,14 @@ def init_db() -> None:
     if "learning_leech_threshold" not in override_cols:
         conn.execute("ALTER TABLE preset_category_overrides ADD COLUMN learning_leech_threshold INTEGER")
 
+    # (language, category) -> preset binding (#1372); decks.preset_id is untouched
+    conn.execute("""CREATE TABLE IF NOT EXISTS category_presets (
+        lang      TEXT NOT NULL,
+        category  TEXT NOT NULL CHECK (category IN ('listening','reading','creating')),
+        preset_id INTEGER NOT NULL REFERENCES deck_presets(id),
+        PRIMARY KEY (lang, category)
+    )""")
+
     # ── One-time historical leech backfill ─────────────────────────────────────
     # Retroactively flag cards that already exceed their deck's leech thresholds,
     # so past Again presses count too. Runs once, when is_leech is first added.

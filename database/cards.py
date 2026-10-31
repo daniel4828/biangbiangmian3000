@@ -4,7 +4,7 @@ import sqlite3
 from datetime import date, datetime, time, timedelta
 from languages import DEFAULT_LANG
 from .core import get_db, anki_today, get_day_cutoff_hour
-from .presets import get_preset_for_deck
+from .presets import get_preset_for_deck, effective_preset_id_sql
 from .decks import get_deck, get_locked_deck_ids
 from .entries import surface_forms
 from .daily_target import limit_new_cards, daily_target_card_ids, daily_target_new_counts, ordinary_new_sql
@@ -219,7 +219,7 @@ def get_card(card_id: int) -> dict | None:
            FROM cards c
            JOIN entries w ON w.id = c.word_id
            JOIN decks d ON d.id = c.deck_id
-           JOIN deck_presets p ON p.id = d.preset_id
+           JOIN deck_presets p ON p.id = """ + effective_preset_id_sql("d", "c.category") + """
            WHERE c.id = ?""",
         (card_id, card_id),
     ).fetchone()
@@ -617,13 +617,20 @@ def _get_presets_bulk(deck_ids: list[int], category: str | None = None) -> dict[
         return {}
     conn = get_db()
     placeholders = ",".join("?" * len(deck_ids))
+    if category:
+        # #1372: a (lang, category) binding wins over decks.preset_id
+        join_id = effective_preset_id_sql("d", "?")
+        params = [category] + list(deck_ids)
+    else:
+        join_id = "d.preset_id"
+        params = list(deck_ids)
     rows = conn.execute(
         f"""SELECT d.id AS deck_id, p.*,
                    d.new_review_order_override AS deck_nro_override,
                    d.bury_quick_mode           AS deck_bury_quick_mode
-            FROM decks d JOIN deck_presets p ON p.id = d.preset_id
+            FROM decks d JOIN deck_presets p ON p.id = {join_id}
             WHERE d.id IN ({placeholders})""",
-        deck_ids,
+        params,
     ).fetchall()
 
     result: dict[int, dict] = {}
@@ -2021,13 +2028,14 @@ def count_due_all_decks() -> dict:
     ).fetchall()
 
     # 4. new_per_day limit per (deck_id, category) with category overrides
+    eff_id = effective_preset_id_sql("d", "d.category")
     limit_rows = conn.execute(
-        """SELECT d.id AS deck_id, d.category,
+        f"""SELECT d.id AS deck_id, d.category,
                   COALESCE(pco.new_per_day, p.new_per_day, 20) AS new_per_day
            FROM decks d
-           JOIN deck_presets p ON p.id = d.preset_id
+           JOIN deck_presets p ON p.id = {eff_id}
            LEFT JOIN preset_category_overrides pco
-             ON pco.preset_id = d.preset_id AND pco.category = d.category
+             ON pco.preset_id = p.id AND pco.category = d.category
            WHERE d.deleted_at IS NULL""",
     ).fetchall()
 
