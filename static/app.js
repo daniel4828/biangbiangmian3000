@@ -12015,6 +12015,7 @@ function showFront() {
   document.getElementById('creating-input-wrap').style.display = (isCreating && !isCloze) ? 'flex' : 'none';
   document.getElementById('word-bank-wrap').style.display      = isCloze ? 'flex' : 'none';
   if (isCloze) _initWordBankSlider();
+  _renderGrammarHint(sentence);  // re-place the tag now that word-bank visibility is known
 
   // Creating: target-word translation hint (🇬🇧/🇫🇷/🇩🇪). Hidden by default;
   // press k to toggle, or the eye icon to make it always show (see toggleWordDef).
@@ -15604,11 +15605,20 @@ function _wireKnowledgeSourceLink(container, s) {
 // textContent only; called on every card so no tag survives onto the next card.
 function _renderGrammarHint(s) {
   const text = s?.grammar_hint || '';
-  for (const id of ['grammar-hint', 'grammar-hint-back']) {
+  // Word-bank (Tiles) mode: the tag sits under "Reconstruct the sentence"
+  // instead of above the sentence.
+  const wbWrap = document.getElementById('word-bank-wrap');
+  const inWordBank = !!wbWrap && wbWrap.style.display !== 'none';
+  const show = {
+    'grammar-hint': !inWordBank,
+    'grammar-hint-wb': inWordBank,
+    'grammar-hint-back': true,
+  };
+  for (const id of Object.keys(show)) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.textContent = text;
-    el.style.display = text ? '' : 'none';
+    el.style.display = (text && show[id]) ? '' : 'none';
   }
 }
 
