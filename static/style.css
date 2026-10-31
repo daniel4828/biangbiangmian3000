@@ -1247,7 +1247,11 @@ body.ra-fullscreen-open #error-banner {
   color: var(--text);
   line-height: 1.6;
   padding: 8px 0 4px;
+  text-align: justify;
+  hyphens: auto;
+  -webkit-hyphens: auto;
 }
+.notes-body li { text-align: left; }
 .notes-body p { margin: 0 0 4px; }
 .notes-body ul { margin: 4px 0 4px 18px; padding: 0; }
 .notes-body li { margin-bottom: 2px; }

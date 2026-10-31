@@ -14,20 +14,42 @@ function renderMarkdown(text) {
   const lines = html.split('\n');
   const out = [];
   let inList = false;
+  // Consecutive prose lines are joined into one <p>: AI-written notes come from
+  // YAML `|` block scalars hard-wrapped every ~80 chars, so a per-line <p>
+  // split sentences mid-way (#1350). A heading line (`**Label:**` alone), a
+  // line starting with <strong>, a list, or a blank line still starts a new block.
+  let para = null;        // open paragraph text, or null
+  let paraIsHeading = false;
+  const flushPara = () => {
+    if (para !== null) out.push(`<p>${para}</p>`);
+    para = null;
+    paraIsHeading = false;
+  };
   for (const line of lines) {
     const li = line.match(/^[-*]\s+(.*)/);
     if (li) {
+      flushPara();
       if (!inList) { out.push('<ul>'); inList = true; }
       out.push(`<li>${li[1]}</li>`);
     } else {
       if (inList) { out.push('</ul>'); inList = false; }
       if (line.trim() === '') {
+        flushPara();
         out.push('<br>');
       } else {
-        out.push(`<p>${line}</p>`);
+        const text = line.trim();
+        const isHeading = /^<strong>(?:(?!<\/?strong>).)*<\/strong>$/.test(text);
+        if (para !== null && !paraIsHeading && !isHeading && !text.startsWith('<strong>')) {
+          para += ' ' + text;
+        } else {
+          flushPara();
+          para = text;
+          paraIsHeading = isHeading;
+        }
       }
     }
   }
+  flushPara();
   if (inList) out.push('</ul>');
   return out.join('');
 }
@@ -12895,7 +12917,7 @@ function renderNotesSection(container, notes, wordId) {
   const bodyId = el.id + '-body';
   const regenBtn = wid ? `<button class="field-regen-btn" onclick="event.stopPropagation();regenFields(${wid},['notes'],'${el.id}')" title="Regenerate notes">↺</button>` : '';
   const bodyContent = text
-    ? `<div class="notes-body">${renderMarkdown(text)}</div>`
+    ? `<div class="notes-body" lang="de">${renderMarkdown(text)}</div>`
     : `<div class="section-empty">—</div>`;
   el.innerHTML =
     `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
@@ -12924,7 +12946,7 @@ function renderEtymologySection(container, wordData, wordId) {
   const text = (wd?.etymology || '').trim();
   const bodyId = el.id + '-body';
   const bodyContent = text
-    ? `<div class="notes-body">${renderMarkdown(text)}</div>`
+    ? `<div class="notes-body" lang="de">${renderMarkdown(text)}</div>`
     : `<div class="section-empty">—</div>`;
   el.innerHTML =
     `<div class="section-label section-label-row section-toggle" onclick="toggleSection('${bodyId}')">` +
