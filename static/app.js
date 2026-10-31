@@ -14469,6 +14469,14 @@ async function renderWordBankUI() {
       }
       return `<span class="wb-skel-blank" data-slot="${slot}">＿</span>`;
     }).join('');
+    // #1346: the pre-placed words are already given away, so they may be
+    // looked up like on the back. Segment only their text — the German hint
+    // and the blanks are not part of the sentence. setWordTable([]) first for
+    // the same reason as on the back (stale list from the previous screen).
+    const isZhCard = currentCardLang() === 'zh';
+    const preText = wordBankOrder.filter(t => t.type === 'pre').map(t => t.char).join(isZhCard ? '' : ' ');
+    setWordTable([], currentCardLang());
+    _makeWordsTappable(skelEl, preText);
   }
 
   const tokensEl = document.getElementById('word-bank-tokens');
