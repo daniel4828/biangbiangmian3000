@@ -10,6 +10,9 @@ function renderMarkdown(text) {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic: *text* (single asterisk, not matched by bold)
   html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  // Inline code and `# Heading` lines (AI chat answers, #1362)
+  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  html = html.replace(/^#{1,6}\s+(.+)$/gm, '<strong>$1</strong>');
   // Split into lines for block-level processing
   const lines = html.split('\n');
   const out = [];
@@ -3971,7 +3974,7 @@ function _sentencePromptHtml() {
              onkeydown="if (event.key === 'Enter') runSentencePromptTest()">
       <button class="keymap-reset-all" onclick="runSentencePromptTest()" ${t.busy ? 'disabled' : ''}>Test</button>
     </div>
-    <div class="sentence-test-answer ${t.error ? 'sq-error' : ''}" id="sentence-test-answer">${_escHtml(t.busy ? '…' : t.answer)}</div>`;
+    <div class="sentence-test-answer ${t.error ? 'sq-error' : ''}" id="sentence-test-answer">${t.busy ? '…' : (t.error ? _escHtml(t.answer) : renderMarkdown(t.answer))}</div>`;
 }
 
 function _sentencePromptInput(el) {
@@ -15110,7 +15113,10 @@ function _addSentenceChatBubble(cls, text) {
   const log = document.getElementById('sentence-chat-log');
   const el = document.createElement('div');
   el.className = 'sc-msg ' + cls;
-  el.textContent = text; // AI text: textContent only, never innerHTML
+  // AI answers are Markdown: renderMarkdown() escapes all HTML first, then
+  // adds only its own tags — so model text can never inject markup.
+  if (cls === 'sc-ai') el.innerHTML = renderMarkdown(text);
+  else el.textContent = text;
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
   return el;
