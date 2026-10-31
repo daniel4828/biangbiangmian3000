@@ -14436,6 +14436,8 @@ async function renderWordBankUI() {
   // Sentence skeleton: pre-placed tokens shown as text, blanks for tiles/target (data-slot for live update)
   const skelEl = document.getElementById('word-bank-skeleton');
   if (skelEl) {
+    // Negative letter-spacing suits single hanzi but squeezes Latin words (#1341)
+    skelEl.classList.toggle('wb-latin', currentCardLang() !== 'zh');
     const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     // Hint shown faintly inside the target word's blank (first target only):
     // prefer the German definition, fall back to English when no German exists.

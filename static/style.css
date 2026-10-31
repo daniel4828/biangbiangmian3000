@@ -2183,6 +2183,9 @@ a.news-source-line:hover {
   font-weight: 700;
   letter-spacing: -2px;
 }
+/* Latin-script words need normal spacing; -2px is only for hanzi (#1341) */
+.word-bank-skeleton.wb-latin .wb-skel-blank,
+.word-bank-skeleton.wb-latin .wb-skel-target { letter-spacing: normal; }
 /* Target word's blank: fixed geometry so the hint (before) and the typed word
    (after) occupy the same box width — the rest of the sentence never reflows.
    Width uses rem (not em) so it stays constant despite the font-size change
