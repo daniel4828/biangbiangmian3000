@@ -11935,6 +11935,7 @@ function loadCard(c, counts) {
       // already showing — the fetch usually wins the race against the flip.
       _setVerbBadge(document.getElementById('card-verb-badge'),
         wordDetails?.id === card.word_id ? wordDetails : null);
+      _renderGrammarHint(sentence);  // tag gets reg./irreg. now (#1363)
       // If back is already showing (user flipped before fetch completed), re-render with full data
       if (document.getElementById('side-back').style.display !== 'none') {
         // Re-render interactive word-zh now that components are available
@@ -15713,7 +15714,11 @@ function _wireKnowledgeSourceLink(container, s) {
 // Verb slot tag (#1295): "Indefinido · 3. Sg." on front and back of the card.
 // textContent only; called on every card so no tag survives onto the next card.
 function _renderGrammarHint(s) {
-  const text = s?.grammar_hint || '';
+  let text = s?.grammar_hint || '';
+  // reg./irreg. im selben Etikett (#1363), sobald /api/word geladen ist
+  const r = (wordDetails && card && wordDetails.id === card.word_id)
+    ? wordDetails.verb_regularity : null;
+  if (text && r) text += r === 'irregular' ? ' · irreg.' : ' · reg.';
   // Word-bank (Tiles) mode: the tag sits under "Reconstruct the sentence"
   // instead of above the sentence.
   const wbWrap = document.getElementById('word-bank-wrap');
