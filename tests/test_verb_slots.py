@@ -387,3 +387,146 @@ def test_generate_story_fr_prompt_has_no_slot_lines(_no_translation):
         sentences, prompt = ai.generate_story(cards, lang="fr")
     assert "→" not in prompt and "write exactly" not in prompt
     assert all("verb_slot" not in s for s in sentences)
+
+
+# --- practice counts in the conjugation table (#1356) ---------------------------
+
+@pytest.mark.parametrize("label,code", [
+    ("Presente", "ind_pres"),
+    ("Pretérito perfecto", "perf"),
+    ("Pretérito indefinido", "ind_pret"),
+    ("Indefinido", "ind_pret"),
+    ("Imperfecto", "ind_impf"),
+    ("Pretérito imperfecto", "ind_impf"),
+    ("Futuro", "ind_fut"),
+    ("Futuro simple", "ind_fut"),
+    ("Condicional", "ind_cond"),
+    ("Condicional simple", "ind_cond"),
+    ("Presente de subjuntivo", "subj_pres"),
+    ("Subjuntivo presente", "subj_pres"),
+    ("Imperfecto de subjuntivo", "subj_impf"),
+    ("Pluscuamperfecto", None),
+    ("Pretérito anterior", None),
+    ("Futuro perfecto", None),
+    ("Condicional compuesto", None),
+    ("Futuro de subjuntivo", None),
+    ("Imperativo", None),
+    ("Participio", None),
+    ("Gerundio", None),
+    ("", None),
+])
+def test_tense_code_for_label(label, code):
+    assert verb_slots.tense_code_for_label(label) == code
+
+
+@pytest.mark.parametrize("label,code", [
+    ("yo", "1s"), ("tú", "2s"), ("él/ella/usted", "3s"), ("nosotros/as", "1p"),
+    ("vosotros/as", "2p"), ("ellos/ellas/ustedes", "3p"), ("Ella", "3s"),
+    ("", None), ("Gerundio", None), (None, None),
+])
+def test_person_code_for_label(label, code):
+    assert verb_slots.person_code_for_label(label) == code
+
+
+def test_tense_is_irregular_derivations(monkeypatch):
+    assert verb_slots.tense_is_irregular("ir", "ind_pret", "es") is True
+    assert verb_slots.tense_is_irregular("hablar", "ind_pret", "es") is False
+    # conditional follows the future, subjunctives follow ind_pres / ind_pret
+    monkeypatch.setattr(verb_slots, "irregular_tenses", lambda lemma, lang: ["ind_fut"])
+    assert verb_slots.tense_is_irregular("x", "ind_cond", "es") is True
+    assert verb_slots.tense_is_irregular("x", "subj_pres", "es") is False
+    monkeypatch.setattr(verb_slots, "irregular_tenses", lambda lemma, lang: ["ind_pres", "ind_pret"])
+    assert verb_slots.tense_is_irregular("x", "subj_pres", "es") is True
+    assert verb_slots.tense_is_irregular("x", "subj_impf", "es") is True
+    assert verb_slots.tense_is_irregular("x", "ind_cond", "es") is False
+
+
+def test_tense_is_irregular_perfect_uses_participle(monkeypatch):
+    orig = lexicon.form_for
+    monkeypatch.setattr(lexicon, "form_for", lambda lemma, t, p, lang: (
+        "hecho" if (lemma, t) == ("hacer", "part") else orig(lemma, t, p, lang)))
+    assert verb_slots.tense_is_irregular("hacer", "perf", "es") is True
+    assert verb_slots.tense_is_irregular("hablar", "perf", "es") is False
+    assert verb_slots.tense_is_irregular("comer", "perf", "es") is False  # no participle = regular
+    assert verb_slots.tense_is_irregular("unknown", "perf", "es") is False
+
+
+def _row(sid, slot, word):
+    return {"sentence_id": sid, "slot": slot, "word_zh": word}
+
+
+def test_practice_counts_pooled_vs_per_verb(monkeypatch):
+    rows = [
+        _row(1, "ind_pres:1s", "hablar"),
+        _row(2, "ind_pres:1s", "comer"),
+        _row(3, "ind_pres:3s", "hablar"), _row(3, "ind_pres:3s", "casa"),
+        _row(4, "ind_pret:1s", "ir"),
+        _row(5, "ind_pret:3s", "hablar"),
+        _row(6, "ind_pret:3s", "comer"),
+        # linked to two verbs: counts once, for its first verb
+        _row(7, "ind_pres:2p", "hablar"), _row(7, "ind_pres:2p", "comer"),
+        _row(8, "ind_pres:1s", "ir"),
+    ]
+    monkeypatch.setattr(database, "verb_slot_rows", lambda lang: rows)
+    monkeypatch.setattr(verb_slots, "tense_is_irregular",
+                        lambda lemma, tense, lang: lemma == "ir" and tense == "ind_pret")
+
+    out = verb_slots.practice_counts("hablar", "es")
+    assert set(out) == set(verb_slots._TENSE_EN)
+    pres = out["ind_pres"]
+    assert pres["scope"] == "regular" and pres["total"] == 5
+    assert pres["persons"] == {"1s": 3, "2s": 0, "3s": 1, "1p": 0, "2p": 1, "3p": 0}
+    pret = out["ind_pret"]  # irregular `ir` is not pooled in
+    assert pret["scope"] == "regular" and pret["total"] == 2 and pret["persons"]["3s"] == 2
+    assert out["ind_fut"]["total"] == 0
+
+    ir = verb_slots.practice_counts("ir", "es")
+    assert ir["ind_pret"] == {"total": 1, "scope": "verb",
+                              "persons": {"1s": 1, "2s": 0, "3s": 0, "1p": 0, "2p": 0, "3p": 0}}
+    assert ir["ind_pres"]["scope"] == "regular" and ir["ind_pres"]["total"] == 5
+
+
+def test_practice_counts_never_raises(monkeypatch):
+    def boom(lang):
+        raise RuntimeError("db gone")
+    monkeypatch.setattr(database, "verb_slot_rows", boom)
+    assert verb_slots.practice_counts("hablar", "es") == {}
+
+
+def test_verb_slot_rows_db(tmp_db):
+    deck_id = database.get_or_create_deck("T")
+    w1 = database.insert_word({"word_zh": "hablar", "lang": "es"})
+    w2 = database.insert_word({"word_zh": "casa", "lang": "es"})
+    database.create_story("2026-01-01", "reading", deck_id, [
+        {"position": 1, "sentence_zh": "Ella habló en casa.", "word_ids": [w1, w2],
+         "verb_slot": "ind_pret:3s"},
+        {"position": 2, "sentence_zh": "La casa.", "word_ids": [w2]},
+    ], lang="es")
+    rows = database.verb_slot_rows("es")
+    assert [(r["slot"], r["word_zh"]) for r in rows] == [
+        ("ind_pret:3s", "hablar"), ("ind_pret:3s", "casa")]
+    assert len({r["sentence_id"] for r in rows}) == 1
+    assert database.verb_slot_rows("fr") == []
+
+
+def test_word_detail_conjugation_stats(client, monkeypatch):
+    # noun / Chinese word: never any stats
+    noun = database.insert_word({"word_zh": "casa", "lang": "es"})
+    zh = database.insert_word({"word_zh": "你好", "lang": "zh"})
+    for wid in (noun, zh):
+        body = client.get(f"/api/word/{wid}").json()
+        assert "conjugation_stats" not in body
+
+    from routes import browse
+    monkeypatch.setattr(verb_slots, "practice_counts", lambda lemma, lang: {
+        "ind_pres": {"total": 4, "scope": "regular",
+                     "persons": {"1s": 2, "2s": 0, "3s": 1, "1p": 0, "2p": 0, "3p": 1}}})
+    word = {"word_zh": "hablar", "lang": "es", "conjugations": [
+        {"tense": "Presente", "person": "yo", "form": "hablo"},
+        {"tense": "Presente", "person": "él/ella/usted", "form": "habla"},
+        {"tense": "Participio", "person": "", "form": "hablado"},
+    ]}
+    browse._add_conjugation_stats(word)
+    assert word["conjugation_stats"] == {
+        "Presente": {"total": 4, "scope": "regular", "code": "ind_pres"}}
+    assert [r.get("practice_count") for r in word["conjugations"]] == [2, 1, None]

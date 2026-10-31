@@ -26,6 +26,8 @@ import json
 import logging
 import math
 import random
+import re
+import unicodedata
 
 import database
 import languages
@@ -539,4 +541,174 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
         return result
     except Exception as e:
         logger.warning("verb slot assignment failed — %s", e)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Practice counts for the conjugation table (#1356)
+#
+# History = story_sentences.verb_slot (no table). Regular verbs share ONE
+# count per tense (they are interchangeable drill), irregular ones count alone.
+# ---------------------------------------------------------------------------
+
+# Tenses whose regularity follows another tense's (the lexicon-based
+# irregular_tenses() only covers FORM_CARD_TENSES).
+_DERIVED_TENSE = {"ind_cond": "ind_fut", "subj_pres": "ind_pres", "subj_impf": "ind_pret"}
+_PERSON_PRONOUNS = {
+    "yo": "1s", "tu": "2s", "el": "3s", "ella": "3s", "usted": "3s",
+    "nosotros": "1p", "nosotras": "1p", "vosotros": "2p", "vosotras": "2p",
+    "ellos": "3p", "ellas": "3p", "ustedes": "3p",
+}
+
+
+def _norm_label(label) -> str:
+    s = unicodedata.normalize("NFKD", str(label or "").lower())
+    return "".join(ch for ch in s if not unicodedata.combining(ch)).strip()
+
+
+def tense_code_for_label(label) -> str | None:
+    """Map a free-text conjugation tense label ("Pretérito indefinido",
+    "Imperfecto de subjuntivo", …) to a slot tense code; None for tenses that
+    are never drilled (Participio, Gerundio, Imperativo, pluscuamperfecto,
+    compound/perfect subjunctive, future perfect, …). Never raises."""
+    try:
+        s = _norm_label(label)
+        if not s or "pluscuamperfecto" in s or "anterior" in s or "compuesto" in s:
+            return None
+        perfecto = re.search(r"\bperfecto\b", s) is not None  # not "imperfecto"
+        if "subjuntivo" in s:
+            if perfecto or "futuro" in s:
+                return None
+            if "imperfecto" in s or "preterito" in s:
+                return "subj_impf"
+            return "subj_pres"
+        if "imperativo" in s:
+            return None
+        if perfecto:
+            return None if ("futuro" in s or "condicional" in s) else "perf"
+        if "indefinido" in s or ("preterito" in s and "imperfecto" not in s):
+            return "ind_pret"
+        if "imperfecto" in s:
+            return "ind_impf"
+        if "futuro" in s:
+            return "ind_fut"
+        if "condicional" in s:
+            return "ind_cond"
+        if "presente" in s:
+            return "ind_pres"
+        return None
+    except Exception:
+        return None
+
+
+def person_code_for_label(label) -> str | None:
+    """"yo" -> "1s", "él/ella/usted" -> "3s", "nosotros/as" -> "1p", … None if
+    the label is not a person pronoun. Never raises."""
+    try:
+        tokens = re.split(r"[\s/]+", _norm_label(label))
+        return _PERSON_PRONOUNS.get(tokens[0]) if tokens else None
+    except Exception:
+        return None
+
+
+def _base_verb(lemma: str) -> str:
+    """Lower-cased infinitive; reflexive -arse/-erse/-irse loses the "se"
+    (same rule as verb_regularity)."""
+    lemma = (lemma or "").strip().lower()
+    if len(lemma) > 4 and lemma.endswith(("arse", "erse", "irse")):
+        lemma = lemma[:-2]
+    return lemma
+
+
+def tense_is_irregular(lemma: str, tense: str, lang: str) -> bool:
+    """Is `tense` irregular for this verb? Reflexive verbs are judged by the
+    base verb. ind_pres/ind_pret/ind_impf/ind_fut come from irregular_tenses();
+    the rest is derived: ind_cond follows ind_fut (same stem), subj_pres follows
+    ind_pres (built on the yo-form), subj_impf follows ind_pret (built on the
+    ellos-form); perf is irregular iff the lexicon participle differs from the
+    regular one (-ar -> -ado, -er/-ir -> -ido; missing participle = regular).
+    Never raises (False on error)."""
+    try:
+        lemma = _base_verb(lemma)
+        if tense == "perf":
+            part = lexicon.form_for(lemma, "part", "", lang)
+            if not part:
+                return False
+            if lemma.endswith("ar"):
+                regular = lemma[:-2] + "ado"
+            elif lemma.endswith(("er", "ir")):
+                regular = lemma[:-2] + "ido"
+            else:
+                return False
+            return part.lower() != regular
+        base = _DERIVED_TENSE.get(tense, tense)
+        return base in irregular_tenses(lemma, lang)
+    except Exception:
+        return False
+
+
+def _slot_lemma(word_zh: str, lang: str) -> str | None:
+    """The verb a story-sentence word stands for: a form card's lemma, or a
+    slottable verb's (base) infinitive; None for any other word."""
+    try:
+        parsed = parse_form_card(word_zh) if lang == _FORM_LANG else None
+        if parsed:
+            return _base_verb(parsed[0])
+        if is_slottable_verb(word_zh, lang):
+            return _base_verb(word_zh)
+    except Exception:
+        pass
+    return None
+
+
+def practice_counts(lemma: str, lang: str) -> dict:
+    """How often each tense / person form of `lemma` was practised in stories:
+    {tense: {"total": n, "persons": {person: n}, "scope": "verb"|"regular"}}
+    for every tense code in _TENSE_EN.
+
+    Rule: a tense that is irregular for THIS verb counts only this verb's
+    sentences (scope "verb"); a regular one pools the sentences of ALL verbs
+    that are regular in that tense (scope "regular"). A sentence linked to
+    several words counts once, for its first verb. Never raises ({} on error)."""
+    try:
+        lemma = _base_verb(lemma)
+        by_sentence: dict[int, dict] = {}
+        lemma_cache: dict[str, str | None] = {}
+        for r in database.verb_slot_rows(lang):
+            sent = by_sentence.setdefault(r["sentence_id"], {"slot": r["slot"], "lemma": None})
+            if sent["lemma"] is None:
+                word = r["word_zh"]
+                if word not in lemma_cache:
+                    lemma_cache[word] = _slot_lemma(word, lang)
+                sent["lemma"] = lemma_cache[word]
+        irr_cache: dict[tuple[str, str], bool] = {}
+
+        def irregular(verb: str, tense: str) -> bool:
+            if (verb, tense) not in irr_cache:
+                irr_cache[(verb, tense)] = tense_is_irregular(verb, tense, lang)
+            return irr_cache[(verb, tense)]
+
+        out = {}
+        for tense in _TENSE_EN:
+            own = irregular(lemma, tense)
+            persons = {p: 0 for p in PERSONS}
+            total = 0
+            for sent in by_sentence.values():
+                s_tense, _, s_person = (sent["slot"] or "").partition(":")
+                s_verb = sent["lemma"]
+                if s_tense != tense or s_verb is None:
+                    continue
+                if own:
+                    if s_verb != lemma:
+                        continue
+                elif irregular(s_verb, tense):
+                    continue
+                total += 1
+                if s_person in persons:
+                    persons[s_person] += 1
+            out[tense] = {"total": total, "persons": persons,
+                          "scope": "verb" if own else "regular"}
+        return out
+    except Exception as e:
+        logger.warning("practice_counts(%r) failed — %s", lemma, e)
         return {}

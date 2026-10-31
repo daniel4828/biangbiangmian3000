@@ -36,7 +36,33 @@ def get_word_detail(word_id: int):
             regularity = verb_slots.verb_regularity(word.get("word_zh"), word.get("lang"))
             if regularity:
                 word["verb_regularity"] = regularity
+                if word.get("conjugations"):
+                    _add_conjugation_stats(word)
     return word
+
+
+def _add_conjugation_stats(word: dict) -> None:
+    """Practice counts for the conjugation table (#1356). Never raises: any
+    failure just means the table is shown without counts."""
+    try:
+        counts = verb_slots.practice_counts(word.get("word_zh"), word.get("lang"))
+        if not counts:
+            return
+        stats = {}
+        for row in word["conjugations"]:
+            label = row.get("tense")
+            code = verb_slots.tense_code_for_label(label)
+            if code is None or code not in counts:
+                continue
+            stats.setdefault(label, {"total": counts[code]["total"],
+                                     "scope": counts[code]["scope"], "code": code})
+            person = verb_slots.person_code_for_label(row.get("person"))
+            if person is not None:
+                row["practice_count"] = counts[code]["persons"].get(person, 0)
+        if stats:
+            word["conjugation_stats"] = stats
+    except Exception as e:
+        logger.warning("conjugation stats failed for %r — %s", word.get("word_zh"), e)
 
 
 @router.delete("/api/word/{word_id}")

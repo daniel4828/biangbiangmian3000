@@ -572,6 +572,16 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升
 - 测试见 `tests/test_irregular_forms.py`
 
+## 西语变位表练习次数与区块初始状态（#1356）
+
+- **快捷键 `j`**（`conjugation`，scope shared，复习卡背面 + 词条页）切换 Conjugation 区块；没有该区块（中文词）时什么都不做
+- **区块初始状态可设**：`static/app.js` 的 `SECTION_DEFAULTS`（examples closed / notes peek / analysis open / **conjugation open（本议题起）** / inflection closed；`analysis` = Word Analysis 与 Etymology 共用）。用户覆盖存 `localStorage.sectionDefaults`（合并到默认值上，未知键/非法值忽略）；设置页 Review 标签「Section defaults」。五个区块都用 `_sectionInit()` 渲染，全部支持 open/peek/closed 三态
+- **变位表每个时态标题带 `×N` 徽标，每个人称格带次数**。数据来自 `story_sentences.verb_slot`（`"tense:person"`），不建表：`database.verb_slot_rows(lang)` → `verb_slots.practice_counts(lemma, lang)`
+- **计数规则**：对该动词**不规则**的时态只数这个动词自己的句子（scope `verb`）；**规则**的时态把所有在该时态也规则的动词合并成一个计数（scope `regular`，徽标虚线）。一个句子链接多个词只算一次（算给第一个动词）
+- **规则性推导**（`verb_slots.tense_is_irregular`）：ind_pres/pret/impf/fut 用 `irregular_tenses()`；`ind_cond` 跟 `ind_fut`，`subj_pres` 跟 `ind_pres`，`subj_impf` 跟 `ind_pret`；`perf` 看词汇表过去分词是否异于规则 -ado/-ido；反身动词按原形
+- **AI 写的时态/人称标签映射**：`tense_code_for_label()` / `person_code_for_label()`（归一化去重音；Participio/Gerundio/Imperativo/复合时态返回 None，不显示次数）
+- `GET /api/word/{id}` 的西语动词多返回 `conjugation_stats`（按原标签键 `{total, scope, code}`）和每行 `practice_count`；任何失败只是不带统计，不影响词条页
+
 ## 每日 50 张卡自动补充（#1281）
 
 设置页的 **Daily card target** 开关默认开启；仅针对中文，按现有 Anki 学习日边界计算。当天到期且可学习的不同卡片与当天已经作答的不同卡片合计不足 50 时，从 Leech、★ List 交替补入，两个列表内部按 SUBTLEX-CH 整词词频排名升序（未收录排末尾）；一方耗尽后继续使用另一方。重复作答只算一张卡。为遵守同词卡片的埋藏规则，每天每词最多自动补一张，且跳过当天已经安排或作答的词；候选不足时只补现有可用的卡。

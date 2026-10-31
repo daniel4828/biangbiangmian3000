@@ -6280,6 +6280,26 @@ table.fsrs-table td.ivl { font-weight: 700; }
   transition: transform 0.15s;
 }
 .conj-tense[open] .conj-chevron { transform: rotate(90deg); }
+/* Practice counts (#1356) */
+.conj-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.conj-count-shared { border-style: dashed; font-style: italic; }
+.conj-cell-count {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.conj-row > .conj-cell-count { margin-left: auto; }
+.conj-count.is-zero, .conj-cell-count.is-zero { opacity: 0.45; }
 .conj-tense-body { padding: 8px 12px 10px; }
 .conj-pairs {
   display: grid;

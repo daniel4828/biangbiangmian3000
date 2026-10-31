@@ -123,6 +123,25 @@ def verb_slot_usage(lang: str) -> dict[str, tuple[int, str | None]]:
     return {r["slot"]: (r["n"], r["last"]) for r in rows}
 
 
+def verb_slot_rows(lang: str) -> list[dict]:
+    """Every slotted story sentence in `lang` stories with the words linked to it
+    (#1356): [{sentence_id, slot, word_zh}], one row per (sentence, linked word).
+    The caller groups by sentence_id and decides which word is the verb."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT ss.id AS sentence_id, ss.verb_slot AS slot, e.word_zh AS word_zh
+           FROM story_sentences ss
+           JOIN stories s ON s.id = ss.story_id
+           JOIN story_sentence_words sw ON sw.sentence_id = ss.id
+           JOIN entries e ON e.id = sw.word_id
+           WHERE ss.verb_slot IS NOT NULL AND s.lang = ?
+           ORDER BY ss.id, sw.id""",
+        (lang,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_sentence_for_word(story_id: int, word_id: int) -> dict | None:
     """Return the first sentence (lowest position) in this story that contains word_id."""
     conn = get_db()
