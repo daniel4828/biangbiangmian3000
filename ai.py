@@ -2040,51 +2040,68 @@ def dictionary_lookup(query: str, lang: str = "zh", model: str | None = None) ->
     return result, use_model
 
 
-SENTENCE_QUESTION_PROMPT = """You are helping Daniel, a native German speaker
-learning {lang_name} ({learner_level}), understand a sentence from his flashcard
-review. Story sentences are AI-generated and occasionally come out
-grammatically wrong or unnatural — this feature exists precisely so he can
-catch that.
-
-Sentence: {sentence_zh}
-Target word being reviewed: {word_zh}
-
-Answer in two parts, in this order:
-1. First, judge the sentence itself: is it natural? Any grammar mistakes? Would
-   a native speaker actually say this? If something is off, say so plainly —
-   do not politely call a bad sentence good just to avoid conflict. If the
-   sentence is fine, say briefly that it's fine and move on; don't manufacture
-   a problem.
-2. Then answer this question about the sentence: {question}
-
-Write your whole answer in GERMAN, whatever language the sentence or the
-question is in. Quote words and phrases from the sentence in the original
-{lang_name}. Never use Japanese. Keep the answer short — a few sentences, not
-an essay. Plain text only, no markdown, no JSON."""
+DEFAULT_SENTENCE_QUESTION_TEMPLATE = (
+    "Bitte hilf mir, {language} zu lernen. "
+    "Ich habe eine Frage zu diesem Satz: „{sentence}“"
+)
+_LANG_NAMES_DE = {"zh": "Chinesisch", "es": "Spanisch", "fr": "Französisch"}
+SENTENCE_QUESTION_SETTING = "sentence_question_prompt"
 
 
-def ask_about_sentence(sentence_zh: str, question: str = "", word_zh: str | None = None,
-                        lang: str = "zh", model: str = DEFAULT_MODEL) -> str:
-    """Answer a one-off question about a review sentence (issue #853).
+def get_sentence_question_template() -> str:
+    """Stored custom template, or the built-in default (empty = default)."""
+    stored = database.get_app_setting(SENTENCE_QUESTION_SETTING)
+    if isinstance(stored, str) and stored.strip():
+        return stored
+    return DEFAULT_SENTENCE_QUESTION_TEMPLATE
 
-    Single-turn, no follow-up — same shape as dictionary_lookup(). The prompt
-    always asks the model to judge the sentence's own quality first (story
-    generation occasionally produces awkward or wrong sentences) before
-    answering whatever Daniel actually typed; an empty question defaults to
-    "is anything wrong with this sentence?".
 
-    The answer is always German, for every deck language (#1344) — lang only
-    names the sentence's language in the prompt. Returns plain text (not
-    JSON); callers render it with textContent.
+def _validate_chat_messages(messages) -> list[dict]:
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("messages must be a non-empty list")
+    out = []
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            raise ValueError("each message needs role 'user' or 'assistant'")
+        content = m.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("message content must be a non-empty string")
+        out.append({"role": m["role"], "content": content})
+    if out[0]["role"] != "user":
+        raise ValueError("the first message must be from the user")
+    if out[-1]["role"] != "user":
+        raise ValueError("the last message must be from the user")
+    return out
+
+
+def ask_about_sentence(sentence_zh: str, messages: list | None = None, question: str = "",
+                        word_zh: str | None = None, lang: str = "zh",
+                        template: str | None = None, model: str = DEFAULT_MODEL) -> str:
+    """Chat about a review sentence (#853, multi-turn since #1362).
+
+    The (editable) template is filled in and prepended to the FIRST user
+    message only; later turns go through unchanged. No system role: ai.py
+    never uses one and Anthropic treats it as a separate parameter. No forced
+    judgement or style rules — whatever the template says is all there is.
+    Returns plain text; callers render it with textContent.
     """
-    cfg = languages.get_lang_config(lang)
-    q = question.strip() if question else "Ist an diesem Satz etwas falsch?"
-    prompt = SENTENCE_QUESTION_PROMPT.format(
-        lang_name=cfg["name_en"], learner_level=cfg["learner_level"],
-        sentence_zh=sentence_zh, word_zh=word_zh or "(none)", question=q,
-    )
+    if not messages:
+        messages = [{"role": "user", "content": question or ""}]
+    msgs = _validate_chat_messages(messages)
+
+    if template is None:
+        template = get_sentence_question_template()
+    elif not template.strip():
+        template = DEFAULT_SENTENCE_QUESTION_TEMPLATE
+    language = _LANG_NAMES_DE.get(lang) or languages.get_lang_config(lang)["name_en"]
+    # str.replace, not str.format: user templates may contain other braces.
+    intro = (template.replace("{language}", language)
+                     .replace("{sentence}", sentence_zh)
+                     .replace("{word}", word_zh or ""))
+    msgs[0]["content"] = intro + "\n\n" + msgs[0]["content"]
+
     logger.info("[%s] ask_about_sentence: %s", model, sentence_zh)
-    raw = _call_api(model, [{"role": "user", "content": prompt}], max_tokens=800,
+    raw = _call_api(model, msgs, max_tokens=1500,
                     purpose="sentence_question", thinking=False)
     return raw.strip()
 

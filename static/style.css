@@ -6727,63 +6727,92 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   header #header-search-input { font-size: 16px; }
 }
 
-/* Sentence-question modal (#853) — same shell as #add-word-modal */
-#sentence-question-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 900;
-}
-#sentence-question-modal {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(460px, 92vw);
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
+/* Inline sentence chat (#1362) — opens under the card toggle bar, no overlay */
+.sentence-chat {
+  margin: 8px 0;
+  padding: 10px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-  z-index: 901;
-  overflow: hidden;
+  border-radius: 12px;
+  color: var(--text);
+  animation: sc-open 0.18s ease-out;
 }
-#sentence-question-modal .edit-modal-header {
-  padding: 16px 16px 0;
+.sentence-chat[hidden] { display: none; }
+@keyframes sc-open {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
 }
-#sentence-question-body {
-  padding: 16px;
+.sentence-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 50vh;
   overflow-y: auto;
 }
-#sentence-question-sentence {
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 12px;
+.sentence-chat-log:not(:empty) { margin-bottom: 10px; }
+.sc-msg {
+  max-width: 88%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-#sentence-question-row {
+.sc-msg.sc-user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--primary) 18%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border));
+}
+.sc-msg.sc-ai {
+  align-self: flex-start;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.sc-msg.sc-pending {
+  align-self: flex-start;
+  background: var(--bg);
+  color: var(--muted);
+}
+.sc-msg.sc-error {
+  align-self: flex-start;
+  color: var(--again);
+  border: 1px solid var(--again);
+  background: var(--bg);
+}
+.sentence-chat-quick { margin-bottom: 8px; }
+.sentence-chat-quick button {
+  padding: 6px 12px;
+  min-height: 36px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.sentence-chat-quick button:disabled { opacity: 0.45; cursor: default; }
+.sentence-chat-row {
   display: flex;
   gap: 8px;
+  align-items: flex-end;
 }
-#sentence-question-input {
+#sentence-chat-input {
   flex: 1;
   min-width: 0;
   padding: 10px 12px;
   min-height: 44px;
-  font-size: 15px;
+  font-size: 16px; /* iOS: no zoom on focus */
+  font-family: inherit;
+  resize: vertical;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-#sentence-question-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-#sentence-question-input:disabled { opacity: 0.6; }
-#sentence-question-submit {
+#sentence-chat-input:focus { outline: none; border-color: var(--primary); }
+#sentence-chat-input:disabled { opacity: 0.6; }
+#sentence-chat-send {
   flex: 0 0 auto;
   padding: 0 18px;
   min-height: 44px;
@@ -6795,38 +6824,30 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   border-radius: 10px;
   cursor: pointer;
 }
-#sentence-question-submit:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-#sentence-question-answer:not(:empty) {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text);
-  white-space: pre-wrap;
-}
-#sentence-question-answer.sq-error { color: var(--again); }
-#sentence-question-answer.sq-loading { color: var(--muted); }
+#sentence-chat-send:disabled { opacity: 0.45; cursor: default; }
 
-@media (max-width: 560px) {
-  #sentence-question-modal {
-    top: auto;
-    bottom: 0;
-    left: 0;
-    transform: none;
-    width: 100%;
-    max-height: 80vh;
-    border-radius: 16px 16px 0 0;
-    border-bottom: none;
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  #sentence-question-modal .edit-modal-header { padding: 14px 14px 0; }
-  #sentence-question-body { padding: 14px 14px 18px; }
-  #sentence-question-input { font-size: 16px; }
+/* Settings → Ask AI */
+.sentence-prompt-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
 }
+.sentence-test-input { flex: 1; min-width: 0; }
+.sentence-test-answer {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+.sentence-test-answer.sq-error { color: var(--again); }
 
 #sync-modal-overlay {
   position: fixed;
@@ -7057,7 +7078,7 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   bottom: max(12px, env(safe-area-inset-bottom));
   width: min(560px, calc(100% - 20px));
   /* Deliberately below the z-index:100+ tier every modal/overlay in this file
-     uses (add-word-modal, sentence-question-overlay, fsrs-inspector, …) — a
+     uses (add-word-modal, fsrs-inspector, …) — a
      modal must always cover this bar, never sit behind it. Still comfortably
      above ordinary scrolling content (z-index: auto or single digits). */
   z-index: 90;

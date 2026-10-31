@@ -659,13 +659,12 @@ def session_timelines(body: dict):
 
 @router.post("/api/sentence-question")
 def sentence_question(body: dict):
-    """Ask AI about the sentence currently showing on a card's back (#853).
+    """Chat with AI about the sentence on a card's back (#853, #1362).
 
-    Single-turn, no follow-up — same shape as /api/dict/lookup. An empty
-    question defaults to "is anything wrong with this sentence?" inside
-    ai.ask_about_sentence(), which is also told to judge the sentence's own
-    quality before answering — story generation occasionally produces
-    awkward or outright wrong sentences, and this button exists to catch that.
+    Body: {sentence_zh, messages?, question?, word_zh?, lang?, template?}.
+    `messages` is the chat history (last one from the user); a bare `question`
+    is a one-message history. `template` overrides the stored prompt template
+    (used by the Settings test with unsaved text).
     """
     sentence_zh = (body.get("sentence_zh") or "").strip()
     if not sentence_zh:
@@ -673,14 +672,54 @@ def sentence_question(body: dict):
     if ai_disabled():
         raise HTTPException(400, "AI is disabled")
 
+    messages = body.get("messages") or None
     question = (body.get("question") or "").strip()
+    if not messages and not question:
+        raise HTTPException(400, "question required")
     word_zh = body.get("word_zh")
     lang = body.get("lang") or "zh"
+    template = body.get("template")
+    if template is not None and not isinstance(template, str):
+        raise HTTPException(400, "template must be a string")
 
     try:
-        answer = ai.ask_about_sentence(sentence_zh, question=question, word_zh=word_zh, lang=lang)
+        answer = ai.ask_about_sentence(sentence_zh, messages=messages, question=question,
+                                       word_zh=word_zh, lang=lang, template=template)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         logger.error("sentence_question failed for %r: %s", sentence_zh, e)
         raise HTTPException(500, str(e))
 
     return {"answer": answer}
+
+
+def _sentence_prompt_payload() -> dict:
+    current = ai.get_sentence_question_template()
+    return {
+        "template": current,
+        "default": ai.DEFAULT_SENTENCE_QUESTION_TEMPLATE,
+        "is_custom": current != ai.DEFAULT_SENTENCE_QUESTION_TEMPLATE,
+        "variables": ["{language}", "{sentence}", "{word}"],
+    }
+
+
+@router.get("/api/sentence-question/prompt")
+def get_sentence_question_prompt():
+    return _sentence_prompt_payload()
+
+
+@router.put("/api/sentence-question/prompt")
+def put_sentence_question_prompt(body: dict):
+    template = body.get("template")
+    if not isinstance(template, str) or not template.strip():
+        raise HTTPException(400, "template required")
+    database.set_app_setting(ai.SENTENCE_QUESTION_SETTING, template)
+    return _sentence_prompt_payload()
+
+
+@router.delete("/api/sentence-question/prompt")
+def delete_sentence_question_prompt():
+    # Empty value = built-in default (there is no delete helper in database/)
+    database.set_app_setting(ai.SENTENCE_QUESTION_SETTING, "")
+    return _sentence_prompt_payload()

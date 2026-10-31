@@ -3830,6 +3830,7 @@ function openSettings() {
   _loadLangSettings();
   _loadDailyTarget();
   _loadEsSlotWeights();
+  _loadSentencePrompt();
 }
 
 // ── Spanish verb slot weights (issue #1306) ─────────────────────────────────
@@ -3916,6 +3917,127 @@ async function resetEsSlotWeights() {
     showError('Verb slot weights could not be reset: ' + e.message);
   } finally {
     _esSlotWeightsBusy = false;
+    renderSettings();
+  }
+}
+
+// ── Ask-AI prompt template (issue #1362) ────────────────────────────────────
+let _sentencePrompt = null;       // GET /api/sentence-question/prompt; null = not loaded
+let _sentencePromptFailed = false;
+let _sentencePromptBusy = false;
+let _sentencePromptDraft = null;  // typed-but-unsaved template, survives re-renders
+let _sentenceTest = { sentence: 'Ayer fui al cine con mi hermana.', lang: 'es', question: '',
+                      answer: '', error: false, busy: false };
+
+async function _loadSentencePrompt() {
+  try {
+    _sentencePrompt = await api('GET', '/api/sentence-question/prompt');
+    _sentencePromptFailed = false;
+    _sentencePromptDraft = null;
+  } catch (e) {
+    _sentencePrompt = null;
+    _sentencePromptFailed = true;
+  }
+  renderSettings();
+}
+
+function _sentencePromptHtml() {
+  if (_sentencePromptFailed) return '<div class="keymap-label">Could not load</div>';
+  if (!_sentencePrompt) return '<div class="keymap-label">Loading…</div>';
+  const text = _sentencePromptDraft ?? _sentencePrompt.template;
+  const busy = _sentencePromptBusy ? 'disabled' : '';
+  const t = _sentenceTest;
+  const langOpts = [['zh', 'Chinesisch (zh)'], ['es', 'Spanisch (es)'], ['fr', 'Französisch (fr)']]
+    .map(([v, l]) => `<option value="${v}" ${t.lang === v ? 'selected' : ''}>${l}</option>`).join('');
+  return `
+    <p class="keymap-hint">Template for the first message of the chat (the ？ button on a card back). Your question is appended after a blank line. Variables: ${
+      _sentencePrompt.variables.map(v => `<code>${_escHtml(v)}</code>`).join(', ')}.
+      ${_sentencePrompt.is_custom ? '<b>Custom template active.</b>' : 'Using the default.'}</p>
+    <textarea class="sentence-prompt-textarea" rows="8" oninput="_sentencePromptInput(this)" ${busy}>${_escHtml(text)}</textarea>
+    <div class="keymap-row">
+      <button class="keymap-reset-all" onclick="saveSentencePrompt()" ${busy}>Save</button>
+      <button class="keymap-reset-all" onclick="resetSentencePrompt()" ${busy}>Reset to default</button>
+    </div>
+    <h3 class="keymap-heading">Test</h3>
+    <p class="keymap-hint">Uses the text above as it is now (unsaved is fine).</p>
+    <div class="keymap-row">
+      <input type="text" class="sentence-test-input" placeholder="Sample sentence" value="${_escHtml(t.sentence)}"
+             oninput="_sentenceTest.sentence = this.value">
+      <select onchange="_sentenceTest.lang = this.value">${langOpts}</select>
+    </div>
+    <div class="keymap-row">
+      <input type="text" class="sentence-test-input" placeholder="Question" value="${_escHtml(t.question)}"
+             oninput="_sentenceTest.question = this.value"
+             onkeydown="if (event.key === 'Enter') runSentencePromptTest()">
+      <button class="keymap-reset-all" onclick="runSentencePromptTest()" ${t.busy ? 'disabled' : ''}>Test</button>
+    </div>
+    <div class="sentence-test-answer ${t.error ? 'sq-error' : ''}" id="sentence-test-answer">${_escHtml(t.busy ? '…' : t.answer)}</div>`;
+}
+
+function _sentencePromptInput(el) {
+  _sentencePromptDraft = el.value;
+}
+
+async function saveSentencePrompt() {
+  if (!_sentencePrompt || _sentencePromptBusy) return;
+  const text = _sentencePromptDraft ?? _sentencePrompt.template;
+  if (!text.trim()) { showError('Template must not be empty (use Reset to default)'); return; }
+  _sentencePromptBusy = true;
+  renderSettings();
+  try {
+    _sentencePrompt = await api('PUT', '/api/sentence-question/prompt', { template: text });
+    _sentencePromptDraft = null;
+  } catch (e) {
+    showError('Prompt could not be saved: ' + e.message);
+  } finally {
+    _sentencePromptBusy = false;
+    renderSettings();
+  }
+}
+
+async function resetSentencePrompt() {
+  if (!_sentencePrompt || _sentencePromptBusy) return;
+  if (!await showConfirm('Reset the Ask-AI prompt to the default?', 'Reset')) return;
+  _sentencePromptBusy = true;
+  renderSettings();
+  try {
+    _sentencePrompt = await api('DELETE', '/api/sentence-question/prompt');
+    _sentencePromptDraft = null;
+  } catch (e) {
+    showError('Prompt could not be reset: ' + e.message);
+  } finally {
+    _sentencePromptBusy = false;
+    renderSettings();
+  }
+}
+
+async function runSentencePromptTest() {
+  const t = _sentenceTest;
+  if (!_sentencePrompt || t.busy) return;
+  if (!t.sentence.trim() || !t.question.trim()) {
+    showError('Sample sentence and question are required');
+    return;
+  }
+  t.busy = true; t.error = false; t.answer = '';
+  renderSettings();
+  try {
+    const res = await fetch('/api/sentence-question', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sentence_zh: t.sentence, question: t.question, lang: t.lang,
+        template: _sentencePromptDraft ?? _sentencePrompt.template,
+      }),
+    });
+    if (res.status === 401) { location.href = '/login'; return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    t.answer = data.answer;
+  } catch (e) {
+    t.error = true;
+    t.answer = 'Failed: ' + e.message;
+  } finally {
+    t.busy = false;
     renderSettings();
   }
 }
@@ -4209,6 +4331,11 @@ function renderSettings() {
       <h3 class="keymap-heading">Verb slot weights</h3>
       <p class="keymap-hint">Higher = appears more often. 0 = never. Defaults from subtitle corpus frequencies.</p>
       ${_esSlotWeightsHtml()}
+    </div>` };
+  pages.askai = { title: 'Ask AI', icon: '💬', desc: 'Prompt for questions about review sentences', html: `
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Ask AI prompt</h2>
+      ${_sentencePromptHtml()}
     </div>` };
   pages.advanced = { title: 'Advanced', icon: '🛠', desc: 'Server logs', html: `
     <div class="keymap-panel">
@@ -14850,6 +14977,16 @@ function _syncCardToggleBar() {
   const questionBtn = document.getElementById('toggle-question-btn');
   const questionAvail = starAvail && !_offlineMode;
   if (questionBtn) questionBtn.style.display = questionAvail ? '' : 'none';
+  // Quick "tense?" buttons: Romance decks only, and only with the ？ button.
+  const tenseAvail = questionAvail && currentCardLang() !== 'zh';
+  for (const id of ['toggle-tense-question-btn', 'sentence-chat-tense']) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = tenseAvail ? '' : 'none';
+  }
+  _bindSentenceChat();
+  // New card/sentence → fresh chat; re-syncs on the same card keep it (#1362).
+  if (_sentenceChatKey() !== _sentenceChat.key) _resetSentenceChat();
+  if (!questionAvail) _setSentenceChatOpen(false);
 
   bar.style.display = (pinAvail || transAvail || starAvail || flagAvail || questionAvail) ? '' : 'none';
 }
@@ -14916,51 +15053,99 @@ async function toggleSentenceStar() {
 }
 
 // ── Ask AI about this sentence (#853) ────────────────────────────────────────
-// Single-turn, in-place grammar/naturalness check — sentence generation
-// occasionally produces awkward or outright wrong sentences, and this is the
-// only moment (right when reading it) that catching that is easy.
+// #1362: multi-turn inline chat panel under the toggle bar (no modal). The
+// history lives only in memory and is dropped when the card changes.
 
-function openSentenceQuestionModal() {
-  if (!sentence?.sentence_zh) return;
-  document.getElementById('sentence-question-overlay').style.display = 'block';
-  document.getElementById('sentence-question-modal').style.display = 'flex';
-  document.getElementById('sentence-question-sentence').textContent = sentence.sentence_zh;
-  const input = document.getElementById('sentence-question-input');
-  input.value = '';
-  input.disabled = false;
-  document.getElementById('sentence-question-submit').disabled = false;
-  const answerEl = document.getElementById('sentence-question-answer');
-  answerEl.textContent = '';
-  answerEl.className = '';
-  input.focus();
+let _sentenceChat = { key: null, messages: [] };
+
+function _sentenceChatKey() {
+  return `${card?.id}|${sentence?.sentence_zh}`;
 }
 
-function closeSentenceQuestionModal() {
-  document.getElementById('sentence-question-overlay').style.display = 'none';
-  document.getElementById('sentence-question-modal').style.display = 'none';
+function _bindSentenceChat() {
+  const input = document.getElementById('sentence-chat-input');
+  const send = document.getElementById('sentence-chat-send');
+  if (!input || !send || input.dataset.bound) return;
+  input.dataset.bound = '1';
+  send.addEventListener('click', sendSentenceChat);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      sendSentenceChat();
+    } else if (e.key === 'Escape') {
+      e.stopPropagation();
+      _setSentenceChatOpen(false);
+    }
+  });
 }
 
-async function submitSentenceQuestion() {
-  if (!sentence?.sentence_zh) return;
-  const input = document.getElementById('sentence-question-input');
-  const submitBtn = document.getElementById('sentence-question-submit');
-  const answerEl = document.getElementById('sentence-question-answer');
+function _setSentenceChatOpen(open) {
+  const panel = document.getElementById('sentence-chat');
+  if (!panel) return;
+  panel.hidden = !open;
+  document.getElementById('toggle-question-btn')?.classList.toggle('active', open);
+  if (open) document.getElementById('sentence-chat-input')?.focus();
+}
 
-  input.disabled = true;
-  submitBtn.disabled = true;
-  answerEl.textContent = 'Asking…';
-  answerEl.className = 'sq-loading';
+function toggleSentenceChat() {
+  if (!sentence?.sentence_zh) return;
+  _bindSentenceChat();
+  const panel = document.getElementById('sentence-chat');
+  _setSentenceChatOpen(panel.hidden);
+}
+
+function _resetSentenceChat() {
+  _sentenceChat = { key: _sentenceChatKey(), messages: [] };
+  const log = document.getElementById('sentence-chat-log');
+  if (log) log.replaceChildren();
+  const input = document.getElementById('sentence-chat-input');
+  if (input) { input.value = ''; input.disabled = false; }
+  _setSentenceChatBusy(false);
+  _setSentenceChatOpen(false);
+}
+
+function _addSentenceChatBubble(cls, text) {
+  const log = document.getElementById('sentence-chat-log');
+  const el = document.createElement('div');
+  el.className = 'sc-msg ' + cls;
+  el.textContent = text; // AI text: textContent only, never innerHTML
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+function askTenseQuestion() {
+  if (!sentence?.sentence_zh) return;
+  _bindSentenceChat();
+  _setSentenceChatOpen(true);
+  sendSentenceChat('Warum wird in diesem Satz diese Zeitform benutzt?');
+}
+
+async function sendSentenceChat(quickText) {
+  if (!sentence?.sentence_zh) return;
+  const input = document.getElementById('sentence-chat-input');
+  const send = document.getElementById('sentence-chat-send');
+  const fromInput = typeof quickText !== 'string';
+  const text = (fromInput ? input.value : quickText).trim();
+  if (!text || input.disabled) return;
+
+  const chat = _sentenceChat;
+  chat.messages.push({ role: 'user', content: text });
+  _addSentenceChatBubble('sc-user', text);
+  // A quick button leaves a half-typed draft in the input untouched.
+  if (fromInput) input.value = '';
+  _setSentenceChatBusy(true);
+  const pending = _addSentenceChatBubble('sc-pending', '…');
+  const userBubble = pending.previousElementSibling;
 
   try {
-    // Raw fetch (not the shared api() helper) so a 400/500 shows the actual
-    // server-side reason (HTTPException detail), not just an HTTP status code
-    // — "静默失败" is explicitly ruled out for this feature.
+    // Raw fetch (not api()) so a 400/500 shows the server's actual reason.
     const res = await fetch('/api/sentence-question', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sentence_zh: sentence.sentence_zh,
-        question: input.value.trim(),
+        messages: chat.messages,
         word_zh: card?.word_zh,
         lang: currentCardLang(),
       }),
@@ -14968,18 +15153,32 @@ async function submitSentenceQuestion() {
     if (res.status === 401) { location.href = '/login'; return; }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || res.statusText);
-    // AI text rendered with textContent only — never innerHTML (#853, same
-    // rule as /dict).
-    answerEl.textContent = data.answer;
-    answerEl.className = '';
+    if (_sentenceChat !== chat) return; // card changed while waiting
+    chat.messages.push({ role: 'assistant', content: data.answer });
+    pending.remove();
+    _addSentenceChatBubble('sc-ai', data.answer);
   } catch (e) {
-    // Show the server's error text as-is — a silent failure here is worse
-    // than an ugly one, since the whole point is trustworthy feedback.
-    answerEl.textContent = 'Failed: ' + e.message;
-    answerEl.className = 'sq-error';
+    if (_sentenceChat !== chat) return;
+    // Failed turn is not kept in history; give the text back to the input.
+    chat.messages.pop();
+    userBubble?.remove();
+    pending.remove();
+    if (fromInput) input.value = text;
+    _addSentenceChatBubble('sc-error', 'Failed: ' + e.message);
   } finally {
-    input.disabled = false;
-    submitBtn.disabled = false;
+    if (_sentenceChat === chat) {
+      _setSentenceChatBusy(false);
+      if (!document.getElementById('sentence-chat').hidden) input.focus();
+    }
+  }
+}
+
+// Input, Send and both quick buttons are locked together while a request runs.
+function _setSentenceChatBusy(busy) {
+  for (const id of ['sentence-chat-input', 'sentence-chat-send',
+                    'sentence-chat-tense', 'toggle-tense-question-btn']) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = busy;
   }
 }
 
@@ -18629,14 +18828,6 @@ document.addEventListener('keydown', async e => {
     if (logsOverlay && logsOverlay.style.display !== 'none') {
       e.preventDefault();
       closeLogsViewer();
-      return;
-    }
-    // Same for the sentence-question modal (#853) — its input holds focus too,
-    // so it has to be handled before the blur branch below.
-    const sqModal = document.getElementById('sentence-question-modal');
-    if (sqModal && sqModal.style.display !== 'none') {
-      e.preventDefault();
-      closeSentenceQuestionModal();
       return;
     }
     // Esc closes the add-word modal (its input has focus, so this must come
