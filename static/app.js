@@ -11056,6 +11056,8 @@ function loadPresetFields(preset) {
   document.getElementById('opt-enable-fsrs').checked   = preset.enable_fsrs == null ? true : !!preset.enable_fsrs;
   document.getElementById('opt-hard-1d').checked       = preset.learning_hard_1d == null ? true : !!preset.learning_hard_1d;
   document.getElementById('opt-hard-days').value       = preset.learning_hard_days == null ? 1 : preset.learning_hard_days;
+  document.getElementById('opt-good-compromise').checked = preset.learning_good_compromise == null ? true : !!preset.learning_good_compromise;
+  document.getElementById('opt-good-compromise-pct').value = preset.learning_good_compromise_pct == null ? 35 : preset.learning_good_compromise_pct;
   document.getElementById('opt-desired-retention').value = Math.round((preset.desired_retention ?? 0.9) * 100);
   document.getElementById('opt-max-int').value         = preset.maximum_interval ?? 36500;
   document.getElementById('opt-reading-enabled').checked = !!preset.reading_enabled;
@@ -11309,6 +11311,11 @@ async function saveOptions() {
     enable_fsrs:            document.getElementById('opt-enable-fsrs').checked ? 1 : 0,
     learning_hard_1d:       document.getElementById('opt-hard-1d').checked ? 1 : 0,
     learning_hard_days:     Math.max(0.1, parseFloat(document.getElementById('opt-hard-days').value) || 1),
+    learning_good_compromise: document.getElementById('opt-good-compromise').checked ? 1 : 0,
+    learning_good_compromise_pct: (() => {
+      const v = parseFloat(document.getElementById('opt-good-compromise-pct').value);
+      return Number.isNaN(v) ? 35 : Math.min(100, Math.max(0, v));
+    })(),
     desired_retention:      Math.min(0.99, Math.max(0.70, (parseInt(document.getElementById('opt-desired-retention').value) || 90) / 100)),
     maximum_interval:       Math.max(1, parseInt(document.getElementById('opt-max-int').value) || 36500),
   };

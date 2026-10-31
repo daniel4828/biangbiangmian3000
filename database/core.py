@@ -461,6 +461,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE deck_presets ADD COLUMN learning_hard_1d INTEGER NOT NULL DEFAULT 1")
     if "learning_hard_days" not in preset_cols:
         conn.execute("ALTER TABLE deck_presets ADD COLUMN learning_hard_days REAL NOT NULL DEFAULT 1")
+    if "learning_good_compromise" not in preset_cols:
+        conn.execute("ALTER TABLE deck_presets ADD COLUMN learning_good_compromise INTEGER NOT NULL DEFAULT 1")
+    if "learning_good_compromise_pct" not in preset_cols:
+        conn.execute("ALTER TABLE deck_presets ADD COLUMN learning_good_compromise_pct REAL NOT NULL DEFAULT 35")
     if "learned_interval" not in preset_cols:
         conn.execute("ALTER TABLE deck_presets ADD COLUMN learned_interval INTEGER NOT NULL DEFAULT 4")
     if "enable_probation" not in preset_cols:
