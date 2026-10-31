@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 function setup(saved = {}, lang = 'zh') {
- const context = {localStorage: {getItem: k => saved[k] ?? null, setItem: (k,v) => saved[k] = String(v)}, currentCardLang: () => lang};
+ const context = {localStorage: {getItem: k => saved[k] ?? null, setItem: (k,v) => saved[k] = String(v)}, currentCardLang: () => lang, activeLang: () => lang};
  vm.createContext(context);
  const source = fs.readFileSync('static/app.js','utf8');
  vm.runInContext(source.slice(source.indexOf('const _HINT_MIN'), source.indexOf('// The new words of the sentence')), context);
@@ -32,7 +32,7 @@ test('reordering and disabling persist from settings', () => {
  const saved={}; const c=setup(saved);
  const options={innerHTML:''};
  c.document={getElementById:()=>options};
- c.moveHintStage(1,-5); // jumps over the four CEFR stages (zh-hidden) and HSK 6
+ c.moveHintStage(1,-1); // #1372: jumps over the four hidden CEFR stages, swaps with HSK 6
  assert.equal(c._hintEnabledStages()[6],1);
  c.changeHintStage(1,false);
  assert.ok(!setup(saved)._hintEnabledStages().includes(1));
@@ -172,4 +172,17 @@ test('previous-word hint falls back when jieba merges it with the target or the 
  assert.match(empty,/新/); assert.doesNotMatch(empty,/掌权/);
  const off=render({listenHintPreviousWord:'false'}, [{word:'他'},{word:'说'},{word:'重新掌权'},{word:'了'}]);
  assert.doesNotMatch(off,/重新/);
+});
+
+test('settings list only the active language stages (#1372)', () => {
+ const options={innerHTML:''};
+ const zh=setup({}, 'zh'); zh.document={getElementById:()=>options};
+ const zhHtml=zh._hintStageOptionsHtml();
+ assert.match(zhHtml,/Move HSK 1 up/); assert.doesNotMatch(zhHtml,/Move A1 up/);
+ const saved={}; const es=setup(saved, 'es'); es.document={getElementById:()=>options};
+ const esHtml=es._hintStageOptionsHtml();
+ assert.match(esHtml,/Move A1 up/); assert.doesNotMatch(esHtml,/Move HSK/);
+ es.moveHintStage(10,-1); // over six hidden HSK stages, swaps with Show all
+ assert.equal(Array.from(es._hintEnabledStages()).join(','),'10,0,11,12,13,1,9,2');
+ assert.equal(Array.from(setup(saved,'zh')._hintEnabledStages()).join(','),'0,3,4,5,6,7,8,1,9,2'); // zh order untouched
 });
