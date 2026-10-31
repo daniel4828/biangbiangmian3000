@@ -6225,7 +6225,69 @@ table.fsrs-table td.ivl { font-weight: 700; }
   min-width: 58px;
   flex-shrink: 0;
 }
-.conj-form { color: var(--text); }
+.conj-form { color: var(--text); overflow-wrap: anywhere; }
+
+/* Collapsible tense list (#1340) */
+.conj-list {
+  width: 100%;
+  max-width: 460px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.conj-tense + .conj-tense { border-top: 1px solid var(--border); }
+.conj-tense-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.conj-tense-head::-webkit-details-marker { display: none; }
+.conj-tense[open] > .conj-tense-head { background: var(--surface2, rgba(127,127,127,0.06)); }
+.conj-tense-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.conj-tense-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conj-tense[open] .conj-tense-preview { visibility: hidden; }
+.conj-chevron {
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.15s;
+}
+.conj-tense[open] .conj-chevron { transform: rotate(90deg); }
+.conj-tense-body { padding: 8px 12px 10px; }
+.conj-pairs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+  row-gap: 4px;
+}
+.conj-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.conj-cell .conj-person { font-size: 11px; min-width: 0; }
 
 /* ── Offline mode banner (#612) ───────────────────────────────────────────── */
 #offline-banner {

@@ -12964,18 +12964,34 @@ function renderConjugationSection(container, wordData) {
     byTense.get(c.tense).push(c);
   });
   const bodyId = el.id + '-body';
-  const cards = tenses.map(t => {
-    const rows = byTense.get(t).map(c =>
-      c.person
-        ? `<div class="conj-row"><span class="conj-person">${c.person}</span><span class="conj-form">${c.form}</span></div>`
-        : `<div class="conj-row"><span class="conj-form">${c.form}</span></div>`
-    ).join('');
-    return `<div class="conj-tense-card"><div class="conj-tense-name">${t}</div>${rows}</div>`;
+  // #1340: one collapsible <details> per tense, only the first is open.
+  const cell = c =>
+    `<div class="conj-cell"><span class="conj-person">${_escHtml(c.person)}</span>` +
+    `<span class="conj-form">${_escHtml(c.form)}</span></div>`;
+  const cards = tenses.map((t, i) => {
+    const list = byTense.get(t);
+    let body;
+    if (list.length === 6 && list.every(c => c.person)) {
+      // Row i: singular person i on the left, plural person i+3 on the right.
+      const pairs = [0, 1, 2].map(k => cell(list[k]) + cell(list[k + 3])).join('');
+      body = `<div class="conj-pairs">${pairs}</div>`;
+    } else {
+      body = list.map(c =>
+        c.person
+          ? `<div class="conj-row"><span class="conj-person">${_escHtml(c.person)}</span><span class="conj-form">${_escHtml(c.form)}</span></div>`
+          : `<div class="conj-row"><span class="conj-form">${_escHtml(c.form)}</span></div>`
+      ).join('');
+    }
+    const preview = list.map(c => _escHtml(c.form)).join(' · ');
+    return `<details class="conj-tense"${i === 0 ? ' open' : ''}>` +
+      `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}</span>` +
+      `<span class="conj-tense-preview">${preview}</span><span class="conj-chevron">›</span></summary>` +
+      `<div class="conj-tense-body">${body}</div></details>`;
   }).join('');
   el.innerHTML =
     `<div class="section-label section-toggle" onclick="toggleSection('${bodyId}')">` +
       `<span id="${bodyId}-arrow">▶</span> Conjugation</div>` +
-    `<div id="${bodyId}" style="display:none"><div class="conj-grid">${cards}</div></div>`;
+    `<div id="${bodyId}" style="display:none"><div class="conj-list">${cards}</div></div>`;
 }
 
 // Noun/adjective inflection section (issue #805) — plural, gender agreement.
