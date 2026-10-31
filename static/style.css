@@ -6743,6 +6743,7 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   to { opacity: 1; transform: none; }
 }
 .sentence-chat-log {
+  position: relative; /* offsetParent for scrolling an answer's top into view */
   display: flex;
   flex-direction: column;
   gap: 8px;

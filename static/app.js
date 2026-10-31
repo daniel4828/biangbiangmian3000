@@ -15118,7 +15118,10 @@ function _addSentenceChatBubble(cls, text) {
   if (cls === 'sc-ai') el.innerHTML = renderMarkdown(text);
   else el.textContent = text;
   log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
+  // An AI answer is read from the top: show its first line, not its end
+  // (#1362). Everything else (own question, "…") sticks to the bottom.
+  if (cls === 'sc-ai') log.scrollTop = el.offsetTop; // log is the offsetParent
+  else log.scrollTop = log.scrollHeight;
   return el;
 }
 
@@ -15176,7 +15179,7 @@ async function sendSentenceChat(quickText) {
   } finally {
     if (_sentenceChat === chat) {
       _setSentenceChatBusy(false);
-      if (!document.getElementById('sentence-chat').hidden) input.focus();
+      if (!document.getElementById('sentence-chat').hidden) input.focus({ preventScroll: true }); // don't jump the page to the input
     }
   }
 }
