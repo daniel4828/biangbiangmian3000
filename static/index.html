@@ -99,8 +99,10 @@
          (⚙ only while something runs, ⟳ only on the laptop, ↺ only in review),
          so anywhere but the end makes the most-used control slide around. -->
     <div id="header-search-wrap">
+      <select id="header-search-lang" aria-label="Language" title="Language" hidden></select>
       <input id="header-search-input" type="search" placeholder="Search or look up…"
              autocomplete="off" spellcheck="false" title="Search your vocabulary (⌘K)">
+      <button id="header-search-clear" type="button" aria-label="Clear" title="Clear" hidden>✕</button>
       <div id="header-search-panel" style="display:none"></div>
     </div>
   </div>

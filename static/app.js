@@ -1734,6 +1734,7 @@ async function loadDecks({ keepView = false } = {}) {
       api('GET', '/api/lang-settings').catch(() => null),
     ]);
     _availableLangs = langs && langs.length ? langs : ['zh'];
+    _renderHeaderSearchLang();
     _langsInUse = (ls && ls.in_use && ls.in_use.length) ? ls.in_use : _availableLangs.slice();
     _offlineMode = !!(mode && mode.offline);
     _localMode = !!(mode && mode.local);
@@ -13736,8 +13737,45 @@ let _headerSearchActive = -1;  // keyboard cursor across rows + actions
 // Same rule as the ＋ this replaced (#829): during review the word was picked
 // out of the card in front of him, so that card's language wins — the home
 // page's tab is irrelevant there.
+// A language picked in the flag selector wins over that (#1384).
 function _headerSearchLang() {
+  try {
+    const stored = localStorage.getItem('headerSearchLang');
+    if (stored && _availableLangs.includes(stored)) return stored;
+  } catch (e) { /* storage unavailable: fall through */ }
   return _currentView === 'review' ? currentCardLang() : activeLang();
+}
+
+const _HS_FLAGS = { zh: '🇨🇳', fr: '🇫🇷', es: '🇪🇸' };
+
+// Flag picker (#1384): only shown with more than one language.
+function _renderHeaderSearchLang() {
+  const select = document.getElementById('header-search-lang');
+  const wrap = document.getElementById('header-search-wrap');
+  if (!select || !wrap) return;
+  if (_availableLangs.length <= 1) {
+    select.hidden = true;
+    wrap.classList.remove('hs-has-lang');
+    return;
+  }
+  select.replaceChildren();
+  for (const l of _availableLangs) {
+    const opt = document.createElement('option');
+    opt.value = l;
+    opt.textContent = _HS_FLAGS[l] || l.toUpperCase();
+    opt.title = _LANG_TAB_LABELS[l] || l;
+    select.appendChild(opt);
+  }
+  select.value = _headerSearchLang();
+  select.hidden = false;
+  wrap.classList.add('hs-has-lang');
+}
+
+// Clear button (#1384): visible only while the field has text.
+function _updateHeaderSearchClear() {
+  const input = _headerSearchInput();
+  const btn = document.getElementById('header-search-clear');
+  if (input && btn) btn.hidden = !input.value;
 }
 
 function _headerSearchInput() { return document.getElementById('header-search-input'); }
@@ -13869,6 +13907,7 @@ function onHeaderSearchKey(e) {
 function headerSearchAdd(q) {
   closeHeaderSearchPanel();
   _headerSearchInput().value = '';
+  _updateHeaderSearchClear();
   showQuickAddBanner('Generating "' + q + '"…', true);
   addWordViaAi(q, 'list', (state, text, deckPath) => {
     // 'idle' is the cancelled "already in your collection" confirmation
@@ -13943,9 +13982,31 @@ async function headerSearchLookup(q) {
 function initHeaderSearch() {
   const input = _headerSearchInput();
   if (!input) return;
+  input.addEventListener('input', _updateHeaderSearchClear);
   input.addEventListener('input', onHeaderSearchInput);
   input.addEventListener('keydown', onHeaderSearchKey);
-  input.addEventListener('focus', () => { if (input.value.trim()) onHeaderSearchInput(); });
+  input.addEventListener('focus', () => {
+    _renderHeaderSearchLang();
+    if (input.value.trim()) onHeaderSearchInput();
+  });
+  // #1384: clear button and language picker, bound once.
+  const clearBtn = document.getElementById('header-search-clear');
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    clearTimeout(_headerSearchTimer);
+    _headerSearchSeq++;
+    input.value = '';
+    closeHeaderSearchPanel();
+    _updateHeaderSearchClear();
+    input.focus();
+  });
+  const langSel = document.getElementById('header-search-lang');
+  if (langSel) langSel.addEventListener('change', () => {
+    try { localStorage.setItem('headerSearchLang', langSel.value); } catch (e) { /* ignore */ }
+    if (input.value.trim()) onHeaderSearchInput();
+    input.focus();
+  });
+  _renderHeaderSearchLang();
+  _updateHeaderSearchClear();
   // Bound once on the document, not per rendered row: the panel's contents are
   // rebuilt on every keystroke, so per-row listeners would have to be rebound
   // forever (#940's lesson on the knowledge list).

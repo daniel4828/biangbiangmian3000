@@ -163,6 +163,24 @@ header h1 {
   transition: border-color .15s, box-shadow .15s;
 }
 #header-search-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+/* Clear button + flag picker inside the field (#1384) */
+#header-search-input { padding-right: 38px; }
+#header-search-wrap.hs-has-lang #header-search-input { padding-left: 44px; }
+#header-search-input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+#header-search-clear, #header-search-lang {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 1;
+  background: transparent; border: none; padding: 0; margin: 0;
+  cursor: pointer; text-align: center; font-family: inherit;
+}
+#header-search-clear {
+  right: 6px; width: 28px; height: 28px; font-size: 14px; line-height: 28px;
+  color: var(--text-muted, var(--text));
+}
+#header-search-clear[hidden], #header-search-lang[hidden] { display: none; }
+#header-search-lang {
+  left: 4px; width: 36px; font-size: 20px; line-height: 1;
+  -webkit-appearance: none; appearance: none; color: var(--text);
+}
 #header-search-panel {
   position: absolute;
   top: calc(100% + 6px);
@@ -6704,6 +6722,15 @@ header #header-search-input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-ring), 0 -6px 24px rgba(15,23,42,.18);
 }
+/* #1384: only left/right padding change; top/bottom + safe-area stay */
+header #header-search-input { padding-right: 38px; }
+header #header-search-wrap.hs-has-lang #header-search-input { padding-left: 44px; }
+/* Controls align with the text line, not the safe-area padding */
+header #header-search-clear, header #header-search-lang {
+  top: 0; transform: none; height: 42px; line-height: 42px;
+}
+header #header-search-clear { right: 8px; }
+header #header-search-lang { left: 6px; }
 header #header-search-panel {
   top: auto;
   bottom: calc(100% + 8px);
