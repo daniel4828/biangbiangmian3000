@@ -380,6 +380,106 @@ def resolve_briefing_model() -> str:
 # #596). Mirrors importer._CEFR_TO_INT (A1=1 … C2=6).
 _CEFR_LEVELS = {1: "A1", 2: "A2", 3: "B1", 4: "B2", 5: "C1", 6: "C2"}
 
+# Pseudo language of the cross-language "🌐 Languages" session (#1378); same
+# literal as routes.utils.MULTI_LANG.
+MULTI_LANG = "multi"
+
+
+def _multi_lang_label(lang: str) -> str:
+    """Short language name used in the multi-language prompt ("Chinese", "Spanish")."""
+    if lang == "zh":
+        return "Chinese"
+    return languages.get_lang_config(lang)["name_en"]
+
+
+def _guess_unmatched_lang(is_cjk: bool, parsed: list[dict], cards: list[dict], card_lang) -> str:
+    """Language of a multi-story sentence that matched no card: CJK text is
+    Chinese; otherwise the language of the nearest earlier matched non-Chinese
+    sentence, else of the first non-Chinese card, else Chinese."""
+    if is_cjk:
+        return "zh"
+    for e in reversed(parsed):
+        if e.get("word_ids") and e.get("lang") not in (None, "zh"):
+            return e["lang"]
+    for c in cards:
+        l = card_lang(c)
+        if l != "zh":
+            return l
+    return "zh"
+
+
+def _multi_story_prompt(cards: list[dict], word_list: str, *, mode: str, topic: str | None,
+                        max_hsk: int, grammar_first: str, has_slots: bool,
+                        card_langs: list[str]) -> str:
+    """Prompt for ONE coherent story whose sentences are each written in the
+    language of their target word (#1378). Not user-customizable."""
+    langs = list(dict.fromkeys(card_langs))
+    lang_names = ", ".join(_multi_lang_label(l) for l in langs)
+    cefr_cap = _CEFR_LEVELS.get(max_hsk, "B1")
+
+    if mode == "qa":
+        task_line = (f"Answer the following question, one sentence at a time, to help a learner review "
+                     f"vocabulary in several languages ({lang_names}).\n"
+                     f"Question: {topic or 'Describe something interesting.'}")
+        style_rule = ("- The sentences together should form a coherent, informative answer to the question above\n"
+                      "- Do NOT use fictional characters or narrative story structure")
+    elif mode == "expository":
+        task_line = (f"Write a short informative text about the following topic, to help a learner review "
+                     f"vocabulary in several languages ({lang_names}).\n"
+                     f"Topic: {topic or 'an interesting subject'}")
+        style_rule = ("- The sentences together should form a coherent, factual explanation of the topic above\n"
+                      "- Do NOT use fictional characters or narrative story structure")
+    else:
+        task_line = (f"Write ONE short, coherent story to help a learner review vocabulary in several "
+                     f"languages ({lang_names}).")
+        topic_clause = f"- The story should be set around this topic or theme: {topic}\n" if topic else ""
+        style_rule = (f"{topic_clause}- The sentences must form a coherent narrative with the same recurring characters "
+                      f"across all languages — it is ONE story, not one story per language")
+
+    lang_rules = []
+    for l in langs:
+        cfg = languages.get_lang_config(l)
+        name = _multi_lang_label(l)
+        if l == "zh":
+            lang_rules.append(
+                f"- {name}: target word verbatim; use only HSK 1-{max_hsk} vocabulary for non-target words; "
+                f"max {cfg['sentence_limit']} per sentence; proper Chinese punctuation")
+        else:
+            lang_rules.append(
+                f"- {name}: target word in exactly the given form (you may adapt or drop its leading "
+                f"article); use only simple CEFR A1-{cefr_cap} vocabulary for non-target words; "
+                f"max {cfg['sentence_limit']} per sentence; natural {name} punctuation")
+    lang_rules_block = "\n".join(lang_rules)
+
+    slot_rule = (
+        "\n- For items marked with →: the sentence MUST contain exactly the quoted "
+        "conjugated form (not the infinitive); you may add a subject pronoun or "
+        "other words around it"
+    ) if has_slots else ""
+
+    return f"""{task_line}
+
+{grammar_first}Target words (each is tagged with the language its sentence must be written in; each must appear verbatim in at least one sentence):
+{word_list}
+
+Rules:
+- Each target word MUST appear verbatim in at least one sentence
+- Write the sentences in the same order as the target word list above
+- Write EACH sentence entirely in the language of its target word (the language in brackets) — never mix languages inside one sentence
+- For items marked [SENTENCE]: use that exact text as the sentence, unchanged
+- Each sentence must contain exactly ONE target word from the list — do not use other target words from the list in that sentence
+- Keep each sentence short and simple
+{style_rule}
+Per-language rules:
+{lang_rules_block}{slot_rule}
+- NEVER highlight, quote, or mark target words in any way — no "quotes", no 「brackets」, no （parentheses）, no bold, no underline; write them as plain text embedded naturally in the sentence
+- NEVER use markdown formatting (**bold**, _italic_, etc.) anywhere in the output — write plain text only
+- Do NOT output the language tags in brackets — only the sentences
+
+Return ONLY a numbered list of sentences, no explanation:
+1. ...
+2. ..."""
+
 # ── 自定义提示词模板（issue #581）──────────────────────────────────────────────
 # 每个可自定义模式一份内置模板；database.get_prompt_template(mode) 有自定义行时
 # 覆盖内置。渲染用 _render_prompt 做逐记号字符串替换（不是 str.format——模板里
@@ -607,8 +707,17 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
 
     word_id_set = {c["word_id"] for c in cards}
 
-    def _is_sentence(word_zh: str) -> bool:
-        if lang != "zh" and word_zh.endswith('.'):
+    # Multi-language session (#1378): one story, each sentence written in the
+    # language of its target word. Everywhere below a card's language is
+    # `_card_lang(card)`, which is just `lang` for the single-language modes.
+    multi = lang == MULTI_LANG
+
+    def _card_lang(card: dict) -> str:
+        return (card.get("word_lang") or "zh") if multi else lang
+
+    def _is_sentence(word_zh: str, l: str | None = None) -> bool:
+        l = l or lang
+        if l != "zh" and word_zh.endswith('.'):
             return True
         return word_zh.endswith(('。', '！', '？', '!', '?'))
 
@@ -616,8 +725,9 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
     # generated sentence — the AI may adapt/drop the article to fit the sentence.
     _FR_ARTICLE_PREFIXES = ("le ", "la ", "les ", "un ", "une ", "des ", "du ", "de la ", "de l'", "l'")
 
-    def _word_in_sentence(word_zh: str, sentence_zh: str) -> bool:
-        if lang != "zh":
+    def _word_in_sentence(word_zh: str, sentence_zh: str, l: str | None = None) -> bool:
+        l = l or lang
+        if l != "zh":
             w = word_zh.casefold()
             s = sentence_zh.casefold()
             for prefix in _FR_ARTICLE_PREFIXES:
@@ -638,7 +748,15 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
     slots: dict[int, dict] = {}
     if lang != "zh":
         import verb_slots
-        slots = verb_slots.assign_slots(cards, lang) if verb_slots.config(lang) else {}
+        if multi:
+            # Per non-Chinese language present, rotate that language's slots
+            # over its own cards (Spanish drills count toward the es history).
+            for l in dict.fromkeys(_card_lang(c) for c in cards):
+                if l != "zh" and verb_slots.config(l):
+                    slots.update(verb_slots.assign_slots(
+                        [c for c in cards if _card_lang(c) == l], l))
+        else:
+            slots = verb_slots.assign_slots(cards, lang) if verb_slots.config(lang) else {}
 
     def _slot_form_in_sentence(form: str, sentence: str) -> bool:
         return re.search(rf"(?<!\w){re.escape(form)}(?!\w)", sentence, re.IGNORECASE) is not None
@@ -646,14 +764,16 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
     word_list_lines = []
     for i, c in enumerate(cards):
         slot = slots.get(c["word_id"])
+        # "[Chinese] " / "[Spanish] " language tag in front of each item (multi only)
+        tag = f"[{_multi_lang_label(_card_lang(c))}] " if multi else ""
         if slot:
             word_list_lines.append(
-                f"{i + 1}. {c['word_zh']} → write exactly \"{slot['form']}\" "
+                f"{i + 1}. {tag}{c['word_zh']} → write exactly \"{slot['form']}\" "
                 f"({verb_slots.describe(slot['slot'])})")
-        elif _is_sentence(c['word_zh']):
-            word_list_lines.append(f"{i + 1}. [SENTENCE] {c['word_zh']}")
+        elif _is_sentence(c['word_zh'], _card_lang(c)):
+            word_list_lines.append(f"{i + 1}. {tag}[SENTENCE] {c['word_zh']}")
         else:
-            word_list_lines.append(f"{i + 1}. {c['word_zh']}")
+            word_list_lines.append(f"{i + 1}. {tag}{c['word_zh']}")
     word_list = "\n".join(word_list_lines)
 
     if grammar_focus:
@@ -683,6 +803,11 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
             )
         tpl_mode = mode if mode in ("qa", "expository") else "story"
         prompt = _render_prompt(_story_prompt_template(tpl_mode), variables)
+    elif multi:
+        prompt = _multi_story_prompt(
+            cards, word_list, mode=mode, topic=topic, max_hsk=max_hsk,
+            grammar_first=grammar_first, has_slots=bool(slots),
+            card_langs=[_card_lang(c) for c in cards])
     else:
         cfg = languages.get_lang_config(lang)
         lang_name = cfg["name_en"]
@@ -772,9 +897,15 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
         for s_zh in sentences_zh:
             word_ids = []
             entry = {"word_ids": word_ids, "sentence_zh": s_zh, "tokens": []}
+            s_is_cjk = multi and zh_annotate.cjk_ratio(s_zh) >= 0.2
             for card in cards:
                 wid = card["word_id"]
                 if wid in seen_ids:
+                    continue
+                c_lang = _card_lang(card)
+                # Multi: a Chinese card only matches a CJK sentence, every other
+                # card only a Latin-script one.
+                if multi and (c_lang == "zh") != s_is_cjk:
                     continue
                 slot = slots.get(wid)
                 if slot and _slot_form_in_sentence(slot["form"], s_zh):
@@ -783,15 +914,19 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
                 elif slot:
                     # Wrong form: still accept the card (don't lose the sentence)
                     # but attach no slot/tag — it would lie about what is drilled.
-                    if not (_word_in_sentence(card["word_zh"], s_zh) or any(
+                    if not (_word_in_sentence(card["word_zh"], s_zh, c_lang) or any(
                             _slot_form_in_sentence(f, s_zh)
-                            for f in database.surface_forms(wid, card["word_zh"], lang))):
+                            for f in database.surface_forms(wid, card["word_zh"], c_lang))):
                         continue
-                elif not _word_in_sentence(card["word_zh"], s_zh):
+                elif not _word_in_sentence(card["word_zh"], s_zh, c_lang):
                     continue
                 word_ids.append(wid)
                 seen_ids.add(wid)
+                if multi:
+                    entry["lang"] = c_lang
                 break  # one target word per sentence
+            if multi and "lang" not in entry:
+                entry["lang"] = _guess_unmatched_lang(s_is_cjk, parsed, cards, _card_lang)
             parsed.append(entry)
 
         missing_ids = [wid for wid in word_id_set if wid not in seen_ids]
@@ -858,12 +993,17 @@ def _patch_missing(sentences: list[dict], missing_word_ids: list[int],
         card = card_by_id.get(wid)
         if not card:
             continue
-        if lang == "zh":
+        # Multi (#1378): each card falls back in its own language
+        card_lang = (card.get("word_lang") or "zh") if lang == MULTI_LANG else lang
+        if card_lang == "zh":
             fallback_zh = card.get("source_sentence") or f"我学了{card['word_zh']}这个词。"
         else:
             fallback_zh = card.get("source_sentence") or f"J'ai appris le mot {card['word_zh']}."
-        sentences.append({"word_ids": [wid], "sentence_zh": fallback_zh,
-                          "sentence_en": "", "sentence_de": "", "sentence_fr": ""})
+        patched = {"word_ids": [wid], "sentence_zh": fallback_zh,
+                   "sentence_en": "", "sentence_de": "", "sentence_fr": ""}
+        if lang == MULTI_LANG:
+            patched["lang"] = card_lang
+        sentences.append(patched)
 
 
 def regenerate_entry_fields(
@@ -2209,6 +2349,16 @@ Return ONLY valid JSON, no explanation, no markdown:
 def _fill_translations(sentences: list[dict], progress_key: str | None = None,
                        lang: str = "zh") -> None:
     """Translate sentence_zh → sentence_de in-place using Google Translate."""
+    if lang == MULTI_LANG:
+        # Multi-language story (#1378): translate each language's sentences with
+        # that language as the source. Groups hold the same dict objects, so the
+        # in-place fill reaches the caller's list.
+        groups: dict[str, list[dict]] = {}
+        for s in sentences:
+            groups.setdefault(s.get("lang") or "zh", []).append(s)
+        for l, group in groups.items():
+            _fill_translations(group, progress_key=progress_key, lang=l)
+        return
     try:
         import translator as _t
         source = languages.get_lang_config(lang)["translator_source"]

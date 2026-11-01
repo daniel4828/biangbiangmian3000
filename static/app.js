@@ -127,7 +127,14 @@ function _langScoped() { return _langsInUse.length > 1; }
 // (both are safe no-ops — trailing '?'/'&' with nothing after them — when
 // _langQ() is empty, but callers still guard with `${_langQ() ? '&...' : ''}`
 // style where a stray separator would look odd).
-function _langQ() { return _langScoped() ? `lang=${activeLang()}` : ''; }
+// 🌐 Languages session (#1378): while true, every review/story request carries
+// lang=multi (all enabled languages together, one story). Set only by
+// startReviewMulti(); reset by showView('decks') and by every other session starter.
+let _multiLangSession = false;
+function _langQ() {
+  if (_multiLangSession) return 'lang=multi';
+  return _langScoped() ? `lang=${activeLang()}` : '';
+}
 // Convenience: '?lang=fr' / '&lang=fr' / '' depending on separator + whether a tab bar is active.
 function _langQP(sep) { const q = _langQ(); return q ? `${sep}${q}` : ''; }
 function setActiveLang(lang) {
@@ -172,6 +179,7 @@ function currentCardLang() {
 // them. currentCardLang() above deliberately keeps using the card's own deck
 // (#726): the word being added comes from that card, not from the tab.
 function setupLang() {
+  if (_multiLangSession) return 'multi';
   return _langScoped() ? activeLang() : (_deckLangById[deckId] || 'zh');
 }
 
@@ -179,6 +187,7 @@ function setupLang() {
 // zh uses HSK levels, every other language the CEFR scale (A1=1 … C2=6).
 const CEFR_LABELS = { 1: 'A1', 2: 'A2', 3: 'B1', 4: 'B2', 5: 'C1', 6: 'C2' };
 function levelLabel(lang, lvl) {
+  if (lang === 'multi') return `HSK ${lvl} · ${CEFR_LABELS[lvl] || lvl}`;
   return lang === 'zh' ? `HSK ${lvl}` : (CEFR_LABELS[lvl] || `${lvl}`);
 }
 
@@ -1072,6 +1081,7 @@ function showView(name) {
   // also puts that element's display back under this function's control.
   if (document.body.classList.contains('wd-popup')) closeWordDetailPopup();
   _currentView = name;
+  if (name === 'decks') _multiLangSession = false;  // the 🌐 session ends back home (#1378)
   if (name !== 'loading') _loadingContextToken = null;
   if (name === 'decks' && typeof initHomeDiscovery === 'function') initHomeDiscovery();
   // #1137: the calendar/evolution tooltip is a direct child of <body>, so it
@@ -2123,7 +2133,7 @@ function renderDecks(decks) {
       <div class="tree-row tree-parent">
         <span class="tree-toggle"></span>
         <span class="tree-name-wrap">
-          <span class="tree-name" onclick="startReviewMixed(${allDeck.id},'${safeName}')" style="cursor:pointer">All</span>
+          <span class="tree-name" onclick="startReviewMixedSingle(${allDeck.id},'${safeName}')" style="cursor:pointer">All</span>
           ${!allDeck.no_story && !_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${allDeck.id})" title="Regenerate story">↺</button>` : ''}
         </span>
         <span class="deck-counts">${_mixNewBtn(allDeck.id, allDeck.new_review_order_override)}<span class="n-new">${(allDeck.counts||{}).new||0}</span>${lrnHtml(allDeck.counts)}<span class="n-rev">${(allDeck.counts||{}).review||0}</span></span>
@@ -2135,6 +2145,17 @@ function renderDecks(decks) {
         </div>
         <div class="cat-pills-row">${buildCategoryButtons(allDeck)}</div>
       </div>`;
+    // 🌐 Languages (#1378): all enabled languages in one session with one story.
+    // Only worth showing when more than one language is in use.
+    if (_langsInUse.length > 1) {
+      filteredHtml += `
+      <div class="tree-row tree-parent">
+        <span class="tree-toggle"></span>
+        <span class="tree-name-wrap">
+          <span class="tree-name" onclick="startReviewMulti(${allDeck.id})" style="cursor:pointer" title="Review every enabled language together, with one story">🌐 Languages</span>
+        </span>
+      </div>`;
+    }
   }
 
   let filteredSection = '';
@@ -2224,7 +2245,7 @@ function renderDeckRows(decks, depth, sortMode) {
       <div class="tree-row tree-parent" style="padding-left:${16 + indent}px">
         <span class="tree-toggle" onclick="toggleDeck(${deck.id})">${toggleIcon}</span>
         <span class="tree-name-wrap">
-          <span class="tree-name" onclick="startReviewMixed(${deck.id},'${safeName}',${!!deck.no_story})" style="cursor:pointer">${deck.name}</span>
+          <span class="tree-name" onclick="startReviewMixedSingle(${deck.id},'${safeName}',${!!deck.no_story})" style="cursor:pointer">${deck.name}</span>
           ${deck.lang === 'fr' ? `<span class="deck-lang-chip" title="French deck">FR</span>` : ''}
           ${!deck.no_story && !_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${deck.id})" title="Regenerate story">↺</button>` : ''}
         </span>
@@ -11385,6 +11406,7 @@ function _startAllDeckCategory(cat) {
 
 // ── Start review session ────────────────────────────────────────────────────
 async function startReview(id, cat, name, noStory = false, quick = false) {
+  _multiLangSession = false;
   navPush('review');
   quickMode = quick;
   deckId   = id;
@@ -11745,9 +11767,23 @@ function _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chap
   if (_bs)                                p.set('batch_size', _bs);
   // Active language tab (issue #436) — only sent once more than one language is
   // in use, so a pure-Chinese install's requests stay byte-identical.
-  if (_langQ())                           p.set('lang', activeLang());
+  if (_langQ())                           p.set('lang', _multiLangSession ? 'multi' : activeLang());
   const s = p.toString();
   return s ? '?' + s : '';
+}
+
+// ── Start the 🌐 Languages session (#1378) ───────────────────────────────────
+// Every due card of every enabled language, one story. startReviewMixed does
+// NOT reset the flag; every other entry point does (see _multiLangSession).
+function startReviewMulti(id) {
+  _multiLangSession = true;
+  return startReviewMixed(id, 'Languages');
+}
+
+// Home-list entry for the normal "All"/deck rows: always a single-language session.
+function startReviewMixedSingle(id, name, noStory = false) {
+  _multiLangSession = false;
+  return startReviewMixed(id, name, noStory);
 }
 
 // ── Start mixed (all-category) review session ────────────────────────────────
@@ -11873,6 +11909,7 @@ function confirmUnfinishedStart() {
 
 // ── Start "Unfinished Cards" review session ───────────────────────────────────
 async function startReviewUnfinished() {
+  _multiLangSession = false;
   navPush('review');
   deckName = 'Unfinished Cards';
   story    = null;
@@ -15666,6 +15703,15 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
 function _applySetupLangRestrictions() {
   const lang = setupLang();
   const modeSelect = document.getElementById('setup-mode');
+  // 🌐 multi-language session (#1378): only the plain prose modes (and
+  // words-only) exist; everything else is built around one language's material.
+  // Runs for every language so a previous multi session never leaves hidden options.
+  const _multiOk = ['story', 'qa', 'expository', 'vocab'];
+  [...modeSelect.options].forEach(opt => {
+    const off = lang === 'multi' && !_multiOk.includes(opt.value);
+    opt.hidden = off; opt.disabled = off;
+  });
+  if (lang === 'multi' && !_multiOk.includes(modeSelect.value)) modeSelect.value = 'story';
   const zhOnlyOptions = modeSelect.querySelectorAll('option.setup-mode-zh-only');
   // hidden alone is ignored by iOS Safari for <option> — disabled greys it out there
   zhOnlyOptions.forEach(opt => { opt.hidden = lang !== 'zh'; opt.disabled = lang !== 'zh'; });
@@ -15678,7 +15724,9 @@ function _applySetupLangRestrictions() {
   const hskLabelText = document.getElementById('setup-hsk-label-text');
   if (hskLabelText) hskLabelText.textContent = lang === 'zh'
     ? 'Max HSK level for background vocabulary'
-    : 'Max CEFR level for background vocabulary';
+    : lang === 'multi'
+      ? 'Max level for background vocabulary (HSK · CEFR)'
+      : 'Max CEFR level for background vocabulary';
 }
 
 function togglePriceTable(e) {
@@ -16900,7 +16948,9 @@ function updateStoryHighlight(idx) {
 }
 
 function _storyAudioUrl(idx) {
-  return `/api/tts-file?text=${encodeURIComponent(story.sentences[idx].sentence_zh)}&lang=${currentCardLang()}`;
+  // Multi-language stories carry the language per sentence (#1378)
+  const s = story.sentences[idx];
+  return `/api/tts-file?text=${encodeURIComponent(s.sentence_zh)}&lang=${s.lang || currentCardLang()}`;
 }
 
 function _playStoryAtIdx(idx) {
@@ -17316,7 +17366,8 @@ function _ttsUrl(text, lang) {
 
 // TTS URL for the current card's sentence (falls back to the bare word).
 function _sentenceAudioUrl() {
-  return _ttsUrl(sentence?.sentence_zh || card?.word_zh, currentCardLang());
+  return _ttsUrl(sentence?.sentence_zh || card?.word_zh,
+                 (sentence?.sentence_zh && sentence.lang) || currentCardLang());
 }
 
 // Browser-side TTS prefetch (#554, #557, #606). /api/tts-file is immutable-cached,
@@ -17344,7 +17395,7 @@ function _prefetchSentenceAudio() {
 function _prefetchStoryAudio(sentences) {
   if (!Array.isArray(sentences)) return;
   const lang = currentCardLang();
-  for (const s of sentences) _warmAudio(_ttsUrl(s?.sentence_zh, lang));
+  for (const s of sentences) _warmAudio(_ttsUrl(s?.sentence_zh, s?.lang || lang));
 }
 
 // Clicking the front-side mascot replays the sentence (listening only).
@@ -17735,6 +17786,7 @@ function goHome() {
 function _goHomeNow() {
   card = null; story = null; sentence = null; wordDetails = null; userInput = '';
   rootDeckId = null; unfinishedMode = false; _sessionReviewedCount = 0;
+  _multiLangSession = false;
   browseWords = []; browseAll = []; _browseSelected.clear();
   _knowledgeDetailId = null;
   _bookState.bookId = null;

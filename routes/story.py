@@ -16,7 +16,7 @@ import tts
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from .utils import ai_disabled, leaf_ids, queue_mgr
+from .utils import ai_disabled, leaf_ids, queue_mgr, MULTI_LANG
 
 KAHNEMAN_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "kahneman_chapters.json")
 
@@ -265,9 +265,12 @@ def _add_tokens(sentences: list[dict], lang: str = "zh") -> list[dict]:
         if s.get("tokens"):
             continue
         zh = s.get("sentence_zh") or ""
+        # Multi-language stories carry the language per sentence (#1378); an
+        # unknown/legacy "multi" falls through to the whitespace split.
+        s_lang = s.get("lang") or lang
         if not zh:
             s["tokens"] = []
-        elif lang == "zh":
+        elif s_lang == "zh":
             s["tokens"] = [[tok, None] for tok in jieba.lcut(zh)]
         else:
             s["tokens"] = [[tok, None] for tok in re.findall(r"\s+|\S+", zh)]
@@ -295,7 +298,7 @@ def _log_story(story: dict) -> None:
 
 
 def _get_cards_for_story(deck_id: int, category: str, lang: str | None = None) -> list:
-    if lang in (None, "zh") and database.ensure_daily_target():
+    if lang in (None, "zh", MULTI_LANG) and database.ensure_daily_target():
         queue_mgr.invalidate()
     if category == "unified":
         cards = database.get_due_cards_unified(deck_id, lang=lang)
@@ -553,7 +556,13 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
             # below), only *new* full-story generation with this identifier
             # is rejected — same pattern as the #512 removal of mode='news'.
             raise ValueError("mode 'podcast' has been renamed — use 'knowledge' instead")
-        if lang != "zh":
+        if lang == MULTI_LANG:
+            # #1378: the cross-language session only supports the plain prose
+            # modes; the others are built around one language's source material.
+            if mode not in ("story", "qa", "expository"):
+                raise ValueError(
+                    f"mode '{mode}' is not available for the multi-language deck")
+        elif lang != "zh":
             # Issue #806: knowledge mode is language-agnostic (the AI writes
             # in the deck's target language regardless of the source
             # material's language) and gets its own feature flag so it isn't
@@ -929,6 +938,11 @@ def generate_sentence_for_word(card: dict, gen_params: dict | None) -> dict | No
     mode = gp.get("mode") or "story"
     model = _validated_model(gp.get("model"))
     lang = gp.get("lang") or database.get_deck_lang(card["deck_id"])
+    # A card from the 🌐 multi-language story is regenerated on its own, in its
+    # own deck's language (#1378).
+    from_multi = lang == MULTI_LANG
+    if from_multi:
+        lang = database.get_deck_lang(card["deck_id"])
     # Action label (issue #578): without this the calls logged NULL action_ids
     # and the cost history showed them as cryptic "podcast · legacy" rows.
     # get_api_costs merges adjacent same-label "… Again Sentences" actions into
@@ -1047,6 +1061,8 @@ def generate_sentence_for_word(card: dict, gen_params: dict | None) -> dict | No
         return None
     if not sentences:
         return None
+    if from_multi:
+        sentences[0]["lang"] = lang
     _add_tokens(sentences, lang=lang)
     return sentences[0]
 
@@ -1814,7 +1830,16 @@ async def preload_session(deck_id: int, category: str, quick: bool = False, lang
         texts = [c["word_zh"] for c in cards if c.get("word_zh")]
         logger.info("tts  quick preloading %d word audio files", len(texts))
         try:
-            await tts.preload_all_async(texts, progress_key=progress_key, lang=lang)
+            if lang == MULTI_LANG:
+                # Each word is spoken in its own language (#1378)
+                by_lang: dict[str, list[str]] = {}
+                for c in cards:
+                    if c.get("word_zh"):
+                        by_lang.setdefault(c.get("word_lang") or "zh", []).append(c["word_zh"])
+                for l, group in by_lang.items():
+                    await tts.preload_all_async(group, progress_key=progress_key, lang=l)
+            else:
+                await tts.preload_all_async(texts, progress_key=progress_key, lang=lang)
         except Exception as e:
             logger.warning("tts  quick preload error: %s", e)
     else:
@@ -1825,7 +1850,16 @@ async def preload_session(deck_id: int, category: str, quick: bool = False, lang
             texts = [s["sentence_zh"] for s in sentences if s.get("sentence_zh")]
             logger.info("tts  preloading %d sentences", len(texts))
             try:
-                await tts.preload_all_async(texts, progress_key=progress_key, lang=lang)
+                if lang == MULTI_LANG:
+                    # Each sentence is spoken in its own language (#1378)
+                    by_lang = {}
+                    for s in sentences:
+                        if s.get("sentence_zh"):
+                            by_lang.setdefault(s.get("lang") or "zh", []).append(s["sentence_zh"])
+                    for l, group in by_lang.items():
+                        await tts.preload_all_async(group, progress_key=progress_key, lang=l)
+                else:
+                    await tts.preload_all_async(texts, progress_key=progress_key, lang=lang)
                 logger.info("tts  preload done")
             except Exception as e:
                 logger.warning("tts  preload error: %s", e)

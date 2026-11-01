@@ -9,6 +9,10 @@ from .decks import get_deck, get_locked_deck_ids
 from .entries import surface_forms
 from .daily_target import limit_new_cards, daily_target_card_ids, daily_target_new_counts, ordinary_new_sql
 
+# Pseudo language code of the cross-language review session (#1378). Same value
+# as routes.utils.MULTI_LANG (database must not import routes).
+MULTI_LANG = "multi"
+
 logger = logging.getLogger(__name__)
 
 
@@ -472,7 +476,8 @@ def get_due_cards(deck_id: int, category: str, *, sibling_suppression: bool = Fa
     rows = conn.execute(
         f"""SELECT c.*, w.word_zh, w.pinyin, w.definition, w.pos,
                   w.hsk_level, w.traditional, w.definition_zh,
-                  w.note_type, w.source_sentence, w.notes, w.definition_de, w.definition_fr, w.register
+                  w.note_type, w.source_sentence, w.notes, w.definition_de, w.definition_fr, w.register,
+                  w.lang AS word_lang
            FROM cards c
            JOIN entries w ON w.id = c.word_id
            WHERE c.deck_id = ?
@@ -946,6 +951,19 @@ def get_descendant_leaf_deck_ids(deck_id: int, category: str | None = None, lang
         pid = row["parent_id"]
         children_map.setdefault(pid, []).append(row["id"])
 
+    # Pseudo language "multi" (#1378): every enabled language together.
+    disabled_langs: set[str] = set()
+    if lang == MULTI_LANG:
+        from .stories import get_disabled_langs
+        disabled_langs = set(get_disabled_langs())
+
+    def _lang_ok(did: int) -> bool:
+        if lang is None:
+            return True
+        if lang == MULTI_LANG:
+            return deck_lang.get(did) not in disabled_langs
+        return deck_lang.get(did) == lang
+
     result = []
     stack = [deck_id]
     while stack:
@@ -953,7 +971,7 @@ def get_descendant_leaf_deck_ids(deck_id: int, category: str | None = None, lang
         cat = deck_cat.get(current)
         kids = children_map.get(current, [])
         if cat is not None:  # category leaf
-            if (category is None or cat == category) and (lang is None or deck_lang.get(current) == lang):
+            if (category is None or cat == category) and _lang_ok(current):
                 result.append(current)
         for kid in kids:
             stack.append(kid)
@@ -1176,7 +1194,9 @@ def get_due_cards_any_cat(root_deck_id: int, lang: str | None = None) -> list[di
     # Unified story is stored as category="unified" on the root deck —
     # the per-category loop above never finds it, so check explicitly.
     if not story_pos:
-        unified_story = get_active_story(today, "unified", root_deck_id)
+        # lang-scoped (#1378): otherwise the 🌐 multi story would shadow a
+        # language tab's own unified story (and vice versa).
+        unified_story = get_active_story(today, "unified", root_deck_id, lang=lang)
         if unified_story:
             for s in get_story_sentences(unified_story["id"]):
                 for wid in s["word_ids"]:
