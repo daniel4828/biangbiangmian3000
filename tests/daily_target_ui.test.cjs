@@ -45,7 +45,7 @@ test('leech row keeps Unleech and adds restart with frequency rank', () => {
   const html=c._wordRow({id:7,word_zh:'的',frequency_rank:1,cards:[{is_leech:1}]});
   assert.match(html,/Unleech/);
   assert.match(html,/Set as New Card/);
-  assert.match(html,/Frequency #1/);
+  assert.match(html,/Rank #1/);
 });
 
 test('restart calls the leech-only endpoint and refreshes browse and counts', async () => {
