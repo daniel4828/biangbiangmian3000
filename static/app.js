@@ -152,7 +152,7 @@ function setActiveLang(lang) {
   // because Browse reads _deckLangById / _cachedDecks for its sidebar — but it
   // must keep the view (#822): its parameter is an object, and a bare `true`
   // silently falls back to keepView=false, racing openBrowse() for the view.
-  if (_currentView === 'browse') { loadDecks({ keepView: true }); openBrowse(); return; }
+  if (_currentView === 'browse') { loadDecks({ keepView: true }); openBrowse({ status: _browseCardStatus }); return; }
   loadDecks();
 }
 
@@ -2582,6 +2582,7 @@ function _syncSortOptions() {
   const entering = _syncSortOptions._scope !== scope;
   _syncSortOptions._scope = scope;
   if (showLeeched && entering) _browseSort = showFrequency ? 'frequency' : 'leeched-desc';
+  else if (_browseCardStatus === 'saved' && showFrequency && entering) _browseSort = 'frequency';
   else if (showStarred && !_browseSort.startsWith('starred-')) _browseSort = 'starred-desc';
   else if (showFlagged && !_browseSort.startsWith('flagged-')) _browseSort = 'flagged-desc';
   else if (!showLeeched && !showStarred && !showFlagged &&
@@ -2758,11 +2759,14 @@ function setBrowseDeckFilter(deckId) {
 }
 
 async function openBrowseForDeck(deckId) {
-  await openBrowse();
+  // A deck's words are the point here, not the Star List default.
+  await openBrowse({ status: 'all' });
   setBrowseDeckFilter(deckId);
 }
 
-async function openBrowse() {
+// Browse opens on the Star List by default: that is where Daniel goes to pick
+// words to promote; the other compartments are one chip away.
+async function openBrowse({ status = 'saved' } = {}) {
   navPush('browse');
   setLoading('Loading…');
   try {
@@ -2790,6 +2794,7 @@ async function openBrowse() {
     _renderBrowseDeckSelect();
     _updateBrowseActionBar();
     setBrowseFilter('notes', 'all');
+    if (status !== 'all') setBrowseStatusFilter(status);
   } catch (e) {
     showError('Browse failed: ' + e.message);
     showView('decks');
@@ -2890,7 +2895,7 @@ function _wordRow(w) {
       <div class="bw-left">
         <span class="bw-hanzi">${w.word_zh}</span>
         <span class="bw-pinyin">${w.pinyin || ''}</span>
-        ${['saved', 'leech'].includes(_browseCardStatus) && _hasFrequencyRanks(activeLang()) ? `<span class="bw-pinyin" title="${activeLang() === 'es' ? 'Lemma frequency rank from OpenSubtitles (es lexicon); lower means more frequent' : 'SUBTLEX-CH whole-word frequency rank from film subtitles; lower means more frequent'}">${w.frequency_rank ? 'Frequency #' + w.frequency_rank : 'Frequency: unlisted'}</span>` : ''}
+        ${['saved', 'leech'].includes(_browseCardStatus) && _hasFrequencyRanks(activeLang()) ? `<span class="bw-pinyin" title="${activeLang() === 'es' ? 'Lemma frequency rank from OpenSubtitles (es lexicon); lower means more frequent' : 'SUBTLEX-CH whole-word frequency rank from film subtitles; lower means more frequent'}">${w.frequency_rank ? 'Rank #' + w.frequency_rank : 'Rank: unlisted'}</span>` : ''}
       </div>
       <div class="bw-mid">
         <span class="bw-def">${def}</span>
