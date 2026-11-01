@@ -324,6 +324,9 @@ def init_db() -> None:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN verb_slot TEXT")
     if "grammar_hint" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN grammar_hint TEXT")
+    # Per-sentence language for the multi-language story (#1378).
+    if "lang" not in ss_cols:
+        conn.execute("ALTER TABLE story_sentences ADD COLUMN lang TEXT")
     if "source_title" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN source_title TEXT")
     if "source_name" not in ss_cols:

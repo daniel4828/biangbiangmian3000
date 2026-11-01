@@ -10,7 +10,7 @@ import review_notify
 import srs
 import tts
 from . import tasks
-from .utils import leaf_ids, queue_mgr as _queue_mgr, ai_disabled
+from .utils import leaf_ids, queue_mgr as _queue_mgr, ai_disabled, MULTI_LANG
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -225,7 +225,7 @@ def _next_card_from_queue(key, build_fn) -> dict | None:
 
 @router.get("/api/today/{deck_id}/{category}")
 def get_today(deck_id: int, category: str, lang: str | None = None):
-    if lang in (None, "zh") and database.ensure_daily_target():
+    if lang in (None, "zh", MULTI_LANG) and database.ensure_daily_target():
         _queue_mgr.invalidate()
     ids = leaf_ids(deck_id, category, lang=lang)
     key, build_fn = _key_and_build(ids=ids, category=category, parent_for_multi=deck_id, lang=lang)
@@ -263,7 +263,7 @@ def get_today_unfinished_decks(scope: str = "unfinished", lang: str | None = Non
 
 @router.get("/api/today-mixed/{deck_id}")
 def get_today_mixed(deck_id: int, lang: str | None = None):
-    if lang in (None, "zh") and database.ensure_daily_target():
+    if lang in (None, "zh", MULTI_LANG) and database.ensure_daily_target():
         _queue_mgr.invalidate()
     key, build_fn = _key_and_build(root_deck_id=deck_id, lang=lang)
     card = _next_card_from_queue(key, build_fn)

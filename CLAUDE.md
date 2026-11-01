@@ -631,6 +631,16 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
 
 ---
 
+## 🌐 Languages：跨语言混合复习（#1378）
+
+主页 `All` 下面的 **🌐 Languages**（多于一种语言在用才显示）：所有**已启用**语言、所有类别的今日到期卡一起复习，共用**一篇**故事，每句用该句目标词的语言写——练脑内快速切换语言。每张卡的调度照旧，这只是一个视图。
+
+- **伪语言代码 `multi`**，作为 `lang` 参数走已有的混合复习接口（根牌组 `All` + `category=unified`）。前端 `_multiLangSession` 为真时 `_langQ()` 返回 `lang=multi`；回主页/开始别的会话都会复位，否则会漏进语言标签的请求
+- **查卡只改一个瓶颈**：`database.get_descendant_leaf_deck_ids(lang="multi")` = 不在 `get_disabled_langs()` 里的语言的叶子牌组（#1252 默认关掉 fr）。队列键、`stories.lang='multi'`、进度键都和单语言会话分开
+- **一次 AI 调用**：`ai.generate_story(lang="multi")`，词表每项带 `[Chinese]`/`[Spanish]`，提示词不可自定义。匹配/补漏/动词槽位/翻译都按**每张卡自己的语言**（`card["word_lang"]`）；中文卡只匹配 CJK 句、其它卡只匹配拉丁字母句
+- **`story_sentences.lang`**（可空，NULL = 故事的 lang）：TTS、分词、`verb_slot_usage` 都按它走，所以多语言故事里练过的西语槽位也计入轮换
+- 只支持 `story`/`qa`/`expository`；Again 单句重生成用卡片自己牌组的语言
+
 ## Archive：故事与学习会话的回看（#1023）
 
 应用生成的两样东西一直没有回看入口：**每一篇故事**和**每一次学习会话**，数据早在库里（`stories` / `review_log`），界面上够不着。主页导航行 `📜 Archive`，两个标签。

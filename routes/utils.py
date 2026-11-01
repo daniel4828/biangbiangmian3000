@@ -17,6 +17,11 @@ def ai_disabled() -> bool:
     """
     return _DISABLE_AI_ENV or is_offline()
 
+# Pseudo language of the cross-language "🌐 Languages" session (#1378): every
+# enabled language reviewed together with one story. Travels as the `lang`
+# query param. Same literal as database.cards.MULTI_LANG.
+MULTI_LANG = "multi"
+
 # Shared singleton — imported by review.py and browse.py
 queue_mgr = QueueManager()
 
