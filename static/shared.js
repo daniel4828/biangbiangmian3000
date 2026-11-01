@@ -474,7 +474,7 @@ function _dictTextEl(tag, cls, text) {
   return el;
 }
 
-function _dictOption(opt, wordLang) {
+function _dictOption(opt, wordLang, pending) {
   const row = document.createElement('div');
   row.className = 'dr-option' + (opt.recommended ? ' dr-recommended' : '');
 
@@ -512,7 +512,8 @@ function _dictOption(opt, wordLang) {
   }
 
   row.append(body);
-  if (opt.zh) row.append(_dictAddButtons(opt.zh, wordLang));
+  // While streaming (pending) `zh` may be cut off mid-word — never addable.
+  if (opt.zh && !pending) row.append(_dictAddButtons(opt.zh, wordLang));
   return row;
 }
 
@@ -545,7 +546,7 @@ function renderDictResult(container, record, opts) {
   const hrow = _dictTextEl('div', 'dr-headline-row');
   hrow.append(_dictTextEl('span', 'dr-headline', r.headline || record.query));
   if (r.headline_pinyin) hrow.append(_dictTextEl('span', 'dr-headline-pinyin', r.headline_pinyin));
-  if (opts.onRepeat) {
+  if (opts.onRepeat && !opts.pending) {
     const repeat = document.createElement('button');
     repeat.className = 'dr-repeat';
     repeat.type = 'button';
@@ -568,17 +569,146 @@ function renderDictResult(container, record, opts) {
     if (r.sentence.pinyin) text.append(_dictTextEl('div', 'dr-sent-pinyin', r.sentence.pinyin));
     if (r.sentence.de) text.append(_dictTextEl('div', 'dr-sent-de', r.sentence.de));
     card.append(text);
-    if (r.sentence.zh) card.append(_dictAddButtons(r.sentence.zh, wordLang));
+    if (r.sentence.zh && !opts.pending) card.append(_dictAddButtons(r.sentence.zh, wordLang));
     container.append(card);
   }
 
-  for (const group of (r.groups || [])) {
+  for (const group of (Array.isArray(r.groups) ? r.groups : [])) {
+    if (!group || typeof group !== 'object') continue;  // partial stream
     const g = document.createElement('div');
     g.className = 'dr-group';
     if (group.label) g.append(_dictTextEl('div', 'dr-group-label', group.label));
     for (const opt of (group.options || [])) {
-      g.append(_dictOption(opt, wordLang));
+      if (!opt || typeof opt !== 'object') continue;  // partial stream
+      g.append(_dictOption(opt, wordLang, opts.pending));
     }
     container.append(g);
   }
+}
+
+// Tolerant parser for a JSON object that is still being streamed (#1381).
+// Returns the best parse of the text so far, or null if nothing usable yet.
+// Strategy: (A) close an open string and all open brackets; if that isn't
+// valid (dangling key, half a literal ...) (B) cut back to the last structural
+// character outside a string, drop a trailing comma and close the brackets.
+function parsePartialJson(text) {
+  if (typeof text !== 'string') return null;
+  let s = text.replace(/^\s*```(?:json)?[ \t]*\n?/, '').replace(/\n?```\s*$/, '');
+  if (!s.trim()) return null;
+
+  let inStr = false, esc = false, escStart = -1;
+  const stack = [];
+  let lastGood = -1, lastStack = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') { esc = true; escStart = i; }
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{') stack.push('}');
+    else if (c === '[') stack.push(']');
+    else if (c === '}' || c === ']') stack.pop();
+    else if (c !== ',') continue;
+    lastGood = i + 1;
+    lastStack = stack.slice();
+  }
+  const closers = st => st.slice().reverse().join('');
+
+  let a = s;
+  if (inStr) {
+    // Drop an incomplete escape sequence (lone backslash, short \uXXXX) at the end.
+    if (escStart >= 0) {
+      const need = s[escStart + 1] === 'u' ? 6 : 2;
+      if (s.length - escStart < need && escStart >= s.length - need) a = s.slice(0, escStart);
+    }
+    a += '"';
+  }
+  try { return JSON.parse(a + closers(stack)); } catch (e) { /* try B */ }
+
+  if (lastGood < 0) return null;
+  const b = s.slice(0, lastGood).replace(/[,\s]+$/, '') + closers(lastStack);
+  try { return JSON.parse(b); } catch (e) { return null; }
+}
+
+// POST /api/dict/lookup-stream (#1381): reads the SSE stream, calls
+// onPartial(obj) (at most once per animation frame) with the best parse of the
+// answer so far, and resolves with the stored record once the server has
+// validated and saved the full answer. Rejects on an error event, a broken
+// stream, or a stream that ends without a final event.
+async function dictLookupStream(body, onPartial) {
+  const path = '/api/dict/lookup-stream';
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    credentials: 'same-origin',
+  });
+  if (res.status === 401) {
+    location.href = '/login';
+    throw new Error(`POST ${path} → 401 (redirecting to login)`);
+  }
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json())?.detail || ''; } catch (e) { /* not JSON */ }
+    throw new Error(detail || `POST ${path} → ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buf = '';
+  let acc = '';
+  let record = null;
+  let scheduled = false;
+  let finished = false;
+
+  const flush = () => {
+    scheduled = false;
+    if (finished) return;
+    const partial = parsePartialJson(acc);
+    if (partial !== null && typeof partial === 'object') onPartial(partial);
+  };
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+    else flush();
+  };
+
+  const handle = (rawEvent) => {
+    for (const line of rawEvent.split('\n')) {
+      if (!line.startsWith('data:')) continue;
+      const ev = JSON.parse(line.slice(5).trim());
+      if (ev.type === 'delta') {
+        acc += ev.text;
+        schedule();
+      } else if (ev.type === 'done') {
+        record = ev.record;
+      } else if (ev.type === 'error') {
+        throw new Error(ev.detail || 'Lookup failed');
+      }
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const rawEvent = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        handle(rawEvent);
+      }
+    }
+    buf += decoder.decode();
+    if (buf.trim()) handle(buf);
+  } finally {
+    finished = true;  // a late animation frame must not paint over the final render
+  }
+  if (!record) throw new Error('Lookup interrupted — no answer received');
+  return record;
 }

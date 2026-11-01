@@ -121,7 +121,7 @@
   </div>
 </main>
 
-<script src="/static/shared.js?v=6"></script>
+<script src="/static/shared.js?v=7"></script>
 <script>
   // Standalone dictionary page (#746). Daniel already uses DeepSeek as an
   // ad-hoc dictionary — this gives that a home with history and one-tap
@@ -200,7 +200,9 @@
   // when the answer was poor — the query box is empty by then (cleared on
   // success) and a pasted German sentence is painful to retype, so the
   // callback closes over the stored record instead of the input box.
+  let shownRecord = null;  // the stored record currently rendered (null = none/partial)
   function renderResult(record) {
+    shownRecord = record;
     renderDictResult(resultEl, record, {
       onRepeat: rec => lookup(rec.query, rec.id, rec.lang),
       addLang: lang,
@@ -226,11 +228,20 @@
     queryEl.disabled = true;
     const repeatBtns = resultEl.querySelectorAll('button.dr-repeat');
     repeatBtns.forEach(b => { b.disabled = true; });
-    setStatus(replaceId ? 'Asking again… (5–15s)' : 'Looking up… (5–15s)');
+    setStatus(replaceId ? 'Asking again…' : 'Looking up…');
+    // Remember the stored answer on screen: a failed repeat must put it back
+    // after the streamed partial has painted over it (#1381).
+    const previous = shownRecord;
+    let partialShown = false;
     try {
       const body = { query: q, lang: queryLang || lang };
       if (replaceId) body.replace_id = replaceId;
-      const record = await api('POST', '/api/dict/lookup', body);
+      const record = await dictLookupStream(body, partial => {
+        partialShown = true;
+        setStatus('');
+        renderDictResult(resultEl, { query: q, lang: queryLang || lang, result: partial },
+                         { pending: true, addLang: lang });
+      });
       setStatus('');
       // Cleared only on success: a failed lookup (AI hiccup, bad JSON) is worth
       // retrying verbatim, and retyping a pasted German sentence is painful.
@@ -238,6 +249,13 @@
       renderResult(record);
       loadHistory(histSearch.value.trim());
     } catch (e) {
+      if (partialShown) {
+        // The streamed partial was never stored. A repeat's old answer still
+        // is (the server writes nothing on failure), so restore it; a fresh
+        // lookup has nothing valid to show.
+        if (replaceId && previous && previous.id === replaceId) renderResult(previous);
+        else resultEl.replaceChildren();
+      }
       setStatus(e.message || 'Lookup failed', true);
       // The old result is still on screen and still stored — a failed repeat
       // must leave its Repeat button usable rather than stranding the answer.

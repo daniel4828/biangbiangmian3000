@@ -59,7 +59,8 @@ def test_lookup_reuses_the_shared_renderer_not_a_second_copy():
     Its ★ buttons are what keeps adding on the single add-word pipeline."""
     app_js = _static("app.js")
     assert "renderDictResult(body, record" in app_js
-    assert "/api/dict/lookup" in app_js
+    # #1381: the popup streams through shared.js (POST /api/dict/lookup-stream).
+    assert "dictLookupStream(" in app_js
     assert "function renderDictResult(" not in app_js, "app.js must not define its own copy"
 
 

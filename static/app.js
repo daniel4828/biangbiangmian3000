@@ -13905,7 +13905,7 @@ async function headerSearchLookup(q) {
   body.replaceChildren();
   const msg = document.createElement('div');
   msg.className = 'hs-msg';
-  msg.textContent = 'Looking up… (5–15s)';
+  msg.textContent = 'Looking up…';
   body.appendChild(msg);
   document.getElementById('dict-result-overlay').style.display = 'block';
   document.getElementById('dict-result-modal').style.display = 'block';
@@ -13917,7 +13917,12 @@ async function headerSearchLookup(q) {
   if (document.activeElement === input) input.select();
   const lang = _headerSearchLang();
   try {
-    const record = await api('POST', '/api/dict/lookup', { query: q, lang });
+    // #1381: streamed — the headline and options paint while the model writes.
+    const record = await dictLookupStream({ query: q, lang }, partial => {
+      if (seq !== _dictLookupSeq) return;
+      renderDictResult(body, { query: q, lang, result: partial },
+                       { pending: true, addLang: lang });
+    });
     if (seq !== _dictLookupSeq) return;
     // No onRepeat here: a repeat overwrites the stored answer (#777), and the
     // history that belongs to lives on /dict — that page is where re-asking

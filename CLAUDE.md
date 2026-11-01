@@ -906,6 +906,7 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 - **提示词移植自 `de-zh-bot` 技能**（`ai.DICTIONARY_PROMPT`）：中文输入**直接给全部义项、不给选择**；德/英输入一律先分析 + `a/b/c` 选项（**不用数字**）+ 明确推荐、**倾向口语**（Daniel 反复强调的偏好）；整句先整句翻译再逐词拆解，每个成分单独可加词；解释语言德语，单词可附法语
 - **加词仍走 `/api/add-word-ai`**（`shared.js` 的 `addWordViaAi()`）：`★` 之后照常花 30 秒生成完整词条（例句/汉字分解/量词/同义反义词齐全）。词典**不得**成为第二条加词管线（#643），哪怕它手里已经有译文——省下的那一次调用换来的是内容简陋、与其它词条不一致的条目
 - **解析失败不写库**：`ai.dictionary_lookup()` 解析不出 JSON 或缺 `groups`/`zh` 就抛 `ValueError` → 500 带原始回复前 500 字。空壳词典条目比报错更糟
+- **流式输出（#1381）**：模型要写 300–500 token 的 JSON，原来整段写完前端才渲染，等 4–14 秒。现在 `/dict` 页和顶栏搜索弹窗走 `POST /api/dict/lookup-stream`（`ai._stream_api` 逐段 yield，记账与 `_call_api` 一致）。必须是 `text/event-stream`：GZip 中间件和 Caddy 对这个类型不缓冲，别改成别的 media type。事件 `delta` → `done`（带已存库的 record）或 `error`；**全文收齐后才 `ai.parse_dictionary_response()` 校验并存库**，校验失败只发 `error`、什么都不写（Repeat 的旧答案原样保留）。前端 `shared.js` 的 `parsePartialJson()` 容错解析半截 JSON，`dictLookupStream()` 每帧最多回调一次 `onPartial`；渲染用 `renderDictResult(..., {pending:true})`，此时**不显示 ★ 和 ↻ Repeat**——半截的 `zh` 绝不能被加进词表。`/api/dict/lookup` 非流式端点保留
 - **↻ Repeat 按钮（#777）**：结果标题行右侧，用**同样的 query 原样再问一次**（AI 有随机性，多半会换个说法）。`POST /api/dict/lookup` 的可选 `replace_id` 让这次结果 **UPDATE 覆盖那一行**而不是新增 —— 重查的语义是"刚才那个答案不好"，不是"两个都留着"。三条规矩：① `replace_id` 指向不存在的行 → 404，绝不静默降级成新增；② 解析失败（`ValueError`）时什么都不写，**旧的好答案原样保留** —— 一次失败的重试不能毁掉它本想改进的东西；③ 覆盖时 `query`/`lang` 不动，只换答案，`created_at` 刷新（历史仍按"最后回答时间"排序）。从历史里点开的旧记录同样能 Repeat
 - **`dict_queries.headline` 是反范式的一列**：历史列表不该为了显示一行标题去解析 50 份 `result_json`
 - **`lang` 目前只支持 `zh`**，传别的值返回 400——拿中文提示词去答法语请求会静默生成一个**看起来合理但错误**的词条（同 #726 在加词侧的教训）
@@ -1194,6 +1195,8 @@ GET    /dict[?q=anordnen]                            → 独立词典页（不�
 POST   /api/dict/lookup                              → body {query, lang?='zh', model?, replace_id?} → {id, created_at, query, result}
                                                        同步约 5–15 秒；query 空 / lang 非 zh / AI 关闭 → 400；解析失败 → 500 且**不写库**
                                                        replace_id（#777，Repeat 按钮）→ 覆盖该行而非新增；行不存在 → 404；失败时旧答案不动
+POST   /api/dict/lookup-stream                       → 同上 body，流式（#1381）：text/event-stream，事件 {type:"delta",text} … 最后 {type:"done",record}（record 同 /lookup 返回）或 {type:"error",detail}
+                                                       开流前的校验失败（空 query / 非法 lang / AI 关闭 / replace_id 不存在）仍是普通 HTTP 400/404；流内失败只发 error 事件且**不写库**
 GET    /api/dict/history[?q=&limit=]                 → 历史列表（不含 result_json；q 对 query/headline 做 LIKE）
 GET    /api/dict/history/{id} ；DELETE /api/dict/history/{id}  → 单条 / 删除；不存在均 404（不假装成功）
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它
