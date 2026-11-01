@@ -206,14 +206,18 @@ def put_lang_settings(body: dict):
 
 
 @router.get("/api/daily-target")
-def get_daily_target():
-    return database.get_daily_target_settings()
+def get_daily_target(lang: str = "zh"):
+    try:
+        return database.get_daily_target_settings(lang)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.put("/api/daily-target")
 def put_daily_target(body: dict):
     try:
-        result = database.set_daily_target_enabled(body.get("enabled"))
+        result = database.set_daily_target_settings(
+            body.get("lang") or "zh", enabled=body.get("enabled"), target=body.get("target"))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return result
@@ -221,7 +225,7 @@ def put_daily_target(body: dict):
 
 @router.get("/api/decks")
 def get_decks(unfinished_scope: str = "unfinished", lang: str | None = None):
-    if lang in (None, "zh") and database.ensure_daily_target():
+    if database.ensure_daily_targets(lang):
         queue_mgr.invalidate()
     tree = database.get_deck_tree()
     if lang:

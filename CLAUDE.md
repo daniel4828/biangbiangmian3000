@@ -535,7 +535,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 ## ★ List 中文词频排序（#1246）
 
-Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名越小越靠前，未收录词排最后；每行显示排名或 unlisted。离开中文 Saved 视图恢复默认排序。`word_frequency.py` 缓存读取 `resources/subtlex-ch-ranks.json`（SUBTLEX-CH，99,121 词，电影字幕语料）；`database/browse.py` 按词条语言返回 `frequency_rank`，非中文返回 null。无数据库迁移，无运行时下载。来源和重建方式见 `resources/README.md`。
+Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名越小越靠前，未收录词排最后；每行显示排名或 unlisted。离开中文 Saved 视图恢复默认排序。西班牙语（#1386）同样有这个排序，排名取 `resources/es-lexicon.json.gz` 的原形频率。`word_frequency.py` 缓存读取 `resources/subtlex-ch-ranks.json`（SUBTLEX-CH，99,121 词，电影字幕语料）；`database/browse.py` 按词条语言返回 `frequency_rank`，非中文返回 null。无数据库迁移，无运行时下载。来源和重建方式见 `resources/README.md`。
 
 ## 西班牙语词汇表：词形→原形（#1293）
 
@@ -595,7 +595,9 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 
 `database/daily_target.py` 在 SQLite 事务内计算缺额、选卡、重置并记录当天补卡 ID 和下次来源，防止并发请求或刷新重复补入。自动补入的卡移入当天 Daily 分类子牌组，完全重置为 `new`，不改同词其他卡、不删除作答历史。当天补入的卡豁免普通 `new_per_day` 限额，但仍遵守删除、埋藏、暂停、未来牌组和类别开关；关闭自动补充不撤回已经补入的卡，也不修改 preset。补充入口覆盖牌组列表、直接复习以及故事生成（包括早晨 cron），发生补卡时清空内存队列。
 
-Leech 中文列表默认按词频排列并显示排名，同时保留其他排序。每行 **Set as New Card** 完全重置该词当前标记为 Leech 的卡，保留原牌组与健康卡；原 **Unleech** 继续只解除 Leech 并恢复原进度。`POST /api/cards/bulk-leech-new` 接收 `{word_ids:[...]}`；`GET/PUT /api/daily-target` 返回 `{enabled:bool,target:50}`。
+Leech 中文列表默认按词频排列并显示排名，同时保留其他排序。每行 **Set as New Card** 完全重置该词当前标记为 Leech 的卡，保留原牌组与健康卡；原 **Unleech** 继续只解除 Leech 并恢复原进度。`POST /api/cards/bulk-leech-new` 接收 `{word_ids:[...]}`；`GET/PUT /api/daily-target` 返回 `{enabled:bool,target:int}`。
+
+**按语言设置（#1386）**：每日补充对每种语言各自独立，`GET /api/daily-target?lang=`、PUT body 可带 `lang`（默认 `zh`，非法值 400）。中文设置键保持不变（`daily_target_enabled` / `daily_target_batch` / `daily_target_next_source` / `daily_target_count`），其它语言加后缀 `_<lang>`；西班牙语默认**关闭**，中文默认开启。目标数量可在设置页按语言修改（整数 1–500，默认 50，键 `daily_target_count[_<lang>]`；PUT 可带 `enabled` 和/或 `target`，先全部校验再写入）；调低不会撤回已补入的卡。西语排名取 `resources/es-lexicon.json.gz` 的原形频率排名（形态卡 `tener · Indefinido` 用 ` · ` 前的原形，自反动词 `quejarse` 找不到时去掉 `se` 再查）；补入的西语卡落在 `Español::<日期> · <类别>`（牌组 `lang='es'`，预设用 `_ensure_lang_preset`）。`ensure_daily_targets(lang)` 是各路由的统一入口（`lang` 为 None/multi 时遍历全部语言）；`daily_target_card_ids()` 返回所有语言当天补入卡的并集。
 
 ## 故事生成
 
