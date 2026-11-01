@@ -3,24 +3,73 @@ import json
 from collections import deque
 from datetime import datetime, time, timedelta
 
+import languages
 from word_frequency import frequency_rank
-from .core import anki_today, get_day_cutoff_hour, get_db, _ensure_default_preset
+from .core import (anki_today, get_day_cutoff_hour, get_db, _ensure_default_preset,
+                   _ensure_lang_preset)
 from .decks import parse_daily_deck_date, _invalidate_locked_deck_cache
 from .stories import get_app_setting, set_app_setting
 
 DAILY_TARGET = 50
+MIN_TARGET, MAX_TARGET = 1, 500
 _BATCH_KEY = 'daily_target_batch'
+_COUNT_KEY = 'daily_target_count'
 
 
-def get_daily_target_settings() -> dict:
-    return {'enabled': get_app_setting('daily_target_enabled', '1') == '1', 'target': DAILY_TARGET}
+def _key(base: str, lang: str = 'zh') -> str:
+    """zh keeps the historical setting keys; other languages get a suffix (#1386)."""
+    return base if lang == 'zh' else f'{base}_{lang}'
 
 
-def set_daily_target_enabled(enabled: bool) -> dict:
-    if type(enabled) is not bool:
+def _check_lang(lang: str) -> str:
+    if not languages.is_valid_lang(lang):
+        raise ValueError(f'unknown language: {lang!r}')
+    return lang
+
+
+def get_daily_target_settings(lang: str = 'zh') -> dict:
+    _check_lang(lang)
+    default = '1' if lang == 'zh' else '0'
+    return {'enabled': get_app_setting(_key('daily_target_enabled', lang), default) == '1',
+            'target': _parse_target(get_app_setting(_key(_COUNT_KEY, lang), None))}
+
+
+def _parse_target(raw) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DAILY_TARGET
+    return value if MIN_TARGET <= value <= MAX_TARGET else DAILY_TARGET
+
+
+def _validate_target(target) -> int:
+    if type(target) is not int or not MIN_TARGET <= target <= MAX_TARGET:
+        raise ValueError(f'target must be an integer between {MIN_TARGET} and {MAX_TARGET}')
+    return target
+
+
+def set_daily_target_enabled(enabled: bool, lang: str = 'zh') -> dict:
+    return set_daily_target_settings(lang, enabled=enabled)
+
+
+def set_daily_target_count(target: int, lang: str = 'zh') -> dict:
+    return set_daily_target_settings(lang, target=target)
+
+
+def set_daily_target_settings(lang: str = 'zh', enabled=None, target=None) -> dict:
+    """Validate everything first, then write; at least one value is required."""
+    if enabled is None and target is None:
+        raise ValueError('enabled or target is required')
+    if enabled is not None and type(enabled) is not bool:
         raise ValueError('enabled must be a boolean')
-    set_app_setting('daily_target_enabled', '1' if enabled else '0')
-    return get_daily_target_settings()
+    if target is not None:
+        _validate_target(target)
+    _check_lang(lang)
+    if enabled is not None:
+        set_app_setting(_key('daily_target_enabled', lang), '1' if enabled else '0')
+    if target is not None:
+        set_app_setting(_key(_COUNT_KEY, lang), str(target))
+    return get_daily_target_settings(lang)
 
 
 def _read_setting(conn, key, default=None):
@@ -28,8 +77,8 @@ def _read_setting(conn, key, default=None):
     return row['value'] if row else default
 
 
-def _batch_ids(conn, today):
-    batch = json.loads(_read_setting(conn, _BATCH_KEY, '{}'))
+def _batch_ids(conn, today, lang: str = 'zh'):
+    batch = json.loads(_read_setting(conn, _key(_BATCH_KEY, lang), '{}'))
     return set(batch.get('ids', [])) if batch.get('day') == today else set()
 
 
@@ -43,7 +92,11 @@ def daily_target_card_ids(conn=None) -> set[int]:
     if own_conn:
         conn = get_db()
     try:
-        return _batch_ids(conn, anki_today().isoformat())
+        today = anki_today().isoformat()
+        ids = set()
+        for lang in languages.LANGUAGES:
+            ids |= _batch_ids(conn, today, lang)
+        return ids
     finally:
         if own_conn:
             conn.close()
@@ -66,6 +119,7 @@ def limit_new_cards(cards: list, remaining: int, auto_ids=None) -> list:
 
 def _blocked_decks(decks, today):
     by_id = {d['id']: d for d in decks}
+    roots = {languages.deck_root(l).strip().lower() for l in languages.LANGUAGES}
     blocked = set()
     for d in decks:
         cur = d
@@ -73,7 +127,7 @@ def _blocked_decks(decks, today):
         while cur and cur['id'] not in seen:
             seen.add(cur['id'])
             parent = by_id.get(cur['parent_id'])
-            future = (parent and parent['name'].strip().lower() == 'daily'
+            future = (parent and parent['name'].strip().lower() in roots
                       and (parse_daily_deck_date(cur['name'], today) or today) > today)
             if cur['deleted_at'] or future:
                 blocked.add(d['id'])
@@ -82,14 +136,14 @@ def _blocked_decks(decks, today):
     return blocked
 
 
-def _daily_leaf(conn, today, category, preset_id):
-    """Create the usual Daily/date/category path inside the fill transaction.
+def _daily_leaf(conn, today, category, preset_id, lang='zh'):
+    """Create the usual <root>/date/category path inside the fill transaction.
 
     A trashed destination is deliberately not revived by an automatic action.
     """
     root = conn.execute("SELECT id FROM decks WHERE name='All' AND parent_id IS NULL AND deleted_at IS NULL LIMIT 1").fetchone()
     parent_id = root['id'] if root else None
-    for name, cat in [('Daily', None), (today, None),
+    for name, cat in [(languages.deck_root(lang), None), (today, None),
                       (f'{today} · {category.title()}', category)]:
         row = conn.execute('SELECT id, deleted_at FROM decks WHERE name=? AND parent_id IS ?',
                            (name, parent_id)).fetchone()
@@ -100,11 +154,19 @@ def _daily_leaf(conn, today, category, preset_id):
         else:
             parent_id = conn.execute(
                 'INSERT INTO decks(name,parent_id,preset_id,category,lang) VALUES(?,?,?,?,?)',
-                (name, parent_id, preset_id, cat, 'zh')).lastrowid
+                (name, parent_id, preset_id, cat, lang)).lastrowid
     return parent_id
 
 
-def ensure_daily_target() -> int:
+def ensure_daily_targets(lang: str | None) -> int:
+    """Fill one registered language, or every language when `lang` is None or
+    the multi-language sentinel. Disabled languages return 0 immediately."""
+    if languages.is_valid_lang(lang):
+        return ensure_daily_target(lang)
+    return sum(ensure_daily_target(l) for l in languages.LANGUAGES)
+
+
+def ensure_daily_target(lang: str = 'zh') -> int:
     """Atomically reserve and activate only today's shortfall; return added count.
 
     Existing due cards and different cards already rated today form a union.
@@ -119,25 +181,34 @@ def ensure_daily_target() -> int:
     end_dt = datetime.combine(today_date + timedelta(days=1), time(cutoff))
     end = end_dt.isoformat(' ')
     conn = get_db()
+    enabled_key = _key('daily_target_enabled', lang)
+    enabled_default = '1' if lang == 'zh' else '0'
+    lang_preset = None
     try:
+        if lang != 'zh':
+            # _ensure_lang_preset commits, so resolve it before the write
+            # transaction opens; skipped entirely while the language is off.
+            if _read_setting(conn, enabled_key, enabled_default) != '1':
+                return 0
+            lang_preset = _ensure_lang_preset(conn, lang)
         conn.execute('BEGIN IMMEDIATE')
-        if (_read_setting(conn, 'daily_target_enabled', '1') != '1'
-                or 'zh' in json.loads(_read_setting(conn, 'disabled_langs', '[]'))):
+        if (_read_setting(conn, enabled_key, enabled_default) != '1'
+                or lang in json.loads(_read_setting(conn, 'disabled_langs', '[]'))):
             return 0
         decks = [dict(r) for r in conn.execute('SELECT * FROM decks')]
         blocked = _blocked_decks(decks, today_date)
         presets = {r['id']: dict(r) for r in conn.execute('SELECT * FROM deck_presets')}
         deck_map = {d['id']: d for d in decks}
-        auto_ids = _batch_ids(conn, today)
+        auto_ids = _batch_ids(conn, today, lang)
         rows = [dict(r) for r in conn.execute(
             """SELECT c.*, e.word_zh, e.lang FROM cards c
                JOIN entries e ON e.id=c.word_id
-               WHERE c.deleted_at IS NULL AND e.lang='zh'""")]
+               WHERE c.deleted_at IS NULL AND e.lang=?""", (lang,))]
         active = []
         candidates = {'leech': [], 'saved': []}
         for c in rows:
             d = deck_map.get(c['deck_id'])
-            if not d or d['id'] in blocked or d['lang'] != 'zh':
+            if not d or d['id'] in blocked or d['lang'] != lang:
                 continue
             p = presets[d['preset_id']]
             if not p.get(c['category'] + '_enabled', 1):
@@ -156,8 +227,8 @@ def ensure_daily_target() -> int:
         reviewed = conn.execute(
             """SELECT DISTINCT c.id, c.word_id FROM review_log rl
                JOIN cards c ON c.id=rl.card_id JOIN entries e ON e.id=c.word_id
-               WHERE e.lang='zh' AND rl.reviewed_at >= datetime(?, 'utc')
-                     AND rl.reviewed_at < datetime(?, 'utc')""", (start, end)).fetchall()
+               WHERE e.lang=? AND rl.reviewed_at >= datetime(?, 'utc')
+                     AND rl.reviewed_at < datetime(?, 'utc')""", (lang, start, end)).fetchall()
         done_ids = {r['id'] for r in reviewed}
         # Natural new cards are subject to the existing per-leaf and root caps.
         # Added cards are explicitly exempt, never by modifying a preset.
@@ -165,13 +236,13 @@ def ensure_daily_target() -> int:
         for r in conn.execute(
             """SELECT DISTINCT c.id,c.deck_id,c.category FROM cards c
                JOIN entries e ON e.id=c.word_id
-               WHERE e.lang='zh' AND EXISTS (SELECT 1 FROM review_log rl WHERE rl.card_id=c.id
+               WHERE e.lang=? AND EXISTS (SELECT 1 FROM review_log rl WHERE rl.card_id=c.id
                    AND rl.reviewed_at >= datetime(?, 'utc') AND rl.reviewed_at < datetime(?, 'utc'))
                AND NOT EXISTS (SELECT 1 FROM review_log rl WHERE rl.card_id=c.id
-                   AND rl.reviewed_at < datetime(?, 'utc'))""", (start, end, start)):
+                   AND rl.reviewed_at < datetime(?, 'utc'))""", (lang, start, end, start)):
             d = deck_map.get(r['deck_id'])
             if (r['id'] not in auto_ids and d and d['id'] not in blocked
-                    and d['lang'] == 'zh'
+                    and d['lang'] == lang
                     and presets[d['preset_id']].get(r['category'] + '_enabled', 1)):
                 key = (r['deck_id'], r['category'])
                 new_done[key] = new_done.get(key, 0) + 1
@@ -226,18 +297,20 @@ def ensure_daily_target() -> int:
             if bury_learning:
                 states.update(('learning', 'relearn'))
         planned = auto_ids | done_ids | {c['id'] for c in usable}
-        gap = max(0, DAILY_TARGET - len(planned))
+        target_count = _parse_target(_read_setting(conn, _key(_COUNT_KEY, lang), None))
+        gap = max(0, target_count - len(planned))
         if not gap:
             return 0
         excluded_words = {r['word_id'] for r in reviewed} | {c['word_id'] for c in active}
         excluded_words.update(c['word_id'] for c in rows if c['id'] in auto_ids)
         for source, cs in candidates.items():
-            cs.sort(key=lambda c: (frequency_rank(c['word_zh'], 'zh') or float('inf'), c['word_id'], c['id']))
+            cs.sort(key=lambda c: (frequency_rank(c['word_zh'], lang) or float('inf'), c['word_id'], c['id']))
             candidates[source] = deque(cs)
-        next_source = _read_setting(conn, 'daily_target_next_source', 'leech')
+        source_key = _key('daily_target_next_source', lang)
+        next_source = _read_setting(conn, source_key, 'leech')
         if next_source not in candidates:
             next_source = 'leech'
-        default_preset = _ensure_default_preset(conn)
+        default_preset = _ensure_default_preset(conn) if lang == 'zh' else lang_preset
         added = 0
         while added < gap:
             selected = None
@@ -252,7 +325,7 @@ def ensure_daily_target() -> int:
             if not selected:
                 break
             c = selected
-            target = _daily_leaf(conn, today, c['category'], default_preset)
+            target = _daily_leaf(conn, today, c['category'], default_preset, lang)
             if target is None:
                 break
             target_preset = conn.execute('SELECT p.* FROM decks d JOIN deck_presets p ON p.id=d.preset_id WHERE d.id=?', (target,)).fetchone()
@@ -270,8 +343,8 @@ def ensure_daily_target() -> int:
             added += 1
             next_source = 'saved' if source == 'leech' else 'leech'
         if added:
-            for key, value in ((_BATCH_KEY, json.dumps({'day': today, 'ids': sorted(auto_ids)})),
-                               ('daily_target_next_source', next_source)):
+            for key, value in ((_key(_BATCH_KEY, lang), json.dumps({'day': today, 'ids': sorted(auto_ids)})),
+                               (source_key, next_source)):
                 conn.execute('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
             conn.commit()
             _invalidate_locked_deck_cache()

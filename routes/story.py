@@ -298,7 +298,7 @@ def _log_story(story: dict) -> None:
 
 
 def _get_cards_for_story(deck_id: int, category: str, lang: str | None = None) -> list:
-    if lang in (None, "zh", MULTI_LANG) and database.ensure_daily_target():
+    if database.ensure_daily_targets(lang):
         queue_mgr.invalidate()
     if category == "unified":
         cards = database.get_due_cards_unified(deck_id, lang=lang)
@@ -1889,7 +1889,7 @@ async def pregen_today():
     A failure on one key is logged and does not stop the remaining keys.
     """
     today = database.anki_today().isoformat()
-    if database.ensure_daily_target():
+    if database.ensure_daily_targets(None):
         queue_mgr.invalidate()
 
     # Master switch (issue #528): when the user has turned morning pre-generation

@@ -2563,8 +2563,11 @@ function onBrowseSort(val) {
 // appear while that view is active, and switching away falls back to the default
 // word sort (#773, generalized to flagged in #854). Must run BEFORE the list is
 // (re)rendered so _browseSort is already correct.
+// Languages whose words carry a frequency rank (zh SUBTLEX-CH, es lexicon lemma rank; #1386).
+function _hasFrequencyRanks(lang) { return lang === 'zh' || lang === 'es'; }
+
 function _syncSortOptions() {
-  const showFrequency = ['saved', 'leech'].includes(_browseCardStatus) && activeLang() === 'zh' && _browseMode !== 'hanzi';
+  const showFrequency = ['saved', 'leech'].includes(_browseCardStatus) && _hasFrequencyRanks(activeLang()) && _browseMode !== 'hanzi';
   document.querySelectorAll('#browse-sort option[value="frequency"]').forEach(o => o.hidden = !showFrequency);
   if (!showFrequency && _browseSort === 'frequency') _browseSort = DEFAULT_BROWSE_SORT;
   const showLeeched = _browseCardStatus === 'leech';
@@ -2887,7 +2890,7 @@ function _wordRow(w) {
       <div class="bw-left">
         <span class="bw-hanzi">${w.word_zh}</span>
         <span class="bw-pinyin">${w.pinyin || ''}</span>
-        ${['saved', 'leech'].includes(_browseCardStatus) && activeLang() === 'zh' ? `<span class="bw-pinyin" title="SUBTLEX-CH whole-word frequency rank from film subtitles; lower means more frequent">${w.frequency_rank ? 'Frequency #' + w.frequency_rank : 'Frequency: unlisted'}</span>` : ''}
+        ${['saved', 'leech'].includes(_browseCardStatus) && _hasFrequencyRanks(activeLang()) ? `<span class="bw-pinyin" title="${activeLang() === 'es' ? 'Lemma frequency rank from OpenSubtitles (es lexicon); lower means more frequent' : 'SUBTLEX-CH whole-word frequency rank from film subtitles; lower means more frequent'}">${w.frequency_rank ? 'Frequency #' + w.frequency_rank : 'Frequency: unlisted'}</span>` : ''}
       </div>
       <div class="bw-mid">
         <span class="bw-def">${def}</span>
@@ -4070,45 +4073,70 @@ async function runSentencePromptTest() {
 }
 
 // ── Daily card target (issue #1281) ─────────────────────────────────────────
-let _dailyTarget = null;
-let _dailyTargetFailed = false;
-let _dailyTargetSaving = false;
+const _DAILY_TARGET_LANGS = { zh: 'Chinese', es: 'Spanish' };
+let _dailyTargets = { zh: null, es: null };
+let _dailyTargetFailed = { zh: false, es: false };
+let _dailyTargetSaving = { zh: false, es: false };
 
 async function _loadDailyTarget() {
-  try {
-    _dailyTarget = await api('GET', '/api/daily-target');
-    _dailyTargetFailed = false;
-  } catch (e) {
-    _dailyTarget = null;
-    _dailyTargetFailed = true;
-  }
+  await Promise.all(Object.keys(_DAILY_TARGET_LANGS).map(async lang => {
+    try {
+      _dailyTargets[lang] = await api('GET', `/api/daily-target?lang=${lang}`);
+      _dailyTargetFailed[lang] = false;
+    } catch (e) {
+      _dailyTargets[lang] = null;
+      _dailyTargetFailed[lang] = true;
+    }
+  }));
   renderSettings();
 }
 
-function _dailyTargetHtml() {
-  const disabled = !_dailyTarget || _dailyTargetSaving;
+function _dailyTargetRowHtml(lang) {
+  const state = _dailyTargets[lang];
+  const disabled = !state || _dailyTargetSaving[lang];
   return `<div class="keymap-row">
-    <span class="keymap-label">Fill up to 50 Chinese cards per day</span>
+    <span class="keymap-label">Fill up to
+      <input type="number" min="1" max="500" step="1" value="${state ? state.target : 50}" ${disabled ? 'disabled' : ''}
+        onchange="setDailyTargetCount('${lang}', this.value)" style="width:4.5em">
+      ${_DAILY_TARGET_LANGS[lang]} cards per day</span>
     <label class="switch-wrap">
-      <input type="checkbox" ${_dailyTarget?.enabled ? 'checked' : ''} ${disabled ? 'disabled' : ''}
-        onchange="setDailyTargetEnabled(this.checked)" style="width:18px;height:18px;cursor:pointer">
-      <span>${_dailyTargetFailed ? 'Could not load' : !_dailyTarget ? 'Loading…' : _dailyTarget.enabled ? 'On' : 'Off'}</span>
+      <input type="checkbox" ${state?.enabled ? 'checked' : ''} ${disabled ? 'disabled' : ''}
+        onchange="setDailyTargetEnabled('${lang}', this.checked)" style="width:18px;height:18px;cursor:pointer">
+      <span>${_dailyTargetFailed[lang] ? 'Could not load' : !state ? 'Loading…' : state.enabled ? 'On' : 'Off'}</span>
     </label>
   </div>`;
 }
 
-async function setDailyTargetEnabled(enabled) {
-  if (!_dailyTarget || _dailyTargetSaving) return;
-  const previous = _dailyTarget;
-  _dailyTargetSaving = true;
+function _dailyTargetHtml() {
+  return Object.keys(_DAILY_TARGET_LANGS).map(_dailyTargetRowHtml).join('');
+}
+
+async function setDailyTargetCount(lang, raw) {
+  const target = Number(raw);
+  if (!Number.isInteger(target) || target < 1 || target > 500) {
+    showError('Daily target must be a whole number from 1 to 500');
+    renderSettings();
+    return;
+  }
+  await _saveDailyTarget(lang, { target });
+}
+
+async function setDailyTargetEnabled(lang, enabled) {
+  await _saveDailyTarget(lang, { enabled });
+}
+
+async function _saveDailyTarget(lang, fields) {
+  if (!_dailyTargets[lang] || _dailyTargetSaving[lang]) return;
+  const previous = _dailyTargets[lang];
+  _dailyTargetSaving[lang] = true;
   renderSettings();
   try {
-    _dailyTarget = await api('PUT', '/api/daily-target', { enabled });
+    _dailyTargets[lang] = await api('PUT', '/api/daily-target', { ...fields, lang });
   } catch (e) {
-    _dailyTarget = previous;
+    _dailyTargets[lang] = previous;
     showError('Daily target could not be saved: ' + e.message);
   } finally {
-    _dailyTargetSaving = false;
+    _dailyTargetSaving[lang] = false;
     renderSettings();
   }
 }
@@ -4275,7 +4303,7 @@ function renderSettings() {
   pages.review = { title: 'Review', icon: '🃏', desc: 'Daily target, day boundary, hint stages, shortcuts', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Daily card target</h2>
-      <p class="keymap-hint">When fewer than 50 different Chinese cards are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
+      <p class="keymap-hint">When fewer different cards of a language than the daily target (you set the number, 1–500) are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Set per language: Chinese is on by default, Spanish is off by default (Spanish is ranked by lemma frequency). Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
       ${_dailyTargetHtml()}
     </div>
     <div class="keymap-panel">
@@ -13296,12 +13324,12 @@ function _entryLang(wordData) {
   return wordData?.lang || currentCardLang() || 'zh';
 }
 
-// #1283: SUBTLEX-CH rank in the vocab box's corner — lower = more common.
-// Only Chinese has ranks; frequency_rank arrives with /api/word/{id}.
+// #1283: frequency rank in the vocab box's corner — lower = more common.
+// Chinese (SUBTLEX-CH) and Spanish (lemma rank, #1386) have ranks; frequency_rank arrives with /api/word/{id}.
 function renderWordFreq() {
   const el = document.getElementById('word-freq');
   if (!el) return;
-  const show = !!wordDetails && wordDetails.id === card?.word_id && _entryLang(wordDetails) === 'zh';
+  const show = !!wordDetails && wordDetails.id === card?.word_id && _hasFrequencyRanks(_entryLang(wordDetails));
   el.hidden = !show;
   if (show) el.textContent = wordDetails.frequency_rank ? `Rank #${wordDetails.frequency_rank}` : 'Rank: unlisted';
 }

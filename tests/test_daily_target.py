@@ -24,7 +24,8 @@ def card(word, source='active', category='listening', lang='zh', **fields):
     if source == 'saved':
         did = database.get_or_create_saved_deck(lang)
     else:
-        parent = database.get_or_create_deck_path('Practice' if lang == 'zh' else 'Français::Practice', lang=lang)
+        root = {'zh': 'Practice', 'es': 'Español::Practice'}.get(lang, 'Français::Practice')
+        parent = database.get_or_create_deck_path(root, lang=lang)
         did = database.get_or_create_category_decks(parent, 'Practice')[category]
     cid = database.insert_card(wid, category, did, state='suspended' if source != 'active' else 'review',
                                due=database.anki_today().isoformat())
@@ -331,3 +332,126 @@ def test_deck_bury_override_keeps_both_sibling_cards_in_daily_total():
     conn.close()
     assert database.ensure_daily_target() == 0
     assert database.get_card(candidate)['state'] == 'suspended'
+
+
+# ── Spanish (#1386) ─────────────────────────────────────────────────────────
+
+@pytest.fixture
+def es_lexicon():
+    import lexicon
+    lexicon.inject('es', {'version': 1,
+                          'lemmas': {'comer': {'r': 10}, 'tener': {'r': 20},
+                                     'raro': {'r': 500}},
+                          'forms': {}, 'verbs': {}})
+    yield
+    lexicon.clear_cache()
+
+
+def _deck_row(card_id):
+    conn = database.get_db()
+    try:
+        did = database.get_card(card_id)['deck_id']
+        return dict(conn.execute('SELECT * FROM decks WHERE id=?', (did,)).fetchone())
+    finally:
+        conn.close()
+
+
+def test_spanish_is_off_by_default(es_lexicon):
+    for i in range(10):
+        card(f'activa{i}', lang='es')
+    leech = card('comer', 'leech', lang='es')
+    saved = card('tener', 'saved', lang='es')
+    assert database.get_daily_target_settings('es')['enabled'] is False
+    assert database.get_daily_target_settings()['enabled'] is True
+    assert database.ensure_daily_target('es') == 0
+    assert database.ensure_daily_targets('es') == 0
+    assert database.get_card(leech)['state'] == 'suspended'
+    assert database.get_card(saved)['state'] == 'suspended'
+
+
+def test_spanish_fill_alternates_by_lemma_frequency_and_leaves_chinese_alone(es_lexicon):
+    database.set_daily_target_enabled(True, 'es')
+    for i in range(48):
+        card(f'activa{i}', lang='es')
+    rare_leech = card('raro', 'leech', lang='es')
+    top_leech = card('comer', 'leech', lang='es')
+    top_saved = card('tener', 'saved', lang='es')
+    unlisted_saved = card('palabrainexistente', 'saved', lang='es')
+    zh_saved = card('我', 'saved')
+    assert database.ensure_daily_target('es') == 2
+    assert database.get_card(top_leech)['state'] == 'new'
+    assert database.get_card(top_saved)['state'] == 'new'
+    assert database.get_card(rare_leech)['state'] == 'suspended'
+    assert database.get_card(unlisted_saved)['state'] == 'suspended'
+    assert database.get_card(zh_saved)['state'] == 'suspended'
+    deck = _deck_row(top_leech)
+    assert deck['lang'] == 'es'
+    assert deck['category'] == 'listening'
+    conn = database.get_db()
+    parent = conn.execute('SELECT * FROM decks WHERE id=?', (deck['parent_id'],)).fetchone()
+    root = conn.execute('SELECT * FROM decks WHERE id=?', (parent['parent_id'],)).fetchone()
+    conn.close()
+    assert parent['name'] == database.anki_today().isoformat() and parent['lang'] == 'es'
+    assert root['name'] == 'Español'
+    assert database.ensure_daily_target('es') == 0
+    assert database.daily_target_card_ids() >= {top_leech, top_saved}
+
+
+def test_ensure_daily_targets_runs_chinese_as_before_and_all_languages(es_lexicon):
+    seed_active(49)
+    zh = card('我', 'saved')
+    assert database.ensure_daily_targets(None) == 1
+    assert database.get_card(zh)['state'] == 'new'
+    database.set_daily_target_enabled(True, 'es')
+    for i in range(49):
+        card(f'activa{i}', lang='es')
+    es = card('comer', 'leech', lang='es')
+    assert database.ensure_daily_targets('multi') == 1
+    assert database.get_card(es)['state'] == 'new'
+
+
+def test_custom_target_count_per_language(es_lexicon):
+    database.set_daily_target_count(30)
+    seed_active(25)
+    for i in range(10):
+        card(f'待学{i}', 'saved')
+    assert database.ensure_daily_target() == 5
+    assert database.get_daily_target_settings('es')['target'] == 50
+    database.set_daily_target_settings('es', enabled=True, target=12)
+    for i in range(10):
+        card(f'activa{i}', lang='es')
+    for i in range(5):
+        card(f'guardada{i}', 'saved', lang='es')
+    assert database.ensure_daily_target('es') == 2
+    # Lowering never removes cards already added.
+    database.set_daily_target_count(5)
+    assert database.ensure_daily_target() == 0
+    assert database.get_daily_target_settings()['target'] == 5
+
+
+def test_daily_target_count_api_validation():
+    client = TestClient(main.app)
+    assert client.put('/api/daily-target', json={'target': 30}).json() == {'enabled': True, 'target': 30}
+    assert client.get('/api/daily-target').json()['target'] == 30
+    assert client.get('/api/daily-target?lang=es').json()['target'] == 50
+    for bad in (0, 501, -1, 2.5, '30', True):
+        assert client.put('/api/daily-target', json={'target': bad}).status_code == 400
+    assert client.put('/api/daily-target', json={}).status_code == 400
+    # Nothing is written when one of two values is invalid.
+    assert client.put('/api/daily-target', json={'enabled': False, 'target': 0}).status_code == 400
+    assert client.get('/api/daily-target').json() == {'enabled': True, 'target': 30}
+    assert client.put('/api/daily-target', json={'enabled': False, 'target': 40}).json() == \
+        {'enabled': False, 'target': 40}
+
+
+def test_daily_target_api_is_per_language():
+    client = TestClient(main.app)
+    assert client.get('/api/daily-target?lang=es').json() == {'enabled': False, 'target': 50}
+    assert client.put('/api/daily-target', json={'enabled': True, 'lang': 'es'}).json() == \
+        {'enabled': True, 'target': 50}
+    assert client.get('/api/daily-target?lang=es').json()['enabled'] is True
+    assert client.get('/api/daily-target').json()['enabled'] is True
+    assert client.put('/api/daily-target', json={'enabled': False, 'lang': 'es'}).json()['enabled'] is False
+    assert client.get('/api/daily-target').json()['enabled'] is True
+    assert client.get('/api/daily-target?lang=xx').status_code == 400
+    assert client.put('/api/daily-target', json={'enabled': True, 'lang': 'xx'}).status_code == 400
