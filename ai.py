@@ -335,6 +335,103 @@ def _call_api(model: str, messages: list, max_tokens: int, purpose: str,
         return (content or "").strip()
 
 
+def _stream_api(model: str, messages: list, max_tokens: int, purpose: str,
+                thinking: bool = False):
+    """Streaming sibling of _call_api (#1381): yields text deltas as they arrive.
+
+    Usage/cost is logged exactly like _call_api once the stream is exhausted.
+    If the consumer stops early (or the provider raises) nothing is logged —
+    only complete answers are accounted. Caller concatenates the deltas.
+    """
+    t0 = time.time()
+    prompt_text = _extract_prompt(messages)
+    parts: list[str] = []
+    first_token_logged = False
+
+    def _note_first():
+        nonlocal first_token_logged
+        if not first_token_logged:
+            first_token_logged = True
+            logger.info("[%s] first token after %.1fs (purpose=%s)",
+                        model, time.time() - t0, purpose)
+
+    input_tokens = output_tokens = cached_tokens = 0
+
+    if model.startswith("claude-"):
+        client = anthropic.Anthropic()
+        with client.messages.stream(model=model, max_tokens=max_tokens,
+                                    messages=messages) as stream:
+            for delta in stream.text_stream:
+                if delta:
+                    _note_first()
+                    parts.append(delta)
+                    yield delta
+            final = stream.get_final_message()
+        usage = final.usage
+        input_tokens = usage.input_tokens
+        output_tokens = usage.output_tokens
+        cached_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
+        if getattr(final, "stop_reason", None) == "max_tokens":
+            logger.warning("[%s] response truncated (stop_reason=max_tokens, max_tokens=%d, "
+                           "output_tokens=%d, purpose=%s)", model, max_tokens,
+                           output_tokens, purpose)
+    else:
+        client = _openai_client(model)
+        kwargs: dict = {}
+        if model.startswith("gpt-"):
+            kwargs["max_completion_tokens"] = max_tokens
+            kwargs["reasoning_effort"] = _gpt_reasoning_effort(model, thinking)
+        else:
+            kwargs["max_tokens"] = max_tokens
+            if model.startswith(("deepseek-", "glm-4.5", "glm-4.6", "glm-4.7", "glm-5")):
+                kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+        stream = client.chat.completions.create(
+            model=model, messages=messages, stream=True,
+            stream_options={"include_usage": True}, **kwargs,
+        )
+        finish_reason = None
+        usage = None
+        for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            if chunk.choices:
+                choice = chunk.choices[0]
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason
+                content = getattr(choice.delta, "content", None)
+                if content:
+                    _note_first()
+                    parts.append(content)
+                    yield content
+        if usage is not None:
+            input_tokens = usage.prompt_tokens or 0
+            output_tokens = usage.completion_tokens or 0
+            deepseek_cached = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+            openai_cached = getattr(
+                getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0
+            ) or 0
+            cached_tokens = deepseek_cached or openai_cached
+        else:
+            logger.warning("[%s] stream ended without usage info (purpose=%s)", model, purpose)
+        if finish_reason == "length":
+            logger.warning("[%s] response truncated (finish_reason=length, max_tokens=%d, "
+                           "completion_tokens=%d, content_chars=%d, purpose=%s)",
+                           model, max_tokens, output_tokens, sum(len(p) for p in parts), purpose)
+
+    text = "".join(parts).strip()
+    logger.info("[%s] API call done in %.1fs — in=%d out=%d cached=%d purpose=%s (stream)",
+                model, time.time() - t0, input_tokens, output_tokens, cached_tokens, purpose)
+    database.log_api_call(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        purpose=purpose,
+        cached_input_tokens=cached_tokens,
+        prompt=prompt_text,
+        response=text,
+    )
+
+
 def resolve_briefing_model() -> str:
     """Resolve the OpenAI model id used for briefing mode (issue #444).
 
@@ -1987,21 +2084,47 @@ def dictionary_lookup(query: str, lang: str = "zh", model: str | None = None) ->
     failure #726 guarded against on the add-word side — so an unsupported lang
     raises rather than falling back.
     """
-    use_model = model or DEFAULT_MODEL
-    if lang == "zh":
-        prompt = DICTIONARY_PROMPT.format(query=query)
-    elif lang in ("fr", "es"):
-        cfg = languages.get_lang_config(lang)
-        prompt = DICTIONARY_PROMPT_ROMANCE.format(
-            query=query, lang_name=cfg["name_en"], level=cfg["learner_level"],
-        )
-    else:
-        raise ValueError(f"dictionary_lookup: language {lang!r} is not supported yet (zh/fr/es only)")
+    use_model = dictionary_model(model)
+    prompt = _dictionary_prompt(query, lang)
 
     logger.info("[%s] dictionary_lookup: %s", use_model, query)
     raw = _call_api(use_model, [{"role": "user", "content": prompt}], max_tokens=4000,
                     purpose="dictionary", thinking=False)
 
+    return parse_dictionary_response(raw), use_model
+
+
+def dictionary_model(model: str | None) -> str:
+    """The model a dictionary lookup will actually use."""
+    return model or DEFAULT_MODEL
+
+
+def _dictionary_prompt(query: str, lang: str) -> str:
+    if lang == "zh":
+        return DICTIONARY_PROMPT.format(query=query)
+    if lang in ("fr", "es"):
+        cfg = languages.get_lang_config(lang)
+        return DICTIONARY_PROMPT_ROMANCE.format(
+            query=query, lang_name=cfg["name_en"], level=cfg["learner_level"],
+        )
+    raise ValueError(f"dictionary_lookup: language {lang!r} is not supported yet (zh/fr/es only)")
+
+
+def dictionary_lookup_stream(query: str, lang: str = "zh", model: str | None = None):
+    """Streaming variant of dictionary_lookup (#1381): yields raw text deltas.
+
+    The caller concatenates them and passes the full text to
+    parse_dictionary_response() — nothing is validated or stored here.
+    """
+    use_model = dictionary_model(model)
+    prompt = _dictionary_prompt(query, lang)
+    logger.info("[%s] dictionary_lookup (stream): %s", use_model, query)
+    yield from _stream_api(use_model, [{"role": "user", "content": prompt}], max_tokens=4000,
+                           purpose="dictionary", thinking=False)
+
+
+def parse_dictionary_response(raw: str) -> dict:
+    """Parse + validate a dictionary reply. Raises ValueError on any problem."""
     stripped = _strip_code_fence(raw).strip()
     try:
         result = json.loads(stripped)
@@ -2037,7 +2160,7 @@ def dictionary_lookup(query: str, lang: str = "zh", model: str | None = None) ->
                     f"Raw response (first 500 chars): {raw[:500]!r}"
                 )
 
-    return result, use_model
+    return result
 
 
 DEFAULT_SENTENCE_QUESTION_TEMPLATE = (

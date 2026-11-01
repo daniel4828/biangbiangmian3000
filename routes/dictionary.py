@@ -9,6 +9,7 @@ import json
 import logging
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import ai
@@ -43,20 +44,7 @@ def _row_to_result(row: dict) -> dict:
 
 @router.post("/api/dict/lookup")
 def lookup(body: DictLookupRequest):
-    query = (body.query or "").strip()
-    if not query:
-        raise HTTPException(400, "query required")
-    if ai_disabled():
-        raise HTTPException(400, "AI is disabled")
-    # A bad language is the caller's mistake, not a model failure — 400, not
-    # the 500 the ValueError below would otherwise produce.
-    if body.lang not in ("zh", "fr", "es"):
-        raise HTTPException(400, f"language {body.lang!r} is not supported yet (zh/fr/es only)")
-
-    # Check the target exists *before* spending 5–15s and a paid AI call on a
-    # repeat that could never be stored.
-    if body.replace_id is not None and database.get_dict_query(body.replace_id) is None:
-        raise HTTPException(404, "not found")
+    query = _validate_request(body)
 
     try:
         result, model_used = ai.dictionary_lookup(query, lang=body.lang, model=body.model)
@@ -67,6 +55,60 @@ def lookup(body: DictLookupRequest):
         logger.error("dict lookup failed for %r: %s", query, e)
         raise HTTPException(500, str(e))
 
+    return _store(query, body.lang, body.replace_id, result, model_used)
+
+
+def _validate_request(body: DictLookupRequest) -> str:
+    """Shared up-front checks for both lookup endpoints. A bad language is the
+    caller's mistake (400, not a 500 from the ValueError later); a missing
+    replace_id is checked *before* spending a paid AI call on a repeat that
+    could never be stored."""
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(400, "query required")
+    if ai_disabled():
+        raise HTTPException(400, "AI is disabled")
+    if body.lang not in ("zh", "fr", "es"):
+        raise HTTPException(400, f"language {body.lang!r} is not supported yet (zh/fr/es only)")
+    if body.replace_id is not None and database.get_dict_query(body.replace_id) is None:
+        raise HTTPException(404, "not found")
+    return query
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/api/dict/lookup-stream")
+def lookup_stream(body: DictLookupRequest):
+    """Streaming lookup (#1381). Validation errors are plain HTTP errors raised
+    before the stream starts; once streaming, failures arrive as an `error`
+    event. The answer is parsed and stored only after the full text is in —
+    on any failure nothing is written (a repeat keeps its old answer).
+    text/event-stream so GZipMiddleware / the proxy don't buffer the chunks."""
+    query = _validate_request(body)
+    model_used = ai.dictionary_model(body.model)
+
+    def gen():
+        try:
+            parts = []
+            for delta in ai.dictionary_lookup_stream(query, lang=body.lang, model=body.model):
+                parts.append(delta)
+                yield _sse({"type": "delta", "text": delta})
+            result = ai.parse_dictionary_response("".join(parts))
+            record = _store(query, body.lang, body.replace_id, result, model_used)
+        except Exception as e:  # noqa: BLE001 — every failure must reach the client as an error event
+            logger.error("dict lookup (stream) failed for %r: %s", query, e)
+            yield _sse({"type": "error", "detail": str(e)})
+            return
+        yield _sse({"type": "done", "record": record})
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _store(query: str, lang: str, replace_id: int | None, result: dict, model_used: str) -> dict:
+    """Save a new row or overwrite replace_id; return the record shape."""
     fields = dict(
         input_lang=result.get("input_lang"),
         kind=result.get("kind"),
@@ -74,12 +116,12 @@ def lookup(body: DictLookupRequest):
         result_json=json.dumps(result, ensure_ascii=False),
         model=model_used,
     )
-    if body.replace_id is not None:
-        if not database.update_dict_query(body.replace_id, **fields):
+    if replace_id is not None:
+        if not database.update_dict_query(replace_id, **fields):
             raise HTTPException(404, "not found")
-        row_id = body.replace_id
+        row_id = replace_id
     else:
-        row_id = database.save_dict_query(query=query, lang=body.lang, **fields)
+        row_id = database.save_dict_query(query=query, lang=lang, **fields)
     return _row_to_result(database.get_dict_query(row_id))
 
 

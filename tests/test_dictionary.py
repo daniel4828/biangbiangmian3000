@@ -239,3 +239,119 @@ def test_dictionary_lookup_raises_on_unparseable_response():
 def test_dict_page_is_served():
     r = client.get("/dict")
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Streaming lookup (#1381): POST /api/dict/lookup-stream
+# ---------------------------------------------------------------------------
+
+def _chunks(text, n=7):
+    return [text[i:i + n] for i in range(0, len(text), n)]
+
+
+def _fake_stream(text):
+    def fake(*args, **kwargs):
+        yield from _chunks(text)
+    return fake
+
+
+def _events(resp):
+    out = []
+    for block in resp.text.split("\n\n"):
+        for line in block.split("\n"):
+            if line.startswith("data: "):
+                out.append(json.loads(line[len("data: "):]))
+    return out
+
+
+def _history_count():
+    return len(client.get("/api/dict/history").json()["items"])
+
+
+def test_stream_emits_deltas_then_done_and_stores(tmp_db):
+    full = _stub_response()
+    with patch.object(ai, "_stream_api", _fake_stream(full)):
+        r = client.post("/api/dict/lookup-stream", json={"query": "anordnen"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    events = _events(r)
+    deltas = [e for e in events if e["type"] == "delta"]
+    assert len(deltas) > 1
+    assert "".join(e["text"] for e in deltas) == full
+    assert events[-1]["type"] == "done"
+    record = events[-1]["record"]
+    assert record["result"] == GOOD_RESULT
+    assert record["query"] == "anordnen"
+    stored = database.get_dict_query(record["id"])
+    assert stored is not None
+    assert json.loads(stored["result_json"]) == GOOD_RESULT
+    assert _history_count() == 1
+
+
+def test_stream_invalid_json_emits_error_and_stores_nothing(tmp_db):
+    with patch.object(ai, "_stream_api", _fake_stream("Sorry, I cannot help with that.")):
+        r = client.post("/api/dict/lookup-stream", json={"query": "anordnen"})
+    assert r.status_code == 200
+    events = _events(r)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["detail"]
+    assert not any(e["type"] == "done" for e in events)
+    assert _history_count() == 0
+
+
+def test_stream_provider_exception_emits_error_and_stores_nothing(tmp_db):
+    def boom(*args, **kwargs):
+        yield '{"headline": "x'
+        raise RuntimeError("provider down")
+    with patch.object(ai, "_stream_api", boom):
+        r = client.post("/api/dict/lookup-stream", json={"query": "anordnen"})
+    events = _events(r)
+    assert events[-1] == {"type": "error", "detail": "provider down"}
+    assert _history_count() == 0
+
+
+def test_stream_failed_repeat_leaves_old_row_untouched(tmp_db):
+    with patch.object(ai, "_call_api", return_value=_stub_response()):
+        first = client.post("/api/dict/lookup", json={"query": "anordnen"}).json()
+    with patch.object(ai, "_stream_api", _fake_stream("not json")):
+        r = client.post("/api/dict/lookup-stream",
+                        json={"query": "anordnen", "replace_id": first["id"]})
+    assert _events(r)[-1]["type"] == "error"
+    assert client.get(f"/api/dict/history/{first['id']}").json()["result"] == GOOD_RESULT
+
+
+def test_stream_repeat_success_updates_same_row(tmp_db):
+    with patch.object(ai, "_call_api", return_value=_stub_response()):
+        first = client.post("/api/dict/lookup", json={"query": "anordnen"}).json()
+    better = dict(GOOD_RESULT, headline="安排")
+    with patch.object(ai, "_stream_api", _fake_stream(_stub_response(better))):
+        r = client.post("/api/dict/lookup-stream",
+                        json={"query": "anordnen", "replace_id": first["id"]})
+    done = _events(r)[-1]
+    assert done["type"] == "done"
+    assert done["record"]["id"] == first["id"]
+    assert done["record"]["result"]["headline"] == "安排"
+    assert _history_count() == 1
+
+
+def test_stream_upfront_errors_are_plain_http_errors(tmp_db):
+    with patch.object(ai, "_stream_api", _fake_stream(_stub_response())):
+        assert client.post("/api/dict/lookup-stream", json={"query": "  "}).status_code == 400
+        assert client.post("/api/dict/lookup-stream",
+                           json={"query": "x", "lang": "xx"}).status_code == 400
+        assert client.post("/api/dict/lookup-stream",
+                           json={"query": "x", "replace_id": 999}).status_code == 404
+    assert _history_count() == 0
+
+
+def test_stream_ai_disabled_is_400(tmp_db, monkeypatch):
+    monkeypatch.setattr(routes.dictionary, "ai_disabled", lambda: True)
+    assert client.post("/api/dict/lookup-stream", json={"query": "x"}).status_code == 400
+
+
+def test_parse_dictionary_response_matches_lookup_validation():
+    assert ai.parse_dictionary_response(json.dumps(GOOD_RESULT))["headline"] == "派任务"
+    with pytest.raises(ValueError):
+        ai.parse_dictionary_response("nope")
+    with pytest.raises(ValueError):
+        ai.parse_dictionary_response(json.dumps({"headline": "x"}))
