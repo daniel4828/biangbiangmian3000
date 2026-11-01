@@ -6680,24 +6680,29 @@ header #header-search-wrap {
   position: fixed;
   left: var(--search-bar-side);
   right: var(--search-bar-side);
-  bottom: max(12px, env(safe-area-inset-bottom));
+  /* Daniel wanted the field to sit on the window's bottom edge (no gap
+     below it); the iPhone home-indicator area goes inside the field as
+     padding instead of below it. */
+  bottom: 0;
   z-index: 89;
 }
 header #header-search-input {
   width: 100%;
   box-sizing: border-box;
   font-size: 15px;
-  padding: 12px 18px;
-  border-radius: 999px;
-  background: var(--glass-header, rgba(255,255,255,.86));
-  backdrop-filter: saturate(180%) blur(18px);
-  -webkit-backdrop-filter: saturate(180%) blur(18px);
-  border: 1px solid rgba(15,23,42,.08);
-  box-shadow: var(--shadow-lg);
+  padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
+  /* only the top corners round: the bottom edge is the window's edge */
+  border-radius: 18px 18px 0 0;
+  /* opaque card colour + a border in the text colour so the field stands
+     out clearly from the page behind it (the glass look blended in) */
+  background: var(--card);
+  border: 2px solid var(--text);
+  border-bottom: none;
+  box-shadow: 0 -6px 24px rgba(15,23,42,.18);
 }
 header #header-search-input:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-ring), var(--shadow-lg);
+  box-shadow: 0 0 0 3px var(--primary-ring), 0 -6px 24px rgba(15,23,42,.18);
 }
 header #header-search-panel {
   top: auto;
