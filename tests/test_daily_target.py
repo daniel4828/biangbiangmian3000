@@ -548,3 +548,24 @@ def test_rebalance_never_swaps_into_a_category_bound_to_limit_zero(es_lexicon):
         assert sum(1 for c in due if c['category'] == 'creating') == 6
     cats = [database.get_card(i)['category'] for i in database.daily_target_card_ids()]
     assert cats == ['creating'] * 6
+
+
+def test_full_category_does_not_block_sibling_of_other_category(es_lexicon):
+    """#1416: Listening an Preset mit Neue/Tag = 0 gebunden. Früher sperrte der
+    erste Listening-Kandidat das ganze Wort, die Creating-Schwesterkarte kam nie dran."""
+    for i in range(12):
+        card(f'palabra{i}', 'saved', category='listening', lang='es')
+        card(f'palabra{i}', 'saved', category='creating', lang='es')
+    conn = database.get_db()
+    conn.execute("INSERT INTO deck_presets(name,new_per_day,reviews_per_day) VALUES('es listening',0,9999)")
+    pid = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    conn.commit()
+    conn.close()
+    database.set_category_preset('es', 'listening', pid)
+    database.set_daily_target_settings('es', enabled=True, target=6, creating_pct=50)
+    assert database.ensure_daily_target('es') == 6
+    root = database.get_all_deck_id()
+    due = database.get_due_cards_any_cat(root, lang='es')
+    assert len(due) == 6 and {c['category'] for c in due} == {'creating'}
+    cats = [database.get_card(i)['category'] for i in database.daily_target_card_ids()]
+    assert cats == ['creating'] * 6
