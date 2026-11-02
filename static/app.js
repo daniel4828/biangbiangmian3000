@@ -14187,6 +14187,83 @@ function _updateHeaderSearchClear() {
   const input = _headerSearchInput();
   const btn = document.getElementById('header-search-clear');
   if (input && btn) btn.hidden = !input.value;
+  const send = document.getElementById('hs-send');
+  if (input && send) send.disabled = !input.value.trim();
+}
+
+// ── Composer tool row (#1403): model pill, mic, keyboard offset ─────────────
+// Model for dictionary lookups; '' = the server default (first entry).
+function _hsModel() {
+  try {
+    const m = localStorage.getItem('dictModel') || '';
+    return KNOWLEDGE_CHAT_MODELS.some(x => x[0] === m) ? m : '';
+  } catch (e) { return ''; }
+}
+function _hsModelShort(id) {
+  const m = KNOWLEDGE_CHAT_MODELS.find(x => x[0] === id) || KNOWLEDGE_CHAT_MODELS[0];
+  return m[1].split(' — ')[0];
+}
+function _renderHsModel() {
+  const sel = document.getElementById('hs-model');
+  const label = document.getElementById('hs-model-label');
+  if (!sel || !label) return;
+  const cur = _hsModel() || KNOWLEDGE_CHAT_MODELS[0][0];
+  if (!sel.options.length) {
+    for (const [id, name] of KNOWLEDGE_CHAT_MODELS) {
+      const o = document.createElement('option');
+      o.value = id; o.textContent = name;
+      sel.appendChild(o);
+    }
+  }
+  sel.value = cur;
+  label.textContent = _hsModelShort(cur);
+}
+
+// Dictation: browser speech recognition in German (lookups are typed in
+// German most of the time). Without it, focus the field so the keyboard's own
+// dictation key is one tap away.
+let _hsRecog = null;
+function _hsToggleMic() {
+  const btn = document.getElementById('hs-mic');
+  const input = _headerSearchInput();
+  if (_hsRecog) { _hsRecog.stop(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { input.focus(); return; }
+  const r = new SR();
+  r.lang = 'de-DE';
+  r.interimResults = true;
+  r.continuous = false;
+  const before = input.value ? input.value.replace(/\s*$/, ' ') : '';
+  r.onresult = (ev) => {
+    let t = '';
+    for (const res of ev.results) t += res[0].transcript;
+    input.value = before + t;
+    _updateHeaderSearchClear();
+  };
+  r.onend = () => {
+    _hsRecog = null;
+    btn.classList.remove('listening');
+    if (input.value.trim()) onHeaderSearchInput();
+  };
+  r.onerror = (ev) => { if (ev.error !== 'aborted' && ev.error !== 'no-speech') showError('Dictation failed: ' + ev.error); };
+  _hsRecog = r;
+  btn.classList.add('listening');
+  try { r.start(); } catch (e) { _hsRecog = null; btn.classList.remove('listening'); }
+}
+
+// Keeps the composer directly above the on-screen keyboard (iOS leaves
+// position:fixed elements behind it) and publishes its height for the page
+// padding, mini player and dictionary sheet.
+function _hsLayout() {
+  const wrap = document.getElementById('header-search-wrap');
+  const root = document.documentElement.style;
+  const vv = window.visualViewport;
+  const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+  root.setProperty('--kb-offset', kb > 60 ? `${Math.round(kb)}px` : '0px');
+  if (!wrap || wrap.closest('#ra-fs-search-slot')) return;
+  const rect = wrap.getBoundingClientRect();
+  const h = window.innerHeight - (kb > 60 ? kb : 0) - rect.top;
+  if (h > 40) root.setProperty('--search-bar-h', `${Math.round(h)}px`);
 }
 
 function _headerSearchInput() { return document.getElementById('header-search-input'); }
@@ -14304,6 +14381,12 @@ function onHeaderSearchKey(e) {
   if (e.key === 'ArrowUp'   && els.length) { e.preventDefault(); _hsSetActive(_headerSearchActive - 1); return; }
   if (e.key !== 'Enter') return;
   e.preventDefault();
+  headerSearchSubmit();
+}
+
+// Enter and the composer's send button (#1403) do the same thing.
+function headerSearchSubmit() {
+  const els = _hsRowEls();
   if (_headerSearchActive >= 0 && els[_headerSearchActive]) { els[_headerSearchActive].click(); return; }
   const q = _headerSearchInput().value.trim();
   if (!q) return;
@@ -14368,7 +14451,8 @@ async function headerSearchLookup(q) {
   const lang = _headerSearchLang();
   try {
     // #1381: streamed — the headline and options paint while the model writes.
-    const record = await dictLookupStream({ query: q, lang }, partial => {
+    const model = _hsModel();
+    const record = await dictLookupStream({ query: q, lang, ...(model ? { model } : {}) }, partial => {
       if (seq !== _dictLookupSeq) return;
       renderDictResult(body, { query: q, lang, result: partial },
                        { pending: true, addLang: lang });
@@ -14418,6 +14502,29 @@ function initHeaderSearch() {
   });
   _renderHeaderSearchLang();
   _updateHeaderSearchClear();
+  // #1403: composer tool row. Deferred: KNOWLEDGE_CHAT_MODELS is declared
+  // further down in this file, after initHeaderSearch() runs.
+  setTimeout(_renderHsModel, 0);
+  const modelSel = document.getElementById('hs-model');
+  if (modelSel) modelSel.addEventListener('change', () => {
+    try { localStorage.setItem('dictModel', modelSel.value); } catch (e) { /* ignore */ }
+    _renderHsModel();
+  });
+  document.getElementById('hs-send')?.addEventListener('click', () => {
+    headerSearchSubmit();
+  });
+  document.getElementById('hs-mic')?.addEventListener('click', _hsToggleMic);
+  document.getElementById('hs-plus')?.addEventListener('click', () => {
+    openAddWordModal(_headerSearchLang());
+  });
+  if (window.visualViewport) {
+    visualViewport.addEventListener('resize', _hsLayout);
+    visualViewport.addEventListener('scroll', _hsLayout);
+  }
+  window.addEventListener('resize', _hsLayout);
+  const wrapEl = document.getElementById('header-search-wrap');
+  if (wrapEl && window.ResizeObserver) new ResizeObserver(_hsLayout).observe(wrapEl);
+  _hsLayout();
   // Bound once on the document, not per rendered row: the panel's contents are
   // rebuilt on every keystroke, so per-row listeners would have to be rebound
   // forever (#940's lesson on the knowledge list).
