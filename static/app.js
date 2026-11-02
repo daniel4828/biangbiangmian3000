@@ -1827,12 +1827,11 @@ function _renderHeaderLangTabs(readOnly = false) {
   const box = document.getElementById('header-lang-tabs');
   if (!box) return;
   // Home shows every language as its own deck (#1390) — no tabs there.
-  if (_availableLangs.length <= 1 || _currentView === 'decks') { box.style.display = 'none'; box.innerHTML = ''; return; }
+  // Review shows none either: the breadcrumb and the header tint already say
+  // which language the card is in, and the tab could not be clicked anyway.
+  if (_availableLangs.length <= 1 || _currentView === 'decks' || readOnly) { box.style.display = 'none'; box.innerHTML = ''; return; }
   const cur = activeLang();
-  const curLabel = _LANG_TAB_LABELS[cur] || cur;
-  box.innerHTML = readOnly
-    ? `<span class="lang-tab lang-tab-active lang-tab-static">${curLabel}</span>`
-    : _availableLangs.map(l => {
+  box.innerHTML = _availableLangs.map(l => {
         const label = _LANG_TAB_LABELS[l] || l;
         const active = l === cur ? ' lang-tab-active' : '';
         return `<button class="lang-tab${active}" onclick="setActiveLang('${l}')">${label}</button>`;
