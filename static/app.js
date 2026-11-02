@@ -17141,8 +17141,26 @@ const _SILENT_WAV = 'data:audio/wav;base64,UklGRnQAAABXQVZFZm10IBAAAAABAAEAQB8AA
 let _sharedAudio = null;
 let _playSeq = 0;   // bumped on every (re)start so stale onended/onerror handlers no-op
 
+// iOS（Safari 16.4+）：解锁用的静音片段若以默认音频会话播放，会抢走音频焦点，
+// 一打开应用 Spotify 等就被暂停。静音片段用 'ambient'（与其他音频混音、不打断），
+// 真正播放前切回 'playback'。不支持 navigator.audioSession 的浏览器什么都不做。
+function _setAudioSessionType(type) {
+  try {
+    const s = navigator.audioSession;
+    if (s && s.type !== type) s.type = type;
+  } catch (_) {}
+}
+
 function _getAudioEl() {
-  if (!_sharedAudio) { _sharedAudio = new Audio(); _sharedAudio.preload = 'auto'; }
+  if (!_sharedAudio) {
+    _sharedAudio = new Audio();
+    _sharedAudio.preload = 'auto';
+    const origPlay = _sharedAudio.play.bind(_sharedAudio);
+    _sharedAudio.play = function () {
+      _setAudioSessionType(this.src === _SILENT_WAV ? 'ambient' : 'playback');
+      return origPlay();
+    };
+  }
   return _sharedAudio;
 }
 
