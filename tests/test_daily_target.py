@@ -101,26 +101,19 @@ def test_does_not_touch_ineligible_cards_and_handles_empty_source():
         assert database.get_card(cid)['state'] == 'suspended'
 
 
-def test_fifty_cards_remain_available_through_leaf_and_root_caps():
+def test_fill_respects_leaf_and_root_caps():
+    """#1412: aufgefüllte Karten unterliegen immer den normalen Limits."""
     conn = database.get_db()
     conn.execute('UPDATE deck_presets SET new_per_day=2')
     conn.commit()
     conn.close()
-    card('明天才学', due='2099-01-01')  # second listening leaf exercises root cap
     for i in range(60):
         card(f'待学词{i}', 'saved')
-    assert database.ensure_daily_target() == 50
+    assert database.ensure_daily_target() == 2
     root = database.get_all_deck_id()
-    assert len(database.get_due_cards_any_cat(root, lang='zh')) == 50
-    assert database.count_due_any_cat(root, lang='zh')['new'] == 50
-    assert database.count_due_by_category(root, lang='zh')['listening']['new'] == 50
-    cards = database.get_due_cards_any_cat(root, lang='zh')
-    leaves = sorted({c['deck_id'] for c in cards})
-    assert len(database.get_due_cards_multi(leaves, 'listening', root_deck_id=root)) == 50
-    assert database.count_due_multi(leaves, 'listening', root_deck_id=root)['new'] == 50
-    counts, _ = database.count_due_all_decks()
-    assert sum(c['new'] for c in counts.values()) == 50
-    assert sum(database.count_due(did, 'listening')['new'] for did in leaves) == 50
+    assert len(database.get_due_cards_any_cat(root, lang='zh')) == 2
+    assert database.count_due_any_cat(root, lang='zh')['new'] == 2
+    assert database.ensure_daily_target() == 0
 
 
 def test_disabled_setting_and_strict_api_boolean():
@@ -210,7 +203,7 @@ def test_new_day_uses_persisted_alternate_source_and_only_new_shortfall(monkeypa
     assert database.get_card(s)['state'] == 'new'
 
 
-def test_auto_review_does_not_consume_ordinary_new_limit():
+def test_auto_review_consumes_ordinary_new_limit():
     seed_active(49)
     saved = card('我', 'saved')
     assert database.ensure_daily_target() == 1
@@ -224,8 +217,8 @@ def test_auto_review_does_not_consume_ordinary_new_limit():
                  (saved, database.anki_today().isoformat() + ' 12:00:00'))
     conn.commit()
     conn.close()
-    assert [c['id'] for c in database.get_due_cards(chosen['deck_id'], 'listening')] == [normal]
-    assert database.count_due(chosen['deck_id'], 'listening')['new'] == 1
+    assert database.get_due_cards(chosen['deck_id'], 'listening') == []
+    assert database.count_due(chosen['deck_id'], 'listening')['new'] == 0
 
 
 def test_auto_reservation_still_respects_future_locks_and_disabled_categories():
@@ -249,7 +242,7 @@ def test_auto_reservation_still_respects_future_locks_and_disabled_categories():
     assert database.daily_target_new_counts() == {}
 
 
-def test_root_category_override_does_not_hide_the_shortfall():
+def test_root_category_override_zero_blocks_the_fill():
     root = database.get_all_deck_id()
     conn = database.get_db()
     root_preset = conn.execute("INSERT INTO deck_presets(name,new_per_day,listening_enabled) VALUES('Root target test',20,1)").lastrowid
@@ -261,9 +254,9 @@ def test_root_category_override_does_not_hide_the_shortfall():
         card(f'普通新卡{i}', state='new')
     for i in range(55):
         card(f'收藏词{i}', 'saved')
-    assert database.ensure_daily_target() == 50
-    assert len(database.get_due_cards_any_cat(root, lang='zh')) == 50
+    before = len(database.get_due_cards_any_cat(root, lang='zh'))
     assert database.ensure_daily_target() == 0
+    assert len(database.get_due_cards_any_cat(root, lang='zh')) == before
 
 
 def test_natural_siblings_that_will_be_buried_do_not_inflate_target():
@@ -315,8 +308,9 @@ def test_french_new_reviews_do_not_consume_chinese_new_allowance():
     conn.close()
     for i in range(55):
         card(f'中文收藏词{i}', 'saved')
-    assert database.ensure_daily_target() == 40
-    assert len(database.get_due_cards_any_cat(database.get_all_deck_id(), lang='zh')) == 50
+    # Limit 20: 10 natürliche + 10 aufgefüllte; Französisch verbraucht nichts davon.
+    assert database.ensure_daily_target() == 10
+    assert len(database.get_due_cards_any_cat(database.get_all_deck_id(), lang='zh')) == 20
 
 
 def test_deck_bury_override_keeps_both_sibling_cards_in_daily_total():
@@ -507,8 +501,8 @@ def test_creating_pct_api_validation():
         assert client.put('/api/daily-target', json={'lang': 'es', 'creating_pct': bad}).status_code == 400
 
 
-def test_category_limit_zero_removes_todays_auto_cards_of_that_category(es_lexicon):
-    """Neue Karten/Tag = 0 für Listening nimmt bereits aufgefüllte Listening-Karten raus."""
+def test_category_limit_zero_hides_todays_auto_cards_of_that_category(es_lexicon):
+    """Neue Karten/Tag = 0 für Listening blendet bereits aufgefüllte Listening-Karten aus."""
     for i in range(6):
         card(f'palabra{i}', 'saved', category='listening', lang='es')
         card(f'cosa{i}', 'saved', category='creating', lang='es')
@@ -516,20 +510,15 @@ def test_category_limit_zero_removes_todays_auto_cards_of_that_category(es_lexic
     assert client.put('/api/daily-target', json={'lang': 'es', 'enabled': True, 'target': 4}).status_code == 200
     database.ensure_daily_target('es')
     conn = database.get_db()
-    listening = [r['id'] for r in conn.execute(
-        "SELECT id FROM cards WHERE category='listening' AND state='new'")]
-    assert listening
-    did = conn.execute('SELECT deck_id FROM cards WHERE id=?', (listening[0],)).fetchone()[0]
-    pid = conn.execute('SELECT preset_id FROM decks WHERE id=?', (did,)).fetchone()[0]
+    row = conn.execute("SELECT deck_id FROM cards WHERE category='listening' AND state='new'").fetchone()
+    assert row
+    pid = conn.execute('SELECT preset_id FROM decks WHERE id=?', (row[0],)).fetchone()[0]
     conn.execute('INSERT INTO preset_category_overrides(preset_id,category,new_per_day) VALUES(?,?,0)',
                  (pid, 'listening'))
     conn.commit()
     conn.close()
-    assert not (set(listening) & database.daily_target_card_ids())
+    assert database.count_due(row[0], 'listening')['new'] == 0
     database.ensure_daily_target('es')
-    ids = database.daily_target_card_ids()
-    conn = database.get_db()
-    cats = {r[0] for r in conn.execute(
-        f"SELECT category FROM cards WHERE id IN ({','.join(map(str, ids))})")}
-    conn.close()
-    assert cats == {'creating'} and len(ids) == 4
+    root = database.get_all_deck_id()
+    due = database.get_due_cards_any_cat(root, lang='es')
+    assert {c['category'] for c in due} == {'creating'} and len(due) == 4

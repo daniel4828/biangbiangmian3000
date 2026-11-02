@@ -110,36 +110,7 @@ def _read_setting(conn, key, default=None):
 def _batch_ids(conn, today, lang: str = 'zh'):
     batch = json.loads(_read_setting(conn, _key(_BATCH_KEY, lang), '{}'))
     ids = set(batch.get('ids', [])) if batch.get('day') == today else set()
-    if not ids:
-        return ids
-    # Ein Kategorie-Limit „neue Karten/Tag = 0" gilt auch für aufgefüllte
-    # Karten: Sie fallen dann aus der Reservierung und unterliegen wieder dem
-    # normalen Limit (also 0). Ohne das bliebe z. B. Listening nach dem
-    # Herabsetzen auf 0 bei 30 stehen.
-    ph = ','.join('?' * len(ids))
-    rows = conn.execute(f'SELECT id, deck_id, category FROM cards WHERE id IN ({ph})',
-                        [i for i in ids]).fetchall()
-    return {r['id'] for r in rows
-            if not _new_limit_is_zero(conn, r['deck_id'], r['category'])} | (
-        ids - {r['id'] for r in rows})
-
-
-def _new_limit_is_zero(conn, deck_id, category) -> bool:
-    """True, wenn das wirksame new_per_day dieser Kategorie im Preset des
-    Blatt-Decks (inkl. Kategorie-Bindung #1372) 0 ist. Das Wurzel-Deck „All"
-    zählt bewusst nicht (siehe test_root_category_override_…)."""
-    deck = conn.execute('SELECT id, lang, preset_id FROM decks WHERE id=?', (deck_id,)).fetchone()
-    if not deck:
-        return False
-    bound = conn.execute('SELECT preset_id FROM category_presets WHERE lang=? AND category=?',
-                         (deck['lang'] or 'zh', category)).fetchone()
-    pid = bound['preset_id'] if bound else deck['preset_id']
-    o = conn.execute('SELECT new_per_day FROM preset_category_overrides '
-                     'WHERE preset_id=? AND category=?', (pid, category)).fetchone()
-    if o and o['new_per_day'] is not None:
-        return o['new_per_day'] == 0
-    p = conn.execute('SELECT new_per_day FROM deck_presets WHERE id=?', (pid,)).fetchone()
-    return bool(p) and p['new_per_day'] == 0
+    return ids
 
 
 def daily_target_card_ids(conn=None) -> set[int]:
@@ -164,8 +135,8 @@ def daily_target_card_ids(conn=None) -> set[int]:
 
 def limit_new_cards(cards: list, remaining: int, auto_ids=None) -> list:
     """Keep the ordinary cap, plus every eligible card explicitly added today."""
-    if auto_ids is None:
-        auto_ids = daily_target_card_ids()
+    # #1412: aufgefüllte Karten unterliegen immer dem normalen Limit.
+    auto_ids = auto_ids or set()
     normal = 0
     result = []
     for c in cards:
@@ -316,32 +287,48 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                AND NOT EXISTS (SELECT 1 FROM review_log rl WHERE rl.card_id=c.id
                    AND rl.reviewed_at < datetime(?, 'utc'))""", (lang, start, end, start)):
             d = deck_map.get(r['deck_id'])
-            if (r['id'] not in auto_ids and d and d['id'] not in blocked
+            if (d and d['id'] not in blocked
                     and d['lang'] == lang
                     and presets[d['preset_id']].get(r['category'] + '_enabled', 1)):
                 key = (r['deck_id'], r['category'])
                 new_done[key] = new_done.get(key, 0) + 1
         root = next((d for d in decks if d['name'] == 'All' and d['parent_id'] is None and not d['deleted_at']), None)
         used_leaf, used_cat = {}, {}
+        bindings = {(r['lang'], r['category']): r['preset_id']
+                    for r in conn.execute('SELECT lang, category, preset_id FROM category_presets')}
+
+        def _limit(pid, category):
+            o = conn.execute('SELECT new_per_day FROM preset_category_overrides WHERE preset_id=? AND category=?',
+                             (pid, category)).fetchone()
+            if o and o['new_per_day'] is not None:
+                return o['new_per_day']
+            return presets[pid]['new_per_day']
+
+        def _caps(deck_id, category):
+            # Gleiche Limits wie die Warteschlange: Blatt-Deck (inkl. #1372-Bindung) + „All“.
+            d = deck_map.get(deck_id) or dict(conn.execute('SELECT * FROM decks WHERE id=?', (deck_id,)).fetchone())
+            pid = bindings.get((d.get('lang') or 'zh', category), d['preset_id'])
+            leaf = _limit(pid, category)
+            return leaf, (_limit(root['preset_id'], category) if root else leaf)
+
+        def _has_room(deck_id, category):
+            leaf_limit, root_limit = _caps(deck_id, category)
+            cat_done = sum(n for (did, cat), n in new_done.items() if cat == category)
+            key = (deck_id, category)
+            if (used_leaf.get(key, 0) < max(0, leaf_limit - new_done.get(key, 0))
+                    and used_cat.get(category, 0) < max(0, root_limit - cat_done)):
+                used_leaf[key] = used_leaf.get(key, 0) + 1
+                used_cat[category] = used_cat.get(category, 0) + 1
+                return True
+            return False
+
         eligible = []
         for c in sorted(active, key=lambda r: r['id']):
-            if c['state'] != 'new' or c['id'] in auto_ids or c['id'] in done_ids:
+            if c['state'] != 'new' or c['id'] in done_ids:
                 eligible.append(c)
                 continue
             key = (c['deck_id'], c['category'])
-            p = presets[deck_map[c['deck_id']]['preset_id']]
-            leaf_limit = p['new_per_day']
-            override = conn.execute('SELECT new_per_day FROM preset_category_overrides WHERE preset_id=? AND category=?',
-                                    (p['id'], c['category'])).fetchone()
-            if override and override['new_per_day'] is not None:
-                leaf_limit = override['new_per_day']
-            root_limit = presets[root['preset_id']]['new_per_day'] if root else leaf_limit
-            if root:
-                root_override = conn.execute(
-                    'SELECT new_per_day FROM preset_category_overrides WHERE preset_id=? AND category=?',
-                    (root['preset_id'], c['category'])).fetchone()
-                if root_override and root_override['new_per_day'] is not None:
-                    root_limit = root_override['new_per_day']
+            leaf_limit, root_limit = _caps(c['deck_id'], c['category'])
             cat_done = sum(n for (did, cat), n in new_done.items() if cat == c['category'])
             if (used_leaf.get(key, 0) < max(0, leaf_limit - new_done.get(key, 0))
                     and used_cat.get(c['category'], 0) < max(0, root_limit - cat_done)):
@@ -387,7 +374,7 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                     """SELECT c.*, e.word_zh, e.lang FROM cards c
                        JOIN entries e ON e.id=c.word_id
                        WHERE c.deleted_at IS NULL AND e.lang=?""", (lang,))]
-        planned = auto_ids | done_ids | {c['id'] for c in usable}
+        planned = done_ids | {c['id'] for c in usable}
         target_count = _parse_target(_read_setting(conn, _key(_COUNT_KEY, lang), None))
         gap = max(0, target_count - len(planned))
         if not gap:
@@ -444,8 +431,7 @@ def ensure_daily_target(lang: str = 'zh') -> int:
             if target is None:
                 break
             target_preset = conn.execute('SELECT p.* FROM decks d JOIN deck_presets p ON p.id=d.preset_id WHERE d.id=?', (target,)).fetchone()
-            if (not target_preset[c['category'] + '_enabled']
-                    or _new_limit_is_zero(conn, target, c['category'])):
+            if not target_preset[c['category'] + '_enabled'] or not _has_room(target, c['category']):
                 excluded_words.add(c['word_id'])
                 continue
             conn.execute(
@@ -531,8 +517,7 @@ def _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets, blocked,
 
 def ordinary_new_sql(conn) -> str:
     """SQL suffix excluding today's reserved IDs from ordinary daily usage."""
-    ids = sorted(i for i in daily_target_card_ids(conn) if type(i) is int)
-    return ' AND c.id NOT IN (' + ','.join(map(str, ids)) + ')' if ids else ''
+    return ''  # #1412: keine Ausnahme mehr für aufgefüllte Karten
 
 
 def daily_target_new_counts(conn=None) -> dict:
@@ -541,6 +526,7 @@ def daily_target_new_counts(conn=None) -> dict:
     if own_conn:
         conn = get_db()
     try:
+        return {}  # #1412: aufgefüllte Karten zählen wie normale neue Karten
         ids = daily_target_card_ids(conn)
         if not ids:
             return {}
