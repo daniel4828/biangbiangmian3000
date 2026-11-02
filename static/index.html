@@ -99,6 +99,8 @@
          Last child on purpose (#975): every other button here is conditional
          (⚙ only while something runs, ⟳ only on the laptop, ↺ only in review),
          so anywhere but the end makes the most-used control slide around. -->
+    <!-- iOS: tabindex=-1 on the two selects keeps them out of Safari's ∧/∨ form
+         navigation, so the keyboard bar only offers ✓ for the search box. -->
     <!-- #1403: composer layout like the Claude app — text on top, a tool
          row below (＋ add word, language, model, mic, send). -->
     <div id="header-search-wrap">
@@ -111,10 +113,10 @@
         <button id="hs-plus" class="hs-round" type="button" aria-label="Add word" title="Add word to ★ List">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        <select id="header-search-lang" class="hs-pill" aria-label="Language" title="Language" hidden></select>
+        <select id="header-search-lang" class="hs-pill" tabindex="-1" aria-label="Language" title="Language" hidden></select>
         <label class="hs-pill hs-model-pill" title="Dictionary model">
           <span id="hs-model-label"></span>
-          <select id="hs-model" aria-label="Dictionary model"></select>
+          <select id="hs-model" tabindex="-1" aria-label="Dictionary model"></select>
         </label>
         <span class="hs-spacer"></span>
         <button id="hs-mic" class="hs-round" type="button" aria-label="Dictate" title="Dictate">
