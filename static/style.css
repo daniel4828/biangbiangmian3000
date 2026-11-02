@@ -6715,6 +6715,9 @@ body.gloss-on [data-gloss-tr]::after {
    fall through to the overlay everywhere else. */
 body.dict-result-open header { z-index: 902; pointer-events: none; }
 body.dict-result-open header::before { display: none; }
+/* Der Header liegt über dem Overlay: gleich abdunkeln, ohne Trennlinie,
+   sonst steht oben ein heller Streifen mit Linie. */
+body.dict-result-open header { background: rgba(0, 0, 0, 0.5); border-bottom-color: transparent !important; backdrop-filter: none; -webkit-backdrop-filter: none; }
 body.dict-result-open header > * { visibility: hidden; }
 body.dict-result-open header #header-search-wrap { visibility: visible; pointer-events: auto; }
 body.dict-result-open header #header-search-input { background: var(--card); }
