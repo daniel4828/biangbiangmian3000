@@ -404,6 +404,7 @@ def ensure_daily_target(lang: str = 'zh') -> int:
             next_source = 'leech'
         default_preset = _ensure_default_preset(conn) if lang == 'zh' else lang_preset
         added = 0
+        full_categories = set()
         while added < gap:
             selected = None
             groups = [None]
@@ -420,7 +421,7 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                 for source in (next_source, 'saved' if next_source == 'leech' else 'leech'):
                     pool = candidates[source]
                     for i, cand in enumerate(pool):
-                        if cand['word_id'] in excluded_words:
+                        if cand['word_id'] in excluded_words or cand['category'] in full_categories:
                             continue
                         if group is not None and (cand['category'] == 'creating') != (group == 'creating'):
                             continue
@@ -439,7 +440,8 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                 break
             target_preset = conn.execute('SELECT p.* FROM decks d JOIN deck_presets p ON p.id=d.preset_id WHERE d.id=?', (target,)).fetchone()
             if not target_preset[c['category'] + '_enabled'] or not _has_room(target, c['category']):
-                excluded_words.add(c['word_id'])
+                # #1416: volle Kategorie überspringen, nicht das ganze Wort sperren.
+                full_categories.add(c['category'])
                 continue
             conn.execute(
                 """UPDATE cards SET deck_id=?,state='new',due=?,step_index=0,interval=0,
