@@ -12790,13 +12790,20 @@ function showFront() {
   document.getElementById('word-bank-wrap').style.display      = isCloze ? 'flex' : 'none';
   if (isCloze) _initWordBankSlider();
   _renderGrammarHint(sentence);  // re-place the tag now that word-bank visibility is known
-  // Front toolbar + the translation it toggles sit right above whichever input
-  // is active (below the tiles in word-bank mode), so both are next to where
-  // the thumb already is (#1359).
+  // Front toolbar stays right above whichever input is active (next to the
+  // thumb, #1359). The translation always sits ABOVE the foreign-language
+  // sentence (#1427): above the skeleton in word-bank mode, above the input in
+  // text-input mode.
   if (isCreating) {
     const _inp = document.getElementById(isCloze ? 'word-bank-input' : 'creating-input');
     _inp.parentNode.insertBefore(document.getElementById('card-toggle-bar-front'), _inp);
-    _inp.parentNode.insertBefore(document.getElementById('sentence-en-front-row'), _inp);
+    const _transRow = document.getElementById('sentence-en-front-row');
+    if (isCloze) {
+      const _skel = document.getElementById('word-bank-skeleton');
+      _skel.parentNode.insertBefore(_transRow, _skel);
+    } else {
+      _inp.parentNode.insertBefore(_transRow, _inp);
+    }
   }
 
   // Creating: target-word translation hint (🇬🇧/🇫🇷/🇩🇪). Hidden by default;
@@ -12929,6 +12936,13 @@ function revealAnswer() {
   if (_pinyinText && currentCardLang() === 'zh') _loadPinyinRow(_pinyinText);
 
   const isSentenceNote = card.note_type === 'sentence';
+
+  // Translation row goes ABOVE the foreign-language sentence on the back (#1427).
+  {
+    const _tr = document.getElementById('sentence-trans-row');
+    const _anchor = document.getElementById(isCreating ? 'creating-answer-section' : 'grammar-hint-back');
+    if (_tr && _anchor) _anchor.parentNode.insertBefore(_tr, _anchor);
+  }
 
   if (isCreating) {
     // Show answer comparison block; hide normal sentence row
