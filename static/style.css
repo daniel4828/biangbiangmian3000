@@ -6726,7 +6726,7 @@ header::before {
    above the on-screen keyboard (--kb-offset, set from visualViewport). */
 header #header-search-wrap {
   position: fixed;
-  left: var(--search-bar-side);
+  left: calc(var(--side-menu-w, 0px) + var(--search-bar-side));
   right: var(--search-bar-side);
   bottom: calc(var(--kb-offset, 0px) + var(--composer-gap));
   z-index: 89;
@@ -8135,7 +8135,7 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
      12 gap), same width as the pill, so he can search the next word. */
   top: auto;
   transform: none;
-  left: var(--search-bar-side);
+  left: calc(var(--side-menu-w, 0px) + var(--search-bar-side));
   right: var(--search-bar-side);
   width: auto;
   bottom: calc(var(--kb-offset, 0px) + var(--search-bar-h) + 8px);
@@ -8310,10 +8310,44 @@ body.side-menu-open #side-menu-backdrop { opacity: 1; pointer-events: auto; }
 @media (min-width: 1000px) {
   #side-menu { transform: none; padding-top: 72px; }
   #side-menu-backdrop, #side-menu-btn { display: none; }
-  body.has-side-menu { padding-left: 240px; }
+  body.has-side-menu { padding-left: 240px; transition: padding-left .22s ease; }
+  /* The composer and the dictionary sheet are position:fixed, so they are
+     centred on the viewport unless told about the menu: centre them on the
+     content column instead. */
+  body.has-side-menu:not(.side-menu-collapsed) {
+    --side-menu-w: 240px;
+    --search-bar-side: max(16px, calc((100vw - 240px - 500px) / 2 + 16px));
+  }
+  /* ⌘B folds the menu away (state kept in localStorage.sideMenuCollapsed). */
+  body.has-side-menu.side-menu-collapsed { padding-left: 0; }
+  body.side-menu-collapsed #side-menu { transform: translateX(-100%); }
 }
 
 /* Settings search (index page) */
 #view-settings-content .settings-search { width: 100%; box-sizing: border-box; margin: 8px 0 4px; padding: 10px 12px; font-size: 16px; }
 #view-settings-content .settings-search-page { display: block; margin: 14px 0 4px; padding: 0; background: none; border: none; color: var(--accent, #4f46e5); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .hcal-seg-lang .hcal-seg-btn { padding-left: 8px; padding-right: 8px; }
+
+/* Phone: AI search composer can be swiped away to the right; a small tab on
+   the right edge brings it back. Desktop always shows it. */
+#hs-edge-tab { display: none; }
+@media (max-width: 999px) {
+  header #header-search-wrap { transition: transform .22s ease, opacity .22s ease; }
+  body.hs-hidden:not(.dict-result-open) header #header-search-wrap {
+    transform: translateX(calc(100% + var(--search-bar-side) + 8px));
+    opacity: 0; pointer-events: none;
+  }
+  body.hs-hidden:not(.dict-result-open) #hs-edge-tab {
+    display: grid; place-items: center;
+    position: fixed; right: 0; z-index: 89;
+    bottom: calc(var(--kb-offset, 0px) + var(--composer-gap) + 36px);
+    width: 26px; height: 52px; padding: 0 0 0 2px;
+    border: 1px solid var(--border); border-right: none;
+    border-radius: 14px 0 0 14px;
+    background: var(--card); color: var(--muted);
+    box-shadow: 0 2px 10px rgba(15,23,42,.14);
+    cursor: pointer;
+  }
+  body.hs-hidden main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+  body.hs-hidden #mini-player { bottom: max(8px, env(safe-area-inset-bottom)); }
+}

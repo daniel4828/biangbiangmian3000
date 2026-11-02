@@ -2132,11 +2132,15 @@ function _ensureSideMenu() {
   backdrop.onclick = closeSideMenu;
   document.body.append(nav, backdrop);
   document.body.classList.add('has-side-menu');
-  let sx = null, sy = 0, fromEdge = false;
+  try {
+    if (localStorage.getItem('sideMenuCollapsed') === '1') document.body.classList.add('side-menu-collapsed');
+  } catch {}
+  let sx = null, sy = 0, fromEdge = false, fromRight = false;
   document.addEventListener('touchstart', e => {
     const t = e.touches[0];
     sx = t.clientX; sy = t.clientY;
     fromEdge = sx < 28;
+    fromRight = _isRightEdgeTouch(t);
   }, { passive: true });
   document.addEventListener('touchend', e => {
     if (sx === null) return;
@@ -2145,13 +2149,61 @@ function _ensureSideMenu() {
     const open = document.body.classList.contains('side-menu-open');
     if (!open && fromEdge && dx > 60 && dx > dy * 1.5) openSideMenu();
     else if (open && dx < -60 && -dx > dy * 1.5) closeSideMenu();
+    // Phone: a swipe from the right edge to the left shows / hides the AI
+    // search composer (it covers part of the review card).
+    else if (!open && fromRight && dx < -60 && -dx > dy * 1.5) toggleSearchComposer();
     sx = null;
   }, { passive: true });
+  _initSearchComposerToggle();
+}
+
+// Phone only (< 1000px): the floating search composer can be tucked away to
+// the right; a small tab on the right edge shows it is there. State per
+// browser in localStorage.searchComposerHidden.
+// A touch starting in the right-edge strip belongs to the search-composer
+// swipe on phones; the other left-swipes (gloss mode, knowledge rows) skip it.
+function _isRightEdgeTouch(t) {
+  return _isNarrow() && t.clientX > window.innerWidth - 28;
+}
+function _isNarrow() { return !window.matchMedia('(min-width: 1000px)').matches; }
+function _initSearchComposerToggle() {
+  if (document.getElementById('hs-edge-tab')) return;
+  const tab = document.createElement('button');
+  tab.id = 'hs-edge-tab';
+  tab.type = 'button';
+  tab.setAttribute('aria-label', 'Show search');
+  tab.title = 'Show search';
+  tab.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>';
+  tab.onclick = () => setSearchComposerHidden(false);
+  document.body.appendChild(tab);
+  let hidden = false;
+  try { hidden = localStorage.getItem('searchComposerHidden') === '1'; } catch {}
+  if (hidden) document.body.classList.add('hs-hidden');
+}
+function setSearchComposerHidden(hidden) {
+  document.body.classList.toggle('hs-hidden', hidden);
+  try { localStorage.setItem('searchComposerHidden', hidden ? '1' : '0'); } catch {}
+  if (hidden) {
+    const inp = _headerSearchInput();
+    if (inp && document.activeElement === inp) inp.blur();
+  }
+}
+function toggleSearchComposer() {
+  if (!_isNarrow()) return;
+  setSearchComposerHidden(!document.body.classList.contains('hs-hidden'));
 }
 function openSideMenu() { _ensureSideMenu(); document.body.classList.add('side-menu-open'); }
 function closeSideMenu() { document.body.classList.remove('side-menu-open'); }
 function toggleSideMenu() {
   document.body.classList.contains('side-menu-open') ? closeSideMenu() : openSideMenu();
+}
+// ⌘B: on wide screens the menu is docked, so fold it away / bring it back
+// (remembered per browser); on phones it is a drawer, so open/close that.
+function toggleSideMenuCollapsed() {
+  _ensureSideMenu();
+  if (!window.matchMedia('(min-width: 1000px)').matches) { toggleSideMenu(); return; }
+  const collapsed = document.body.classList.toggle('side-menu-collapsed');
+  try { localStorage.setItem('sideMenuCollapsed', collapsed ? '1' : '0'); } catch {}
 }
 
 // Home suggestions (podcast + knowledge picks) are off unless switched on (#1393).
@@ -5688,7 +5740,7 @@ function _initKnowledgeSwipe() {
 
 function _onSwipeStart(e) {
   const wrap = e.target.closest?.('.knowledge-swipe');
-  if (!wrap || e.touches.length !== 1) return;
+  if (!wrap || e.touches.length !== 1 || _isRightEdgeTouch(e.touches[0])) return;
   const t = e.touches[0];
   _swipe = { wrap, row: wrap.querySelector('.knowledge-swipe-row'),
              x0: t.clientX, y0: t.clientY, dx: 0, axis: null,
@@ -10527,7 +10579,7 @@ function _initGlossReveal(root) {
   root.dataset.glossSwipeBound = '1';
   let g = null;
   root.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) { g = null; return; }
+    if (e.touches.length !== 1 || _isRightEdgeTouch(e.touches[0])) { g = null; return; }
     g = { x0: e.touches[0].clientX, y0: e.touches[0].clientY, axis: null };
   }, { passive: true });
   // Never preventDefault: the axis lock alone decides whether this was a
@@ -19751,7 +19803,16 @@ document.addEventListener('keydown', async e => {
   // already own the bare letters.
   if (e.code === 'KeyK' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
     const hsInput = _headerSearchInput();
-    if (hsInput) { e.preventDefault(); hsInput.focus(); hsInput.select(); }
+    if (hsInput) { e.preventDefault(); setSearchComposerHidden(false); hsInput.focus(); hsInput.select(); }
+    return;
+  }
+
+  // Cmd+B (Ctrl+B) folds the side menu (#1393) away. Not inside rich-text
+  // editors, where ⌘B means bold.
+  if (e.code === 'KeyB' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey
+      && !(e.target && e.target.isContentEditable)) {
+    e.preventDefault();
+    toggleSideMenuCollapsed();
     return;
   }
 
