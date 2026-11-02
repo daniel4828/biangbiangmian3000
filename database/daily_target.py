@@ -14,6 +14,11 @@ DAILY_TARGET = 50
 MIN_TARGET, MAX_TARGET = 1, 500
 _BATCH_KEY = 'daily_target_batch'
 _COUNT_KEY = 'daily_target_count'
+_CREATING_KEY = 'daily_target_creating_pct'
+# Share of auto-filled cards that go to `creating` (#1390). None = no balancing
+# (Chinese keeps its historical behaviour); Spanish defaults to half-half.
+_CREATING_DEFAULT = {'zh': None}
+_CREATING_FALLBACK = 50
 
 
 def _key(base: str, lang: str = 'zh') -> str:
@@ -31,7 +36,21 @@ def get_daily_target_settings(lang: str = 'zh') -> dict:
     _check_lang(lang)
     default = '1' if lang == 'zh' else '0'
     return {'enabled': get_app_setting(_key('daily_target_enabled', lang), default) == '1',
-            'target': _parse_target(get_app_setting(_key(_COUNT_KEY, lang), None))}
+            'target': _parse_target(get_app_setting(_key(_COUNT_KEY, lang), None)),
+            'creating_pct': _parse_creating(get_app_setting(_key(_CREATING_KEY, lang), None), lang)}
+
+
+def _parse_creating(raw, lang):
+    """Stored value: '' = explicitly unbalanced, integer 0–100 = share."""
+    if raw is None:
+        return _CREATING_DEFAULT.get(lang, _CREATING_FALLBACK)
+    if raw == '':
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _CREATING_DEFAULT.get(lang, _CREATING_FALLBACK)
+    return value if 0 <= value <= 100 else _CREATING_DEFAULT.get(lang, _CREATING_FALLBACK)
 
 
 def _parse_target(raw) -> int:
@@ -56,10 +75,18 @@ def set_daily_target_count(target: int, lang: str = 'zh') -> dict:
     return set_daily_target_settings(lang, target=target)
 
 
-def set_daily_target_settings(lang: str = 'zh', enabled=None, target=None) -> dict:
-    """Validate everything first, then write; at least one value is required."""
-    if enabled is None and target is None:
-        raise ValueError('enabled or target is required')
+_UNSET = object()
+
+
+def set_daily_target_settings(lang: str = 'zh', enabled=None, target=None,
+                              creating_pct=_UNSET) -> dict:
+    """Validate everything first, then write; at least one value is required.
+    creating_pct: integer 0–100, or None = no category balancing."""
+    if enabled is None and target is None and creating_pct is _UNSET:
+        raise ValueError('enabled, target or creating_pct is required')
+    if creating_pct is not _UNSET and creating_pct is not None and (
+            type(creating_pct) is not int or not 0 <= creating_pct <= 100):
+        raise ValueError('creating_pct must be an integer between 0 and 100, or null')
     if enabled is not None and type(enabled) is not bool:
         raise ValueError('enabled must be a boolean')
     if target is not None:
@@ -69,6 +96,8 @@ def set_daily_target_settings(lang: str = 'zh', enabled=None, target=None) -> di
         set_app_setting(_key('daily_target_enabled', lang), '1' if enabled else '0')
     if target is not None:
         set_app_setting(_key(_COUNT_KEY, lang), str(target))
+    if creating_pct is not _UNSET:
+        set_app_setting(_key(_CREATING_KEY, lang), '' if creating_pct is None else str(creating_pct))
     return get_daily_target_settings(lang)
 
 
@@ -296,11 +325,28 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                 states.add('review')
             if bury_learning:
                 states.update(('learning', 'relearn'))
+        creating_pct = _parse_creating(_read_setting(conn, _key(_CREATING_KEY, lang), None), lang)
+        swapped = 0
+        if creating_pct is not None and auto_ids:
+            swapped = _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets,
+                                       blocked, creating_pct, lang, today)
+            if swapped:
+                rows = [dict(r) for r in conn.execute(
+                    """SELECT c.*, e.word_zh, e.lang FROM cards c
+                       JOIN entries e ON e.id=c.word_id
+                       WHERE c.deleted_at IS NULL AND e.lang=?""", (lang,))]
         planned = auto_ids | done_ids | {c['id'] for c in usable}
         target_count = _parse_target(_read_setting(conn, _key(_COUNT_KEY, lang), None))
         gap = max(0, target_count - len(planned))
         if not gap:
-            return 0
+            if swapped:
+                _save_batch(conn, lang, today, auto_ids)
+                conn.commit()
+                _invalidate_locked_deck_cache()
+            return swapped
+        row_by_id = {c['id']: c for c in rows}
+        mix = {'creating': sum(1 for i in auto_ids if row_by_id.get(i, {}).get('category') == 'creating')}
+        mix['other'] = len(auto_ids) - mix['creating']
         excluded_words = {r['word_id'] for r in reviewed} | {c['word_id'] for c in active}
         excluded_words.update(c['word_id'] for c in rows if c['id'] in auto_ids)
         for source, cs in candidates.items():
@@ -314,11 +360,28 @@ def ensure_daily_target(lang: str = 'zh') -> int:
         added = 0
         while added < gap:
             selected = None
-            for source in (next_source, 'saved' if next_source == 'leech' else 'leech'):
-                while candidates[source]:
-                    c = candidates[source].popleft()
-                    if c['word_id'] not in excluded_words:
-                        selected = c
+            groups = [None]
+            if creating_pct is not None:
+                total = mix['creating'] + mix['other'] + 1
+                want_creating = (creating_pct / 100 * total - mix['creating']
+                                 >= (1 - creating_pct / 100) * total - mix['other'])
+                if creating_pct in (0, 100):
+                    want_creating = creating_pct == 100
+                groups = ['creating', 'other'] if want_creating else ['other', 'creating']
+                if creating_pct not in (0, 100):
+                    groups.append(None)
+            for group in groups:
+                for source in (next_source, 'saved' if next_source == 'leech' else 'leech'):
+                    pool = candidates[source]
+                    for i, cand in enumerate(pool):
+                        if cand['word_id'] in excluded_words:
+                            continue
+                        if group is not None and (cand['category'] == 'creating') != (group == 'creating'):
+                            continue
+                        selected = cand
+                        del pool[i]
+                        break
+                    if selected:
                         break
                 if selected:
                     break
@@ -340,17 +403,77 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                 (target, today, c['id']))
             auto_ids.add(c['id'])
             excluded_words.add(c['word_id'])
+            mix['creating' if c['category'] == 'creating' else 'other'] += 1
             added += 1
             next_source = 'saved' if source == 'leech' else 'leech'
-        if added:
-            for key, value in ((_key(_BATCH_KEY, lang), json.dumps({'day': today, 'ids': sorted(auto_ids)})),
-                               (source_key, next_source)):
-                conn.execute('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
+        if added or swapped:
+            _save_batch(conn, lang, today, auto_ids)
+            conn.execute('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                         (source_key, next_source))
             conn.commit()
             _invalidate_locked_deck_cache()
-        return added
+        return added + swapped
     finally:
         conn.close()
+
+
+def _save_batch(conn, lang, today, auto_ids):
+    conn.execute('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                 (_key(_BATCH_KEY, lang), json.dumps({'day': today, 'ids': sorted(auto_ids)})))
+
+
+def _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets, blocked,
+                     creating_pct, lang, today) -> int:
+    """Swap today's untouched auto cards to the other category (#1390).
+
+    Applies a changed creating share to a batch already added today. Only an
+    auto card that is still new and unreviewed is swapped, and only for a
+    sibling card parked in the Saved deck (suspended, no progress to lose).
+    The swapped-out card goes back to Saved, suspended. Returns swap count.
+    """
+    by_id = {c['id']: c for c in rows}
+    batch = [by_id[i] for i in auto_ids if i in by_id]
+    creating = [c for c in batch if c['category'] == 'creating']
+    other = [c for c in batch if c['category'] != 'creating']
+    want = round(len(batch) * creating_pct / 100)
+    if len(creating) > want:
+        movable, n, to_creating = creating, len(creating) - want, False
+    elif len(creating) < want:
+        movable, n, to_creating = other, want - len(creating), True
+    else:
+        return 0
+    order = {'listening': 0, 'reading': 1}
+    swaps = 0
+    for c in sorted(movable, key=lambda r: -r['id']):
+        if swaps >= n:
+            break
+        if c['state'] != 'new' or c['id'] in done_ids:
+            continue
+        siblings = sorted(
+            (s for s in rows if s['word_id'] == c['word_id'] and s['id'] != c['id']
+             and (s['category'] == 'creating') == to_creating
+             and s['id'] not in auto_ids and s['state'] == 'suspended'
+             and deck_map.get(s['deck_id'], {}).get('name') == 'Saved'
+             and presets[deck_map[c['deck_id']]['preset_id']].get(s['category'] + '_enabled', 1)),
+            key=lambda s: (order.get(s['category'], 2), s['id']))
+        if not siblings:
+            continue
+        sib = siblings[0]
+        target = _daily_leaf(conn, today, sib['category'], deck_map[c['deck_id']]['preset_id'], lang)
+        if target is None or target in blocked:
+            continue
+        conn.execute(
+            """UPDATE cards SET deck_id=?,state='new',due=?,step_index=0,interval=0,
+               ease=2.5,repetitions=0,lapses=0,stability=NULL,difficulty=NULL,
+               last_review=NULL,learning_again_count=0,is_leech=0,leeched_at=NULL,
+               probation=0,buried_until=NULL,pre_suspend_state=NULL WHERE id=?""",
+            (target, today, sib['id']))
+        conn.execute("UPDATE cards SET deck_id=?,state='suspended' WHERE id=?",
+                     (sib['deck_id'], c['id']))
+        auto_ids.discard(c['id'])
+        auto_ids.add(sib['id'])
+        swaps += 1
+    return swaps
 
 
 def ordinary_new_sql(conn) -> str:

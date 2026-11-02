@@ -2076,10 +2076,11 @@ function buildCategoryButtons(deck) {
   }).join('');
 }
 
-function renderDecks(decks) {
-  const navRow = `
-    <div class="nav-row">
-      <button class="nav-btn" onclick="openAddWordModal()" title="Add a new word (⌘A)">＋ Add Word</button>
+// Side menu (#1393): the navigation tiles moved off the home page into a
+// left menu — always visible on wide screens, a drawer on phones (☰ or swipe
+// from the left edge to the right; swipe left or tap outside to close).
+const _SIDE_MENU_ITEMS = `
+<button class="nav-btn" onclick="openAddWordModal()" title="Add a new word (⌘A)">＋ Add Word</button>
       <a class="nav-btn" href="/dict" title="Dictionary lookup">📖 Dictionary</a>
       <button class="nav-btn" onclick="openRandomWords()" title="10 random words for today">🎲 Random</button>
       <button class="nav-btn" onclick="openBrowse()" title="Shortcut: B">Browse Cards</button>
@@ -2093,8 +2094,52 @@ function renderDecks(decks) {
       <button class="nav-btn" onclick="openImportModal()" title="Shortcut: Command+I">Import</button>
       <button class="nav-btn" onclick="openQuickAddCard()" title="Shortcut: A">Add Card</button>
       <button class="nav-btn" onclick="createDeck()">New Deck</button>
-      <button class="nav-btn" onclick="openTrash()">Trash</button>
-    </div>`;
+      <button class="nav-btn" onclick="openTrash()">Trash</button>`;
+
+function _ensureSideMenu() {
+  if (document.getElementById('side-menu')) return;
+  const nav = document.createElement('nav');
+  nav.id = 'side-menu';
+  nav.setAttribute('aria-label', 'Menu');
+  nav.innerHTML = '<div class="side-menu-items">' + _SIDE_MENU_ITEMS + '</div>';
+  nav.addEventListener('click', e => { if (e.target.closest('.nav-btn')) closeSideMenu(); });
+  const backdrop = document.createElement('div');
+  backdrop.id = 'side-menu-backdrop';
+  backdrop.onclick = closeSideMenu;
+  document.body.append(nav, backdrop);
+  document.body.classList.add('has-side-menu');
+  let sx = null, sy = 0, fromEdge = false;
+  document.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    sx = t.clientX; sy = t.clientY;
+    fromEdge = sx < 28;
+  }, { passive: true });
+  document.addEventListener('touchend', e => {
+    if (sx === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx, dy = Math.abs(t.clientY - sy);
+    const open = document.body.classList.contains('side-menu-open');
+    if (!open && fromEdge && dx > 60 && dx > dy * 1.5) openSideMenu();
+    else if (open && dx < -60 && -dx > dy * 1.5) closeSideMenu();
+    sx = null;
+  }, { passive: true });
+}
+function openSideMenu() { _ensureSideMenu(); document.body.classList.add('side-menu-open'); }
+function closeSideMenu() { document.body.classList.remove('side-menu-open'); }
+function toggleSideMenu() {
+  document.body.classList.contains('side-menu-open') ? closeSideMenu() : openSideMenu();
+}
+
+// Home suggestions (podcast + knowledge picks) are off unless switched on (#1393).
+function homeDiscoveryEnabled() {
+  try { return localStorage.getItem('homeDiscovery') === '1'; } catch { return false; }
+}
+function setHomeDiscoveryEnabled(on) {
+  try { localStorage.setItem('homeDiscovery', on ? '1' : '0'); } catch {}
+}
+
+function renderDecks(decks) {
+  _ensureSideMenu();
 
   const virtualDecks = decks.filter(d => d.virtual);
   const allDeck = virtualDecks.find(d => d.name === 'All');
@@ -2174,7 +2219,7 @@ function renderDecks(decks) {
   }
 
   document.getElementById('view-decks').innerHTML =
-    '<section id="home-discovery" aria-label="Today’s listening and reading"></section>' + navRow + filteredSection +
+    (homeDiscoveryEnabled() ? '<section id="home-discovery" aria-label="Today’s listening and reading"></section>' : '') + filteredSection +
     '<div id="home-calendar" class="hcal-card"></div>' +
     '<div id="home-evolution" class="hcal-card"></div>' + regularSection;
   _renderHeaderLangTabs();
@@ -4103,7 +4148,10 @@ function _dailyTargetRowHtml(lang) {
     <span class="keymap-label">Fill up to
       <input type="number" min="1" max="500" step="1" value="${state ? state.target : 50}" ${disabled ? 'disabled' : ''}
         onchange="setDailyTargetCount('${lang}', this.value)" style="width:4.5em">
-      ${_DAILY_TARGET_LANGS[lang]} cards per day</span>
+      ${_DAILY_TARGET_LANGS[lang]} cards per day, Creating
+      <input type="number" min="0" max="100" step="1" placeholder="any"
+        value="${state && state.creating_pct != null ? state.creating_pct : ''}" ${disabled ? 'disabled' : ''}
+        onchange="setDailyTargetCreatingPct('${lang}', this.value)" style="width:4em">%</span>
     <label class="switch-wrap">
       <input type="checkbox" ${state?.enabled ? 'checked' : ''} ${disabled ? 'disabled' : ''}
         onchange="setDailyTargetEnabled('${lang}', this.checked)" style="width:18px;height:18px;cursor:pointer">
@@ -4124,6 +4172,18 @@ async function setDailyTargetCount(lang, raw) {
     return;
   }
   await _saveDailyTarget(lang, { target });
+}
+
+// Share of filled cards that go to Creating (#1390); empty = no balancing.
+async function setDailyTargetCreatingPct(lang, raw) {
+  const text = String(raw).trim();
+  const pct = text === '' ? null : Number(text);
+  if (pct !== null && (!Number.isInteger(pct) || pct < 0 || pct > 100)) {
+    showError('Creating share must be a whole number from 0 to 100, or empty');
+    renderSettings();
+    return;
+  }
+  await _saveDailyTarget(lang, { creating_pct: pct });
 }
 
 async function setDailyTargetEnabled(lang, enabled) {
@@ -4290,6 +4350,15 @@ function renderSettings() {
   const pages = {};
   pages.appearance = { title: 'Appearance', icon: '🎨', desc: 'Theme, languages', html: `
     <div class="keymap-panel">
+      <h2 class="keymap-heading">Home page</h2>
+      <p class="keymap-hint">Show today's 声动早咖啡 episode and knowledge-base picks at the top of the home page. Off by default. Saved in this browser only.</p>
+      <div class="keymap-row">
+        <span class="keymap-label">Daily suggestions</span>
+        <label class="switch-wrap"><input type="checkbox" ${homeDiscoveryEnabled() ? 'checked' : ''}
+          onchange="setHomeDiscoveryEnabled(this.checked)" style="width:18px;height:18px;cursor:pointer"></label>
+      </div>
+    </div>
+    <div class="keymap-panel">
       <h2 class="keymap-heading">Theme</h2>
       <p class="keymap-hint">System follows your device's light/dark setting. Saved in this browser only.</p>
       <div class="keymap-row">
@@ -4308,7 +4377,7 @@ function renderSettings() {
   pages.review = { title: 'Review', icon: '🃏', desc: 'Daily target, day boundary, hint stages, shortcuts', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Daily card target</h2>
-      <p class="keymap-hint">When fewer different cards of a language than the daily target (you set the number, 1–500) are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Set per language: Chinese is on by default, Spanish is off by default (Spanish is ranked by lemma frequency). Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
+      <p class="keymap-hint">When fewer different cards of a language than the daily target (you set the number, 1–500) are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Set per language: Chinese is on by default, Spanish is off by default (Spanish is ranked by lemma frequency). Creating % splits the filled cards between Creating and the other categories (Spanish default 50, Chinese default empty = no split); changing it also swaps today's untouched filled cards. Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
       ${_dailyTargetHtml()}
     </div>
     <div class="keymap-panel">
