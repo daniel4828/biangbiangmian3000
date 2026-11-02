@@ -160,7 +160,8 @@ def test_settings_defaults_and_validation(tmp_db):
     assert clean == {"new_per_day": 5}
     conj_patterns.save_settings({"enabled": False, "new_per_day": 5, "desired_retention": 0.85})
     assert conj_patterns.settings() == {"enabled": False, "new_per_day": 5,
-                                        "desired_retention": 0.85}
+                                        "desired_retention": 0.85, "pull_per_day": 10,
+                                        "irregular_creating_unburied": True}
     for bad in ({"new_per_day": 51}, {"new_per_day": -1}, {"new_per_day": 1.5},
                 {"new_per_day": True}, {"desired_retention": 0.79},
                 {"desired_retention": 0.98}, {"desired_retention": "x"},
