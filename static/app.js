@@ -3848,7 +3848,6 @@ async function openStats() {
 // ── Settings (customize review shortcuts) ────────────────────────────────────
 let _capturingAction = null;
 let _settingsMsg = '';
-let _settingsShortcutsOpen = false;
 let _dayCutoffHour = 5;
 let _settingsPage = null; // null = index; else 'appearance'|'review'|'stories'|'spanish'|'advanced'
 function openSettingsPage(key) {
@@ -4410,6 +4409,16 @@ function renderSettings() {
   const nfZh = _newsflowLang === 'zh';
   const themeChoice = window.getThemeChoice ? window.getThemeChoice() : 'system';
   const pages = {};
+  // Shortcuts get their own top-level page (#1395): no detour via Review,
+  // no collapsed <details> — every shortcut is visible and editable at once.
+  pages.shortcuts = { title: 'Shortcuts', icon: '⌨️', desc: 'All keyboard shortcuts', html: `
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Keyboard shortcuts</h2>
+      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed.</p>
+      ${msg}
+      ${groups}
+      <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
+    </div>` };
   pages.appearance = { title: 'Appearance', icon: '🎨', desc: 'Theme, languages', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Theme</h2>
@@ -4427,7 +4436,7 @@ function renderSettings() {
       <p class="keymap-hint">A language that is switched off does not appear in the language tab bar and its cards stay out of the current review. Words and progress are kept — switch it back on any time. Chinese cannot be switched off.</p>
       ${_langSettingsRowsHtml()}
     </div>` };
-  pages.review = { title: 'Review', icon: '🃏', desc: 'Daily target, day boundary, hint stages, shortcuts', html: `
+  pages.review = { title: 'Review', icon: '🃏', desc: 'Daily target, day boundary, hint stages', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Daily card target</h2>
       <p class="keymap-hint">When fewer different cards of a language than the daily target (you set the number, 1–500) are scheduled for the day, add new cards alternately from Leeches and the Star List, most common words first. Set per language: Chinese is on by default, Spanish is off by default (Spanish is ranked by lemma frequency). Leech cards restart as new. Repeat answers on the same card count once. Turning this off stops future additions; cards already added stay scheduled.</p>
@@ -4474,15 +4483,6 @@ function renderSettings() {
           <span>${_againRegenEnabled ? 'On' : 'Off'}</span>
         </label>
       </div>
-    </div>
-    <div class="keymap-panel">
-      <details class="settings-collapse" ${(_settingsShortcutsOpen || _capturingAction || _settingsMsg) ? 'open' : ''} ontoggle="_settingsShortcutsOpen=this.open">
-      <summary>Review shortcuts</summary>
-      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed.</p>
-      ${msg}
-      ${groups}
-      <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
-      </details>
     </div>` };
   pages.stories = { title: 'Stories', icon: '📖', desc: 'Morning pre-generation, Kontextsummary', html: `
     <div class="keymap-panel">
@@ -4507,6 +4507,8 @@ function renderSettings() {
       <h2 class="keymap-heading">Konjugations-Musterkarten</h2>
       <p class="keymap-hint">Bei Verben mit Konjugations-Slot bewertest du nach dem Aufdecken zusätzlich die Konjugation (✓/✗, Tasten u/i). Geplant werden Muster, nicht Verben: Ein falsches Muster kommt in ein paar Tagen mit einem anderen Verb wieder. Erkennen (Reading + Listening) und Bilden (Creating) werden getrennt geplant – Listening beeinflusst Creating nicht.</p>
       ${_esConjSettingsHtml()}
+      <h3 class="keymap-subheading">Tasten</h3>
+      ${KEYMAP_ACTIONS.filter(a => a.id === 'conj-ok' || a.id === 'conj-fail').map(_keymapRowHtml).join('')}
       ${_esConjPatternsHtml()}
     </div>
     <div class="keymap-panel">
