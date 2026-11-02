@@ -1316,3 +1316,50 @@ CREATE TABLE IF NOT EXISTS audio_bookmarks (
 
 CREATE INDEX IF NOT EXISTS idx_audio_bookmarks_owner
     ON audio_bookmarks(owner_kind, owner_id, lang, variant);
+
+-- ---------------------------------------------------------------------------
+-- Conjugation pattern scheduler (#1395). A Spanish verb card's story sentence
+-- carries a (tense, person) slot; besides the vocabulary rating the user rates
+-- the CONJUGATION (right/wrong). That rating feeds a separate FSRS scheduler
+-- whose items are conjugation PATTERNS (conj_patterns.py: "reg:ind_pres:ar",
+-- "irr:ind_pret:strong_u", ...), not verbs: a miss brings the same pattern
+-- back with another verb. Each pattern has two independent states: 'recog'
+-- (reading + listening cards) and 'prod' (creating cards).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS conj_patterns (
+    lang         TEXT NOT NULL,
+    pattern      TEXT NOT NULL,
+    mode         TEXT NOT NULL CHECK(mode IN ('recog','prod')),
+    state        TEXT NOT NULL DEFAULT 'new',   -- new | learning | review
+    stability    REAL,
+    difficulty   REAL,
+    due          TEXT,                          -- ISO date
+    last_review  TEXT,                          -- ISO date
+    reps         INTEGER NOT NULL DEFAULT 0,
+    lapses       INTEGER NOT NULL DEFAULT 0,
+    -- Same-day rule: only the first rating of a day counts as a success, a
+    -- first failure can still be corrected once. day_before = JSON snapshot of
+    -- the state fields before that day's first rating (NULL = brand new).
+    day          TEXT,
+    day_before   TEXT,
+    day_failed   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (lang, pattern, mode)
+);
+
+CREATE TABLE IF NOT EXISTS conj_review_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    lang         TEXT NOT NULL,
+    pattern      TEXT NOT NULL,
+    mode         TEXT NOT NULL,
+    ok           INTEGER NOT NULL,
+    card_id      INTEGER,
+    sentence_id  INTEGER,
+    slot         TEXT,
+    lemma        TEXT,
+    form         TEXT,
+    reviewed_day TEXT NOT NULL,
+    reviewed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_conj_review_log_pattern
+    ON conj_review_log(lang, mode, pattern);

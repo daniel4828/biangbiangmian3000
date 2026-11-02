@@ -18,3 +18,4 @@ from .audio import *
 from .translations import *
 from .home import home_discovery
 from .daily_target import *
+from .conj import *

@@ -682,6 +682,50 @@ def reset_es_verb_slot_weights():
     return _verb_slot_weights_payload()
 
 
+@router.get("/api/es/conj-settings")
+def get_es_conj_settings():
+    """Conjugation pattern scheduler settings (#1395)."""
+    import conj_patterns
+    return conj_patterns.settings()
+
+
+@router.put("/api/es/conj-settings")
+def put_es_conj_settings(body: dict):
+    """Partial update {enabled?, new_per_day?, desired_retention?} (#1395)."""
+    import conj_patterns
+    try:
+        clean = conj_patterns.validate_settings(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    conj_patterns.save_settings(clean)
+    return conj_patterns.settings()
+
+
+@router.get("/api/es/conj-patterns")
+def get_es_conj_patterns():
+    """Every conjugation pattern (catalog + everything in the DB) with its
+    recognition / production status (#1395)."""
+    import conj_patterns
+    states = database.get_conj_states("es")
+    stats = database.conj_log_stats("es")
+    today = database.anki_today().isoformat()
+    items = {p["key"]: p for p in conj_patterns.catalog("es")}
+    for key, _mode in list(states) + list(stats):
+        if key not in items:
+            parts = key.split(":")
+            items[key] = {"key": key, "label": conj_patterns.label_for_key(key),
+                          "kind": {"reg": "regular", "irr": "group"}.get(parts[0], "verb"),
+                          "tense": parts[1] if len(parts) > 1 else ""}
+    patterns = []
+    for p in items.values():
+        patterns.append({
+            **p,
+            "recog": conj_patterns.pattern_status("es", p["key"], "recog", states, stats, today),
+            "prod": conj_patterns.pattern_status("es", p["key"], "prod", states, stats, today),
+        })
+    return {"patterns": patterns, "today": today}
+
+
 @router.get("/api/add-word-ai/progress/{job_id}")
 def add_word_ai_progress(job_id: str):
     """Poll status for a background add-word job started by /api/add-word-ai."""

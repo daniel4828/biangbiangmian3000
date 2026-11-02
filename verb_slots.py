@@ -473,7 +473,8 @@ def validate_weights(lang: str, data) -> dict:
 
 def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                  rng: random.Random | None = None,
-                 weights: dict | None = None) -> dict[int, dict]:
+                 weights: dict | None = None, conj_states: dict | None = None,
+                 new_budget=None, today=None) -> dict[int, dict]:
     """Pick a slot for every slottable verb card: {word_id: {slot, form, label}}.
 
     Weighted fair rotation (#1306): the slot with the smallest
@@ -484,11 +485,31 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
     person weight only. `weights` = {"tenses": {...}, "persons": {...}}, default
     = weights(lang). The local count is bumped after each pick so one story
     spreads over several slots. Never raises.
+
+    Conjugation patterns (#1395, Spanish only, switchable in Settings): before
+    the rotation, a card gets (1) a slot whose conjugation PATTERN is due for
+    review (each (pattern, mode) once per call), else (2) a slot of a not yet
+    introduced pattern while the daily new-pattern budget lasts, else (3) the
+    rotation above restricted to already introduced patterns. Mode: creating
+    cards = "prod", reading/listening = "recog". `conj_states` ({(pattern, mode):
+    row}), `new_budget` ({mode: n} or int) and `today` can be injected (tests);
+    the planner is only active when they are given or `usage` is loaded from the
+    database here (an injected `usage` = isolated rotation test, old behaviour).
+    Any failure in the pattern logic logs a warning and falls back to the plain
+    rotation. Entries then carry an extra "pattern" key.
     """
     try:
         cfg = config(lang)
         if not cfg:
             return {}
+        planner = None
+        if lang == _FORM_LANG and (usage is None or conj_states is not None):
+            try:
+                import conj_patterns
+                planner = conj_patterns.SlotPlanner.create(
+                    lang, conj_states, new_budget, today)
+            except Exception as e:
+                logger.warning("conjugation pattern planner unavailable — %s", e)
         if usage is None:
             usage = database.verb_slot_usage(lang)
         if weights is None:
@@ -527,17 +548,50 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
             if not options:
                 continue
 
+            pattern_of: dict[str, str | None] = {}
+            chosen = None
+            mode = None
+            if planner is not None:
+                try:
+                    import conj_patterns
+                    mode = conj_patterns.mode_for_category(card.get("category"))
+                    for o in options:
+                        tense, _, person = o[0].partition(":")
+                        pat = conj_patterns.pattern_for(lemma, tense, person, lang)
+                        pattern_of[o[0]] = pat["key"] if pat else None
+                    chosen = planner.choose(
+                        mode, [(o, pattern_of[o[0]]) for o in options], rng)
+                except Exception as e:
+                    logger.warning("conjugation pattern priority failed, "
+                                   "using plain rotation — %s", e)
+                    planner, chosen = None, None
+
+            pool = options
+            if chosen is None and planner is not None:
+                # Stage 3: rotate only over patterns that are already introduced
+                # (none introduced yet = all options, i.e. the old behaviour).
+                introduced = [o for o in options
+                              if planner.introduced(mode, pattern_of.get(o[0]))]
+                pool = introduced or options
+
             def key(o):
                 # rounded so float noise can't break ties
                 return (round((counts.get(o[0], 0) + 1) / o[2], 9), -round(o[2], 9),
                         last.get(o[0], ""))
-            best = min(key(o) for o in options)
-            tied = [o for o in options if key(o) == best]
-            slot, form, _w = rng.choice(tied)
+            if chosen is not None:
+                (slot, form, _w), pattern_key = chosen
+            else:
+                best = min(key(o) for o in pool)
+                tied = [o for o in pool if key(o) == best]
+                slot, form, _w = rng.choice(tied)
+                pattern_key = pattern_of.get(slot)
             counts[slot] = counts.get(slot, 0) + 1
             tense, _, person = slot.partition(":")
-            result[card["word_id"]] = {"slot": slot, "form": form,
-                                       "label": lexicon.slot_label(tense, person)}
+            entry = {"slot": slot, "form": form,
+                     "label": lexicon.slot_label(tense, person)}
+            if planner is not None and pattern_key:
+                entry["pattern"] = pattern_key
+            result[card["word_id"]] = entry
         return result
     except Exception as e:
         logger.warning("verb slot assignment failed — %s", e)
@@ -545,10 +599,8 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
 
 
 # ---------------------------------------------------------------------------
-# Practice counts for the conjugation table (#1356)
-#
-# History = story_sentences.verb_slot (no table). Regular verbs share ONE
-# count per tense (they are interchangeable drill), irregular ones count alone.
+# Label helpers for the conjugation table (#1356). The practice counts that used
+# to live here were replaced by conjugation PATTERNS (conj_patterns.py, #1395).
 # ---------------------------------------------------------------------------
 
 # Tenses whose regularity follows another tense's (the lexicon-based
@@ -661,54 +713,3 @@ def _slot_lemma(word_zh: str, lang: str) -> str | None:
     return None
 
 
-def practice_counts(lemma: str, lang: str) -> dict:
-    """How often each tense / person form of `lemma` was practised in stories:
-    {tense: {"total": n, "persons": {person: n}, "scope": "verb"|"regular"}}
-    for every tense code in _TENSE_EN.
-
-    Rule: a tense that is irregular for THIS verb counts only this verb's
-    sentences (scope "verb"); a regular one pools the sentences of ALL verbs
-    that are regular in that tense (scope "regular"). A sentence linked to
-    several words counts once, for its first verb. Never raises ({} on error)."""
-    try:
-        lemma = _base_verb(lemma)
-        by_sentence: dict[int, dict] = {}
-        lemma_cache: dict[str, str | None] = {}
-        for r in database.verb_slot_rows(lang):
-            sent = by_sentence.setdefault(r["sentence_id"], {"slot": r["slot"], "lemma": None})
-            if sent["lemma"] is None:
-                word = r["word_zh"]
-                if word not in lemma_cache:
-                    lemma_cache[word] = _slot_lemma(word, lang)
-                sent["lemma"] = lemma_cache[word]
-        irr_cache: dict[tuple[str, str], bool] = {}
-
-        def irregular(verb: str, tense: str) -> bool:
-            if (verb, tense) not in irr_cache:
-                irr_cache[(verb, tense)] = tense_is_irregular(verb, tense, lang)
-            return irr_cache[(verb, tense)]
-
-        out = {}
-        for tense in _TENSE_EN:
-            own = irregular(lemma, tense)
-            persons = {p: 0 for p in PERSONS}
-            total = 0
-            for sent in by_sentence.values():
-                s_tense, _, s_person = (sent["slot"] or "").partition(":")
-                s_verb = sent["lemma"]
-                if s_tense != tense or s_verb is None:
-                    continue
-                if own:
-                    if s_verb != lemma:
-                        continue
-                elif irregular(s_verb, tense):
-                    continue
-                total += 1
-                if s_person in persons:
-                    persons[s_person] += 1
-            out[tense] = {"total": total, "persons": persons,
-                          "scope": "verb" if own else "regular"}
-        return out
-    except Exception as e:
-        logger.warning("practice_counts(%r) failed — %s", lemma, e)
-        return {}

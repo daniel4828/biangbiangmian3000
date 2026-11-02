@@ -123,25 +123,6 @@ def verb_slot_usage(lang: str) -> dict[str, tuple[int, str | None]]:
     return {r["slot"]: (r["n"], r["last"]) for r in rows}
 
 
-def verb_slot_rows(lang: str) -> list[dict]:
-    """Every slotted story sentence in `lang` stories with the words linked to it
-    (#1356): [{sentence_id, slot, word_zh}], one row per (sentence, linked word).
-    The caller groups by sentence_id and decides which word is the verb."""
-    conn = get_db()
-    rows = conn.execute(
-        """SELECT ss.id AS sentence_id, ss.verb_slot AS slot, e.word_zh AS word_zh
-           FROM story_sentences ss
-           JOIN stories s ON s.id = ss.story_id
-           JOIN story_sentence_words sw ON sw.sentence_id = ss.id
-           JOIN entries e ON e.id = sw.word_id
-           WHERE ss.verb_slot IS NOT NULL AND COALESCE(ss.lang, s.lang) = ?
-           ORDER BY ss.id, sw.id""",
-        (lang,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
 def get_sentence_for_word(story_id: int, word_id: int) -> dict | None:
     """Return the first sentence (lowest position) in this story that contains word_id."""
     conn = get_db()
@@ -154,6 +135,45 @@ def get_sentence_for_word(story_id: int, word_id: int) -> dict | None:
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def _attach_conj_pattern(d: dict, lang: str | None) -> None:
+    """Spanish verb-slot sentences: attach the conjugation pattern the slot
+    follows (#1395) as conj_pattern / conj_pattern_label / conj_rating (whether
+    the UI should ask for a conjugation rating). Never raises."""
+    try:
+        slot = d.get("verb_slot")
+        if not slot or lang != "es":
+            return
+        import conj_patterns
+        for w in d.get("words") or []:
+            pat = conj_patterns.slot_pattern(w["word_zh"], slot, "es")
+            if pat:
+                d["conj_pattern"] = pat["key"]
+                d["conj_pattern_label"] = pat["label"]
+                d["conj_rating"] = bool(conj_patterns.settings()["enabled"])
+                return
+    except Exception as e:
+        logging.getLogger(__name__).warning("conj pattern for sentence %s failed — %s",
+                                            d.get("id"), e)
+
+
+def get_story_sentence(sentence_id: int) -> dict | None:
+    """One story sentence (hydrated like get_story_sentences entries) with the
+    effective language in `lang` (own lang, else the story's); None if missing."""
+    conn = get_db()
+    row = conn.execute(
+        """SELECT ss.*, s.lang AS story_lang FROM story_sentences ss
+           JOIN stories s ON s.id = ss.story_id WHERE ss.id = ?""",
+        (sentence_id,),
+    ).fetchone()
+    if row is None:
+        conn.close()
+        return None
+    d = _hydrate_sentence(conn, row)
+    conn.close()
+    d["lang"] = d.get("lang") or d.get("story_lang")
+    return d
 
 
 def _hydrate_sentence(conn, sent_row) -> dict:
@@ -181,6 +201,13 @@ def _hydrate_sentence(conn, sent_row) -> dict:
         d["definition"] = wlist[0]["definition"]
     raw_tokens = d.get("tokens")
     d["tokens"] = json.loads(raw_tokens) if raw_tokens else []
+    if d.get("verb_slot"):
+        lang = d.get("lang") or d.get("story_lang")
+        if not lang:
+            story = conn.execute("SELECT lang FROM stories WHERE id = ?",
+                                 (d.get("story_id"),)).fetchone()
+            lang = story["lang"] if story else None
+        _attach_conj_pattern(d, lang)
     return d
 
 
@@ -428,6 +455,8 @@ def get_story_sentences(story_id: int) -> list[dict]:
            ORDER BY sw.sentence_id, sw.id""",
         (story_id,),
     ).fetchall()
+    story_row = conn.execute("SELECT lang FROM stories WHERE id = ?", (story_id,)).fetchone()
+    story_lang = story_row["lang"] if story_row else None
     conn.close()
 
     words_by_sentence: dict[int, list] = {}
@@ -450,6 +479,8 @@ def get_story_sentences(story_id: int) -> list[dict]:
             d["definition"] = wlist[0]["definition"]
         raw_tokens = d.get("tokens")
         d["tokens"] = json.loads(raw_tokens) if raw_tokens else []
+        if d.get("verb_slot"):
+            _attach_conj_pattern(d, d.get("lang") or story_lang)
         result.append(d)
     return result
 
