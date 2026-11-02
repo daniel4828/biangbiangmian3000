@@ -474,7 +474,7 @@ def validate_weights(lang: str, data) -> dict:
 def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                  rng: random.Random | None = None,
                  weights: dict | None = None, conj_states: dict | None = None,
-                 new_budget=None, today=None) -> dict[int, dict]:
+                 today=None) -> dict[int, dict]:
     """Pick a slot for every slottable verb card: {word_id: {slot, form, label}}.
 
     Weighted fair rotation (#1306): the slot with the smallest
@@ -489,10 +489,10 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
     Conjugation patterns (#1395, Spanish only, switchable in Settings): before
     the rotation, a card gets (1) a slot whose conjugation PATTERN is due for
     review (each (pattern, mode) once per call), else (2) a slot of a not yet
-    introduced pattern while the daily new-pattern budget lasts, else (3) the
+    introduced pattern (not limited per day since #1401), else (3) the
     rotation above restricted to already introduced patterns. Mode: creating
     cards = "prod", reading/listening = "recog". `conj_states` ({(pattern, mode):
-    row}), `new_budget` ({mode: n} or int) and `today` can be injected (tests);
+    row}) and `today` can be injected (tests);
     the planner is only active when they are given or `usage` is loaded from the
     database here (an injected `usage` = isolated rotation test, old behaviour).
     Any failure in the pattern logic logs a warning and falls back to the plain
@@ -507,7 +507,7 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
             try:
                 import conj_patterns
                 planner = conj_patterns.SlotPlanner.create(
-                    lang, conj_states, new_budget, today)
+                    lang, conj_states, today)
             except Exception as e:
                 logger.warning("conjugation pattern planner unavailable — %s", e)
         if usage is None:

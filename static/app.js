@@ -3928,10 +3928,16 @@ function _esConjSettingsHtml() {
       </label>
     </div>
     <div class="keymap-row">
-      <span class="keymap-label">Neue Muster pro Tag</span>
-      <input type="number" min="0" max="50" step="1" value="${_escHtml(String(s.new_per_day))}" style="width:80px" ${dis}
-             onchange="saveEsConjSettings({new_per_day: Number(this.value)})">
+      <span class="keymap-label">Muster pro Verb und Tag (Creating)</span>
+      <input type="number" min="1" max="5" step="1" value="${_escHtml(String(s.prod_per_verb))}" style="width:80px" ${dis}
+             onchange="saveEsConjSettings({prod_per_verb: Number(this.value)})">
     </div>
+    <div class="keymap-row">
+      <span class="keymap-label">Folgesätze pro Tag (gesamt)</span>
+      <input type="number" min="0" max="100" step="1" value="${_escHtml(String(s.followups_per_day))}" style="width:80px" ${dis}
+             onchange="saveEsConjSettings({followups_per_day: Number(this.value)})">
+    </div>
+    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Creating: nach der Karte folgen bis zu (N−1) Folgesätze mit demselben Verb, nur Konjugation bewerten. Fällige Muster zuerst, dann neue. Listening/Reading: 1 Muster pro Verb. Folgesätze gesamt: 0 = aus.</div>
     <div class="keymap-row">
       <span class="keymap-label">Ziel-Behaltensrate</span>
       <input type="number" min="0.80" max="0.97" step="0.01" value="${_escHtml(String(s.desired_retention))}" style="width:80px" ${dis}
@@ -15243,6 +15249,127 @@ function setConjChoice(ok) {
   _syncConjButtons();
 }
 
+// ── Folgesätze (#1401) ───────────────────────────────────────────────────────
+// After a creating card of a Spanish verb, 1-2 more sentences with the SAME verb
+// (each another conjugation pattern) are shown one by one: German first, reveal
+// the Spanish sentence, then rate only the conjugation (richtig/falsch). The
+// vocabulary card's scheduling is untouched. Panel: #followup-panel.
+let _followupState = null;            // {items, idx, revealed, busy, card, resolve, prev}
+const _followupDone = new Set();      // sentence ids already rated or skipped
+
+function _pendingFollowups(ratedCard) {
+  if (!ratedCard || ratedCard.category !== 'creating') return [];
+  return (story?.followups || []).filter(f =>
+    f.id != null && f.followup_word_id === ratedCard.word_id && !_followupDone.has(f.id));
+}
+
+function _runFollowups(ratedCard, items) {
+  return new Promise(resolve => {
+    const front = document.getElementById('side-front');
+    const back = document.getElementById('side-back');
+    _followupState = {
+      items, idx: 0, revealed: false, busy: false, card: ratedCard, resolve,
+      prev: { front: front?.style.display ?? '', back: back?.style.display ?? '' },
+    };
+    if (front) front.style.display = 'none';
+    if (back) back.style.display = 'none';
+    document.getElementById('followup-panel').style.display = '';
+    _renderFollowup();
+  });
+}
+
+function _renderFollowup() {
+  const st = _followupState;
+  if (!st) return;
+  const f = st.items[st.idx];
+  document.getElementById('followup-head').textContent =
+    `Folgesatz ${st.idx + 1}/${st.items.length} · ${f.conj_pattern_label || ''}`;
+  document.getElementById('followup-lemma').textContent = f.lemma || f.word_zh || '';
+  document.getElementById('followup-hint').textContent = f.grammar_hint || '';
+  document.getElementById('followup-de').textContent = f.sentence_de || '';
+  const es = document.getElementById('followup-es');
+  es.textContent = '';
+  if (st.revealed) {
+    // Sentence text is AI output: only text nodes and one <b>, never innerHTML.
+    const text = f.sentence_zh || '';
+    let m = null;
+    if (f.form) {
+      const esc = f.form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      m = new RegExp(`(^|[^\\p{L}\\p{N}_])(${esc})(?![\\p{L}\\p{N}_])`, 'iu').exec(text);
+    }
+    if (m) {
+      const start = m.index + m[1].length;
+      es.appendChild(document.createTextNode(text.slice(0, start)));
+      const b = document.createElement('b');
+      b.textContent = m[2];
+      es.appendChild(b);
+      es.appendChild(document.createTextNode(text.slice(start + m[2].length)));
+    } else {
+      es.textContent = text;
+    }
+  }
+  es.style.display = st.revealed ? '' : 'none';
+  document.getElementById('followup-reveal-btn').style.display = st.revealed ? 'none' : '';
+  document.getElementById('followup-btn-fail').style.display = st.revealed ? '' : 'none';
+  document.getElementById('followup-btn-ok').style.display = st.revealed ? '' : 'none';
+}
+
+function followupReveal() {
+  const st = _followupState;
+  if (!st || st.revealed) return;
+  st.revealed = true;
+  _renderFollowup();
+}
+
+function _finishFollowups() {
+  const st = _followupState;
+  if (!st) return;
+  _followupState = null;
+  document.getElementById('followup-panel').style.display = 'none';
+  const front = document.getElementById('side-front');
+  const back = document.getElementById('side-back');
+  if (front) front.style.display = st.prev.front;
+  if (back) back.style.display = st.prev.back;
+  st.resolve();
+}
+
+async function followupRate(ok) {
+  const st = _followupState;
+  if (!st || !st.revealed || st.busy) return;
+  st.busy = true;
+  const f = st.items[st.idx];
+  try {
+    await api('POST', '/api/conj/followup-rate',
+              { sentence_id: f.id, ok: !!ok, card_id: st.card?.id ?? null });
+  } catch (e) {
+    showError('Folgesatz-Bewertung fehlgeschlagen: ' + e.message);
+  }
+  _followupDone.add(f.id);
+  st.busy = false;
+  st.idx += 1;
+  st.revealed = false;
+  if (st.idx >= st.items.length) _finishFollowups();
+  else _renderFollowup();
+}
+
+function followupSkip() {
+  const st = _followupState;
+  if (!st) return;
+  for (const f of st.items.slice(st.idx)) _followupDone.add(f.id);
+  _finishFollowups();
+}
+
+// Keys while the panel is open. Returns true when the key was consumed; every
+// plain key is swallowed so the review shortcuts (1-4, reveal, …) can't hit the
+// card hidden behind the panel.
+function _followupKeyDown(e) {
+  if (e.key === 'Escape') { e.preventDefault(); followupSkip(); return true; }
+  if (e.key === _key('reveal')) { e.preventDefault(); followupReveal(); return true; }
+  if (e.key === _key('conj-ok')) { e.preventDefault(); followupRate(true); return true; }
+  if (e.key === _key('conj-fail')) { e.preventDefault(); followupRate(false); return true; }
+  return true;
+}
+
 // ── Submit rating ───────────────────────────────────────────────────────────
 async function rate(rating) {
   document.querySelectorAll('.r-btn').forEach(b => b.disabled = true);
@@ -15268,6 +15395,7 @@ async function rate(rating) {
       url += `&conj_ok=${_conjChoice ? 1 : 0}&sentence_id=${sentence.id}`;
     }
     const reviewedId = card.id;
+    const ratedCard = card;
     const result = await api('POST', url);
     _sessionReviewedCount++;
     if (reviewedId != null) _sessionReviewedIds.push(reviewedId);
@@ -15278,6 +15406,10 @@ async function rate(rating) {
       _retentionData = r;
       _updateReviewRRBadge(deckId);
     }).catch(() => {});
+    // Folgesätze (#1401): extra conjugation sentences for this verb, shown after
+    // a creating card and BEFORE the next card is loaded.
+    const followups = _pendingFollowups(ratedCard);
+    if (followups.length) await _runFollowups(ratedCard, followups);
     if (!result.next_card) {
       _lastCounts = result.counts || _lastCounts;
       rootDeckId = null;
@@ -19242,6 +19374,12 @@ function renderFsrsInspector() {
 
 document.addEventListener('keydown', async e => {
   const inInput = _isEditableFocusTarget(document.activeElement);
+
+  // Folgesatz panel (#1401): handles reveal / richtig / falsch / Escape itself and
+  // keeps every other review key (1-4, …) away from the card behind it.
+  if (_followupState && !inInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (_followupKeyDown(e)) return;
+  }
 
   // Book reader (#836): ←/→ turn the page. Guarded on the reader actually
   // being open — the jump-to-page box is an input, so `inInput` keeps arrow

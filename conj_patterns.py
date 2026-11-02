@@ -23,6 +23,7 @@ raising.
 import json
 import logging
 import math
+import random
 import unicodedata
 from datetime import date, timedelta
 
@@ -43,11 +44,14 @@ _SER_IR_TENSES = ("ind_pret", "subj_impf")
 
 # Settings (app_settings, Spanish only)
 KEY_ENABLED = "es_conj_enabled"
-KEY_NEW_PER_DAY = "es_conj_new_per_day"
 KEY_RETENTION = "es_conj_retention"
-DEFAULT_NEW_PER_DAY = 3
-MAX_NEW_PER_DAY = 50
 DEFAULT_RETENTION = 0.90
+# Creating: up to N patterns per verb and day (the first is the story sentence,
+# the rest are Folgesätze, #1401); followups_per_day caps all Folgesätze (0 = off).
+KEY_PROD_PER_VERB = "es_conj_prod_per_verb"
+KEY_FOLLOWUPS_PER_DAY = "es_conj_followups_per_day"
+DEFAULT_PROD_PER_VERB, MIN_PROD_PER_VERB, MAX_PROD_PER_VERB = 3, 1, 5
+DEFAULT_FOLLOWUPS_PER_DAY, MAX_FOLLOWUPS_PER_DAY = 30, 100
 MIN_RETENTION, MAX_RETENTION = 0.80, 0.97
 KEY_PULL_PER_DAY = "es_conj_pull_per_day"
 KEY_NO_BURY = "es_conj_irregular_no_bury"
@@ -434,18 +438,27 @@ def catalog(lang: str = LANG) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def settings() -> dict:
-    """{"enabled", "new_per_day", "desired_retention"}; defaults when unset,
-    unparsable stored values fall back to the default with a warning."""
-    enabled, new_per_day, retention = True, DEFAULT_NEW_PER_DAY, DEFAULT_RETENTION
+    """{"enabled", "desired_retention", "pull_per_day", "irregular_creating_unburied",
+    "prod_per_verb", "followups_per_day"}; defaults when unset, unparsable stored
+    values fall back to the default with a warning."""
+    enabled, retention = True, DEFAULT_RETENTION
     raw = database.get_app_setting(KEY_ENABLED)
     if raw in ("0", "1"):
         enabled = raw == "1"
-    raw = database.get_app_setting(KEY_NEW_PER_DAY)
+    prod_per_verb = DEFAULT_PROD_PER_VERB
+    raw = database.get_app_setting(KEY_PROD_PER_VERB)
     if raw not in (None, ""):
         try:
-            new_per_day = max(0, min(MAX_NEW_PER_DAY, int(raw)))
+            prod_per_verb = max(MIN_PROD_PER_VERB, min(MAX_PROD_PER_VERB, int(raw)))
         except ValueError:
-            logger.warning("conj settings: bad new_per_day %r, using default", raw)
+            logger.warning("conj settings: bad prod_per_verb %r, using default", raw)
+    followups = DEFAULT_FOLLOWUPS_PER_DAY
+    raw = database.get_app_setting(KEY_FOLLOWUPS_PER_DAY)
+    if raw not in (None, ""):
+        try:
+            followups = max(0, min(MAX_FOLLOWUPS_PER_DAY, int(raw)))
+        except ValueError:
+            logger.warning("conj settings: bad followups_per_day %r, using default", raw)
     raw = database.get_app_setting(KEY_RETENTION)
     if raw not in (None, ""):
         try:
@@ -462,9 +475,10 @@ def settings() -> dict:
         except ValueError:
             logger.warning("conj settings: bad pull_per_day %r, using default", raw)
     no_bury = database.get_app_setting(KEY_NO_BURY) != "0"
-    return {"enabled": enabled, "new_per_day": new_per_day,
+    return {"enabled": enabled,
             "desired_retention": retention, "pull_per_day": pull,
-            "irregular_creating_unburied": no_bury}
+            "irregular_creating_unburied": no_bury,
+            "prod_per_verb": prod_per_verb, "followups_per_day": followups}
 
 
 def validate_settings(body) -> dict:
@@ -472,8 +486,8 @@ def validate_settings(body) -> dict:
     Raises ValueError with a readable reason."""
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
-    known = {"enabled", "new_per_day", "desired_retention", "pull_per_day",
-             "irregular_creating_unburied"}
+    known = {"enabled", "desired_retention", "pull_per_day",
+             "irregular_creating_unburied", "prod_per_verb", "followups_per_day"}
     unknown = sorted(set(body) - known)
     if unknown:
         raise ValueError(f"unknown setting(s): {', '.join(map(str, unknown))}")
@@ -486,11 +500,20 @@ def validate_settings(body) -> dict:
             out["enabled"] = bool(v)
         else:
             raise ValueError("'enabled' must be true or false")
-    if "new_per_day" in body:
-        v = body["new_per_day"]
-        if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= MAX_NEW_PER_DAY:
-            raise ValueError(f"'new_per_day' must be an integer between 0 and {MAX_NEW_PER_DAY}")
-        out["new_per_day"] = v
+    if "prod_per_verb" in body:
+        v = body["prod_per_verb"]
+        if (isinstance(v, bool) or not isinstance(v, int)
+                or not MIN_PROD_PER_VERB <= v <= MAX_PROD_PER_VERB):
+            raise ValueError(f"'prod_per_verb' must be an integer between "
+                             f"{MIN_PROD_PER_VERB} and {MAX_PROD_PER_VERB}")
+        out["prod_per_verb"] = v
+    if "followups_per_day" in body:
+        v = body["followups_per_day"]
+        if (isinstance(v, bool) or not isinstance(v, int)
+                or not 0 <= v <= MAX_FOLLOWUPS_PER_DAY):
+            raise ValueError(f"'followups_per_day' must be an integer between "
+                             f"0 and {MAX_FOLLOWUPS_PER_DAY}")
+        out["followups_per_day"] = v
     if "desired_retention" in body:
         v = body["desired_retention"]
         if (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
@@ -518,8 +541,10 @@ def save_settings(clean: dict) -> None:
     """Store the keys of a validate_settings() result."""
     if "enabled" in clean:
         database.set_app_setting(KEY_ENABLED, "1" if clean["enabled"] else "0")
-    if "new_per_day" in clean:
-        database.set_app_setting(KEY_NEW_PER_DAY, str(int(clean["new_per_day"])))
+    if "prod_per_verb" in clean:
+        database.set_app_setting(KEY_PROD_PER_VERB, str(int(clean["prod_per_verb"])))
+    if "followups_per_day" in clean:
+        database.set_app_setting(KEY_FOLLOWUPS_PER_DAY, str(int(clean["followups_per_day"])))
     if "desired_retention" in clean:
         database.set_app_setting(KEY_RETENTION, repr(float(clean["desired_retention"])))
     if "pull_per_day" in clean:
@@ -808,19 +833,18 @@ def ensure_pullforward(lang: str = LANG) -> int:
 class SlotPlanner:
     """Priority of conjugation patterns when slots are assigned for one batch:
     1. DUE   - a pattern whose review is due (each (pattern, mode) once per call)
-    2. NEW   - a not yet introduced pattern while the daily budget lasts
+    2. NEW   - a not yet introduced pattern (no daily limit since #1401)
     3. rest  - the caller's weighted rotation, restricted to introduced patterns
     """
 
-    def __init__(self, states: dict, budget: dict, today: str):
+    def __init__(self, states: dict, today: str):
         self.states = states
-        self.budget = dict(budget)
         self.today = today
         self.used_due: set = set()
         self.planned_new: set = set()
 
     @classmethod
-    def create(cls, lang, conj_states=None, new_budget=None, today=None):
+    def create(cls, lang, conj_states=None, today=None):
         """None when conjugation scheduling is disabled."""
         s = settings()
         if not s["enabled"]:
@@ -830,14 +854,7 @@ class SlotPlanner:
         elif hasattr(today, "isoformat"):
             today = today.isoformat()
         states = conj_states if conj_states is not None else database.get_conj_states(lang)
-        if new_budget is None:
-            budget = {m: max(0, s["new_per_day"] - database.conj_introduced_today(lang, m, today))
-                      for m in MODES}
-        elif isinstance(new_budget, int):
-            budget = {m: new_budget for m in MODES}
-        else:
-            budget = {m: int(new_budget.get(m, 0)) for m in MODES}
-        return cls(states, budget, today)
+        return cls(states, today)
 
     def introduced(self, mode: str, key) -> bool:
         row = self.states.get((key, mode)) if key else None
@@ -861,14 +878,140 @@ class SlotPlanner:
             opt, key, _ = rng.choice([d for d in pool if d[0][2] == top])
             self.used_due.add((key, mode))
             return opt, key
-        if self.budget.get(mode, 0) > 0:
-            fresh = [(opt, key) for opt, key in cands
-                     if key and not self.introduced(mode, key)
-                     and (key, mode) not in self.planned_new]
-            if fresh:
-                top = max(o[2] for o, _ in fresh)
-                opt, key = rng.choice([c for c in fresh if c[0][2] == top])
-                self.budget[mode] -= 1
-                self.planned_new.add((key, mode))
-                return opt, key
+        fresh = [(opt, key) for opt, key in cands
+                 if key and not self.introduced(mode, key)
+                 and (key, mode) not in self.planned_new]
+        if fresh:
+            top = max(o[2] for o, _ in fresh)
+            opt, key = rng.choice([c for c in fresh if c[0][2] == top])
+            self.planned_new.add((key, mode))
+            return opt, key
         return None
+
+
+# ---------------------------------------------------------------------------
+# Folgesätze (#1401): extra conjugation sentences after a creating card
+# ---------------------------------------------------------------------------
+
+def verb_headword(word_zh: str):
+    """(infinitive to conjugate, fixed tense | None) of a slottable Spanish card
+    word, or None for any other word. The infinitive keeps a reflexive "se"
+    (verb_slots.target_form puts the pronoun in front); a form card
+    ("tener · Indefinido") carries its fixed tense. Never raises."""
+    try:
+        parsed = verb_slots.parse_form_card(word_zh)
+        if parsed:
+            return parsed[0], parsed[1]
+        if verb_slots.is_slottable_verb(word_zh, LANG):
+            return (word_zh or "").strip().lower(), None
+    except Exception:
+        pass
+    return None
+
+
+def _card_lang(card: dict, story_lang: str) -> str:
+    if story_lang == "multi":
+        return card.get("word_lang") or "zh"
+    return story_lang
+
+
+def plan_followups(entries: list, lang: str, today=None, conj_states=None,
+                   rng=None) -> list[dict]:
+    """Plan the Folgesätze of one story (#1401).
+
+    `entries` = [(card dict, main_slot or None)] for the story's cards; `lang`
+    is the story language ("multi" = per card via card["word_lang"]). For every
+    Spanish CREATING card with a slottable verb (plain or form card) up to
+    prod_per_verb - 1 further DISTINCT production patterns are chosen: due ones
+    first (oldest due first), then new ones (highest slot weight first). Never
+    the pattern of any main sentence of this story, never one pattern twice in
+    the story. No rotation stage: nothing due/new = fewer follow-ups. Cards are
+    served round-robin so the daily cap (followups_per_day minus the Folgesätze
+    of today's stories) is spread over the verbs.
+
+    Returns [{word_id, lemma, slot, form, label, pattern, pattern_label}].
+    Total: any failure logs a warning and returns []."""
+    try:
+        s = settings()
+        per_verb = s["prod_per_verb"] - 1
+        if not s["enabled"] or s["followups_per_day"] <= 0 or per_verb <= 0:
+            return []
+        cfg = verb_slots.config(LANG)
+        if not cfg:
+            return []
+        if today is None:
+            today = database.anki_today().isoformat()
+        elif hasattr(today, "isoformat"):
+            today = today.isoformat()
+        remaining = s["followups_per_day"] - database.count_followups_for_date(today)
+        if remaining <= 0:
+            return []
+        states = conj_states if conj_states is not None else database.get_conj_states(LANG)
+        wts = verb_slots.weights(LANG)
+        w_tense, w_person = wts.get("tenses") or {}, wts.get("persons") or {}
+        rng = rng or random.Random()
+
+        # Patterns the story's main sentences already drill (every mode, every card)
+        used: set = set()
+        for card, main_slot in entries:
+            if main_slot and _card_lang(card, lang) == LANG:
+                pat = slot_pattern(card.get("word_zh") or "", main_slot, LANG)
+                if pat:
+                    used.add(pat["key"])
+
+        queues = []  # (card, lemma, {pattern: [(slot, form, weight)]}, ordered keys)
+        for card, _main in entries:
+            if card.get("category") != "creating" or _card_lang(card, lang) != LANG:
+                continue
+            head = verb_headword(card.get("word_zh") or "")
+            lemma = verb_slots._slot_lemma(card.get("word_zh") or "", LANG)
+            if not head or not lemma:
+                continue
+            raw_lemma, fixed_tense = head
+            by_pattern: dict = {}
+            tenses = [fixed_tense] if fixed_tense else list(cfg["tenses"])
+            for tense in tenses:
+                for person in (PERSONS if fixed_tense else cfg["persons"]):
+                    weight = (w_person.get(person, 1.0) if fixed_tense
+                              else w_tense.get(tense, 1.0) * w_person.get(person, 1.0))
+                    if weight <= 0:
+                        continue
+                    form = verb_slots.target_form(raw_lemma, tense, person, LANG)
+                    pat = pattern_for(lemma, tense, person, LANG) if form else None
+                    if not pat:
+                        continue
+                    by_pattern.setdefault(pat["key"], []).append(
+                        (f"{tense}:{person}", form, weight))
+            due, fresh = [], []
+            for key, opts in by_pattern.items():
+                row = states.get((key, "prod"))
+                if row and row.get("state") != "new":
+                    if row.get("due") and row["due"][:10] <= today:
+                        due.append((row["due"], key))
+                else:
+                    fresh.append((-max(o[2] for o in opts), key))
+            order = [k for _, k in sorted(due)] + [k for _, k in sorted(fresh)]
+            queues.append((card, lemma, by_pattern, order))
+
+        out: list[dict] = []
+        for _round in range(per_verb):
+            for card, lemma, by_pattern, order in queues:
+                if remaining <= 0:
+                    return out
+                key = next((k for k in order if k not in used), None)
+                if key is None:
+                    continue
+                used.add(key)
+                opts = by_pattern[key]
+                top = max(o[2] for o in opts)
+                slot, form, _w = rng.choice([o for o in opts if o[2] == top])
+                tense, _, person = slot.partition(":")
+                out.append({
+                    "word_id": card["word_id"], "lemma": lemma, "slot": slot,
+                    "form": form, "label": lexicon.slot_label(tense, person),
+                    "pattern": key, "pattern_label": label_for_key(key)})
+                remaining -= 1
+        return out
+    except Exception as e:
+        logger.warning("plan_followups failed — %s", e)
+        return []

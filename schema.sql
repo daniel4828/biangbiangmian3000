@@ -468,6 +468,9 @@ CREATE TABLE IF NOT EXISTS story_sentences (
     -- verb slot rotation (#1295): "ind_pret:3s" + its card label ("Indefinido · 3. Sg.")
     verb_slot   TEXT,
     grammar_hint TEXT,
+    -- Folgesatz (#1401): extra conjugation sentence for this verb entry after its
+    -- creating card; such a sentence has no story_sentence_words rows
+    followup_word_id INTEGER,
     -- language of this sentence in a multi-language story (#1378); NULL = the story's lang
     lang        TEXT,
     UNIQUE(story_id, position)

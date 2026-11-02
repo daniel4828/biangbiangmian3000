@@ -199,6 +199,21 @@
             </div>
           </div>
 
+          <!-- Folgesätze (#1401): extra conjugation sentences after a creating card -->
+          <div class="followup-panel" id="followup-panel" style="display:none">
+            <div class="followup-head" id="followup-head"></div>
+            <div class="followup-lemma" id="followup-lemma"></div>
+            <div class="followup-hint" id="followup-hint"></div>
+            <div class="followup-de" id="followup-de"></div>
+            <div class="followup-es" id="followup-es" style="display:none"></div>
+            <div class="followup-actions">
+              <button type="button" class="conj-r-btn" id="followup-reveal-btn" onclick="followupReveal()">Aufdecken</button>
+              <button type="button" class="conj-r-btn conj-r-fail active" id="followup-btn-fail" style="display:none" onclick="followupRate(false)">✗ falsch</button>
+              <button type="button" class="conj-r-btn conj-r-ok active" id="followup-btn-ok" style="display:none" onclick="followupRate(true)">✓ richtig</button>
+              <button type="button" class="conj-r-btn" id="followup-skip-btn" onclick="followupSkip()">Überspringen</button>
+            </div>
+          </div>
+
           <!-- Front side (content varies by category) -->
           <div id="side-front">
             <!-- Kontextsummary: clickable source title · publisher, above the context/sentence (issue #454) -->

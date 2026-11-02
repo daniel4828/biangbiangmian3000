@@ -1103,6 +1103,63 @@ def _patch_missing(sentences: list[dict], missing_word_ids: list[int],
         sentences.append(patched)
 
 
+def generate_conj_followups(items: list[dict], model: str = DEFAULT_MODEL) -> list[dict]:
+    """Folgesätze (#1401): ONE AI call writes a short Spanish sentence (plus a
+    German translation) for every item of a story — each sentence must contain
+    EXACTLY the given conjugated form.
+
+    `items` = [{"form": "tuve", "lemma": "tener", "label": "Indefinido · 1. Sg."}, …].
+    Returns [{"index", "sentence_es", "sentence_de"}] where index is the 0-based
+    position in `items`. Items whose sentence lacks the form as a whole word
+    (case-insensitive), repeated indexes and unusable entries are dropped.
+    Never raises: [] (with a warning) on any failure — Folgesätze are an extra,
+    never a reason to fail a story."""
+    if not items:
+        return []
+    try:
+        lines = "\n".join(
+            f'{i + 1}. "{it["form"]}" ({it.get("lemma", "")}, {it.get("label", "")})'
+            for i, it in enumerate(items))
+        prompt = (
+            "For each numbered item below write ONE short, natural Spanish sentence "
+            "(CEFR A2, at most 12 words, everyday context) that contains EXACTLY the "
+            "given conjugated form (spelled exactly like that, as a separate word), "
+            "plus a natural German translation of the sentence.\n"
+            "Every sentence must stand on its own; do not reuse the same situation.\n"
+            "Reply with ONLY a JSON array, no markdown fences, no explanation:\n"
+            '[{"index": 1, "sentence_es": "…", "sentence_de": "…"}, …]\n\n'
+            f"Items:\n{lines}"
+        )
+        raw = _call_api(model, [{"role": "user", "content": prompt}],
+                        200 + 160 * len(items), purpose="conj_followups")
+        start, end = raw.find("["), raw.rfind("]") + 1
+        data = json.loads(raw[start:end]) if start != -1 and end != 0 else None
+        if not isinstance(data, list):
+            logger.warning("generate_conj_followups: reply is no JSON array: %.200s", raw)
+            return []
+        out, seen = [], set()
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            idx = row.get("index")
+            es, de = row.get("sentence_es"), row.get("sentence_de")
+            if (isinstance(idx, bool) or not isinstance(idx, int)
+                    or not 1 <= idx <= len(items) or idx in seen
+                    or not isinstance(es, str) or not isinstance(de, str)
+                    or not es.strip() or not de.strip()):
+                continue
+            form = items[idx - 1]["form"]
+            if re.search(rf"(?<!\w){re.escape(form)}(?!\w)", es, re.IGNORECASE) is None:
+                logger.warning("generate_conj_followups: sentence %d lacks %r — dropped", idx, form)
+                continue
+            seen.add(idx)
+            out.append({"index": idx - 1, "sentence_es": es.strip(), "sentence_de": de.strip()})
+        return out
+    except Exception as e:
+        logger.warning("generate_conj_followups failed — %s", e)
+        return []
+
+
 def regenerate_entry_fields(
     word: dict,
     characters: list[dict],

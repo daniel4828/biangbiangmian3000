@@ -153,17 +153,23 @@ def test_catalog_deterministic_and_complete(real_lex):
 # --- settings ------------------------------------------------------------------
 
 def test_settings_defaults_and_validation(tmp_db):
-    assert conj_patterns.settings() == {"enabled": True, "new_per_day": 3,
+    assert conj_patterns.settings() == {"enabled": True,
                                         "desired_retention": 0.90, "pull_per_day": 10,
-                                        "irregular_creating_unburied": True}
-    clean = conj_patterns.validate_settings({"new_per_day": 5})
-    assert clean == {"new_per_day": 5}
-    conj_patterns.save_settings({"enabled": False, "new_per_day": 5, "desired_retention": 0.85})
-    assert conj_patterns.settings() == {"enabled": False, "new_per_day": 5,
+                                        "irregular_creating_unburied": True,
+                                        "prod_per_verb": 3, "followups_per_day": 30}
+    clean = conj_patterns.validate_settings({"prod_per_verb": 5})
+    assert clean == {"prod_per_verb": 5}
+    conj_patterns.save_settings({"enabled": False, "prod_per_verb": 2,
+                                 "followups_per_day": 0, "desired_retention": 0.85})
+    assert conj_patterns.settings() == {"enabled": False,
                                         "desired_retention": 0.85, "pull_per_day": 10,
-                                        "irregular_creating_unburied": True}
-    for bad in ({"new_per_day": 51}, {"new_per_day": -1}, {"new_per_day": 1.5},
-                {"new_per_day": True}, {"desired_retention": 0.79},
+                                        "irregular_creating_unburied": True,
+                                        "prod_per_verb": 2, "followups_per_day": 0}
+    for bad in ({"new_per_day": 5},  # removed in #1401: now an unknown key
+                {"prod_per_verb": 0}, {"prod_per_verb": 6}, {"prod_per_verb": 1.5},
+                {"prod_per_verb": True}, {"followups_per_day": -1},
+                {"followups_per_day": 101}, {"followups_per_day": True},
+                {"desired_retention": 0.79},
                 {"desired_retention": 0.98}, {"desired_retention": "x"},
                 {"enabled": "yes"}, {"nope": 1}, []):
         with pytest.raises(ValueError):
@@ -326,14 +332,14 @@ def real_conj(tmp_db):
     lexicon.clear_cache()
 
 
-def _assign(cards, states, budget, seed=1):
+def _assign(cards, states, seed=1):
     return verb_slots.assign_slots(cards, "es", usage={}, rng=random.Random(seed),
-                                   conj_states=states, new_budget=budget, today=TODAY)
+                                   conj_states=states, today=TODAY)
 
 
 def test_due_pattern_wins_over_rotation(real_conj):
     states = {("reg:ind_pret:ar", "recog"): _state("reg:ind_pret:ar", "recog", LONG_AGO)}
-    out = _assign([_card(1, "reading")], states, {"recog": 0, "prod": 0})
+    out = _assign([_card(1, "reading")], states)
     assert out[1]["slot"] == "ind_pret:3s"  # most frequent person
     assert out[1]["pattern"] == "reg:ind_pret:ar"
 
@@ -343,50 +349,52 @@ def test_due_prod_pattern_does_not_affect_reading_card(real_conj):
         ("reg:ind_pret:ar", "prod"): _state("reg:ind_pret:ar", "prod", LONG_AGO),
         ("reg:ind_impf:ar", "recog"): _state("reg:ind_impf:ar", "recog", LATER),  # not due
     }
-    budget = {"recog": 0, "prod": 0}
-    reading = _assign([_card(1, "reading")], states, budget)
-    assert reading[1]["slot"].startswith("ind_impf:")  # rotation limited to introduced
-    creating = _assign([_card(1, "creating")], states, budget)
+    reading = _assign([_card(1, "reading")], states)
+    # the due pattern is a PROD one: the reading card gets a new recog pattern instead
+    assert reading[1]["pattern"] == "reg:ind_pres:ar"
+    creating = _assign([_card(1, "creating")], states)
     assert creating[1]["slot"] == "ind_pret:3s"
 
 
 def test_each_due_pattern_used_once_per_call(real_conj):
     states = {("reg:ind_pret:ar", "recog"): _state("reg:ind_pret:ar", "recog", LONG_AGO),
               ("reg:ind_impf:ar", "recog"): _state("reg:ind_impf:ar", "recog", LONG_AGO)}
-    out = _assign([_card(1, "reading"), _card(2, "reading")], states, {"recog": 0, "prod": 0})
+    out = _assign([_card(1, "reading"), _card(2, "reading")], states)
     assert {out[1]["slot"].split(":")[0], out[2]["slot"].split(":")[0]} == {"ind_pret", "ind_impf"}
 
 
 def test_most_overdue_wins(real_conj):
     states = {("reg:ind_pret:ar", "recog"): _state("reg:ind_pret:ar", "recog", "2026-03-01"),
               ("reg:ind_impf:ar", "recog"): _state("reg:ind_impf:ar", "recog", "2026-02-01")}
-    out = _assign([_card(1, "reading")], states, {"recog": 0, "prod": 0})
+    out = _assign([_card(1, "reading")], states)
     assert out[1]["pattern"] == "reg:ind_impf:ar"
 
 
-def test_new_budget_introduces_highest_weight_pattern(real_conj):
-    out = _assign([_card(1, "reading")], {}, {"recog": 1, "prod": 0})
-    assert out[1]["slot"] == "ind_pres:3s"
-    assert out[1]["pattern"] == "reg:ind_pres:ar"
+def test_new_patterns_are_not_limited_per_day(real_conj):
+    """#1401: the NEW stage has no daily budget — every card without a due
+    pattern introduces another new one (highest weight first, none twice)."""
+    cards = [_card(i, "reading") for i in range(1, 5)]
+    out = _assign(cards, {})
+    patterns = [out[i]["pattern"] for i in range(1, 5)]
+    assert patterns[0] == "reg:ind_pres:ar" and out[1]["slot"] == "ind_pres:3s"
+    assert len(set(patterns)) == 4  # four cards -> four different new patterns
 
 
-def test_budget_zero_restricts_to_introduced_patterns(real_conj):
-    states = {("reg:ind_fut:all", "recog"): _state("reg:ind_fut:all", "recog", LATER)}
+def test_all_patterns_introduced_falls_back_to_rotation(real_conj):
+    cfg = verb_slots.config("es")
+    keys = sorted({conj_patterns.pattern_for("hablar", t, p)["key"]
+                   for t in cfg["tenses"] for p in cfg["persons"]})
+    states = {(k, "recog"): _state(k, "recog", LATER) for k in keys}
     for seed in range(5):
-        out = _assign([_card(1, "reading")], states, {"recog": 0, "prod": 0}, seed=seed)
-        assert out[1]["slot"].startswith("ind_fut:")
-
-
-def test_nothing_introduced_and_no_budget_is_plain_rotation(real_conj):
-    out = _assign([_card(1, "reading")], {}, {"recog": 0, "prod": 0})
-    assert out[1]["slot"]  # still gets a slot
+        out = _assign([_card(1, "reading")], states, seed=seed)
+        assert out[1]["slot"] and out[1]["pattern"] in keys
 
 
 def test_disabled_is_identical_to_old_behaviour(real_conj):
     database.set_app_setting(conj_patterns.KEY_ENABLED, "0")
     states = {("reg:ind_pret:ar", "recog"): _state("reg:ind_pret:ar", "recog", LONG_AGO)}
     cards = [_card(i, "reading") for i in range(1, 6)]
-    with_states = _assign(cards, states, {"recog": 3, "prod": 3}, seed=7)
+    with_states = _assign(cards, states, seed=7)
     old = verb_slots.assign_slots(cards, "es", usage={}, rng=random.Random(7))
     assert with_states == old
     assert all("pattern" not in v for v in with_states.values())
@@ -394,7 +402,7 @@ def test_disabled_is_identical_to_old_behaviour(real_conj):
 
 def test_non_spanish_unchanged(real_conj):
     assert verb_slots.assign_slots([_card(1, "reading")], "fr", usage={},
-                                   conj_states={}, new_budget=1) == {}
+                                   conj_states={}) == {}
 
 
 # --- hydration + review API ----------------------------------------------------
@@ -484,18 +492,20 @@ def test_review_conj_failure_never_fails_vocab_rating(small_lex, client, clock, 
 
 def test_conj_settings_endpoints(client):
     assert client.get("/api/es/conj-settings").json() == {
-        "enabled": True, "new_per_day": 3, "desired_retention": 0.9,
-        "pull_per_day": 10, "irregular_creating_unburied": True}
-    r = client.put("/api/es/conj-settings", json={"new_per_day": 7})
-    assert r.status_code == 200 and r.json()["new_per_day"] == 7
+        "enabled": True, "desired_retention": 0.9,
+        "pull_per_day": 10, "irregular_creating_unburied": True,
+        "prod_per_verb": 3, "followups_per_day": 30}
+    r = client.put("/api/es/conj-settings", json={"prod_per_verb": 4})
+    assert r.status_code == 200 and r.json()["prod_per_verb"] == 4
     assert r.json()["enabled"] is True
     r = client.put("/api/es/conj-settings", json={"enabled": False, "desired_retention": 0.85})
-    assert r.json() == {"enabled": False, "new_per_day": 7, "desired_retention": 0.85,
-                        "pull_per_day": 10, "irregular_creating_unburied": True}
-    for bad in ({"new_per_day": 99}, {"desired_retention": 0.5}, {"enabled": "yes"},
-                {"new_per_day": True}):
+    assert r.json() == {"enabled": False, "desired_retention": 0.85,
+                        "pull_per_day": 10, "irregular_creating_unburied": True,
+                        "prod_per_verb": 4, "followups_per_day": 30}
+    for bad in ({"new_per_day": 7}, {"prod_per_verb": 9}, {"followups_per_day": 101},
+                {"desired_retention": 0.5}, {"enabled": "yes"}, {"prod_per_verb": True}):
         assert client.put("/api/es/conj-settings", json=bad).status_code == 400
-    assert client.get("/api/es/conj-settings").json()["new_per_day"] == 7
+    assert client.get("/api/es/conj-settings").json()["prod_per_verb"] == 4
 
 
 def test_conj_patterns_endpoint_shape(client, clock):

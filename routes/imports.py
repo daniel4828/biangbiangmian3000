@@ -691,7 +691,8 @@ def get_es_conj_settings():
 
 @router.put("/api/es/conj-settings")
 def put_es_conj_settings(body: dict):
-    """Partial update {enabled?, new_per_day?, desired_retention?} (#1395)."""
+    """Partial update {enabled?, desired_retention?, pull_per_day?,
+    irregular_creating_unburied?, prod_per_verb?, followups_per_day?} (#1395, #1401)."""
     import conj_patterns
     try:
         clean = conj_patterns.validate_settings(body)

@@ -522,6 +522,48 @@ def _record_conjugation(card_before: dict, ok: bool, sentence_id: int) -> dict |
         form=verb_slots.target_form(lemma, tense, person, "es"))
 
 
+@router.post("/api/conj/followup-rate")
+def rate_conj_followup(body: dict):
+    """Rate the conjugation of a Folgesatz (#1401): body {sentence_id, ok, card_id?}.
+
+    Only the pattern's production state is touched (mode "prod"); the vocabulary
+    card's scheduling is not. 404 for an unknown sentence, 400 when the sentence
+    is no Folgesatz or the input is malformed. The undo handle is not returned
+    (follow-ups are not undoable)."""
+    import conj_patterns
+    import verb_slots
+
+    sentence_id, ok, card_id = body.get("sentence_id"), body.get("ok"), body.get("card_id")
+    if isinstance(sentence_id, bool) or not isinstance(sentence_id, int):
+        raise HTTPException(400, "sentence_id must be an integer")
+    if not isinstance(ok, bool):
+        raise HTTPException(400, "ok must be true or false")
+    if card_id is not None and (isinstance(card_id, bool) or not isinstance(card_id, int)):
+        raise HTTPException(400, "card_id must be an integer")
+    sentence = database.get_story_sentence(sentence_id)
+    if sentence is None:
+        raise HTTPException(404, "sentence not found")
+    slot, word_id = sentence.get("verb_slot"), sentence.get("followup_word_id")
+    if not slot or not word_id:
+        raise HTTPException(400, "sentence is no follow-up sentence with a verb slot")
+    if not conj_patterns.settings()["enabled"]:
+        raise HTTPException(400, "conjugation rating is switched off")
+    word = database.get_word(word_id)
+    word_zh = (word or {}).get("word_zh")
+    lemma = verb_slots._slot_lemma(word_zh or "", "es")
+    pat = conj_patterns.slot_pattern(word_zh or "", slot, "es")
+    if not lemma or not pat:
+        raise HTTPException(400, f"no conjugation pattern for {word_zh!r} / {slot}")
+    tense, _, person = slot.partition(":")
+    head = conj_patterns.verb_headword(word_zh)
+    rec = conj_patterns.record(
+        "es", pat["key"], "prod", ok, card_id=card_id, sentence_id=sentence_id,
+        slot=slot, lemma=lemma,
+        form=verb_slots.target_form(head[0], tense, person, "es") if head else None)
+    rec.pop("undo", None)
+    return rec
+
+
 @router.get("/api/again-regen-enabled")
 def get_again_regen_enabled():
     """Whether rating Again auto-regenerates the card's sentence (issue #714)."""

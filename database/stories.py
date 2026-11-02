@@ -87,13 +87,14 @@ def create_story(date_str: str, category: str, deck_id: int,
         tokens_json = json.dumps(s["tokens"], ensure_ascii=False) if s.get("tokens") else None
         sent_cur = conn.execute(
             """INSERT INTO story_sentences
-               (story_id, position, sentence_zh, sentence_en, sentence_de, sentence_fr, tokens, concept_en, concept_zh, reasoning_zh, source_url, context_de, source_title, source_name, verb_slot, grammar_hint, lang)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (story_id, position, sentence_zh, sentence_en, sentence_de, sentence_fr, tokens, concept_en, concept_zh, reasoning_zh, source_url, context_de, source_title, source_name, verb_slot, grammar_hint, lang, followup_word_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (story_id, s["position"], s["sentence_zh"],
              s.get("sentence_en", ""), s.get("sentence_de"), s.get("sentence_fr"), tokens_json,
              s.get("concept_en"), s.get("concept_zh"), s.get("reasoning_zh"), s.get("source_url"),
              s.get("context_de"), s.get("source_title"), s.get("source_name"),
-             s.get("verb_slot"), s.get("grammar_hint"), s.get("lang")),
+             s.get("verb_slot"), s.get("grammar_hint"), s.get("lang"),
+             s.get("followup_word_id")),
         )
         sentence_id = sent_cur.lastrowid
         for word_id in s.get("word_ids", []):
@@ -438,11 +439,16 @@ def get_story_gen_params_for_word(word_id: int, date_str: str) -> dict | None:
         return None
 
 
-def get_story_sentences(story_id: int) -> list[dict]:
-    """Return all sentences for a story, each with word_ids and words list."""
+def get_story_sentences(story_id: int, include_followups: bool = False) -> list[dict]:
+    """Return all sentences for a story, each with word_ids and words list.
+
+    Folgesätze (#1401, followup_word_id set) are NOT part of the story: the story
+    modal, audio prefetch and the review ordering all iterate this list. They
+    come from get_story_followups(); include_followups=True returns both."""
     conn = get_db()
+    follow_clause = "" if include_followups else " AND followup_word_id IS NULL"
     sent_rows = conn.execute(
-        "SELECT * FROM story_sentences WHERE story_id = ? ORDER BY position",
+        f"SELECT * FROM story_sentences WHERE story_id = ?{follow_clause} ORDER BY position",
         (story_id,),
     ).fetchall()
 
@@ -483,6 +489,67 @@ def get_story_sentences(story_id: int) -> list[dict]:
             _attach_conj_pattern(d, d.get("lang") or story_lang)
         result.append(d)
     return result
+
+
+def get_story_followups(story_id: int) -> list[dict]:
+    """The Folgesätze (#1401) of a story, hydrated like story sentences: extra
+    conjugation sentences for a verb after its creating card. Each carries
+    followup_word_id, the verb in `words`/`word_zh`, the target `form` and the
+    conj_pattern fields. Never raises (a broken row is skipped with a warning)."""
+    log = logging.getLogger(__name__)
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT ss.*, e.word_zh AS fu_word_zh, e.definition AS fu_definition,
+                  s.lang AS story_lang
+           FROM story_sentences ss
+           JOIN stories s ON s.id = ss.story_id
+           JOIN entries e ON e.id = ss.followup_word_id
+           WHERE ss.story_id = ? AND ss.followup_word_id IS NOT NULL
+           ORDER BY ss.position""",
+        (story_id,),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            d = dict(r)
+            word_zh, definition = d.pop("fu_word_zh"), d.pop("fu_definition")
+            lang = d.get("lang") or d.pop("story_lang", None)
+            d.pop("story_lang", None)
+            d["lang"] = lang
+            d["word_ids"] = []
+            d["words"] = [{"word_id": d["followup_word_id"], "word_zh": word_zh,
+                           "definition": definition}]
+            d["word_zh"], d["definition"] = word_zh, definition
+            raw_tokens = d.get("tokens")
+            d["tokens"] = json.loads(raw_tokens) if raw_tokens else []
+            d["form"] = None
+            if d.get("verb_slot") and lang == "es":
+                import verb_slots
+                lemma = verb_slots._slot_lemma(word_zh, "es")
+                tense, _, person = d["verb_slot"].partition(":")
+                if lemma:
+                    d["form"] = verb_slots.target_form(lemma, tense, person, "es")
+                    d["lemma"] = lemma
+                _attach_conj_pattern(d, lang)
+            out.append(d)
+        except Exception as e:
+            log.warning("follow-up sentence %s unreadable — %s", r["id"], e)
+    return out
+
+
+def count_followups_for_date(date_str: str) -> int:
+    """Number of Folgesätze in stories of `date_str` (the Anki day the stories
+    are filed under) — the base of the daily follow-up cap (#1401)."""
+    conn = get_db()
+    row = conn.execute(
+        """SELECT COUNT(*) AS n FROM story_sentences ss
+           JOIN stories s ON s.id = ss.story_id
+           WHERE s.date = ? AND ss.followup_word_id IS NOT NULL""",
+        (date_str,),
+    ).fetchone()
+    conn.close()
+    return int(row["n"])
 
 
 def get_story_position_map(deck_id: int, category: str, date_str: str,
@@ -766,7 +833,8 @@ def list_stories(lang: str | None = None, limit: int = 300) -> list[dict]:
                    s.gen_params, s.lang,
                    d.name AS deck_name,
                    (s.prompt_text IS NOT NULL AND s.prompt_text != '') AS has_prompt,
-                   (SELECT COUNT(*) FROM story_sentences ss WHERE ss.story_id = s.id) AS sentence_count
+                   (SELECT COUNT(*) FROM story_sentences ss
+                     WHERE ss.story_id = s.id AND ss.followup_word_id IS NULL) AS sentence_count
             FROM stories s
             LEFT JOIN decks d ON d.id = s.deck_id
             WHERE {where}

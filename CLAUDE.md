@@ -595,11 +595,14 @@ Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**�
 - **每个具体变位形唯一归属一张模式卡**（`conj_patterns.pattern_for(lemma, tense, person)`）：规则形 → `reg:{时态}:{词尾类}`（词尾相同的类合并）；不规则组 → `irr:{时态}:{组}`（yo_go、yo_zco、e_ie/o_ue/e_i/u_ue、strong_u/i/j、stem_3rd、y_3rd、ortho、stem、yo_stem、participle…）；ser/ir/estar/haber/dar/ver 和分不进组的形 → `verb:{动词}:{时态}`（ser/ir 的 Indefinido 与虚拟式过去时共用 `verb:ser_ir:…`）。**同一动词同一时态可以属于不同卡**：tengo（yo_go）/ tienes（e_ie）/ tenemos（规则 -er）
 - 🔴 **识别与产出分开调度**：每张模式卡两份 FSRS 状态，`recog`（reading + listening 卡）和 `prod`（creating 卡）。**听读答对绝不影响产出的间隔**——产出才是重点，识别好不代表会自己变
 - **同一天多次评分**：一个模式一天可能出现在好几句里。当天第一次评分才改状态；之后 ✓ 只记日志，✗ 从当天快照（`day_before`）重算一次失败（每天最多一次）
-- **故事选槽位**（`verb_slots.assign_slots`）：① 到期模式优先（按卡片类别的 mode，最过期的先，每篇故事每个到期模式最多一次）；② 每天每 mode 最多 `es_conj_new_per_day`（默认 3）个新模式，按槽位权重从高到低引入——所以虚拟式自然靠后；③ 否则原来的加权轮换，但限定在已引入的模式里。**到期模式没有合适的动词就等着**，不额外造句
+- **故事选槽位**（`verb_slots.assign_slots`）：① 到期模式优先（按卡片类别的 mode，最过期的先，每篇故事每个到期模式最多一次）；② 新模式，按槽位权重从高到低引入（**#1401 起没有全局每日上限**，`es_conj_new_per_day` 已删除）；③ 否则原来的加权轮换，限定在已引入的模式里
+- **跟进句（Folgesätze，#1401）**：creating 卡每个动词每天最多 `es_conj_prod_per_verb`（默认 3）个模式——主句 1 个 + 最多 2 个跟进句，到期优先、再新模式（`conj_patterns.plan_followups`）。reading/listening 每词每天仍只 1 个。全局每天最多 `es_conj_followups_per_day`（默认 30）句。生成故事时**一次额外 AI 调用**（`ai.generate_conj_followups`，purpose `conj_followups`）写出来，存为 `story_sentences.followup_word_id` 非空、**不链接 story_sentence_words** 的行——所以永远不会被当成卡片主句。`get_story_sentences()` 默认不含它们，故事接口另给 `story["followups"]`。复习：creating 卡评分后、下一张卡之前依次出现（德语句 → 揭晓西语 → ✗/✓，只评变位，`POST /api/conj/followup-rate`，不动词卡调度）。失败只记日志，故事照常存
+- **到期模式没有合适的动词 → 提前拉取**（`conj_patterns.ensure_pullforward`，挂在 `ensure_daily_targets` 里）：把一张已学会（review 态）、能产生该模式、类别对应 mode 的动词卡 `due` 改成今天（只改 due，FSRS 按 last_review 处理提前复习）；最早到期者优先；每天最多 `es_conj_pull_per_day`（默认 10）张，`es_conj_pull_batch` 保证同一天幂等
+- **不规则动词：reading/listening 不埋 creating**（`es_conj_irregular_no_bury`，默认开）：`bury_siblings`、故事词表的 sibling suppression、每日目标的可用估计三处一致
 - 复习：翻面后 `#conj-rating-row`（快捷键 `u` ✓ / `i` ✗）；`POST /api/review` 多带 `conj_ok` + `sentence_id`，撤销同时撤销变位评分。**识别卡的槽位标签只在背面**（正面会泄露答案），creating 正反面都有；背面加模式名
-- 设置页 Spanish：「Konjugations-Musterkarten」开关（`es_conj_enabled`，默认开）、每天新模式数、目标保持率（`es_conj_retention`，默认 0.90）、全部模式卡在两种 mode 下的状态表。`GET/PUT /api/es/conj-settings`、`GET /api/es/conj-patterns`
+- 设置页 Spanish：「Konjugations-Musterkarten」开关（`es_conj_enabled`，默认开）、目标保持率（`es_conj_retention`，默认 0.90）、creating 每词模式数、跟进句每日上限、提前拉取上限、不规则动词埋卡例外、两个评分快捷键、全部模式卡在两种 mode 下的状态表。快捷键另有顶层「⌨️ Shortcuts」设置页（不再折叠在 Review 里）。`GET/PUT /api/es/conj-settings`、`GET /api/es/conj-patterns`
 - 句子对象多 `conj_pattern` / `conj_pattern_label` / `conj_rating`（`database/stories._hydrate_sentence`）
-- 测试见 `tests/test_conj_patterns.py`
+- 测试见 `tests/test_conj_patterns.py`、`tests/test_conj_pullforward.py`、`tests/test_conj_followups.py`
 
 ## 每日 50 张卡自动补充（#1281）
 
