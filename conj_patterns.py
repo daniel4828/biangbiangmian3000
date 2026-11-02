@@ -49,6 +49,11 @@ DEFAULT_NEW_PER_DAY = 3
 MAX_NEW_PER_DAY = 50
 DEFAULT_RETENTION = 0.90
 MIN_RETENTION, MAX_RETENTION = 0.80, 0.97
+KEY_PULL_PER_DAY = "es_conj_pull_per_day"
+KEY_NO_BURY = "es_conj_irregular_no_bury"
+KEY_PULL_BATCH = "es_conj_pull_batch"
+DEFAULT_PULL_PER_DAY = 10
+MAX_PULL_PER_DAY = 50
 
 
 def mode_for_category(category) -> str:
@@ -449,8 +454,17 @@ def settings() -> dict:
                 retention = max(MIN_RETENTION, min(MAX_RETENTION, v))
         except ValueError:
             logger.warning("conj settings: bad retention %r, using default", raw)
+    pull = DEFAULT_PULL_PER_DAY
+    raw = database.get_app_setting(KEY_PULL_PER_DAY)
+    if raw not in (None, ""):
+        try:
+            pull = max(0, min(MAX_PULL_PER_DAY, int(raw)))
+        except ValueError:
+            logger.warning("conj settings: bad pull_per_day %r, using default", raw)
+    no_bury = database.get_app_setting(KEY_NO_BURY) != "0"
     return {"enabled": enabled, "new_per_day": new_per_day,
-            "desired_retention": retention}
+            "desired_retention": retention, "pull_per_day": pull,
+            "irregular_creating_unburied": no_bury}
 
 
 def validate_settings(body) -> dict:
@@ -458,7 +472,8 @@ def validate_settings(body) -> dict:
     Raises ValueError with a readable reason."""
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
-    known = {"enabled", "new_per_day", "desired_retention"}
+    known = {"enabled", "new_per_day", "desired_retention", "pull_per_day",
+             "irregular_creating_unburied"}
     unknown = sorted(set(body) - known)
     if unknown:
         raise ValueError(f"unknown setting(s): {', '.join(map(str, unknown))}")

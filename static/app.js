@@ -3937,6 +3937,19 @@ function _esConjSettingsHtml() {
       <span class="keymap-label">Ziel-Behaltensrate</span>
       <input type="number" min="0.80" max="0.97" step="0.01" value="${_escHtml(String(s.desired_retention))}" style="width:80px" ${dis}
              onchange="saveEsConjSettings({desired_retention: Number(this.value)})">
+    </div>
+    <div class="keymap-row">
+      <span class="keymap-label">Vorgezogene Verbkarten pro Tag</span>
+      <input type="number" min="0" max="50" step="1" value="${_escHtml(String(s.pull_per_day))}" style="width:80px" ${dis}
+             onchange="saveEsConjSettings({pull_per_day: Number(this.value)})">
+    </div>
+    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Ist ein Muster fällig, aber keine passende Verbkarte, wird eine schon gelernte Verbkarte auf heute vorgezogen. 0 = aus.</div>
+    <div class="keymap-row">
+      <span class="keymap-label">Creating bei unregelmäßigen Verben nicht begraben</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${s.irregular_creating_unburied ? 'checked' : ''} ${dis}
+               onchange="saveEsConjSettings({irregular_creating_unburied: this.checked})" style="width:18px;height:18px;cursor:pointer">
+      </label>
     </div>`;
 }
 
