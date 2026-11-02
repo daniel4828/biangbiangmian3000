@@ -858,7 +858,7 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
 - **西语 CEFR 阶段（#1369）**：A1/A2/B1/B2（stage id 10–13，仅 es），规则同 HSK：CEFR N 隐藏 ≤N 级词。词级 `cefr` 由 `lexicon.cefr_from_rank()` 按词频排名近似（≤500 A1、≤1000 A2、≤2000 B1、≤4000 B2、≤8000 C1、其余 C2），取候选原形中最常用的那个；不是官方 CEFR 表。旧的已存阶段配置缺少的新阶段插在默认位置，不排到最后。Settings 的 Stages 列表只显示当前语言标签（`activeLang()`）的阶段（#1372）：中文 HSK、西语 CEFR；↑/↓ 跳过隐藏阶段，并且是**移动不是交换**，否则会顺带打乱另一种语言的顺序。非中文卡的目标遮挡走 `resolveTargetSurfaces()` + `card.word_forms`，否则变位形（ser → eres）永远露出来。
 - Unsaved words 按 `word_id` 判断是否已收入词库；New words only 保留现有生词判断。所有阶段继续隐藏目标答案。
 - 所有会遮挡文字的阶段默认保留目标词前一个词作为回忆提示；Stages 设置可关闭，浏览器用 `listenHintPreviousWord` 保存。
-- 浏览器 `listenHintStages` 保存顺序及启用状态；`listenHintState` 保存稳定阶段 ID，兼容旧 0/1/2 默认值。取消默认阶段时使用第一个可用阶段；重新启用可恢复原默认。设置只在当前浏览器保存。
+- 浏览器 `listenHintStages` 保存顺序及启用状态；`listenHintState` 保存稳定阶段 ID，兼容旧 0/1/2 默认值。取消默认阶段时使用第一个可用阶段；重新启用可恢复原默认。设置只在当前浏览器保存，且按语言分开（#1426）：`listenHintStages`、`listenHintState`、`listenHintPreviousWord` 三项都存为 `<key>:<lang>`；设置页用当前语言标签页，复习时用卡片语言。无后缀的旧键只作为回退读取（旧设置成为各语言的起始值），不再写入。
 
 ## 主界面主题（#1271）
 

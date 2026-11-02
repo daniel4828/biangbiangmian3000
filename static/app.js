@@ -14728,9 +14728,19 @@ const _HINT_LABELS = ['Show all', 'New words only', 'Hide all',
 // "A1" hides words of word.cefr <= 1 and keeps harder and unlisted ones.
 const _HINT_ORDER = [0, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 1, 9, 2];
 
-function _hintStageConfig() {
+// #1426: hint settings are stored per language as "<key>:<lang>". The old
+// shared key (no suffix) is only read as a fallback, never written.
+function _hintStoreKey(base, lang) { return base + ':' + lang; }
+function _hintRead(base, lang) {
+  const v = localStorage.getItem(_hintStoreKey(base, lang));
+  return v !== null ? v : localStorage.getItem(base);
+}
+function _hintWrite(base, lang, value) {
+  localStorage.setItem(_hintStoreKey(base, lang), value);
+}
+function _hintStageConfig(lang) {
   let saved;
-  try { saved = JSON.parse(localStorage.getItem('listenHintStages')); } catch (_) { saved = null; }
+  try { saved = JSON.parse(_hintRead('listenHintStages', lang)); } catch (_) { saved = null; }
   const result = [];
   if (Array.isArray(saved)) for (const item of saved) {
     if (item && _HINT_ORDER.includes(item.id) && !result.some(s => s.id === item.id))
@@ -14756,11 +14766,11 @@ function _hintStageAvailable(id, lang) {
 }
 function _hintEnabledStages() {
   const lang = currentCardLang();
-  const ids = _hintStageConfig().filter(s => s.enabled && _hintStageAvailable(s.id, lang)).map(s => s.id);
+  const ids = _hintStageConfig(lang).filter(s => s.enabled && _hintStageAvailable(s.id, lang)).map(s => s.id);
   return ids.length ? ids : [0];
 }
 function _hintSavedDefault() {
-  const n = Number(localStorage.getItem('listenHintState') ?? '1');
+  const n = Number(_hintRead('listenHintState', currentCardLang()) ?? '1');
   const ids = _hintEnabledStages();
   return ids.includes(n) ? n : ids[0];
 }
@@ -14772,8 +14782,8 @@ function _hintKeepWord(stage, word) {
   const level = word.hint_hsk ?? word.hsk;
   return stage === 9 ? !word.word_id : level == null || level > stage - 2;
 }
-function _hintPreviousWordEnabled() {
-  return localStorage.getItem('listenHintPreviousWord') !== 'false';
+function _hintPreviousWordEnabled(lang = currentCardLang()) {
+  return _hintRead('listenHintPreviousWord', lang) !== 'false';
 }
 function _hintPreviousWordPositions(zh, lang, targetPositions, isMaskable) {
   const positions = new Set();
@@ -14832,18 +14842,19 @@ function _hintCurrentStage() {
 // The stage list lives on the Settings page (#1232), not on the card: it is
 // set once, and on the card it pushed the sentence around. There is no card
 // there, so it lists the stages of the language tab in use (#1372): HSK for
-// Chinese, CEFR for Spanish. Hidden stages keep their place in the shared
-// order; ↑/↓ jump over them.
+// Chinese, CEFR for Spanish. Each language tab now has its own stage list,
+// order and settings (#1426); ↑/↓ jump over stages hidden for that language.
 function _hintVisibleStageIds() {
   const lang = activeLang();
-  return _hintStageConfig().filter(s => _hintStageAvailable(s.id, lang)).map(s => s.id);
+  return _hintStageConfig(lang).filter(s => _hintStageAvailable(s.id, lang)).map(s => s.id);
 }
 function _hintStageOptionsHtml() {
+  const lang = activeLang();
   const visible = _hintVisibleStageIds();
-  const rows = _hintStageConfig().filter(s => visible.includes(s.id));
+  const rows = _hintStageConfig(lang).filter(s => visible.includes(s.id));
   const enabled = rows.filter(s => s.enabled);
   const previousWord = `<div class="hint-stage-option"><label><input type="checkbox"
-    ${_hintPreviousWordEnabled() ? 'checked' : ''}
+    ${_hintPreviousWordEnabled(lang) ? 'checked' : ''}
     onchange="changeHintPreviousWord(this.checked)"> Always show word before target</label></div>`;
   return previousWord + rows.map((s, i) =>
     `<div class="hint-stage-option"><label><input type="checkbox" ${s.enabled ? 'checked' : ''}
@@ -14858,24 +14869,26 @@ function renderHintStageSettings() {
   const box = document.getElementById('hint-stage-options');
   if (box) box.innerHTML = _hintStageOptionsHtml();
 }
-function _saveHintStages(config) {
-  localStorage.setItem('listenHintStages', JSON.stringify(config));
+function _saveHintStages(config, lang) {
+  _hintWrite('listenHintStages', lang, JSON.stringify(config));
   renderHintStageSettings();
 }
 function changeHintStage(id, enabled) {
-  const config = _hintStageConfig();
+  const lang = activeLang();
+  const config = _hintStageConfig(lang);
   const visible = _hintVisibleStageIds();
   if (!enabled && config.filter(s => s.enabled && visible.includes(s.id)).length === 1) return;
   config.find(s => s.id === id).enabled = enabled;
-  _saveHintStages(config);
+  _saveHintStages(config, lang);
 }
 function changeHintPreviousWord(enabled) {
-  localStorage.setItem('listenHintPreviousWord', String(enabled));
+  _hintWrite('listenHintPreviousWord', activeLang(), String(enabled));
   const slider = document.getElementById('listen-hint-slider');
   if (slider) onListenHintSlider(slider.value);
 }
 function moveHintStage(id, delta) {
-  const config = _hintStageConfig();
+  const lang = activeLang();
+  const config = _hintStageConfig(lang);
   const visible = _hintVisibleStageIds();
   const a = config.findIndex(s => s.id === id);
   let b = a + delta;
@@ -14885,7 +14898,7 @@ function moveHintStage(id, delta) {
   // language's hidden stages and reorder that language too.
   const [item] = config.splice(a, 1);
   config.splice(b, 0, item);
-  _saveHintStages(config);
+  _saveHintStages(config, lang);
 }
 
 // The new words of the sentence currently on screen, keyed by lang+sentence so
@@ -14954,7 +14967,7 @@ async function _initListenHint() {
 
 function saveListenHintDefault() {
   const val = _hintCurrentStage();
-  localStorage.setItem('listenHintState', val);
+  _hintWrite('listenHintState', currentCardLang(), val);
   _updateHintStar(val);
 }
 
