@@ -6700,7 +6700,9 @@ body.gloss-on [data-gloss-tr]::after {
    page stays visible left, right and below the field; the wrap is just the
    pill's box and the glass look lives on the input. */
 :root {
-  --search-bar-h: 72px;
+  /* #1403: height of the composer + the gap above it; app.js measures it */
+  --search-bar-h: 126px;
+  --composer-gap: max(12px, env(safe-area-inset-bottom));
   /* pill as wide as the page content: main is 500px wide with 16px padding */
   --search-bar-side: max(16px, calc((100vw - 500px) / 2 + 16px));
 }
@@ -6728,44 +6730,77 @@ header::before {
   backdrop-filter: saturate(180%) blur(14px);
   -webkit-backdrop-filter: saturate(180%) blur(14px);
 }
+/* #1403: composer like the Claude app — a floating rounded card with the
+   text on top and a tool row below, a gap to the window edge, and lifted
+   above the on-screen keyboard (--kb-offset, set from visualViewport). */
 header #header-search-wrap {
   position: fixed;
   left: var(--search-bar-side);
   right: var(--search-bar-side);
-  /* Daniel wanted the field to sit on the window's bottom edge (no gap
-     below it); the iPhone home-indicator area goes inside the field as
-     padding instead of below it. */
-  bottom: 0;
+  bottom: calc(var(--kb-offset, 0px) + var(--composer-gap));
   z-index: 89;
-}
-header #header-search-input {
-  width: 100%;
-  box-sizing: border-box;
-  font-size: 15px;
-  padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
-  /* only the top corners round: the bottom edge is the window's edge */
-  border-radius: 18px 18px 0 0;
-  /* opaque card colour + a border in the text colour so the field stands
-     out clearly from the page behind it (the glass look blended in) */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 12px 10px;
   background: var(--card);
-  border: 2px solid var(--text);
-  border-bottom: none;
-  box-shadow: 0 -6px 24px rgba(15,23,42,.18);
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  box-shadow: 0 6px 28px rgba(15,23,42,.16);
 }
-header #header-search-input:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-ring), 0 -6px 24px rgba(15,23,42,.18);
+header #header-search-wrap:focus-within { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+header .hs-input-row { position: relative; display: flex; align-items: center; }
+header #header-search-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-size: 17px;
+  line-height: 1.4;
+  padding: 4px 36px 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
-/* #1384: only left/right padding change; top/bottom + safe-area stay */
-header #header-search-input { padding-right: 38px; }
-header #header-search-wrap.hs-has-lang #header-search-input { padding-left: 44px; }
-/* Controls align with the text line, not the safe-area padding */
-header #header-search-clear, header #header-search-lang {
-  top: 0; transform: none; height: 42px; line-height: 42px;
+header #header-search-input:focus { outline: none; border: none; box-shadow: none; }
+header #header-search-wrap.hs-has-lang #header-search-input { padding-left: 8px; }
+header #header-search-clear {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  width: 30px; height: 30px; line-height: 30px;
 }
-header #header-search-clear { right: 8px; }
-header #header-search-lang { left: 6px; }
+header .hs-toolbar { display: flex; align-items: center; gap: 8px; }
+header .hs-spacer { flex: 1; }
+header .hs-round {
+  width: 44px; height: 44px; flex-shrink: 0;
+  display: grid; place-items: center;
+  border-radius: 999px; border: none; padding: 0;
+  background: var(--hover-bg, rgba(0,0,0,.05));
+  color: var(--text); cursor: pointer;
+}
+header .hs-round:active { transform: scale(.95); }
+header #hs-mic.listening { background: #e5484d; color: #fff; }
+header .hs-send { background: var(--primary); color: #fff; }
+header .hs-send:disabled { background: var(--hover-bg, rgba(0,0,0,.05)); color: var(--muted); cursor: default; }
+header .hs-pill {
+  position: relative;
+  height: 44px; box-sizing: border-box;
+  display: inline-flex; align-items: center;
+  padding: 0 16px; border-radius: 999px; border: none;
+  background: var(--hover-bg, rgba(0,0,0,.05));
+  color: var(--text); font: inherit; font-size: 16px;
+  min-width: 0; cursor: pointer;
+}
+header #header-search-lang.hs-pill { -webkit-appearance: none; appearance: none; font-size: 20px; padding: 0 12px; position: static; transform: none; width: auto; left: auto; top: auto; }
+header #header-search-lang.hs-pill[hidden] { display: none; }
+header .hs-model-pill span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the real <select> lies invisibly over the pill: native picker on iOS */
+header .hs-model-pill select {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; cursor: pointer; font-size: 16px;
+}
 header #header-search-panel {
+  position: absolute;
   top: auto;
   bottom: calc(100% + 8px);
   left: 0;
@@ -6774,6 +6809,8 @@ header #header-search-panel {
   max-height: min(55vh, 420px);
   border-radius: 16px;
 }
+/* The fullscreen reader borrows the box (#1109): there it sits in its slot. */
+#ra-fs-search-slot #header-search-wrap { position: static; box-shadow: none; }
 /* Keep page content and other fixed corner widgets clear of the bar.
    main is the scroll container, so the room for the pill goes on main's
    bottom padding: content scrolls under the pill and the last item can still
@@ -8110,7 +8147,7 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   left: var(--search-bar-side);
   right: var(--search-bar-side);
   width: auto;
-  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 58px);
+  bottom: calc(var(--kb-offset, 0px) + var(--search-bar-h) + 8px);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -8121,8 +8158,8 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
 #dict-result-modal .edit-modal-header { padding: 16px 16px 0; }
 #dict-result-body {
   padding: 16px;
-  max-height: calc(100vh - 58px - max(12px, env(safe-area-inset-bottom)) - 120px);
-  max-height: calc(100dvh - 58px - max(12px, env(safe-area-inset-bottom)) - 120px);
+  max-height: calc(100vh - var(--search-bar-h) - var(--kb-offset, 0px) - 120px);
+  max-height: calc(100dvh - var(--search-bar-h) - var(--kb-offset, 0px) - 120px);
   overflow-y: auto;
 }
 /* #1271：内嵌词典始终跟随应用选择；独立 /dict 仍由系统决定。 */
@@ -8259,3 +8296,33 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   color: var(--warning, #c2410c);
   background: color-mix(in srgb, var(--warning, #c2410c) 12%, transparent);
 }
+
+/* ── Side menu (#1393) ───────────────────────────────── */
+#side-menu {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 240px; z-index: 900;
+  background: var(--card); border-right: 1px solid var(--border);
+  overflow-y: auto; padding: calc(env(safe-area-inset-top) + 64px) 12px 24px;
+  transform: translateX(-100%); transition: transform .22s ease;
+}
+.side-menu-items { display: flex; flex-direction: column; gap: 6px; }
+#side-menu .nav-btn { flex: none; text-align: left; padding: 10px 12px; font-size: 14px; }
+#side-menu-backdrop {
+  position: fixed; inset: 0; z-index: 899; background: rgba(0,0,0,.35);
+  opacity: 0; pointer-events: none; transition: opacity .22s;
+}
+body.side-menu-open #side-menu { transform: none; }
+body.side-menu-open #side-menu-backdrop { opacity: 1; pointer-events: auto; }
+#side-menu-btn {
+  border: none; background: none; font-size: 22px; line-height: 1;
+  color: var(--text); cursor: pointer; padding: 4px 8px 4px 0;
+}
+@media (min-width: 1000px) {
+  #side-menu { transform: none; padding-top: 72px; }
+  #side-menu-backdrop, #side-menu-btn { display: none; }
+  body.has-side-menu { padding-left: 240px; }
+}
+
+/* Settings search (index page) */
+#view-settings-content .settings-search { width: 100%; box-sizing: border-box; margin: 8px 0 4px; padding: 10px 12px; font-size: 16px; }
+#view-settings-content .settings-search-page { display: block; margin: 14px 0 4px; padding: 0; background: none; border: none; color: var(--accent, #4f46e5); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.hcal-seg-lang .hcal-seg-btn { padding-left: 8px; padding-right: 8px; }

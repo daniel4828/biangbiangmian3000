@@ -126,9 +126,9 @@ def test_fifty_cards_remain_available_through_leaf_and_root_caps():
 def test_disabled_setting_and_strict_api_boolean():
     candidate = card('我', 'saved')
     client = TestClient(main.app)
-    assert client.get('/api/daily-target').json() == {'enabled': True, 'target': 50}
+    assert client.get('/api/daily-target').json() == {'enabled': True, 'target': 50, 'creating_pct': None}
     assert client.put('/api/daily-target', json={'enabled': 'false'}).status_code == 400
-    assert client.put('/api/daily-target', json={'enabled': False}).json() == {'enabled': False, 'target': 50}
+    assert client.put('/api/daily-target', json={'enabled': False}).json() == {'enabled': False, 'target': 50, 'creating_pct': None}
     assert database.ensure_daily_target() == 0
     assert database.get_card(candidate)['state'] == 'suspended'
     assert client.put('/api/daily-target', json={'enabled': True}).status_code == 200
@@ -431,7 +431,7 @@ def test_custom_target_count_per_language(es_lexicon):
 
 def test_daily_target_count_api_validation():
     client = TestClient(main.app)
-    assert client.put('/api/daily-target', json={'target': 30}).json() == {'enabled': True, 'target': 30}
+    assert client.put('/api/daily-target', json={'target': 30}).json() | {'creating_pct': None} == {'enabled': True, 'target': 30, 'creating_pct': None}
     assert client.get('/api/daily-target').json()['target'] == 30
     assert client.get('/api/daily-target?lang=es').json()['target'] == 50
     for bad in (0, 501, -1, 2.5, '30', True):
@@ -439,19 +439,69 @@ def test_daily_target_count_api_validation():
     assert client.put('/api/daily-target', json={}).status_code == 400
     # Nothing is written when one of two values is invalid.
     assert client.put('/api/daily-target', json={'enabled': False, 'target': 0}).status_code == 400
-    assert client.get('/api/daily-target').json() == {'enabled': True, 'target': 30}
+    assert client.get('/api/daily-target').json() | {'creating_pct': None} == {'enabled': True, 'target': 30, 'creating_pct': None}
     assert client.put('/api/daily-target', json={'enabled': False, 'target': 40}).json() == \
-        {'enabled': False, 'target': 40}
+        {'enabled': False, 'target': 40, 'creating_pct': None}
 
 
 def test_daily_target_api_is_per_language():
     client = TestClient(main.app)
-    assert client.get('/api/daily-target?lang=es').json() == {'enabled': False, 'target': 50}
+    assert client.get('/api/daily-target?lang=es').json() == {'enabled': False, 'target': 50, 'creating_pct': 50}
     assert client.put('/api/daily-target', json={'enabled': True, 'lang': 'es'}).json() == \
-        {'enabled': True, 'target': 50}
+        {'enabled': True, 'target': 50, 'creating_pct': 50}
     assert client.get('/api/daily-target?lang=es').json()['enabled'] is True
     assert client.get('/api/daily-target').json()['enabled'] is True
     assert client.put('/api/daily-target', json={'enabled': False, 'lang': 'es'}).json()['enabled'] is False
     assert client.get('/api/daily-target').json()['enabled'] is True
     assert client.get('/api/daily-target?lang=xx').status_code == 400
     assert client.put('/api/daily-target', json={'enabled': True, 'lang': 'xx'}).status_code == 400
+
+
+def test_spanish_fill_splits_half_creating_and_rebalances_today(es_lexicon):
+    database.set_daily_target_settings('es', enabled=True, target=10)
+    assert database.get_daily_target_settings('es')['creating_pct'] == 50
+    assert database.get_daily_target_settings()['creating_pct'] is None
+    words = [f'palabra{i}' for i in range(12)]
+    ids = {}
+    for w in words:
+        for cat in ('listening', 'creating'):
+            ids[(w, cat)] = card(w, 'saved', category=cat, lang='es')
+    # Simulate today's old behaviour: everything went to creating.
+    database.set_daily_target_settings('es', creating_pct=100)
+    assert database.ensure_daily_target('es') == 10
+    batch = database.daily_target_card_ids()
+    cats = [database.get_card(i)['category'] for i in batch]
+    assert cats.count('creating') == 10
+    # Switching to 50 % swaps today's untouched cards, same words.
+    database.set_daily_target_settings('es', creating_pct=50)
+    assert database.ensure_daily_target('es') == 5
+    batch = database.daily_target_card_ids()
+    cats = [database.get_card(i)['category'] for i in batch]
+    assert len(batch) == 10 and cats.count('creating') == 5
+    for i in batch:
+        assert database.get_card(i)['state'] == 'new'
+    swapped_out = [c for (w, c2), c in ids.items() if c2 == 'creating' and c not in batch
+                   and database.get_card(ids[(w, 'listening')])['id'] in batch]
+    assert len(swapped_out) == 5
+    for cid in swapped_out:
+        assert database.get_card(cid)['state'] == 'suspended'
+        assert _deck_row(cid)['name'] == 'Saved'
+    assert database.ensure_daily_target('es') == 0
+
+
+def test_fresh_fill_alternates_categories(es_lexicon):
+    database.set_daily_target_settings('es', enabled=True, target=6)
+    for i in range(10):
+        for cat in ('listening', 'creating'):
+            card(f'palabra{i}', 'saved', category=cat, lang='es')
+    assert database.ensure_daily_target('es') == 6
+    cats = [database.get_card(i)['category'] for i in database.daily_target_card_ids()]
+    assert cats.count('creating') == 3
+
+
+def test_creating_pct_api_validation():
+    client = TestClient(main.app)
+    assert client.put('/api/daily-target', json={'lang': 'es', 'creating_pct': 30}).json()['creating_pct'] == 30
+    assert client.put('/api/daily-target', json={'lang': 'es', 'creating_pct': None}).json()['creating_pct'] is None
+    for bad in (-1, 101, 2.5, '50', True):
+        assert client.put('/api/daily-target', json={'lang': 'es', 'creating_pct': bad}).status_code == 400

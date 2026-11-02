@@ -9,7 +9,7 @@
   <link rel="manifest" href="/static/manifest.webmanifest">
   <meta name="theme-color" content="#f1f5f9">
   <script src="/static/theme.js?v=2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=23">
+  <link rel="stylesheet" href="/static/style.css?v=24">
   <!-- Dictionary-result styling, shared with the standalone /dict page
        (#1055): the header search box renders lookups with shared.js's
        renderDictResult(), so both pages must load the same sheet. -->
@@ -22,6 +22,7 @@
     <!-- ← goes to the LAST screen, not home (#1009). Hidden until there is
          something to go back to — on a fresh load that is the deck list, and
          an arrow that appears for a moment and then vanishes is just noise. -->
+    <button id="side-menu-btn" onclick="toggleSideMenu()" aria-label="Menu" title="Menu">☰</button>
     <button id="back-btn" onclick="goBack()" style="display:none">←</button>
     <!-- 𰻞 标志（#780）。必须是 <img> 引用 SVG，不能写这个字符本身：
          U+30EDE 在 Unicode 扩展 G 区，没有任何常见字体包含它。 -->
@@ -98,11 +99,31 @@
          Last child on purpose (#975): every other button here is conditional
          (⚙ only while something runs, ⟳ only on the laptop, ↺ only in review),
          so anywhere but the end makes the most-used control slide around. -->
+    <!-- #1403: composer layout like the Claude app — text on top, a tool
+         row below (＋ add word, language, model, mic, send). -->
     <div id="header-search-wrap">
-      <select id="header-search-lang" aria-label="Language" title="Language" hidden></select>
-      <input id="header-search-input" type="search" placeholder="Search or look up…"
-             autocomplete="off" spellcheck="false" title="Search your vocabulary (⌘K)">
-      <button id="header-search-clear" type="button" aria-label="Clear" title="Clear" hidden>✕</button>
+      <div class="hs-input-row">
+        <input id="header-search-input" type="search" placeholder="Search or look up…"
+               autocomplete="off" spellcheck="false" enterkeyhint="search" title="Search your vocabulary (⌘K)">
+        <button id="header-search-clear" type="button" aria-label="Clear" title="Clear" hidden>✕</button>
+      </div>
+      <div class="hs-toolbar">
+        <button id="hs-plus" class="hs-round" type="button" aria-label="Add word" title="Add word to ★ List">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <select id="header-search-lang" class="hs-pill" aria-label="Language" title="Language" hidden></select>
+        <label class="hs-pill hs-model-pill" title="Dictionary model">
+          <span id="hs-model-label"></span>
+          <select id="hs-model" aria-label="Dictionary model"></select>
+        </label>
+        <span class="hs-spacer"></span>
+        <button id="hs-mic" class="hs-round" type="button" aria-label="Dictate" title="Dictate">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+        </button>
+        <button id="hs-send" class="hs-round hs-send" type="button" aria-label="Look up" title="Look up" disabled>
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+      </div>
       <div id="header-search-panel" style="display:none"></div>
     </div>
   </div>
@@ -904,7 +925,7 @@
 <div id="word-tip" style="display:none"></div>
 <script src="/static/shared.js?v=7"></script>
 <script src="/static/home-discovery.js?v=2"></script>
-<script src="/static/app.js?v=30"></script>
+<script src="/static/app.js?v=31"></script>
 
 <!-- Edit card modal -->
 <div id="edit-modal-overlay" onclick="closeEditCard()" style="display:none"></div>

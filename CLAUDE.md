@@ -612,7 +612,7 @@ Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**�
 
 Leech 中文列表默认按词频排列并显示排名，同时保留其他排序。每行 **Set as New Card** 完全重置该词当前标记为 Leech 的卡，保留原牌组与健康卡；原 **Unleech** 继续只解除 Leech 并恢复原进度。`POST /api/cards/bulk-leech-new` 接收 `{word_ids:[...]}`；`GET/PUT /api/daily-target` 返回 `{enabled:bool,target:int}`。
 
-**按语言设置（#1386）**：每日补充对每种语言各自独立，`GET /api/daily-target?lang=`、PUT body 可带 `lang`（默认 `zh`，非法值 400）。中文设置键保持不变（`daily_target_enabled` / `daily_target_batch` / `daily_target_next_source` / `daily_target_count`），其它语言加后缀 `_<lang>`；西班牙语默认**关闭**，中文默认开启。目标数量可在设置页按语言修改（整数 1–500，默认 50，键 `daily_target_count[_<lang>]`；PUT 可带 `enabled` 和/或 `target`，先全部校验再写入）；调低不会撤回已补入的卡。西语排名取 `resources/es-lexicon.json.gz` 的原形频率排名（形态卡 `tener · Indefinido` 用 ` · ` 前的原形，自反动词 `quejarse` 找不到时去掉 `se` 再查）；补入的西语卡落在 `Español::<日期> · <类别>`（牌组 `lang='es'`，预设用 `_ensure_lang_preset`）。`ensure_daily_targets(lang)` 是各路由的统一入口（`lang` 为 None/multi 时遍历全部语言）；`daily_target_card_ids()` 返回所有语言当天补入卡的并集。
+**按语言设置（#1386）**：每日补充对每种语言各自独立，`GET /api/daily-target?lang=`、PUT body 可带 `lang`（默认 `zh`，非法值 400）。中文设置键保持不变（`daily_target_enabled` / `daily_target_batch` / `daily_target_next_source` / `daily_target_count`），其它语言加后缀 `_<lang>`；西班牙语默认**关闭**，中文默认开启。目标数量可在设置页按语言修改（整数 1–500，默认 50，键 `daily_target_count[_<lang>]`；PUT 可带 `enabled` 和/或 `target`，先全部校验再写入）；调低不会撤回已补入的卡。西语排名取 `resources/es-lexicon.json.gz` 的原形频率排名（形态卡 `tener · Indefinido` 用 ` · ` 前的原形，自反动词 `quejarse` 找不到时去掉 `se` 再查）；补入的西语卡落在 `Español::<日期> · <类别>`（牌组 `lang='es'`，预设用 `_ensure_lang_preset`）。**类别配比（#1390）**：设置项 `creating_pct`（0–100，键 `daily_target_creating_pct[_<lang>]`，空串 = 不配比）决定补入的卡里 creating 占多少，其余给 listening/reading。西语默认 50，中文默认不配比（原行为）。每次选卡挑当前偏差最大的一组。改配比后，当天**还没作答的**补入卡会与它在 Saved 里挂起的同词兄弟卡互换（换下的卡回 Saved 挂起），所以当天就生效；Leech 来的卡没有 Saved 兄弟，不换。`ensure_daily_targets(lang)` 是各路由的统一入口（`lang` 为 None/multi 时遍历全部语言）；`daily_target_card_ids()` 返回所有语言当天补入卡的并集。
 
 ## 故事生成
 
@@ -694,7 +694,7 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
   - 使用 RSS GUID 去重，保留原 Spotify 单集链接；不自动订阅节目、不在导入时调用付费 AI。`kind=podcast`、`platform=spotify`、`author=节目名`，之后复用现有转录、摘要与通知链。
   - `process_required` 让三个分享入口继续处理 pending/error/no_transcript 的已有单集；已完成或正在处理的单集不重复执行。邮件导入后直接处理，不等前端按钮。
 
-首页推荐（#1212）：`GET /api/home-discovery?tz=<浏览器 IANA 时区>` 通过 `database/home.py` 只读选择当天《声动早咖啡》（按订阅源标题、作者或单集标题识别，发布时间换算为当地日期，无当日节目明确留空）。首页功能按钮上方显示入口，点击复用 `openKnowledgeItem(..., 'fulltext')` 和 `doStartListen()`。当地 10 点起每两小时显示三条可阅读且未归档的知识库内容；按日期稳定洗牌、来源和类型交错，按时段前进三条，库不足时显示实际数量。当天播客不在推荐中重复。`static/home-discovery.js` 每分钟及窗口重新获得焦点时刷新首页；不新增定时任务、AI 调用或数据库写入。听读生成仍由用户点击触发现有流程。
+**#1393 起每日推荐默认关闭**（设置 → Appearance → Home page，`localStorage.homeDiscovery`）；主页导航按钮移到左侧菜单 `#side-menu`（`_SIDE_MENU_ITEMS`，桌面 ≥1000px 常驻，手机 ☰ 或左边缘右滑打开）。首页推荐（#1212）：`GET /api/home-discovery?tz=<浏览器 IANA 时区>` 通过 `database/home.py` 只读选择当天《声动早咖啡》（按订阅源标题、作者或单集标题识别，发布时间换算为当地日期，无当日节目明确留空）。首页功能按钮上方显示入口，点击复用 `openKnowledgeItem(..., 'fulltext')` 和 `doStartListen()`。当地 10 点起每两小时显示三条可阅读且未归档的知识库内容；按日期稳定洗牌、来源和类型交错，按时段前进三条，库不足时显示实际数量。当天播客不在推荐中重复。`static/home-discovery.js` 每分钟及窗口重新获得焦点时刷新首页；不新增定时任务、AI 调用或数据库写入。听读生成仍由用户点击触发现有流程。
 
 播客爬虫（#479）泛化成一个统一的知识库：播客单集、YouTube 视频、报刊文章三类素材走**同一条流水线**（获取 → 转录/正文 → 中文+德语摘要 → 生词标注 → 通知 → 造卡）。总体设计见 `docs/knowledge-base.md`（各阶段 Issue 都引用它）。
 
