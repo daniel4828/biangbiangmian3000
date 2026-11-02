@@ -322,6 +322,11 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                 return True
             return False
 
+        def _release(deck_id, category):
+            key = (deck_id, category)
+            used_leaf[key] = max(0, used_leaf.get(key, 0) - 1)
+            used_cat[category] = max(0, used_cat.get(category, 0) - 1)
+
         eligible = []
         for c in sorted(active, key=lambda r: r['id']):
             if c['state'] != 'new' or c['id'] in done_ids:
@@ -368,7 +373,9 @@ def ensure_daily_target(lang: str = 'zh') -> int:
         swapped = 0
         if creating_pct is not None and auto_ids:
             swapped = _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets,
-                                       blocked, creating_pct, lang, today)
+                                       blocked, creating_pct, lang, today,
+                                       has_room=_has_room, release=_release,
+                                       visible_ids={c['id'] for c in usable})
             if swapped:
                 rows = [dict(r) for r in conn.execute(
                     """SELECT c.*, e.word_zh, e.lang FROM cards c
@@ -462,7 +469,8 @@ def _save_batch(conn, lang, today, auto_ids):
 
 
 def _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets, blocked,
-                     creating_pct, lang, today) -> int:
+                     creating_pct, lang, today, has_room=None, release=None,
+                     visible_ids=None) -> int:
     """Swap today's untouched auto cards to the other category (#1390).
 
     Applies a changed creating share to a batch already added today. Only an
@@ -472,6 +480,9 @@ def _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets, blocked,
     """
     by_id = {c['id']: c for c in rows}
     batch = [by_id[i] for i in auto_ids if i in by_id]
+    if visible_ids is not None:
+        # #1414: Karten, die das Limit ausblendet, zählen nicht zum Verhältnis.
+        batch = [c for c in batch if c['id'] in done_ids or c['id'] in visible_ids]
     creating = [c for c in batch if c['category'] == 'creating']
     other = [c for c in batch if c['category'] != 'creating']
     want = round(len(batch) * creating_pct / 100)
@@ -501,6 +512,12 @@ def _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets, blocked,
         target = _daily_leaf(conn, today, sib['category'], deck_map[c['deck_id']]['preset_id'], lang)
         if target is None or target in blocked:
             continue
+        # #1414: nie in eine Kategorie tauschen, deren Limit voll ist – sonst
+        # verschwindet die Karte, und jedes Speichern tauscht weitere weg.
+        if has_room is not None and not has_room(target, sib['category']):
+            continue
+        if release is not None:
+            release(c['deck_id'], c['category'])
         conn.execute(
             """UPDATE cards SET deck_id=?,state='new',due=?,step_index=0,interval=0,
                ease=2.5,repetitions=0,lapses=0,stability=NULL,difficulty=NULL,

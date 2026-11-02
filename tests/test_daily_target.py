@@ -522,3 +522,29 @@ def test_category_limit_zero_hides_todays_auto_cards_of_that_category(es_lexicon
     root = database.get_all_deck_id()
     due = database.get_due_cards_any_cat(root, lang='es')
     assert {c['category'] for c in due} == {'creating'} and len(due) == 4
+
+
+def test_rebalance_never_swaps_into_a_category_bound_to_limit_zero(es_lexicon):
+    """#1414: Listening an ein Preset mit Neue/Tag = 0 gebunden (#1372). Der
+    Ausgleich auf 50 % darf Creating-Karten nicht gegen Listening tauschen –
+    die getauschte Karte wäre unsichtbar, und jedes Speichern im Deck-⚙ ließ
+    Creating weiter schrumpfen (Produktion 2026-11-02: nur noch 3 Karten)."""
+    for i in range(12):
+        card(f'palabra{i}', 'saved', category='listening', lang='es')
+        card(f'palabra{i}', 'saved', category='creating', lang='es')
+    database.set_daily_target_settings('es', enabled=True, target=6, creating_pct=100)
+    assert database.ensure_daily_target('es') == 6
+    conn = database.get_db()
+    conn.execute("INSERT INTO deck_presets(name,new_per_day,reviews_per_day) VALUES('es listening',0,9999)")
+    pid = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    conn.commit()
+    conn.close()
+    database.set_category_preset('es', 'listening', pid)
+    database.set_daily_target_settings('es', creating_pct=50)
+    root = database.get_all_deck_id()
+    for _ in range(3):  # jedes Speichern ruft ensure_daily_target erneut auf
+        database.ensure_daily_target('es')
+        due = database.get_due_cards_any_cat(root, lang='es')
+        assert sum(1 for c in due if c['category'] == 'creating') == 6
+    cats = [database.get_card(i)['category'] for i in database.daily_target_card_ids()]
+    assert cats == ['creating'] * 6
