@@ -131,6 +131,23 @@ function _langScoped() { return _langsInUse.length > 1; }
 // lang=multi (all enabled languages together, one story). Set only by
 // startReviewMulti(); reset by showView('decks') and by every other session starter.
 let _multiLangSession = false;
+let _homeDecks = null;   // unscoped deck tree of the home page (#1390)
+let _homeAllId = null;   // id of the aggregating root 'All'
+
+// Home has no language tabs any more (#1390): a deck row carries its own
+// language, so every action started from it switches activeLang to that
+// language first — the rest of the app (lang=… on requests) keeps working.
+// The root 'All' belongs to no language; a language row sets it explicitly.
+function _setLangQuiet(lang) {
+  if (!lang || lang === activeLang() || !_availableLangs.includes(lang)) return;
+  localStorage.setItem('activeLang', lang);
+  _applyLangTheme();
+  invalidateHomeEvolution();
+}
+function _adoptDeckLang(id) {
+  if (id == null || id === _homeAllId) return;
+  _setLangQuiet(_deckLangById[id]);
+}
 function _langQ() {
   if (_multiLangSession) return 'lang=multi';
   return _langScoped() ? `lang=${activeLang()}` : '';
@@ -1744,12 +1761,14 @@ async function loadDecks({ keepView = false } = {}) {
     _startModePolling();
     // Only scope requests to the active tab once there's more than one language
     // in use — keeps a pure-Chinese install byte-identical to pre-#436 behavior.
-    const langParam = _langScoped() ? `&lang=${activeLang()}` : '';
+    // Home is unscoped since #1390: one page, one deck per language.
+    const langParam = '';
     const [decks, retention] = await Promise.all([
       api('GET', `/api/decks?unfinished_scope=${_unfinishedScope}${langParam}`),
       api('GET', `/api/retention?days=0${langParam}`).catch(() => null),
     ]);
     _cachedDecks = decks;
+    _homeDecks = decks;
     _retentionData = retention;
     _deckLangById = {};
     for (const d of flatten(decks)) {
@@ -1789,7 +1808,8 @@ function _renderHeaderLangTabs(readOnly = false) {
   _applyLangTheme();
   const box = document.getElementById('header-lang-tabs');
   if (!box) return;
-  if (_availableLangs.length <= 1) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  // Home shows every language as its own deck (#1390) — no tabs there.
+  if (_availableLangs.length <= 1 || _currentView === 'decks') { box.style.display = 'none'; box.innerHTML = ''; return; }
   const cur = activeLang();
   const curLabel = _LANG_TAB_LABELS[cur] || cur;
   box.innerHTML = readOnly
@@ -2118,56 +2138,20 @@ function renderDecks(decks) {
   }
 
   if (allDeck) {
-    const safeName = 'All';
-    const allBuryMode  = allDeck.bury_mode || 'all';
-    const allBuryIcon  = allBuryMode === 'all' ? '⛓' : allBuryMode === 'none' ? '⊘' : '≡';
-    const allBuryClass = `bury-btn bury-${allBuryMode}`;
-    const allBuryTitle = allBuryMode === 'all'  ? 'Bury siblings: All (click for None)'
-                       : allBuryMode === 'none' ? 'Bury siblings: None (click for Custom)'
-                       :                          'Bury siblings: Custom (click for All)';
-    const allRRData = _retentionData?.all;
-    const allRRVal = allRRData?.total > 0 ? allRRData.correct / allRRData.total : null;
-    const allRRBadge = allRRVal !== null
-      ? `<span class="deck-rr-badge" title="Today's retention: ${_formatRR(allRRVal)} (${allRRData.total} reviews)">${_formatRR(allRRVal)}</span>`
-      : '';
-    filteredHtml += `
-      <div class="tree-row tree-parent">
-        <span class="tree-toggle"></span>
-        <span class="tree-name-wrap">
-          <span class="tree-name" onclick="startReviewMixedSingle(${allDeck.id},'${safeName}')" style="cursor:pointer">All</span>
-          ${!allDeck.no_story && !_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryFromList(${allDeck.id})" title="Regenerate story">↺</button>` : ''}
-        </span>
-        <span class="deck-counts">${_mixNewBtn(allDeck.id, allDeck.new_review_order_override)}<span class="n-new">${(allDeck.counts||{}).new||0}</span>${lrnHtml(allDeck.counts)}<span class="n-rev">${(allDeck.counts||{}).review||0}</span></span>
-        ${allRRBadge}
-        <button class="${allBuryClass}" onclick="event.stopPropagation();toggleBury(${allDeck.id})" title="${allBuryTitle}">${allBuryIcon}</button>
-        <div class="deck-menu-wrap">
-          <button class="deck-susp-btn ${allDeck.deck_all_suspended ? 'deck-all-suspended' : ''}" onclick="event.stopPropagation();toggleDeckAllSuspension(${allDeck.id})" title="${allDeck.deck_all_suspended ? 'Unsuspend all cards' : 'Suspend all cards'}">${allDeck.deck_all_suspended ? '▶' : '⏸'}</button>
-          <button class="gear-btn" onclick="event.stopPropagation();toggleDeckMenu(event,${allDeck.id},'${safeName}',false)" title="Deck options">⚙</button>
-        </div>
-        <div class="cat-pills-row">${buildCategoryButtons(allDeck)}</div>
-      </div>`;
-    // 🌐 Languages (#1378): all enabled languages in one session with one story.
-    // Only worth showing when more than one language is in use.
-    if (_langsInUse.length > 1) {
-      filteredHtml += `
-      <div class="tree-row tree-parent">
-        <span class="tree-toggle"></span>
-        <span class="tree-name-wrap">
-          <span class="tree-name" onclick="startReviewMulti(${allDeck.id})" style="cursor:pointer" title="Review every enabled language together, with one story">🌐 Languages</span>
-        </span>
-      </div>`;
-    }
+    _homeAllId = allDeck.id;
+    filteredHtml += _homeLanguageRows(allDeck, regularDecks);
   }
-
+  const deckSortMode = localStorage.getItem('deckSortMode') || 'name';
+  const sortLabel = deckSortMode === 'due' ? 'Sort: Due ↓' : deckSortMode === 'name-desc' ? 'Sort: Z→A' : 'Sort: A→Z';
   let filteredSection = '';
   if (filteredHtml) {
-    filteredSection = `<div class="section-label">Filtered Decks</div><div class="tree-card filtered-tree-card">${filteredHtml}</div>`;
+    filteredSection = `<div class="section-label section-label-row">Decks<button class="deck-sort-btn" onclick="toggleDeckSort()">${sortLabel}</button></div><div class="tree-card filtered-tree-card">${filteredHtml}</div>`;
   }
 
   // ── Regular Decks section ─────────────────────────────────────────────────
-  const deckSortMode = localStorage.getItem('deckSortMode') || 'name';
-  const sortLabel = deckSortMode === 'due' ? 'Sort: Due ↓' : deckSortMode === 'name-desc' ? 'Sort: Z→A' : 'Sort: A→Z';
-  const regularHtml = renderDeckRows(regularDecks, 0, deckSortMode);
+  // Everything lives inside a language deck now (#1390); only decks that
+  // are not attached to the All root (none in practice) are listed here.
+  const regularHtml = allDeck ? '' : renderDeckRows(regularDecks, 0, deckSortMode);
   let regularSection = '';
   if (regularHtml.trim()) {
     regularSection = `<div class="section-label section-label-row">Decks<button class="deck-sort-btn" onclick="toggleDeckSort()">${sortLabel}</button></div><div class="tree-card">${regularHtml}</div>`;
@@ -2183,11 +2167,112 @@ function renderDecks(decks) {
   if (typeof initHomeEvolution === 'function') initHomeEvolution();
 }
 
+
+// ── Home: All + one deck per language (#1390) ────────────────────────────────
+const _HOME_LANG_LABELS = { zh: '🇨🇳 中文', es: '🇪🇸 Español', fr: '🇫🇷 Français' };
+
+function _sumCounts(decks) {
+  const out = { new: 0, learning: 0, review: 0, learning_future: 0, learning_soon: 0,
+                learning_soon_first_min: null, learning_soon_last_min: null };
+  for (const d of decks) {
+    const c = d.counts || {};
+    for (const k of ['new', 'learning', 'review', 'learning_future', 'learning_soon']) out[k] += c[k] || 0;
+    if (c.learning_soon_first_min != null)
+      out.learning_soon_first_min = out.learning_soon_first_min == null ? c.learning_soon_first_min : Math.min(out.learning_soon_first_min, c.learning_soon_first_min);
+    if (c.learning_soon_last_min != null)
+      out.learning_soon_last_min = Math.max(out.learning_soon_last_min || 0, c.learning_soon_last_min);
+  }
+  return out;
+}
+
+function _homeLangExpanded() {
+  try { return new Set(JSON.parse(localStorage.getItem('homeLangExpanded') || '[]')); }
+  catch { return new Set(); }
+}
+function toggleHomeLang(lang) {
+  const s = _homeLangExpanded();
+  s.has(lang) ? s.delete(lang) : s.add(lang);
+  localStorage.setItem('homeLangExpanded', JSON.stringify([...s]));
+  const scrollEl = document.querySelector('main');
+  const y = scrollEl ? scrollEl.scrollTop : 0;
+  renderDecks(_homeDecks || _cachedDecks);
+  if (scrollEl) scrollEl.scrollTop = y;
+}
+
+// Language deck = what the 'All' row used to be under that language's tab.
+function startReviewLang(lang) {
+  _multiLangSession = false;
+  _setLangQuiet(lang);
+  return startReviewMixed(_homeAllId, _LANG_TAB_LABELS[lang] || lang);
+}
+
+function _homeLanguageRows(allDeck, regularDecks) {
+  // Only enabled languages (#1252): a switched-off language leaves no deck.
+  const langs = ['zh', ..._availableLangs.filter(l => l !== 'zh')].filter(l => _availableLangs.includes(l));
+  const groups = langs.map(lang => ({ lang, decks: regularDecks.filter(d => (d.lang || 'zh') === lang) }))
+    .filter(g => g.decks.length);
+  const deckSortMode = localStorage.getItem('deckSortMode') || 'name';
+  const expanded = _homeLangExpanded();
+
+  // ── All: every due card of every enabled language, one story ──
+  const multi = groups.length > 1;
+  const allCounts = _sumCounts(groups.flatMap(g => g.decks));
+  const allBuryMode  = allDeck.bury_mode || 'all';
+  const allBuryIcon  = allBuryMode === 'all' ? '⛓' : allBuryMode === 'none' ? '⊘' : '≡';
+  const allBuryTitle = allBuryMode === 'all'  ? 'Bury siblings: All (click for None)'
+                     : allBuryMode === 'none' ? 'Bury siblings: None (click for Custom)'
+                     :                          'Bury siblings: Custom (click for All)';
+  const allRRData = _retentionData?.all;
+  const allRRVal = allRRData?.total > 0 ? allRRData.correct / allRRData.total : null;
+  const allRRBadge = allRRVal !== null
+    ? `<span class="deck-rr-badge" title="Today's retention: ${_formatRR(allRRVal)} (${allRRData.total} reviews)">${_formatRR(allRRVal)}</span>`
+    : '';
+  const allClick = multi ? `startReviewMulti(${allDeck.id})` : `startReviewLang('${groups[0]?.lang || 'zh'}')`;
+  let html = `
+      <div class="tree-row tree-parent">
+        <span class="tree-toggle"></span>
+        <span class="tree-name-wrap">
+          <span class="tree-name" onclick="${allClick}" style="cursor:pointer" title="Every due card of every language, one story">All</span>
+        </span>
+        <span class="deck-counts"><span class="n-new">${allCounts.new}</span>${lrnHtml(allCounts)}<span class="n-rev">${allCounts.review}</span></span>
+        ${allRRBadge}
+        <button class="bury-btn bury-${allBuryMode}" onclick="event.stopPropagation();toggleBury(${allDeck.id})" title="${allBuryTitle}">${allBuryIcon}</button>
+      </div>`;
+
+  // ── One deck per language, expandable to that language's decks ──
+  for (const g of groups) {
+    const c = _sumCounts(g.decks);
+    const open = expanded.has(g.lang);
+    const label = _HOME_LANG_LABELS[g.lang] || _LANG_TAB_LABELS[g.lang] || g.lang;
+    const leaves = g.decks.flatMap(d => getDeepCategoryLeaves(d).concat(d.category ? [d] : []));
+    const enabled = {};
+    for (const cat of ['reading', 'listening', 'creating'])
+      enabled[`${cat}_enabled`] = flatten(g.decks).some(d => d[`${cat}_enabled`]) ? 1 : 0;
+    const pseudo = { ...allDeck, ...enabled, name: label.replace(/^\S+\s/, ''), children: g.decks };
+    // Pills/suspend act on the All root scoped to this language, exactly what
+    // the All row under this language's tab did before #1390.
+    const setLang = s => s.replaceAll('event.stopPropagation();', `event.stopPropagation();_setLangQuiet('${g.lang}');`);
+    const allSusp = leaves.length > 0 && leaves.every(l => !!l.all_suspended);
+    html += `
+      <div class="tree-row tree-parent home-lang-row" data-lang="${g.lang}">
+        <span class="tree-toggle" onclick="toggleHomeLang('${g.lang}')">${open ? '▼' : '▶'}</span>
+        <span class="tree-name-wrap">
+          <span class="tree-name" onclick="startReviewLang('${g.lang}')" style="cursor:pointer;font-weight:600">${label}</span>
+        </span>
+        <span class="deck-counts"><span class="n-new">${c.new}</span>${lrnHtml(c)}<span class="n-rev">${c.review}</span></span>
+        ${setLang(`<div class="deck-menu-wrap"><button class="deck-susp-btn ${allSusp ? 'deck-all-suspended' : ''}" onclick="event.stopPropagation();toggleDeckAllSuspension(${allDeck.id})" title="${allSusp ? 'Unsuspend all cards' : 'Suspend all cards'}">${allSusp ? '▶' : '⏸'}</button></div>`)}
+        <div class="cat-pills-row">${setLang(buildCategoryButtons(pseudo))}</div>
+      </div>`;
+    if (open) html += renderDeckRows(g.decks, 1, deckSortMode);
+  }
+  return html;
+}
+
 function toggleDeckSort() {
   const cur = localStorage.getItem('deckSortMode') || 'name';
   const next = cur === 'name' ? 'name-desc' : cur === 'name-desc' ? 'due' : 'name';
   localStorage.setItem('deckSortMode', next);
-  renderDecks(_cachedDecks);
+  renderDecks(_homeDecks || _cachedDecks);
 }
 
 function renderDeckRows(decks, depth, sortMode) {
@@ -2269,26 +2354,24 @@ function renderDeckRows(decks, depth, sortMode) {
 }
 
 async function toggleCategorySuspension(deckId, category) {
+  _adoptDeckLang(deckId);
   try {
     // Scope the toggle to the active tab: 'All' descends into every language
     // tree, so an unscoped pause under 中文 suspends the French cards too (#918).
     await api('POST', `/api/decks/${deckId}/categories/${category}/toggle-suspension${_optLangQ()}`);
     // Scope the refresh to the active tab like loadDecks() does — an unfiltered
     // reload repaints the tree with every language's decks in it (#915).
-    const decks = await api('GET', `/api/decks${_optLangQ()}`);
-    _cachedDecks = decks;
-    renderDecks(decks);
+    await loadDecks({ keepView: true });
   } catch (e) {
     showError('Could not toggle suspension: ' + e.message);
   }
 }
 
 async function toggleDeckAllSuspension(deckId) {
+  _adoptDeckLang(deckId);
   try {
     await api('POST', `/api/decks/${deckId}/toggle-all-suspension${_optLangQ()}`);
-    const decks = await api('GET', `/api/decks${_optLangQ()}`);
-    _cachedDecks = decks;
-    renderDecks(decks);
+    await loadDecks({ keepView: true });
   } catch (e) {
     showError('Could not toggle suspension: ' + e.message);
   }
@@ -2304,7 +2387,7 @@ function toggleDeck(deckId) {
   if (_cachedDecks) {
     const scrollEl = document.querySelector('main');
     const scrollY = scrollEl ? scrollEl.scrollTop : 0;
-    renderDecks(_cachedDecks);
+    renderDecks(_homeDecks || _cachedDecks);
     if (scrollEl) scrollEl.scrollTop = scrollY;
   } else {
     loadDecks();
@@ -2323,7 +2406,7 @@ async function toggleBury(deckId) {
       if (deck) deck.bury_mode = bury_mode;
       const scrollEl = document.querySelector('main');
       const scrollY = scrollEl ? scrollEl.scrollTop : 0;
-      renderDecks(_cachedDecks);
+      renderDecks(_homeDecks || _cachedDecks);
       if (scrollEl) scrollEl.scrollTop = scrollY;
     }
   } catch (e) {
@@ -2342,7 +2425,7 @@ async function toggleMixNew(deckId) {
       if (deck) deck.new_review_order_override = new_review_order_override;
       const scrollEl = document.querySelector('main');
       const scrollY = scrollEl ? scrollEl.scrollTop : 0;
-      renderDecks(_cachedDecks);
+      renderDecks(_homeDecks || _cachedDecks);
       if (scrollEl) scrollEl.scrollTop = scrollY;
     }
   } catch (e) {
@@ -11211,6 +11294,7 @@ function _applyOptionsMode() {
 }
 
 async function openOptions(deckId, cat = null) {
+  _adoptDeckLang(deckId);
   optDeckId = deckId;
   optCategory = cat;
   optLang = null;
@@ -11440,6 +11524,7 @@ function _startAllDeckCategory(cat) {
 
 // ── Start review session ────────────────────────────────────────────────────
 async function startReview(id, cat, name, noStory = false, quick = false) {
+  _adoptDeckLang(id);
   _multiLangSession = false;
   navPush('review');
   quickMode = quick;
@@ -11817,6 +11902,7 @@ function startReviewMulti(id) {
 // Home-list entry for the normal "All"/deck rows: always a single-language session.
 function startReviewMixedSingle(id, name, noStory = false) {
   _multiLangSession = false;
+  _adoptDeckLang(id);
   return startReviewMixed(id, name, noStory);
 }
 
@@ -17651,6 +17737,7 @@ async function _finishRegenInBackground(storyData, storyDeckId, storyCategory,
 }
 
 async function regenerateStoryFromList(deckId, category = 'unified') {
+  _adoptDeckLang(deckId);
   _deckListRegenId = deckId;
   _deckListRegenCategory = category;
   _setupIsDeckListRegen = true;
