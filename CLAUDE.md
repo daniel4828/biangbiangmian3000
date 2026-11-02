@@ -579,15 +579,27 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升
 - 测试见 `tests/test_irregular_forms.py`
 
-## 西语变位表练习次数与区块初始状态（#1356）
+## 西语变位表与区块初始状态（#1356）
 
 - **快捷键 `j`**（`conjugation`，scope shared，复习卡背面 + 词条页）切换 Conjugation 区块；没有该区块（中文词）时什么都不做
 - **区块初始状态可设**：`static/app.js` 的 `SECTION_DEFAULTS`（examples closed / notes peek / analysis open / **conjugation open（本议题起）** / inflection closed；`analysis` = Word Analysis 与 Etymology 共用）。用户覆盖存 `localStorage.sectionDefaults`（合并到默认值上，未知键/非法值忽略）；设置页 Review 标签「Section defaults」。五个区块都用 `_sectionInit()` 渲染，全部支持 open/peek/closed 三态
-- **变位表每个时态标题带 `×N` 徽标，每个人称格带次数**。数据来自 `story_sentences.verb_slot`（`"tense:person"`），不建表：`database.verb_slot_rows(lang)` → `verb_slots.practice_counts(lemma, lang)`
-- **计数规则**：对该动词**不规则**的时态只数这个动词自己的句子（scope `verb`）；**规则**的时态把所有在该时态也规则的动词合并成一个计数（scope `regular`，徽标虚线）。一个句子链接多个词只算一次（算给第一个动词）
+- **#1395 起变位表不再显示生成次数**（原来数的是**生成过的句子**，重新生成一次就再算一次、规则时态还把所有动词混在一起，Daniel 觉得「不可能对」）。每个人称格改为一个小圆点：该形式所属**模式卡**在「产出（Bilden）」下的状态，tooltip 里两种 mode 都有。`practice_counts` / `conjugation_stats` / `practice_count` 已删除
 - **规则性推导**（`verb_slots.tense_is_irregular`）：ind_pres/pret/impf/fut 用 `irregular_tenses()`；`ind_cond` 跟 `ind_fut`，`subj_pres` 跟 `ind_pres`，`subj_impf` 跟 `ind_pret`；`perf` 看词汇表过去分词是否异于规则 -ado/-ido；反身动词按原形
-- **AI 写的时态/人称标签映射**：`tense_code_for_label()` / `person_code_for_label()`（归一化去重音；Participio/Gerundio/Imperativo/复合时态返回 None，不显示次数）
-- `GET /api/word/{id}` 的西语动词多返回 `conjugation_stats`（按原标签键 `{total, scope, code}`）和每行 `practice_count`；任何失败只是不带统计，不影响词条页
+- **AI 写的时态/人称标签映射**：`tense_code_for_label()` / `person_code_for_label()`（归一化去重音；Participio/Gerundio/Imperativo/复合时态返回 None）
+
+## 西语变位模式卡：第二个评分 + 独立调度器（#1395）
+
+Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**——词义（Again/Hard/Good/Easy，照旧）+ 变位（✓/✗，可选，不选不记录）。变位分数进一个**独立调度器**，调度的是**变位模式**不是动词：错了，同一模式过几天**换一个动词**再来。
+
+- **模式卡不在 `cards` 表里**（`conj_patterns` + `conj_review_log`，`database/conj.py`）：它们从不单独复习，只作为动词卡的附属评分出现；放进 `cards` 会污染队列、角标、统计
+- **每个具体变位形唯一归属一张模式卡**（`conj_patterns.pattern_for(lemma, tense, person)`）：规则形 → `reg:{时态}:{词尾类}`（词尾相同的类合并）；不规则组 → `irr:{时态}:{组}`（yo_go、yo_zco、e_ie/o_ue/e_i/u_ue、strong_u/i/j、stem_3rd、y_3rd、ortho、stem、yo_stem、participle…）；ser/ir/estar/haber/dar/ver 和分不进组的形 → `verb:{动词}:{时态}`（ser/ir 的 Indefinido 与虚拟式过去时共用 `verb:ser_ir:…`）。**同一动词同一时态可以属于不同卡**：tengo（yo_go）/ tienes（e_ie）/ tenemos（规则 -er）
+- 🔴 **识别与产出分开调度**：每张模式卡两份 FSRS 状态，`recog`（reading + listening 卡）和 `prod`（creating 卡）。**听读答对绝不影响产出的间隔**——产出才是重点，识别好不代表会自己变
+- **同一天多次评分**：一个模式一天可能出现在好几句里。当天第一次评分才改状态；之后 ✓ 只记日志，✗ 从当天快照（`day_before`）重算一次失败（每天最多一次）
+- **故事选槽位**（`verb_slots.assign_slots`）：① 到期模式优先（按卡片类别的 mode，最过期的先，每篇故事每个到期模式最多一次）；② 每天每 mode 最多 `es_conj_new_per_day`（默认 3）个新模式，按槽位权重从高到低引入——所以虚拟式自然靠后；③ 否则原来的加权轮换，但限定在已引入的模式里。**到期模式没有合适的动词就等着**，不额外造句
+- 复习：翻面后 `#conj-rating-row`（快捷键 `u` ✓ / `i` ✗）；`POST /api/review` 多带 `conj_ok` + `sentence_id`，撤销同时撤销变位评分。**识别卡的槽位标签只在背面**（正面会泄露答案），creating 正反面都有；背面加模式名
+- 设置页 Spanish：「Konjugations-Musterkarten」开关（`es_conj_enabled`，默认开）、每天新模式数、目标保持率（`es_conj_retention`，默认 0.90）、全部模式卡在两种 mode 下的状态表。`GET/PUT /api/es/conj-settings`、`GET /api/es/conj-patterns`
+- 句子对象多 `conj_pattern` / `conj_pattern_label` / `conj_rating`（`database/stories._hydrate_sentence`）
+- 测试见 `tests/test_conj_patterns.py`
 
 ## 每日 50 张卡自动补充（#1281）
 
