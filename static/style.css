@@ -6701,7 +6701,7 @@ body.gloss-on [data-gloss-tr]::after {
    pill's box and the glass look lives on the input. */
 :root {
   /* #1403: height of the composer + the gap above it; app.js measures it */
-  --search-bar-h: 126px;
+  --search-bar-h: 112px;
   --composer-gap: max(12px, env(safe-area-inset-bottom));
   /* pill as wide as the page content: main is 500px wide with 16px padding */
   --search-bar-side: max(16px, calc((100vw - 500px) / 2 + 16px));
@@ -6741,14 +6741,18 @@ header #header-search-wrap {
   z-index: 89;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px 12px 10px;
+  gap: 4px;
+  padding: 10px 10px 8px 14px;
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 28px;
-  box-shadow: 0 6px 28px rgba(15,23,42,.16);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 26px;
+  box-shadow: 0 1px 2px rgba(15,23,42,.06), 0 12px 32px -8px rgba(15,23,42,.22);
+  transition: transform .22s ease, opacity .22s ease, border-color .15s, box-shadow .15s;
 }
-header #header-search-wrap:focus-within { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+header #header-search-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+  box-shadow: 0 0 0 4px var(--primary-ring), 0 12px 32px -8px rgba(15,23,42,.22);
+}
 header .hs-input-row { position: relative; display: flex; align-items: center; }
 header #header-search-input {
   flex: 1;
@@ -6757,41 +6761,55 @@ header #header-search-input {
   box-sizing: border-box;
   font-size: 17px;
   line-height: 1.4;
-  padding: 4px 36px 4px 8px;
+  padding: 6px 36px 6px 2px;
   background: transparent;
   border: none;
   border-radius: 0;
   box-shadow: none;
 }
+header #header-search-input::placeholder { color: var(--muted); opacity: .85; }
 header #header-search-input:focus { outline: none; border: none; box-shadow: none; }
 header #header-search-wrap.hs-has-lang #header-search-input { padding-left: 8px; }
 header #header-search-clear {
   position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
   width: 30px; height: 30px; line-height: 30px;
 }
-header .hs-toolbar { display: flex; align-items: center; gap: 8px; }
+header .hs-toolbar { display: flex; align-items: center; gap: 6px; }
 header .hs-spacer { flex: 1; }
 header .hs-round {
-  width: 44px; height: 44px; flex-shrink: 0;
+  width: 36px; height: 36px; flex-shrink: 0;
   display: grid; place-items: center;
   border-radius: 999px; border: none; padding: 0;
-  background: var(--hover-bg, rgba(0,0,0,.05));
-  color: var(--text); cursor: pointer;
+  background: transparent;
+  color: var(--muted); cursor: pointer;
+  transition: background .15s, color .15s, transform .1s;
 }
+header .hs-round:hover { background: var(--hover-bg, rgba(0,0,0,.05)); color: var(--text); }
 header .hs-round:active { transform: scale(.95); }
 header #hs-mic.listening { background: #e5484d; color: #fff; }
-header .hs-send { background: var(--primary); color: #fff; }
-header .hs-send:disabled { background: var(--hover-bg, rgba(0,0,0,.05)); color: var(--muted); cursor: default; }
+header .hs-send {
+  background: var(--primary); color: #fff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+header .hs-send:hover { background: var(--primary); color: #fff; filter: brightness(1.08); }
+header .hs-send:disabled { background: var(--hover-bg, rgba(0,0,0,.06)); color: var(--muted); box-shadow: none; filter: none; cursor: default; }
 header .hs-pill {
   position: relative;
-  height: 44px; box-sizing: border-box;
+  height: 34px; box-sizing: border-box;
   display: inline-flex; align-items: center;
-  padding: 0 16px; border-radius: 999px; border: none;
-  background: var(--hover-bg, rgba(0,0,0,.05));
-  color: var(--text); font: inherit; font-size: 16px;
+  padding: 0 12px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text); font: inherit; font-size: 14px; font-weight: 500;
   min-width: 0; cursor: pointer;
+  transition: background .15s;
 }
-header #header-search-lang.hs-pill { -webkit-appearance: none; appearance: none; font-size: 20px; padding: 0 12px; position: static; transform: none; width: auto; left: auto; top: auto; }
+header .hs-pill:hover { background: var(--hover-bg, rgba(0,0,0,.05)); }
+header #header-search-lang.hs-pill { -webkit-appearance: none; appearance: none; font-size: 18px; padding: 0 8px; border: none; background: transparent; position: static; transform: none; width: auto; left: auto; top: auto; }
+header .hs-model-pill::after {
+  content: ''; width: 6px; height: 6px; margin-left: 8px;
+  border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
+  transform: translateY(-2px) rotate(45deg); opacity: .55; flex-shrink: 0;
+}
 header #header-search-lang.hs-pill[hidden] { display: none; }
 header .hs-model-pill span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* the real <select> lies invisibly over the pill: native picker on iOS */
@@ -6825,6 +6843,12 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   }
   body.mini-player-visible:not(.ra-fullscreen-open) #gloss-toggle-btn {
     bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-inset-bottom)) + 80px);
+  }
+  body.hs-hidden:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  body.hs-hidden.mini-player-visible:not(.ra-fullscreen-open) #gloss-toggle-btn {
+    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 80px);
   }
 }
 @media (max-width: 560px) {
@@ -8337,26 +8361,25 @@ body.side-menu-open #side-menu-backdrop { opacity: 1; pointer-events: auto; }
 #view-settings-content .settings-search-page { display: block; margin: 14px 0 4px; padding: 0; background: none; border: none; color: var(--accent, #4f46e5); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .hcal-seg-lang .hcal-seg-btn { padding-left: 8px; padding-right: 8px; }
 
-/* Phone: AI search composer can be swiped away to the right; a small tab on
-   the right edge brings it back. Desktop always shows it. */
+/* AI search composer can be tucked away to the right (› button, or a swipe on
+   phones); a small tab on the right edge brings it back. All widths. */
 #hs-edge-tab { display: none; }
-@media (max-width: 999px) {
-  header #header-search-wrap { transition: transform .22s ease, opacity .22s ease; }
-  body.hs-hidden:not(.dict-result-open) header #header-search-wrap {
-    transform: translateX(calc(100% + var(--search-bar-side) + 8px));
-    opacity: 0; pointer-events: none;
-  }
-  body.hs-hidden:not(.dict-result-open) #hs-edge-tab {
-    display: grid; place-items: center;
-    position: fixed; right: 0; z-index: 89;
-    bottom: calc(var(--kb-offset, 0px) + var(--composer-gap) + 36px);
-    width: 26px; height: 52px; padding: 0 0 0 2px;
-    border: 1px solid var(--border); border-right: none;
-    border-radius: 14px 0 0 14px;
-    background: var(--card); color: var(--muted);
-    box-shadow: 0 2px 10px rgba(15,23,42,.14);
-    cursor: pointer;
-  }
-  body.hs-hidden main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
-  body.hs-hidden #mini-player { bottom: max(8px, env(safe-area-inset-bottom)); }
+body.hs-hidden:not(.dict-result-open) header #header-search-wrap {
+  transform: translateX(calc(100% + var(--search-bar-side) + 8px));
+  opacity: 0; pointer-events: none;
 }
+body.hs-hidden:not(.dict-result-open) #hs-edge-tab {
+  display: grid; place-items: center;
+  position: fixed; right: 0; z-index: 89;
+  bottom: calc(var(--kb-offset, 0px) + var(--composer-gap) + 36px);
+  width: 26px; height: 52px; padding: 0 0 0 2px;
+  border: 1px solid var(--border); border-right: none;
+  border-radius: 14px 0 0 14px;
+  background: var(--card); color: var(--muted);
+  box-shadow: 0 2px 10px rgba(15,23,42,.14);
+  cursor: pointer;
+  transition: background .15s;
+}
+body.hs-hidden:not(.dict-result-open) #hs-edge-tab:hover { background: var(--hover-bg, rgba(0,0,0,.05)); color: var(--primary); }
+body.hs-hidden main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+body.hs-hidden #mini-player { bottom: max(8px, env(safe-area-inset-bottom)); }

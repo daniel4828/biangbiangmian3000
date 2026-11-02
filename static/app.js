@@ -2171,9 +2171,10 @@ function _ensureSideMenu() {
   _initSearchComposerToggle();
 }
 
-// Phone only (< 1000px): the floating search composer can be tucked away to
-// the right; a small tab on the right edge shows it is there. State per
-// browser in localStorage.searchComposerHidden.
+// The floating search composer can be tucked away to the right at every width
+// via the › button; a small tab on the right edge brings it back. The swipe
+// gesture stays phone-only (< 1000px). State per browser in
+// localStorage.searchComposerHidden.
 // A touch starting in the right-edge strip belongs to the search-composer
 // swipe on phones; the other left-swipes (gloss mode, knowledge rows) skip it.
 function _isRightEdgeTouch(t) {
@@ -2203,7 +2204,6 @@ function setSearchComposerHidden(hidden) {
   }
 }
 function toggleSearchComposer() {
-  if (!_isNarrow()) return;
   setSearchComposerHidden(!document.body.classList.contains('hs-hidden'));
 }
 function openSideMenu() { _ensureSideMenu(); document.body.classList.add('side-menu-open'); }
@@ -14586,9 +14586,7 @@ function initHeaderSearch() {
     headerSearchSubmit();
   });
   document.getElementById('hs-mic')?.addEventListener('click', _hsToggleMic);
-  document.getElementById('hs-plus')?.addEventListener('click', () => {
-    openAddWordModal(_headerSearchLang());
-  });
+  document.getElementById('hs-collapse')?.addEventListener('click', () => setSearchComposerHidden(true));
   if (window.visualViewport) {
     visualViewport.addEventListener('resize', _hsLayout);
     visualViewport.addEventListener('scroll', _hsLayout);
