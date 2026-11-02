@@ -15651,6 +15651,7 @@ function _renderConjRatingRow() {
   if (!row) return;
   const show = !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null);
   row.style.display = show ? '' : 'none';
+  row.classList.remove('conj-need');
   const lbl = document.getElementById('conj-rating-pattern');
   if (lbl) lbl.textContent = show ? (sentence.conj_pattern_label || '') : '';
   _syncConjButtons();
@@ -15660,6 +15661,7 @@ function setConjChoice(ok) {
   const row = document.getElementById('conj-rating-row');
   if (!row || row.style.display === 'none') return;
   _conjChoice = (_conjChoice === ok) ? null : ok;   // clicking the active one deselects
+  row.classList.remove('conj-need');
   _syncConjButtons();
 }
 
@@ -15786,6 +15788,15 @@ function _followupKeyDown(e) {
 
 // ── Submit rating ───────────────────────────────────────────────────────────
 async function rate(rating) {
+  // The conjugation must be rated first: otherwise 1-4 rates the card and the
+  // richtig/falsch choice is silently skipped.
+  const _conjRowGate = document.getElementById('conj-rating-row');
+  if (_conjRowGate && _conjRowGate.style.display !== 'none' && _conjChoice === null) {
+    _conjRowGate.classList.remove('conj-need');
+    void _conjRowGate.offsetWidth;   // restart the animation on repeated presses
+    _conjRowGate.classList.add('conj-need');
+    return;
+  }
   document.querySelectorAll('.r-btn').forEach(b => b.disabled = true);
   let _cardMs = null;
   if (_timerStart) {
