@@ -9,7 +9,7 @@
   <link rel="manifest" href="/static/manifest.webmanifest">
   <meta name="theme-color" content="#f1f5f9">
   <script src="/static/theme.js?v=2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=23">
+  <link rel="stylesheet" href="/static/style.css?v=24">
   <!-- Dictionary-result styling, shared with the standalone /dict page
        (#1055): the header search box renders lookups with shared.js's
        renderDictResult(), so both pages must load the same sheet. -->
@@ -22,6 +22,7 @@
     <!-- ← goes to the LAST screen, not home (#1009). Hidden until there is
          something to go back to — on a fresh load that is the deck list, and
          an arrow that appears for a moment and then vanishes is just noise. -->
+    <button id="side-menu-btn" onclick="toggleSideMenu()" aria-label="Menu" title="Menu">☰</button>
     <button id="back-btn" onclick="goBack()" style="display:none">←</button>
     <!-- 𰻞 标志（#780）。必须是 <img> 引用 SVG，不能写这个字符本身：
          U+30EDE 在 Unicode 扩展 G 区，没有任何常见字体包含它。 -->
@@ -880,7 +881,7 @@
 <div id="word-tip" style="display:none"></div>
 <script src="/static/shared.js?v=7"></script>
 <script src="/static/home-discovery.js?v=2"></script>
-<script src="/static/app.js?v=30"></script>
+<script src="/static/app.js?v=31"></script>
 
 <!-- Edit card modal -->
 <div id="edit-modal-overlay" onclick="closeEditCard()" style="display:none"></div>

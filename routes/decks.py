@@ -217,7 +217,8 @@ def get_daily_target(lang: str = "zh"):
 def put_daily_target(body: dict):
     try:
         result = database.set_daily_target_settings(
-            body.get("lang") or "zh", enabled=body.get("enabled"), target=body.get("target"))
+            body.get("lang") or "zh", enabled=body.get("enabled"), target=body.get("target"),
+            **({"creating_pct": body["creating_pct"]} if "creating_pct" in body else {}))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return result
