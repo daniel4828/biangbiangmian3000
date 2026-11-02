@@ -40,7 +40,7 @@ test('reordering and disabling persist from settings', () => {
  assert.match(options.innerHTML,/Move HSK 4 up/);
 });
 test('non-Chinese skips HSK and last available stage cannot be disabled', () => {
- const c=setup(); c.currentCardLang=()=> 'fr';
+ const c=setup(); c.currentCardLang=()=> 'fr'; c.activeLang=()=> 'fr';
  assert.equal(Array.from(c._hintEnabledStages()).join(','),'0,1,9,2');
  c.document={getElementById:()=>({value:0,innerHTML:''})}; c.onListenHintSlider=()=>{};
  for(const id of [1,9,2,0]) c.changeHintStage(id,false);
@@ -65,12 +65,12 @@ test('CEFR threshold keeps harder and unlisted words', () => {
 test('legacy saved config gets CEFR stages inserted after HSK 6, not at the end', () => {
  const legacy=[0,3,4,5,6,7,8,1,9,2].map(id=>({id,enabled:true}));
  const c=setup({listenHintStages:JSON.stringify(legacy)}, 'es');
- assert.equal(Array.from(c._hintStageConfig().map(s=>s.id)).join(','),'0,3,4,5,6,7,8,10,11,12,13,1,9,2');
+ assert.equal(Array.from(c._hintStageConfig('es').map(s=>s.id)).join(','),'0,3,4,5,6,7,8,10,11,12,13,1,9,2');
  const custom=setup({listenHintStages:JSON.stringify([{id:2,enabled:true},{id:0,enabled:false}])});
- const ids=Array.from(custom._hintStageConfig().map(s=>s.id));
+ const ids=Array.from(custom._hintStageConfig('zh').map(s=>s.id));
  assert.equal(ids.slice(0,2).join(','),'2,0');
  assert.ok(ids.indexOf(10)>ids.indexOf(8) && ids.indexOf(13)<ids.indexOf(1));
- assert.ok(custom._hintStageConfig().every(s=>s.id===0?!s.enabled:true));
+ assert.ok(custom._hintStageConfig('zh').every(s=>s.id===0?!s.enabled:true));
 });
 test('_getTargetPositions finds the conjugated form on non-Chinese cards', () => {
  const source=fs.readFileSync('static/app.js','utf8');
