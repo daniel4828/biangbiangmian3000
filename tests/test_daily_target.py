@@ -522,3 +522,34 @@ def test_category_limit_zero_hides_todays_auto_cards_of_that_category(es_lexicon
     root = database.get_all_deck_id()
     due = database.get_due_cards_any_cat(root, lang='es')
     assert {c['category'] for c in due} == {'creating'} and len(due) == 4
+
+
+def test_repeated_fills_do_not_swap_creating_into_a_full_category(es_lexicon):
+    """#1414: Ausgleich darf nicht in Listening (Limit 0) tauschen; wiederholtes
+    Speichern ließ sonst Creating-Karten nach und nach verschwinden."""
+    for i in range(12):
+        card(f'verbo{i}', 'saved', category='listening', lang='es')
+        card(f'verbo{i}', 'saved', category='creating', lang='es')
+    client = TestClient(main.app)
+    client.put('/api/daily-target', json={'lang': 'es', 'enabled': True, 'target': 6})
+    database.ensure_daily_target('es')
+    conn = database.get_db()
+    for (pid,) in conn.execute('SELECT id FROM deck_presets').fetchall():
+        conn.execute('INSERT INTO preset_category_overrides(preset_id,category,new_per_day) VALUES(?,?,0)',
+                     (pid, 'listening'))
+    conn.commit()
+    conn.close()
+    root = database.get_all_deck_id()
+    counts = []
+    for _ in range(4):
+        database.ensure_daily_target('es')
+        due = database.get_due_cards_any_cat(root, lang='es')
+        counts.append(sum(1 for c in due if c['category'] == 'creating'))
+    assert counts == sorted(counts) and counts[0] > 0
+    conn = database.get_db()
+    batch = database.daily_target_card_ids(conn)
+    listening_new = conn.execute(
+        f"SELECT COUNT(*) FROM cards WHERE id IN ({','.join(map(str, batch))}) "
+        "AND category='listening' AND state='new'").fetchone()[0]
+    conn.close()
+    assert listening_new <= 3  # nur die vor dem Limit aufgefüllten, keine neu eingetauschten
