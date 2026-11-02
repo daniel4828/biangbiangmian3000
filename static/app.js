@@ -264,7 +264,7 @@ const KEYMAP_DEFAULTS = {
   'rate-plus':    "'",
   'story-modal':  'x',
   // shared (review card-back + word-detail page)
-  examples:       'e',
+  examples:       'u',
   notes:          'n',
   'word-analysis':'w',
   conjugation:    'j',
@@ -281,11 +281,12 @@ const KEYMAP_DEFAULTS = {
   'restart-server':    'R',
   'star-sentence':     'F',
   'flag-sentence':     'G',
-  'conj-ok':           'u',
-  'conj-fail':         'i',
+  // E/R: Daniel's choice for rating the conjugation (examples/relations moved to U/I)
+  'conj-ok':           'e',
+  'conj-fail':         'r',
   'fsrs-inspector':    'S',
   // word-detail only
-  relations:      'r',
+  relations:      'i',
   // story modal
   'story-play':   ' ',
   'story-prev':   'a',
@@ -363,6 +364,19 @@ const KEYMAP_MODIFIER_KEYS = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Al
 function _loadKeymap() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('reviewKeymap') || '{}'); } catch (e) {}
+  // _saveKeymap() stores the whole map, so a browser that ever saved one
+  // keeps the old defaults forever. One-time move of the untouched old
+  // defaults to the new ones (conj ok/fail → E/R, examples → U, relations → I).
+  const _OLD_TO_NEW = { 'conj-ok': ['u', 'e'], 'conj-fail': ['i', 'r'], examples: ['e', 'u'], relations: ['r', 'i'] };
+  try {
+    if (!localStorage.getItem('reviewKeymapConjER')) {
+      for (const [id, [oldK, newK]] of Object.entries(_OLD_TO_NEW)) {
+        if (saved[id] === oldK) saved[id] = newK;
+      }
+      localStorage.setItem('reviewKeymap', JSON.stringify(saved));
+      localStorage.setItem('reviewKeymapConjER', '1');
+    }
+  } catch (e) {}
   return { ...KEYMAP_DEFAULTS, ...saved };
 }
 let _keymap = _loadKeymap();
