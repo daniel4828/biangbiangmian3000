@@ -17157,7 +17157,9 @@ function _getAudioEl() {
     _sharedAudio.preload = 'auto';
     const origPlay = _sharedAudio.play.bind(_sharedAudio);
     _sharedAudio.play = function () {
-      _setAudioSessionType(this.src === _SILENT_WAV ? 'ambient' : 'playback');
+      const silent = this.src === _SILENT_WAV;
+      if (!silent) this.muted = false;
+      _setAudioSessionType(silent ? 'ambient' : 'playback');
       return origPlay();
     };
   }
@@ -17198,9 +17200,11 @@ function _unlockAudio() {
   const a = _getAudioEl();
   try {
     a.src = _SILENT_WAV;
+    // #1396：静音（muted）播放在 iOS 上不抢音频焦点，但仍算在手势内 play() 过，解锁照样生效
+    a.muted = true;
     const p = a.play();
     const done = () => {
-      try { a.pause(); a.currentTime = 0; } catch (_) {}
+      try { a.pause(); a.currentTime = 0; a.muted = false; } catch (_) {}
       document.removeEventListener('pointerdown', _unlockAudio, true);
     };
     if (p && p.then) p.then(done).catch(() => {});
