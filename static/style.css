@@ -8250,3 +8250,8 @@ body.side-menu-open #side-menu-backdrop { opacity: 1; pointer-events: auto; }
   #side-menu-backdrop, #side-menu-btn { display: none; }
   body.has-side-menu { padding-left: 240px; }
 }
+
+/* Settings search (index page) */
+#view-settings-content .settings-search { width: 100%; box-sizing: border-box; margin: 8px 0 4px; padding: 10px 12px; font-size: 16px; }
+#view-settings-content .settings-search-page { display: block; margin: 14px 0 4px; padding: 0; background: none; border: none; color: var(--accent, #4f46e5); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.hcal-seg-lang .hcal-seg-btn { padding-left: 8px; padding-right: 8px; }

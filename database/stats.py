@@ -482,7 +482,7 @@ def get_retention_bulk(days: int = 30, lang: str | None = None) -> dict:
     }
 
 
-def get_calendar_stats(days: int = 365, deck_id: int | None = None) -> dict:
+def get_calendar_stats(days: int = 365, deck_id: int | None = None, lang: str | None = None) -> dict:
     """Per-day review statistics for the home-page calendar heatmap.
 
     Days are bucketed by the Anki day boundary (local time, 4am cutoff) so they
@@ -502,6 +502,10 @@ def get_calendar_stats(days: int = 365, deck_id: int | None = None) -> dict:
 
     deck_filter = "AND c.deck_id = ?" if deck_id else ""
     params = [since] + ([deck_id] if deck_id else [])
+    # Language filter for the home charts: by the deck's language, like card-evolution.
+    if lang is not None:
+        deck_filter += " AND d.lang = ?"
+        params.append(lang)
 
     # Anki-day bucket: UTC timestamp → local → shift back past the 4am cutoff.
     day_expr = "date(datetime(rl.reviewed_at, 'localtime', '-4 hours'))"
@@ -577,6 +581,9 @@ def get_calendar_stats(days: int = 365, deck_id: int | None = None) -> dict:
     # Future scheduled reviews (today onward), grouped by due date + category
     future_filter = "AND deck_id = ?" if deck_id else ""
     future_params = [today.isoformat()] + ([deck_id] if deck_id else [])
+    if lang is not None:
+        future_filter += " AND deck_id IN (SELECT id FROM decks WHERE lang = ?)"
+        future_params.append(lang)
     future_rows = conn.execute(
         f"""SELECT date(due) AS d, category AS cat, COUNT(*) AS cnt
             FROM cards

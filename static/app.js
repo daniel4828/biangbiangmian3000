@@ -2157,6 +2157,14 @@ function homeDiscoveryEnabled() {
 function setHomeDiscoveryEnabled(on) {
   try { localStorage.setItem('homeDiscovery', on ? '1' : '0'); } catch {}
 }
+// "Unfinished Cards" row on the home page: off unless switched on.
+function homeUnfinishedEnabled() {
+  try { return localStorage.getItem('homeUnfinished') === '1'; } catch { return false; }
+}
+function setHomeUnfinishedEnabled(on) {
+  try { localStorage.setItem('homeUnfinished', on ? '1' : '0'); } catch {}
+  if (_homeDecks) renderDecks(_homeDecks);
+}
 
 function renderDecks(decks) {
   _ensureSideMenu();
@@ -2171,7 +2179,7 @@ function renderDecks(decks) {
   let filteredHtml = '';
 
   for (const vd of virtualDecks) {
-    if (vd.id === 'unfinished') {
+    if (vd.id === 'unfinished' && homeUnfinishedEnabled()) {
       const c = vd.counts;
       const total = (c.new || 0) + (c.learning || 0) + (c.review || 0);
       filteredHtml += `
@@ -3975,6 +3983,67 @@ let _settingsMsg = '';
 let _settingsShortcutsOpen = false;
 let _dayCutoffHour = 5;
 let _settingsPage = null; // null = index; else 'appearance'|'review'|'stories'|'spanish'|'advanced'
+let _settingsQuery = '';  // settings search box on the index page
+let _settingsPages = {};  // last pages object built by renderSettings(), searched by settingsSearch()
+
+// Extra search words per panel (by its <h2> text): German, English, Spanish,
+// Chinese and paraphrases, so a panel is found without knowing its English name.
+const SETTINGS_SEARCH_KEYWORDS = {
+  'Home page': 'startseite start home hauptseite inicio portada pagina principal 首页 主页 vorschlage vorschlag empfehlungen sugerencias recomendaciones 推荐 建议 unfinished unvollstandig unfertig offen ubrig liegengeblieben tarjetas pendientes sin terminar 未完成 剩下 podcast 播客 早咖啡 entdecken',
+  'Theme': 'design thema farbe farben dunkel hell nachtmodus darkmode aussehen dark light night tema modo oscuro claro color apariencia 主题 深色 浅色 夜间 暗色 外观 颜色',
+  'Languages': 'sprachen sprache idiomas idioma lenguas 语言 中文 chinesisch spanisch franzosisch chinese spanish french espanol frances chino ausblenden deaktivieren abschalten ausschalten desactivar ocultar 关闭 隐藏',
+  'Daily card target': 'tagesziel tagliches ziel karten pro tag neue karten anzahl menge auffullen nachfullen limit objetivo diario meta tarjetas por dia nuevas cantidad 每日 目标 每天 卡片 数量 新卡 补充 leech sternliste star list lista creating prozent porcentaje 比例',
+  'Day boundary': 'tagesgrenze tageswechsel uhrzeit mitternacht neuer tag beginnt nachts limite del dia hora medianoche nuevo dia 日界 换日 几点 时间 凌晨 cutoff',
+  'Stages': 'hinweis tipp hilfe stufen hsk cefr niveau horen listening schieberegler pista ayuda etapas niveles escuchar 提示 阶段 听力 滑块 slider a1 a2 b1 b2',
+  'Section defaults': 'abschnitte aufklappen zuklappen offen geschlossen beispiele notizen konjugation etymologie secciones abrir cerrar ejemplos notas conjugacion 区块 展开 折叠 例句 变位 词源',
+  'Again → new sentence': 'wiederholen nochmal falsch neuer satz neu generieren erneuern otra vez nueva frase regenerar 重新生成 新句子 再来 again ki kosten',
+  'Morning pre-generation': 'morgens fruh vorab generieren automatisch geschichte story manana pregenerar automatico historia 早晨 早上 预生成 自动 故事',
+  'Kontextsummary': 'kontext zusammenfassung briefing nachrichten resumen contexto noticias 上下文 总结 简报 新闻',
+  'Irregular verb cards': 'unregelmassige verben konjugation verbformen gewichte zeitformen zeiten personen haufigkeit verbos irregulares conjugacion tiempos verbales pesos personas 不规则动词 变位 时态 权重 人称',
+  'Ask AI prompt': 'ki fragen frage prompt chatgpt kunstliche intelligenz preguntar ia pregunta 问 ai 提问 提示词 人工智能',
+  'Server logs': 'protokoll logs fehler debug fehlersuche registro errores depurar 日志 错误 调试',
+};
+function _settingsNorm(t) {
+  return String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/ß/g, 'ss');
+}
+// Matching panels of all settings pages, best first. Every word of the query
+// must appear (in heading, text, labels or keywords); if no panel has them all,
+// panels matching any word are shown, most matches first.
+function _settingsSearchResults(q) {
+  const words = _settingsNorm(q).split(/[\s,;]+/).filter(Boolean);
+  if (!words.length) return [];
+  const tmp = document.createElement('div');
+  const hits = [];
+  for (const [key, page] of Object.entries(_settingsPages)) {
+    tmp.innerHTML = page.html;
+    for (const panel of tmp.querySelectorAll('.keymap-panel')) {
+      const head = panel.querySelector('.keymap-heading, summary');
+      const title = head ? head.textContent.trim() : page.title;
+      const hay = _settingsNorm([page.title, page.desc, panel.textContent,
+        SETTINGS_SEARCH_KEYWORDS[title] || ''].join(' '));
+      const n = words.filter(w => hay.includes(w)).length;
+      if (n) hits.push({ key, page, html: panel.outerHTML, n, titleHit: _settingsNorm(title).includes(words[0]) });
+    }
+  }
+  const all = hits.filter(h => h.n === words.length);
+  const list = all.length ? all : hits;
+  return list.sort((a, b) => (b.n - a.n) || (b.titleHit - a.titleHit));
+}
+function settingsSearch(q) {
+  _settingsQuery = q;
+  const box = document.getElementById('settings-search-results');
+  const idx = document.querySelector('#view-settings-content .settings-index');
+  if (!box) return;
+  const query = q.trim();
+  if (idx) idx.style.display = query ? 'none' : '';
+  if (!query) { box.innerHTML = ''; return; }
+  const res = _settingsSearchResults(query);
+  box.innerHTML = res.length ? res.map(r => `
+    <button class="settings-search-page" onclick="openSettingsPage('${r.key}')">${r.page.icon} ${r.page.title} ›</button>
+    ${r.html}`).join('') : '<p class="keymap-hint">No setting found.</p>';
+  if (box.querySelector('#pregen-config-body')) _loadPregenSettings();
+}
 function openSettingsPage(key) {
   _settingsPage = key;
   renderSettings();
@@ -3986,6 +4055,7 @@ function openSettings() {
   navPush('settings');
   _capturingAction = null; _settingsMsg = '';
   _settingsPage = null;
+  _settingsQuery = '';
   showView('settings');
   renderSettings();
   _loadDayCutoffHour();
@@ -4434,11 +4504,16 @@ function renderSettings() {
   pages.appearance = { title: 'Appearance', icon: '🎨', desc: 'Theme, languages', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Home page</h2>
-      <p class="keymap-hint">Show today's 声动早咖啡 episode and knowledge-base picks at the top of the home page. Off by default. Saved in this browser only.</p>
+      <p class="keymap-hint">Daily suggestions: today's 声动早咖啡 episode and knowledge-base picks at the top of the home page. Unfinished Cards: the virtual deck with every card left over from earlier days. Both off by default. Saved in this browser only.</p>
       <div class="keymap-row">
         <span class="keymap-label">Daily suggestions</span>
         <label class="switch-wrap"><input type="checkbox" ${homeDiscoveryEnabled() ? 'checked' : ''}
           onchange="setHomeDiscoveryEnabled(this.checked)" style="width:18px;height:18px;cursor:pointer"></label>
+      </div>
+      <div class="keymap-row">
+        <span class="keymap-label">Unfinished Cards deck</span>
+        <label class="switch-wrap"><input type="checkbox" ${homeUnfinishedEnabled() ? 'checked' : ''}
+          onchange="setHomeUnfinishedEnabled(this.checked)" style="width:18px;height:18px;cursor:pointer"></label>
       </div>
     </div>
     <div class="keymap-panel">
@@ -4555,16 +4630,27 @@ function renderSettings() {
       <p class="keymap-hint">View the last lines of the server log (helpful for debugging story generation, TTS, etc). Shortcut: Option+L (Alt+L).</p>
       <button class="keymap-reset-all" onclick="openLogsViewer()">Open logs</button>
     </div>` };
+  _settingsPages = pages;
   const page = pages[_settingsPage];
   const root = document.getElementById('view-settings-content');
   if (!page) {
-    root.innerHTML = `<div class="settings-index">${Object.entries(pages).map(([key, p]) => `
+    const hadFocus = document.activeElement && document.activeElement.id === 'settings-search';
+    root.innerHTML = `<input type="search" id="settings-search" class="opt-input settings-search"
+        placeholder="Search settings – any language (e.g. Startseite, idioma, 主题)"
+        aria-label="Search settings" value="${_escHtml(_settingsQuery)}" oninput="settingsSearch(this.value)">
+    <div id="settings-search-results"></div>
+    <div class="settings-index">${Object.entries(pages).map(([key, p]) => `
       <button class="settings-index-row" onclick="openSettingsPage('${key}')">
         <span class="settings-index-icon">${p.icon}</span>
         <span class="settings-index-text"><span class="settings-index-title">${p.title}</span><span class="settings-index-desc">${p.desc}</span></span>
         <span class="settings-index-chevron">›</span>
       </button>`).join('')}
     </div>`;
+    if (_settingsQuery.trim()) settingsSearch(_settingsQuery);
+    if (hadFocus) {
+      const inp = document.getElementById('settings-search');
+      inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length);
+    }
     return;
   }
   root.innerHTML = `
@@ -20063,6 +20149,28 @@ initHeaderSearch();
 // ============================================================================
 
 let _hcalData = null;          // cached /api/calendar-stats response
+// Language filter shared by both home charts ('' = all languages).
+let _statsLang = localStorage.getItem('statsLang') || '';
+function _statsLangValid() {
+  if (_statsLang && !_availableLangs.includes(_statsLang)) _statsLang = '';
+  return _statsLang;
+}
+function _statsLangParam() { const l = _statsLangValid(); return l ? `&lang=${l}` : ''; }
+// Flag buttons; hidden when only one language is enabled.
+function _statsLangSegHtml() {
+  if (_availableLangs.length < 2) return '';
+  const cur = _statsLangValid();
+  const opts = [['', '🌐', 'All languages'], ..._availableLangs.map(l => [l, _HS_FLAGS[l] || l, _LANG_TAB_LABELS[l] || l])];
+  return `<div class="hcal-seg hcal-seg-lang">${opts.map(([k, lbl, title]) =>
+    `<button class="hcal-seg-btn ${k === cur ? 'active' : ''}" title="${title}" aria-label="${title}"
+             onclick="statsSetLang('${k}')">${lbl}</button>`).join('')}</div>`;
+}
+function statsSetLang(l) {
+  _statsLang = l;
+  try { localStorage.setItem('statsLang', l); } catch {}
+  invalidateHomeCalendar(); invalidateHomeEvolution();
+  initHomeCalendar(); initHomeEvolution();
+}
 let _hcalLoading = false;
 let _hcalMetric = localStorage.getItem('calMetric') || 'retention';
 let _hcalMode   = localStorage.getItem('calMode')   || 'heatmap';
@@ -20104,7 +20212,7 @@ function initHomeCalendar() {
   if (_hcalLoading) return;
   _hcalLoading = true;
   el.innerHTML = '<div class="hcal-loading">Loading calendar…</div>';
-  api('GET', '/api/calendar-stats?days=365')
+  api('GET', `/api/calendar-stats?days=365${_statsLangParam()}`)
     .then(d => { _hcalData = d; _hcalLoading = false; _hcalRender(); })
     .catch(err => {
       _hcalLoading = false;
@@ -20132,6 +20240,7 @@ function _hcalRender() {
     <div class="hcal-controls">
       <div class="hcal-seg hcal-seg-metric">${metricBtns}</div>
       <div class="hcal-seg hcal-seg-mode">${modeBtns}</div>
+      ${_statsLangSegHtml()}
     </div>
     <div class="hcal-body">${_hcalMode === 'heatmap' ? _hcalRenderHeatmap() : _hcalRenderGraph()}</div>
     <div class="hcal-detail" id="hcal-detail">${_hcalRenderDetail()}</div>`;
@@ -20481,8 +20590,7 @@ function initHomeEvolution() {
   if (_evoLoading) return;
   _evoLoading = true;
   el.innerHTML = '<div class="hcal-loading">Loading card evolution…</div>';
-  const langParam = _langScoped() ? `&lang=${activeLang()}` : '';
-  api('GET', `/api/card-evolution?days=365${langParam}`)
+  api('GET', `/api/card-evolution?days=365${_statsLangParam()}`)
     .then(d => { _evoData = d; _evoLoading = false; _evoRender(); })
     .catch(err => {
       _evoLoading = false;
@@ -20574,6 +20682,7 @@ function _evoRender() {
   el.innerHTML = `
     <div class="hcal-controls">
       <div class="hcal-seg">${viewBtns}</div>
+      ${_statsLangSegHtml()}
       <div class="evo-legend">${legend}</div>
     </div>
     <div class="evo-chart-wrap">

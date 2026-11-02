@@ -627,8 +627,8 @@ def get_retention(days: int = 30, lang: str | None = None):
 
 
 @router.get("/api/calendar-stats")
-def get_calendar_stats(days: int = 365, deck_id: int | None = None):
-    return database.get_calendar_stats(days, deck_id)
+def get_calendar_stats(days: int = 365, deck_id: int | None = None, lang: str | None = None):
+    return database.get_calendar_stats(days, deck_id, lang=lang)
 
 
 @router.get("/api/card-evolution")
