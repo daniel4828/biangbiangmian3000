@@ -19,3 +19,4 @@ from .translations import *
 from .home import home_discovery
 from .daily_target import *
 from .conj import *
+from .conj_pull import *

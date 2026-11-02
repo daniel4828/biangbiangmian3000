@@ -1,5 +1,6 @@
 """Fill the Chinese study day to 50 distinct cards without changing presets."""
 import json
+import logging
 from collections import deque
 from datetime import datetime, time, timedelta
 
@@ -162,8 +163,23 @@ def ensure_daily_targets(lang: str | None) -> int:
     """Fill one registered language, or every language when `lang` is None or
     the multi-language sentinel. Disabled languages return 0 immediately."""
     if languages.is_valid_lang(lang):
-        return ensure_daily_target(lang)
-    return sum(ensure_daily_target(l) for l in languages.LANGUAGES)
+        total = ensure_daily_target(lang)
+    else:
+        total = sum(ensure_daily_target(l) for l in languages.LANGUAGES)
+    if lang == 'es' or not languages.is_valid_lang(lang):
+        total += _pull_conj_cards()
+    return total
+
+
+def _pull_conj_cards() -> int:
+    """Pull learned Spanish verb cards forward for due conjugation patterns
+    (#1395). Must never break the daily-target fill."""
+    try:
+        import conj_patterns
+        return conj_patterns.ensure_pullforward('es')
+    except Exception as e:
+        logging.getLogger(__name__).warning('conjugation pull-forward failed - %s', e)
+        return 0
 
 
 def ensure_daily_target(lang: str = 'zh') -> int:
@@ -280,8 +296,14 @@ def ensure_daily_target(lang: str = 'zh') -> int:
         usable = []
         category_order = {'listening': 0, 'reading': 1, 'creating': 2}
         state_order = {'learning': 0, 'relearn': 0, 'review': 1, 'new': 2}
+        # #1395: creating of an irregular Spanish verb is not buried by
+        # reading/listening (same rule as bury_siblings / story suppression).
+        from .cards import _irregular_verb_word_ids
+        irregular_words = _irregular_verb_word_ids(
+            conn, {c['word_id'] for c in eligible if c['category'] == 'creating'}) if lang == 'es' else set()
         for c in sorted(eligible, key=lambda r: (state_order.get(r['state'], 3), category_order.get(r['category'], 3), r['id'])):
-            if c['state'] in suppressed_states.get(c['word_id'], set()):
+            if (c['state'] in suppressed_states.get(c['word_id'], set())
+                    and not (c['category'] == 'creating' and c['word_id'] in irregular_words)):
                 continue
             usable.append(c)
             p = presets[deck_map[c['deck_id']]['preset_id']]

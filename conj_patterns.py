@@ -498,6 +498,19 @@ def validate_settings(body) -> dict:
             raise ValueError(
                 f"'desired_retention' must be a number between {MIN_RETENTION} and {MAX_RETENTION}")
         out["desired_retention"] = float(v)
+    if "pull_per_day" in body:
+        v = body["pull_per_day"]
+        if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= MAX_PULL_PER_DAY:
+            raise ValueError(f"'pull_per_day' must be an integer between 0 and {MAX_PULL_PER_DAY}")
+        out["pull_per_day"] = v
+    if "irregular_creating_unburied" in body:
+        v = body["irregular_creating_unburied"]
+        if isinstance(v, bool):
+            out["irregular_creating_unburied"] = v
+        elif isinstance(v, int) and v in (0, 1):
+            out["irregular_creating_unburied"] = bool(v)
+        else:
+            raise ValueError("'irregular_creating_unburied' must be true or false")
     return out
 
 
@@ -509,6 +522,32 @@ def save_settings(clean: dict) -> None:
         database.set_app_setting(KEY_NEW_PER_DAY, str(int(clean["new_per_day"])))
     if "desired_retention" in clean:
         database.set_app_setting(KEY_RETENTION, repr(float(clean["desired_retention"])))
+    if "pull_per_day" in clean:
+        database.set_app_setting(KEY_PULL_PER_DAY, str(int(clean["pull_per_day"])))
+    if "irregular_creating_unburied" in clean:
+        database.set_app_setting(KEY_NO_BURY, "1" if clean["irregular_creating_unburied"] else "0")
+
+
+def is_irregular_card_word(word_zh: str, lang: str = LANG) -> bool:
+    """True for an irregular Spanish verb card (plain verb or a parsed form
+    card); used by the bury rules (#1395). Never raises."""
+    try:
+        if lang != LANG:
+            return False
+        if verb_slots.parse_form_card(word_zh):
+            return True
+        return verb_slots.verb_regularity(word_zh, lang) == "irregular"
+    except Exception:
+        return False
+
+
+def irregular_no_bury_active() -> bool:
+    """Setting on (default) -> reading/listening must not bury creating of an
+    irregular verb. Never raises (False on error = old behaviour)."""
+    try:
+        return bool(settings()["irregular_creating_unburied"])
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +671,134 @@ def pattern_status(lang: str, key: str, mode: str, states: dict, stats: dict,
             "reps": int((row or {}).get("reps") or 0),
             "lapses": int((row or {}).get("lapses") or 0),
             "total": int(st.get("total") or 0), "correct": int(st.get("correct") or 0)}
+
+
+# ---------------------------------------------------------------------------
+# Pull-forward: a due pattern counts like a due card
+# ---------------------------------------------------------------------------
+
+def _word_pattern_keys(word_zh: str, cfg: dict, w_tense: dict, w_person: dict,
+                       cache: dict) -> frozenset:
+    """Pattern keys the verb card `word_zh` can produce in a story: the same
+    option set as verb_slots.assign_slots (enabled slots with weight > 0; form
+    cards only their fixed tense). Empty for any non-verb. Cached per word."""
+    if word_zh in cache:
+        return cache[word_zh]
+    keys = set()
+    try:
+        parsed = verb_slots.parse_form_card(word_zh)
+        if parsed:
+            lemma, tense = parsed
+            for person in PERSONS:
+                if w_person.get(person, 1.0) > 0:
+                    pat = pattern_for(lemma, tense, person)
+                    if pat:
+                        keys.add(pat["key"])
+        elif verb_slots.is_slottable_verb(word_zh, LANG):
+            lemma = word_zh.strip().lower()
+            for tense in cfg["tenses"]:
+                for person in cfg["persons"]:
+                    if w_tense.get(tense, 1.0) * w_person.get(person, 1.0) <= 0:
+                        continue
+                    if verb_slots.target_form(lemma, tense, person, LANG) is None:
+                        continue
+                    pat = pattern_for(lemma, tense, person)
+                    if pat:
+                        keys.add(pat["key"])
+    except Exception as e:
+        logger.debug("pattern keys of %r failed — %s", word_zh, e)
+    cache[word_zh] = frozenset(keys)
+    return cache[word_zh]
+
+
+def ensure_pullforward(lang: str = LANG) -> int:
+    """Pull learned verb cards forward to today for due patterns nothing else
+    covers (settings: es_conj_pull_per_day, 0 = off). Returns the number of
+    cards pulled. Only `cards.due` changes. Idempotent per Anki day (batch in
+    app_settings es_conj_pull_batch)."""
+    if lang != LANG:
+        return 0
+    s = settings()
+    limit = s["pull_per_day"]
+    cfg = verb_slots.config(lang)
+    if not s["enabled"] or limit <= 0 or not cfg:
+        return 0
+    ctx = database.load_pull_context(lang, KEY_PULL_BATCH)
+    if ctx is None:
+        return 0
+    budget = limit - len(ctx["batch_ids"])
+    if budget <= 0:
+        return 0
+    today = ctx["today"]
+    states = database.get_conj_states(lang)
+    due = [(0 if mode == "prod" else 1, row["due"], key, mode)
+           for (key, mode), row in states.items()
+           if row.get("state") not in (None, "new") and row.get("due")
+           and row["due"][:10] <= today]
+    if not due:
+        return 0
+    due.sort()
+    due_list = [(key, mode) for _, _, key, mode in due]
+
+    wts = verb_slots.weights(lang)
+    w_tense, w_person = wts.get("tenses") or {}, wts.get("persons") or {}
+    cache: dict = {}
+
+    def keys_of(word_zh):
+        return _word_pattern_keys(word_zh, cfg, w_tense, w_person, cache)
+
+    cards = ctx["cards"]
+    by_id = {c["id"]: c for c in cards}
+    tomorrow = ctx["tomorrow_cutoff"]
+
+    def due_today(c):
+        d = c["due"] or ""
+        if "T" in d:
+            return c["state"] in ("learning", "relearn") and d < tomorrow
+        return d <= today
+
+    # Cards that already put a pattern in front of the user today
+    covering = [c for c in cards if c["eligible"] and due_today(c)]
+    covering += [by_id[r["id"]] for r in ctx["reviewed"] if r["id"] in by_id]
+    used_words = {c["word_id"] for c in covering}
+    used_words |= {by_id[i]["word_id"] for i in ctx["batch_ids"] if i in by_id}
+    covered: set = set()
+    # pulled cards first: they were chosen for a pattern, keep that stable
+    for c in sorted({c["id"]: c for c in covering}.values(),
+                    key=lambda c: (c["id"] not in ctx["batch_ids"], c["id"])):
+        mode = mode_for_category(c["category"])
+        keys = keys_of(c["word_zh"])
+        if not keys:
+            continue
+        for key, m in due_list:
+            if m == mode and key in keys and (key, m) not in covered:
+                covered.add((key, m))
+                break
+
+    pool = {"prod": [], "recog": []}
+    for c in cards:
+        d = c["due"] or ""
+        if (c["eligible"] and c["state"] == "review" and "T" not in d and d > today
+                and c["word_id"] not in used_words):
+            pool[mode_for_category(c["category"])].append(c)
+    for lst in pool.values():
+        lst.sort(key=lambda c: (c["due"], c["id"]))
+
+    pulls: list[int] = []
+    for key, mode in due_list:
+        if budget <= 0:
+            break
+        if (key, mode) in covered:
+            continue
+        for c in pool[mode]:
+            if c["word_id"] in used_words:
+                continue
+            if key in keys_of(c["word_zh"]):
+                pulls.append(c["id"])
+                used_words.add(c["word_id"])
+                budget -= 1
+                break
+    return database.commit_pulls(lang, KEY_PULL_BATCH, pulls, limit)
 
 
 # ---------------------------------------------------------------------------

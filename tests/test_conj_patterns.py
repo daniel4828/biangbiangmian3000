@@ -154,7 +154,8 @@ def test_catalog_deterministic_and_complete(real_lex):
 
 def test_settings_defaults_and_validation(tmp_db):
     assert conj_patterns.settings() == {"enabled": True, "new_per_day": 3,
-                                        "desired_retention": 0.90}
+                                        "desired_retention": 0.90, "pull_per_day": 10,
+                                        "irregular_creating_unburied": True}
     clean = conj_patterns.validate_settings({"new_per_day": 5})
     assert clean == {"new_per_day": 5}
     conj_patterns.save_settings({"enabled": False, "new_per_day": 5, "desired_retention": 0.85})
@@ -482,12 +483,14 @@ def test_review_conj_failure_never_fails_vocab_rating(small_lex, client, clock, 
 
 def test_conj_settings_endpoints(client):
     assert client.get("/api/es/conj-settings").json() == {
-        "enabled": True, "new_per_day": 3, "desired_retention": 0.9}
+        "enabled": True, "new_per_day": 3, "desired_retention": 0.9,
+        "pull_per_day": 10, "irregular_creating_unburied": True}
     r = client.put("/api/es/conj-settings", json={"new_per_day": 7})
     assert r.status_code == 200 and r.json()["new_per_day"] == 7
     assert r.json()["enabled"] is True
     r = client.put("/api/es/conj-settings", json={"enabled": False, "desired_retention": 0.85})
-    assert r.json() == {"enabled": False, "new_per_day": 7, "desired_retention": 0.85}
+    assert r.json() == {"enabled": False, "new_per_day": 7, "desired_retention": 0.85,
+                        "pull_per_day": 10, "irregular_creating_unburied": True}
     for bad in ({"new_per_day": 99}, {"desired_retention": 0.5}, {"enabled": "yes"},
                 {"new_per_day": True}):
         assert client.put("/api/es/conj-settings", json=bad).status_code == 400

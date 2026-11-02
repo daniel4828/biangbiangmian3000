@@ -351,7 +351,27 @@ def _get_virtually_buried_word_ids(
               )""",
         (*word_ids, category, category, today, now, today, today),
     ).fetchall()
-    return {r["word_id"] for r in rows}
+    suppressed = {r["word_id"] for r in rows}
+    if suppressed and category == "creating":
+        # #1395: irregular Spanish verbs - reading/listening don't bury creating
+        suppressed -= _irregular_verb_word_ids(conn, suppressed)
+    return suppressed
+
+
+def _irregular_verb_word_ids(conn, word_ids) -> set[int]:
+    """Subset of word_ids that are irregular Spanish verbs, empty while the
+    es_conj_irregular_no_bury setting is off (#1395)."""
+    if not word_ids:
+        return set()
+    import conj_patterns
+    if not conj_patterns.irregular_no_bury_active():
+        return set()
+    ids = list(word_ids)
+    ph = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT id, word_zh FROM entries WHERE lang = 'es' AND id IN ({ph})", ids
+    ).fetchall()
+    return {r["id"] for r in rows if conj_patterns.is_irregular_card_word(r["word_zh"])}
 
 
 def resolve_bury_flags(preset: dict) -> tuple[bool, bool, bool]:
@@ -1709,9 +1729,12 @@ def bury_siblings(word_id: int, reviewed_category: str, *,
         return
     today = anki_today().isoformat()
     conn = get_db()
+    extra = ""
+    if reviewed_category in ("reading", "listening") and _irregular_verb_word_ids(conn, {word_id}):
+        extra = " AND category != 'creating'"  # #1395: irregular verb keeps creating
     conn.execute(
         f"UPDATE cards SET buried_until = ? WHERE word_id = ? AND category != ?"
-        f" AND state IN ({','.join(states)})",
+        f" AND state IN ({','.join(states)}){extra}",
         (today, word_id, reviewed_category),
     )
     conn.commit()
