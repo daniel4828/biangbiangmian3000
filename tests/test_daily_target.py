@@ -505,3 +505,31 @@ def test_creating_pct_api_validation():
     assert client.put('/api/daily-target', json={'lang': 'es', 'creating_pct': None}).json()['creating_pct'] is None
     for bad in (-1, 101, 2.5, '50', True):
         assert client.put('/api/daily-target', json={'lang': 'es', 'creating_pct': bad}).status_code == 400
+
+
+def test_category_limit_zero_removes_todays_auto_cards_of_that_category(es_lexicon):
+    """Neue Karten/Tag = 0 für Listening nimmt bereits aufgefüllte Listening-Karten raus."""
+    for i in range(6):
+        card(f'palabra{i}', 'saved', category='listening', lang='es')
+        card(f'cosa{i}', 'saved', category='creating', lang='es')
+    client = TestClient(main.app)
+    assert client.put('/api/daily-target', json={'lang': 'es', 'enabled': True, 'target': 4}).status_code == 200
+    database.ensure_daily_target('es')
+    conn = database.get_db()
+    listening = [r['id'] for r in conn.execute(
+        "SELECT id FROM cards WHERE category='listening' AND state='new'")]
+    assert listening
+    did = conn.execute('SELECT deck_id FROM cards WHERE id=?', (listening[0],)).fetchone()[0]
+    pid = conn.execute('SELECT preset_id FROM decks WHERE id=?', (did,)).fetchone()[0]
+    conn.execute('INSERT INTO preset_category_overrides(preset_id,category,new_per_day) VALUES(?,?,0)',
+                 (pid, 'listening'))
+    conn.commit()
+    conn.close()
+    assert not (set(listening) & database.daily_target_card_ids())
+    database.ensure_daily_target('es')
+    ids = database.daily_target_card_ids()
+    conn = database.get_db()
+    cats = {r[0] for r in conn.execute(
+        f"SELECT category FROM cards WHERE id IN ({','.join(map(str, ids))})")}
+    conn.close()
+    assert cats == {'creating'} and len(ids) == 4

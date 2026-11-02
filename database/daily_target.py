@@ -109,7 +109,37 @@ def _read_setting(conn, key, default=None):
 
 def _batch_ids(conn, today, lang: str = 'zh'):
     batch = json.loads(_read_setting(conn, _key(_BATCH_KEY, lang), '{}'))
-    return set(batch.get('ids', [])) if batch.get('day') == today else set()
+    ids = set(batch.get('ids', [])) if batch.get('day') == today else set()
+    if not ids:
+        return ids
+    # Ein Kategorie-Limit „neue Karten/Tag = 0" gilt auch für aufgefüllte
+    # Karten: Sie fallen dann aus der Reservierung und unterliegen wieder dem
+    # normalen Limit (also 0). Ohne das bliebe z. B. Listening nach dem
+    # Herabsetzen auf 0 bei 30 stehen.
+    ph = ','.join('?' * len(ids))
+    rows = conn.execute(f'SELECT id, deck_id, category FROM cards WHERE id IN ({ph})',
+                        [i for i in ids]).fetchall()
+    return {r['id'] for r in rows
+            if not _new_limit_is_zero(conn, r['deck_id'], r['category'])} | (
+        ids - {r['id'] for r in rows})
+
+
+def _new_limit_is_zero(conn, deck_id, category) -> bool:
+    """True, wenn das wirksame new_per_day dieser Kategorie im Preset des
+    Blatt-Decks (inkl. Kategorie-Bindung #1372) 0 ist. Das Wurzel-Deck „All"
+    zählt bewusst nicht (siehe test_root_category_override_…)."""
+    deck = conn.execute('SELECT id, lang, preset_id FROM decks WHERE id=?', (deck_id,)).fetchone()
+    if not deck:
+        return False
+    bound = conn.execute('SELECT preset_id FROM category_presets WHERE lang=? AND category=?',
+                         (deck['lang'] or 'zh', category)).fetchone()
+    pid = bound['preset_id'] if bound else deck['preset_id']
+    o = conn.execute('SELECT new_per_day FROM preset_category_overrides '
+                     'WHERE preset_id=? AND category=?', (pid, category)).fetchone()
+    if o and o['new_per_day'] is not None:
+        return o['new_per_day'] == 0
+    p = conn.execute('SELECT new_per_day FROM deck_presets WHERE id=?', (pid,)).fetchone()
+    return bool(p) and p['new_per_day'] == 0
 
 
 def daily_target_card_ids(conn=None) -> set[int]:
@@ -414,7 +444,8 @@ def ensure_daily_target(lang: str = 'zh') -> int:
             if target is None:
                 break
             target_preset = conn.execute('SELECT p.* FROM decks d JOIN deck_presets p ON p.id=d.preset_id WHERE d.id=?', (target,)).fetchone()
-            if not target_preset[c['category'] + '_enabled']:
+            if (not target_preset[c['category'] + '_enabled']
+                    or _new_limit_is_zero(conn, target, c['category'])):
                 excluded_words.add(c['word_id'])
                 continue
             conn.execute(
