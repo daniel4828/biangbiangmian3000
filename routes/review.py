@@ -277,7 +277,8 @@ def submit_review(card_id: int, rating: int, user_response: str | None = None,
                   root_deck_id: int | None = None, unfinished_mode: bool = False,
                   parent_deck_id: int | None = None, duration_ms: int | None = None,
                   next_note: str | None = None, unfinished_scope: str = "unfinished",
-                  lang: str | None = None):
+                  lang: str | None = None, conj_ok: int | None = None,
+                  sentence_id: int | None = None):
     _t0 = time.perf_counter()
     card_before = database.get_card(card_id)
     # Persist the free-text "note for next time" the user left on this card
@@ -288,6 +289,20 @@ def submit_review(card_id: int, rating: int, user_response: str | None = None,
                                        duration_ms=duration_ms)
     deck_id = updated["deck_id"]
     cat     = updated["category"]
+
+    # Conjugation rating (#1395): separate scheduler, never allowed to fail the
+    # vocabulary rating that was just saved.
+    conj_result, conj_undo, conj_error = None, None, None
+    if conj_ok is not None and sentence_id is not None:
+        try:
+            rec = _record_conjugation(card_before, bool(conj_ok), sentence_id)
+            if rec:
+                conj_undo = rec.pop("undo")
+                conj_result = rec
+        except Exception as e:
+            logger.exception("conjugation rating failed (card=#%d sentence=#%s)",
+                             card_id, sentence_id)
+            conj_error = str(e)
 
     # Rated Again → regenerate a fresh sentence for this word in the background,
     # so it shows something new when the card reappears in a few minutes.
@@ -389,6 +404,7 @@ def submit_review(card_id: int, rating: int, user_response: str | None = None,
         "deck_id":            deck_id,
         "category":           cat,
         "siblings_snapshot":  siblings_snapshot,
+        "conj_undo":          conj_undo,
     })
 
     if unfinished_mode:
@@ -468,7 +484,42 @@ def submit_review(card_id: int, rating: int, user_response: str | None = None,
         logger.warning("submit_review SLOW: %.0f ms (card=#%d)", _elapsed_ms, card_id)
     else:
         logger.info("submit_review: %.0f ms", _elapsed_ms)
-    return {"next_card": next_card, "counts": counts, "transition": transition}
+    resp = {"next_card": next_card, "counts": counts, "transition": transition,
+            "conj": conj_result}
+    if conj_error:
+        resp["conj_error"] = conj_error
+    return resp
+
+
+def _record_conjugation(card_before: dict, ok: bool, sentence_id: int) -> dict | None:
+    """Rate the conjugation pattern of the sentence the card was shown with
+    (#1395). None (with an info log) when there is nothing to rate: not a
+    Spanish card, switched off, no verb slot, or no pattern for it."""
+    import conj_patterns
+    import verb_slots
+
+    if (card_before.get("word_lang") or "zh") != "es":
+        logger.info("conj rating skipped: card is not Spanish")
+        return None
+    if not conj_patterns.settings()["enabled"]:
+        logger.info("conj rating skipped: switched off")
+        return None
+    sentence = database.get_story_sentence(sentence_id)
+    slot = (sentence or {}).get("verb_slot")
+    if not slot:
+        logger.info("conj rating skipped: sentence #%s has no verb slot", sentence_id)
+        return None
+    word = card_before.get("word_zh")
+    lemma = verb_slots._slot_lemma(word, "es")
+    pat = conj_patterns.slot_pattern(word, slot, "es")
+    if not lemma or not pat:
+        logger.info("conj rating skipped: no pattern for %r / %s", word, slot)
+        return None
+    tense, _, person = slot.partition(":")
+    return conj_patterns.record(
+        "es", pat["key"], conj_patterns.mode_for_category(card_before.get("category")), ok,
+        card_id=card_before["id"], sentence_id=sentence_id, slot=slot, lemma=lemma,
+        form=verb_slots.target_form(lemma, tense, person, "es"))
 
 
 @router.get("/api/again-regen-enabled")
@@ -571,6 +622,9 @@ def undo_review():
         last_review=cb.get("last_review"),
     )
     database.delete_review_log(entry["log_id"])
+    if entry.get("conj_undo"):
+        import conj_patterns
+        conj_patterns.undo_record(entry["conj_undo"])
 
     # Restore siblings' buried_until to their pre-review values
     for sib in entry.get("siblings_snapshot", []):

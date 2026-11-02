@@ -37,32 +37,38 @@ def get_word_detail(word_id: int):
             if regularity:
                 word["verb_regularity"] = regularity
                 if word.get("conjugations"):
-                    _add_conjugation_stats(word)
+                    _add_conjugation_patterns(word)
     return word
 
 
-def _add_conjugation_stats(word: dict) -> None:
-    """Practice counts for the conjugation table (#1356). Never raises: any
-    failure just means the table is shown without counts."""
+def _add_conjugation_patterns(word: dict) -> None:
+    """Attach the conjugation pattern (#1395) and its recognition/production
+    status to every row of the conjugation table: row["pattern"] = {key, label,
+    kind, recog, prod}. Rows for tenses that are never drilled (participle,
+    imperative, ...) get none. Never raises: any failure just means the table
+    is shown without patterns."""
     try:
-        counts = verb_slots.practice_counts(word.get("word_zh"), word.get("lang"))
-        if not counts:
+        import conj_patterns
+        if word.get("lang") != "es":
             return
-        stats = {}
+        states = database.get_conj_states("es")
+        stats = database.conj_log_stats("es")
+        today = database.anki_today().isoformat()
         for row in word["conjugations"]:
-            label = row.get("tense")
-            code = verb_slots.tense_code_for_label(label)
-            if code is None or code not in counts:
-                continue
-            stats.setdefault(label, {"total": counts[code]["total"],
-                                     "scope": counts[code]["scope"], "code": code})
+            tense = verb_slots.tense_code_for_label(row.get("tense"))
             person = verb_slots.person_code_for_label(row.get("person"))
-            if person is not None:
-                row["practice_count"] = counts[code]["persons"].get(person, 0)
-        if stats:
-            word["conjugation_stats"] = stats
+            if tense is None or person is None:
+                continue
+            pat = conj_patterns.pattern_for(word.get("word_zh"), tense, person, "es")
+            if not pat:
+                continue
+            row["pattern"] = {
+                "key": pat["key"], "label": pat["label"], "kind": pat["kind"],
+                "recog": conj_patterns.pattern_status("es", pat["key"], "recog", states, stats, today),
+                "prod": conj_patterns.pattern_status("es", pat["key"], "prod", states, stats, today),
+            }
     except Exception as e:
-        logger.warning("conjugation stats failed for %r — %s", word.get("word_zh"), e)
+        logger.warning("conjugation patterns failed for %r — %s", word.get("word_zh"), e)
 
 
 @router.delete("/api/word/{word_id}")

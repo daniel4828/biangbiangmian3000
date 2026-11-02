@@ -405,6 +405,15 @@
               <button class="r-btn r-good"  onclick="rate(3)">Good<small id="int-3"></small></button>
               <button class="r-btn r-easy"  onclick="rate(4)">Easy<small id="int-4"></small></button>
             </div>
+            <!-- Optional second rating: conjugation pattern right/wrong (Spanish verb slots) -->
+            <div class="conj-rating-row" id="conj-rating-row" style="display:none">
+              <div class="conj-rating-label">
+                <span>Konjugation</span>
+                <small id="conj-rating-pattern"></small>
+              </div>
+              <button type="button" class="conj-r-btn conj-r-fail" id="conj-btn-fail" onclick="setConjChoice(false)">✗ falsch</button>
+              <button type="button" class="conj-r-btn conj-r-ok" id="conj-btn-ok" onclick="setConjChoice(true)">✓ richtig</button>
+            </div>
             <!-- Free-text note carried over to the next time this card is seen -->
             <div class="next-note-row" id="next-note-row">
               <textarea id="next-note-input" class="next-note-input" rows="1"
