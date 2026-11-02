@@ -6288,26 +6288,51 @@ table.fsrs-table td.ivl { font-weight: 700; }
   transition: transform 0.15s;
 }
 .conj-tense[open] .conj-chevron { transform: rotate(90deg); }
-/* Practice counts (#1356) */
-.conj-count {
-  flex-shrink: 0;
-  font-size: 11px;
-  line-height: 1.4;
-  padding: 0 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.conj-count-shared { border-style: dashed; font-style: italic; }
-.conj-cell-count {
+/* Pattern status dots (#1395) */
+.conj-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
   margin-left: 6px;
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  vertical-align: middle;
+  flex-shrink: 0;
 }
-.conj-row > .conj-cell-count { margin-left: auto; }
-.conj-count.is-zero, .conj-cell-count.is-zero { opacity: 0.45; }
+.conj-row > .conj-dot { margin-left: auto; }
+.conj-dot-new      { background: transparent; border-color: var(--muted); }
+.conj-dot-due      { background: #ef4444; border-color: #ef4444; }
+.conj-dot-learning { background: #f59e0b; border-color: #f59e0b; }
+.conj-dot-review   { background: #22c55e; border-color: #22c55e; }
+
+/* Conjugation rating row on the card back (#1395) */
+.conj-rating-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+}
+.conj-rating-label { display: flex; flex-direction: column; min-width: 0; font-size: 13px; color: var(--text); }
+.conj-rating-label small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conj-r-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+.conj-r-btn.conj-r-fail.active { background: #ef4444; border-color: #ef4444; color: #fff; }
+.conj-r-btn.conj-r-ok.active   { background: #22c55e; border-color: #22c55e; color: #fff; }
+
+/* Settings: pattern table (#1395) */
+.conj-pat-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+.conj-pat-table th, .conj-pat-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.conj-pat-table small { color: var(--muted); }
+.conj-pat-tense td { font-weight: 600; background: var(--bg); color: var(--text); }
+.conj-st-new { color: var(--muted); }
+.conj-st-due { color: #ef4444; font-weight: 600; }
 .conj-tense-body { padding: 8px 12px 10px; }
 .conj-pairs {
   display: grid;

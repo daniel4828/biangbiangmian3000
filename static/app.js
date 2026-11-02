@@ -264,6 +264,8 @@ const KEYMAP_DEFAULTS = {
   'restart-server':    'R',
   'star-sentence':     'F',
   'flag-sentence':     'G',
+  'conj-ok':           'u',
+  'conj-fail':         'i',
   'fsrs-inspector':    'S',
   // word-detail only
   relations:      'r',
@@ -316,6 +318,8 @@ const KEYMAP_ACTIONS = [
   { id: 'restart-server',    label: 'Restart server',             scope: 'review' },
   { id: 'star-sentence',     label: 'Star this sentence',         scope: 'review' },
   { id: 'flag-sentence',     label: 'Flag this sentence',         scope: 'review' },
+  { id: 'conj-ok',           label: 'Konjugation richtig',        scope: 'review' },
+  { id: 'conj-fail',         label: 'Konjugation falsch',         scope: 'review' },
   { id: 'fsrs-inspector',    label: 'FSRS scheduler inspector',   scope: 'review' },
 
   { id: 'relations',    label: 'Toggle relations',             scope: 'word-detail' },
@@ -3865,7 +3869,112 @@ function openSettings() {
   _loadLangSettings();
   _loadDailyTarget();
   _loadEsSlotWeights();
+  _loadEsConj();
   _loadSentencePrompt();
+}
+
+// ── Spanish conjugation pattern cards (Musterkarten, #1395) ─────────────────
+let _esConjSettings = null;      // GET /api/es/conj-settings
+let _esConjPatterns = null;      // GET /api/es/conj-patterns
+let _esConjSettingsError = '';
+let _esConjPatternsError = '';
+let _esConjBusy = false;
+
+async function _loadEsConj() {
+  try {
+    _esConjSettings = await api('GET', '/api/es/conj-settings');
+    _esConjSettingsError = '';
+  } catch (e) {
+    _esConjSettings = null;
+    _esConjSettingsError = e.message;
+  }
+  try {
+    _esConjPatterns = await api('GET', '/api/es/conj-patterns');
+    _esConjPatternsError = '';
+  } catch (e) {
+    _esConjPatterns = null;
+    _esConjPatternsError = e.message;
+  }
+  renderSettings();
+}
+
+function _conjStatusText(st) {
+  if (!st) return '–';
+  if (st.state === 'new') return 'neu';
+  const dueTxt = (st.due_in_days != null && st.due_in_days <= 0) ? 'fällig' : `in ${Number(st.due_in_days)} T`;
+  const stats = st.total ? ` · ${Number(st.correct)}/${Number(st.total)} ✓` : '';
+  return dueTxt + stats;
+}
+
+function _conjCellHtml(st) {
+  if (!st) return '–';
+  if (st.state === 'new') return '<span class="conj-st-new">neu</span>';
+  const due = st.due_in_days != null && st.due_in_days <= 0;
+  const main = due ? '<span class="conj-st-due">fällig</span>' : `in ${Number(st.due_in_days)} T`;
+  const small = st.total ? ` <small>${Number(st.correct)}/${Number(st.total)} ✓${st.lapses > 0 ? ` · ${Number(st.lapses)} ✗` : ''}</small>` : '';
+  return main + small;
+}
+
+function _esConjSettingsHtml() {
+  if (_esConjSettingsError) return `<div class="keymap-label">${_escHtml(_esConjSettingsError)}</div>`;
+  if (!_esConjSettings) return '<div class="keymap-label">Lädt…</div>';
+  const s = _esConjSettings;
+  const dis = _esConjBusy ? 'disabled' : '';
+  return `
+    <div class="keymap-row">
+      <span class="keymap-label">Konjugation zusätzlich bewerten</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${s.enabled ? 'checked' : ''} ${dis}
+               onchange="saveEsConjSettings({enabled: this.checked})" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    <div class="keymap-row">
+      <span class="keymap-label">Neue Muster pro Tag</span>
+      <input type="number" min="0" max="50" step="1" value="${_escHtml(String(s.new_per_day))}" style="width:80px" ${dis}
+             onchange="saveEsConjSettings({new_per_day: Number(this.value)})">
+    </div>
+    <div class="keymap-row">
+      <span class="keymap-label">Ziel-Behaltensrate</span>
+      <input type="number" min="0.80" max="0.97" step="0.01" value="${_escHtml(String(s.desired_retention))}" style="width:80px" ${dis}
+             onchange="saveEsConjSettings({desired_retention: Number(this.value)})">
+    </div>`;
+}
+
+function _esConjPatternsHtml() {
+  if (_esConjPatternsError) return `<div class="keymap-label">${_escHtml(_esConjPatternsError)}</div>`;
+  if (!_esConjPatterns) return '<div class="keymap-label">Lädt…</div>';
+  const pats = _esConjPatterns.patterns || [];
+  if (!pats.length) return '<div class="keymap-label">Keine Muster.</div>';
+  let rows = '';
+  let lastTense = null;
+  for (const p of pats) {
+    if (p.tense !== lastTense) {
+      lastTense = p.tense;
+      rows += `<tr class="conj-pat-tense"><td colspan="3">${_escHtml(String(p.tense || ''))}</td></tr>`;
+    }
+    rows += `<tr>
+      <td>${_escHtml(p.label)}</td>
+      <td>${_conjCellHtml(p.recog)}</td>
+      <td>${_conjCellHtml(p.prod)}</td>
+    </tr>`;
+  }
+  return `<table class="conj-pat-table">
+    <thead><tr><th>Muster</th><th>Erkennen</th><th>Bilden</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+async function saveEsConjSettings(partial) {
+  if (_esConjBusy) return;
+  _esConjBusy = true;
+  try {
+    _esConjSettings = await api('PUT', '/api/es/conj-settings', partial);
+  } catch (e) {
+    showError('Konjugations-Einstellung konnte nicht gespeichert werden: ' + e.message);
+    try { _esConjSettings = await api('GET', '/api/es/conj-settings'); } catch (_) { /* keep old */ }
+  } finally {
+    _esConjBusy = false;
+    renderSettings();
+  }
 }
 
 // ── Spanish verb slot weights (issue #1306) ─────────────────────────────────
@@ -4382,6 +4491,12 @@ function renderSettings() {
     </div>` };
   pages.spanish = { title: 'Spanish', icon: '🇪🇸', desc: 'Irregular verb cards, verb slot weights', html: `
     <div class="keymap-panel">
+      <h2 class="keymap-heading">Konjugations-Musterkarten</h2>
+      <p class="keymap-hint">Bei Verben mit Konjugations-Slot bewertest du nach dem Aufdecken zusätzlich die Konjugation (✓/✗, Tasten u/i). Geplant werden Muster, nicht Verben: Ein falsches Muster kommt in ein paar Tagen mit einem anderen Verb wieder. Erkennen (Reading + Listening) und Bilden (Creating) werden getrennt geplant – Listening beeinflusst Creating nicht.</p>
+      ${_esConjSettingsHtml()}
+      ${_esConjPatternsHtml()}
+    </div>
+    <div class="keymap-panel">
       <h2 class="keymap-heading">Irregular verb cards</h2>
       <p class="keymap-hint">One card per irregular verb × tense, ~60 cards, no AI cost; they land in Español ★ List — promote them from Browse.</p>
       <div class="keymap-row">
@@ -4389,7 +4504,7 @@ function renderSettings() {
         <span id="es-irregular-msg" class="keymap-label"></span>
       </div>
       <h3 class="keymap-heading">Verb slot weights</h3>
-      <p class="keymap-hint">Higher = appears more often. 0 = never. Defaults from subtitle corpus frequencies.</p>
+      <p class="keymap-hint">Higher = appears more often. 0 = never. Defaults from subtitle corpus frequencies. Gewichte bestimmen auch, in welcher Reihenfolge neue Muster eingeführt werden (höheres Gewicht zuerst).</p>
       ${_esSlotWeightsHtml()}
     </div>` };
   pages.askai = { title: 'Ask AI', icon: '💬', desc: 'Prompt for questions about review sentences', html: `
@@ -12006,6 +12121,7 @@ async function _doStartReviewUnfinished(topic, maxHsk, model, grammarFocus, gram
 function loadCard(c, counts) {
   card = c;
   wordDetails = null;
+  _resetConjRating();   // no conjugation choice may leak to the next card
   renderReviewCatRow(); // clear circles immediately when new card loads
 
   // In unfinished mode each card may belong to a different deck/category
@@ -13354,11 +13470,27 @@ function renderConjugationSection(container, wordData) {
     byTense.get(c.tense).push(c);
   });
   const bodyId = el.id + '-body';
-  // #1356: practice counts per tense / per form (absent → render as before).
-  const stats = (wordData ?? wordDetails)?.conjugation_stats || {};
-  const countSpan = c => c.practice_count != null
-    ? `<span class="conj-cell-count${c.practice_count === 0 ? ' is-zero' : ''}" title="Practised ${Number(c.practice_count)}×">${Number(c.practice_count)}</span>`
-    : '';
+  // Pattern status dot (#1395): colour = Bilden (prod) status of the pattern
+  // this form belongs to; tooltip shows both modes. No pattern → no dot.
+  const stText = st => {
+    if (!st) return '–';
+    if (st.state === 'new') return 'neu';
+    const d = (st.due_in_days != null && st.due_in_days <= 0) ? 'fällig' : `in ${Number(st.due_in_days)} T`;
+    return d + (st.total ? ` · ${Number(st.correct)}/${Number(st.total)} ✓` : '');
+  };
+  const countSpan = c => {
+    const p = c.pattern;
+    if (!p) return '';
+    const prod = p.prod || {};
+    let mod = 'conj-dot-new';
+    if (prod.state !== 'new') {
+      if (prod.due_in_days != null && prod.due_in_days <= 0) mod = 'conj-dot-due';
+      else if (prod.state === 'learning') mod = 'conj-dot-learning';
+      else mod = 'conj-dot-review';
+    }
+    const tip = `${p.label}\nBilden: ${stText(p.prod)}\nErkennen: ${stText(p.recog)}`;
+    return `<span class="conj-dot ${mod}" title="${_escHtml(tip)}"></span>`;
+  };
   // #1340: one collapsible <details> per tense, only the first is open.
   const cell = c =>
     `<div class="conj-cell"><span class="conj-person">${_escHtml(c.person)}</span>` +
@@ -13378,18 +13510,8 @@ function renderConjugationSection(container, wordData) {
       ).join('');
     }
     const preview = list.map(c => _escHtml(c.form)).join(' · ');
-    const st = stats[t];
-    let badge = '';
-    if (st && st.total != null) {
-      const n = Number(st.total);
-      const shared = st.scope === 'regular';
-      const tip = shared
-        ? `Practised ${n}× — shared count of all verbs that are regular in this tense`
-        : `Practised ${n}× with this verb (irregular in this tense)`;
-      badge = `<span class="conj-count${shared ? ' conj-count-shared' : ''}${n === 0 ? ' is-zero' : ''}" title="${_escHtml(tip)}">×${n}</span>`;
-    }
     return `<details class="conj-tense"${i === 0 ? ' open' : ''}>` +
-      `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}</span>${badge}` +
+      `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}</span>` +
       `<span class="conj-tense-preview">${preview}</span><span class="conj-chevron">›</span></summary>` +
       `<div class="conj-tense-body">${body}</div></details>`;
   }).join('');
@@ -15070,6 +15192,40 @@ function diffClozeAnswer(userInput, targetWord) {
 
 function _renderMultiRatingIfNeeded() {
   document.getElementById('rating-row').style.display = '';
+  _renderConjRatingRow();
+}
+
+// ── Conjugation rating (Spanish verb slots → Musterkarten) ───────────────────
+// null = no choice (nothing is sent), true = richtig, false = falsch.
+let _conjChoice = null;
+
+function _resetConjRating() {
+  _conjChoice = null;
+  const row = document.getElementById('conj-rating-row');
+  if (row) row.style.display = 'none';
+  _syncConjButtons();
+}
+
+function _syncConjButtons() {
+  document.getElementById('conj-btn-ok')?.classList.toggle('active', _conjChoice === true);
+  document.getElementById('conj-btn-fail')?.classList.toggle('active', _conjChoice === false);
+}
+
+function _renderConjRatingRow() {
+  const row = document.getElementById('conj-rating-row');
+  if (!row) return;
+  const show = !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null);
+  row.style.display = show ? '' : 'none';
+  const lbl = document.getElementById('conj-rating-pattern');
+  if (lbl) lbl.textContent = show ? (sentence.conj_pattern_label || '') : '';
+  _syncConjButtons();
+}
+
+function setConjChoice(ok) {
+  const row = document.getElementById('conj-rating-row');
+  if (!row || row.style.display === 'none') return;
+  _conjChoice = (_conjChoice === ok) ? null : ok;   // clicking the active one deselects
+  _syncConjButtons();
 }
 
 // ── Submit rating ───────────────────────────────────────────────────────────
@@ -15092,6 +15248,10 @@ async function rate(rating) {
     else if (rootDeckId) url += `&root_deck_id=${rootDeckId}`;
     else if (deckId) url += `&parent_deck_id=${deckId}`;
     url += _langQP('&');
+    const _convRow = document.getElementById('conj-rating-row');
+    if (_conjChoice !== null && sentence?.id != null && _convRow && _convRow.style.display !== 'none') {
+      url += `&conj_ok=${_conjChoice ? 1 : 0}&sentence_id=${sentence.id}`;
+    }
     const reviewedId = card.id;
     const result = await api('POST', url);
     _sessionReviewedCount++;
@@ -16251,20 +16411,27 @@ function _renderGrammarHint(s) {
   const r = (wordDetails && card && wordDetails.id === card.word_id)
     ? wordDetails.verb_regularity : null;
   if (text && r) text += r === 'irregular' ? ' · irreg.' : ' · reg.';
+  // Back: append the conjugation pattern (Musterkarten)
+  const backText = (text && s?.conj_pattern_label)
+    ? `${text} — Muster: ${s.conj_pattern_label}` : text;
+  // Reading/listening: the tag on the front would reveal what is being tested.
+  const cat = card?.category || category;
+  const frontAllowed = cat !== 'reading' && cat !== 'listening';
   // Word-bank (Tiles) mode: the tag sits under "Reconstruct the sentence"
   // instead of above the sentence.
   const wbWrap = document.getElementById('word-bank-wrap');
   const inWordBank = !!wbWrap && wbWrap.style.display !== 'none';
   const show = {
-    'grammar-hint': !inWordBank,
-    'grammar-hint-wb': inWordBank,
+    'grammar-hint': !inWordBank && frontAllowed,
+    'grammar-hint-wb': inWordBank && frontAllowed,
     'grammar-hint-back': true,
   };
   for (const id of Object.keys(show)) {
     const el = document.getElementById(id);
     if (!el) continue;
-    el.textContent = text;
-    el.style.display = (text && show[id]) ? '' : 'none';
+    const t = id === 'grammar-hint-back' ? backText : text;
+    el.textContent = t;
+    el.style.display = (t && show[id]) ? '' : 'none';
   }
 }
 
@@ -19173,6 +19340,16 @@ document.addEventListener('keydown', async e => {
   if (e.key === _key('star-sentence') && !e.ctrlKey && !e.metaKey) {
     if (!inInput) { e.preventDefault(); toggleSentenceStar(); }
     return;
+  }
+
+  // Conjugation rating (Musterkarten): only while the row is visible
+  if ((e.key === _key('conj-ok') || e.key === _key('conj-fail')) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const conjRow = document.getElementById('conj-rating-row');
+    if (!inInput && conjRow && conjRow.style.display !== 'none') {
+      e.preventDefault();
+      setConjChoice(e.key === _key('conj-ok'));
+      return;
+    }
   }
 
   // Flags/unflags the sentence on the current card (#854, mirror of star-sentence)
