@@ -324,6 +324,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN verb_slot TEXT")
     if "grammar_hint" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN grammar_hint TEXT")
+    # Folgesatz (#1401): extra sentence for the same verb after a creating card;
+    # holds the verb's entry id (the sentence itself has no story_sentence_words rows).
+    if "followup_word_id" not in ss_cols:
+        conn.execute("ALTER TABLE story_sentences ADD COLUMN followup_word_id INTEGER")
     # Per-sentence language for the multi-language story (#1378).
     if "lang" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN lang TEXT")

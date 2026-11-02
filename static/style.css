@@ -6326,6 +6326,15 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .conj-r-btn.conj-r-fail.active { background: #ef4444; border-color: #ef4444; color: #fff; }
 .conj-r-btn.conj-r-ok.active   { background: #22c55e; border-color: #22c55e; color: #fff; }
 
+/* Folgesätze: extra conjugation sentences after a creating card (#1401) */
+.followup-panel { display: flex; flex-direction: column; gap: 10px; padding: 16px 12px; }
+.followup-head { font-size: 12px; color: var(--muted); }
+.followup-lemma { font-size: 22px; font-weight: 600; color: var(--text); }
+.followup-hint { font-size: 13px; color: var(--muted); }
+.followup-de { font-size: 17px; line-height: 1.5; color: var(--text); }
+.followup-es { font-size: 19px; line-height: 1.5; color: var(--text); }
+.followup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+
 /* Settings: pattern table (#1395) */
 .conj-pat-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
 .conj-pat-table th, .conj-pat-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }

@@ -366,6 +366,55 @@ def _generate_story_sentences(cards: list, *, topic, max_hsk, model, progress_ke
     return all_sentences, combined_prompt
 
 
+def _story_followups(story_id: int, lang: str | None) -> list[dict]:
+    """The Folgesätze (#1401) of a stored story for the frontend; they are not
+    part of story["sentences"]. [] on any failure — the story itself must load."""
+    try:
+        return _add_tokens(database.get_story_followups(story_id), lang=lang or "zh")
+    except Exception as e:
+        logger.warning("story  follow-ups of story %s unreadable — %s", story_id, e)
+        return []
+
+
+def _append_followups(sentences: list, cards: list, *, lang: str, model: str,
+                      progress_key: str | None) -> None:
+    """Folgesätze (#1401): extra conjugation sentences for the Spanish creating
+    cards of this story (conj_patterns.plan_followups decides which, one AI call
+    writes them). Appended to `sentences` with followup_word_id set and no
+    word_ids, so they are never matched as a card's own sentence.
+
+    An extra, never a reason to fail the story: every failure is logged and the
+    story is stored without follow-ups. Only a user cancel (StoryCancelled)
+    propagates."""
+    try:
+        if lang not in ("es", MULTI_LANG) or ai_disabled():
+            return
+        import conj_patterns
+        main_slot = {s["word_ids"][0]: s["verb_slot"] for s in sentences
+                     if s.get("verb_slot") and s.get("word_ids")}
+        plan = conj_patterns.plan_followups(
+            [(c, main_slot.get(c["word_id"])) for c in cards], lang)
+        if not plan:
+            return
+        ai._set_progress(progress_key, phase="generating",
+                         msg="Writing follow-up sentences…", percent=95)
+        written = ai.generate_conj_followups(
+            [{"form": p["form"], "lemma": p["lemma"], "label": p["label"]} for p in plan],
+            model=model)
+        for w in written:
+            p = plan[w["index"]]
+            sentences.append({
+                "sentence_zh": w["sentence_es"], "sentence_de": w["sentence_de"],
+                "sentence_en": "", "word_ids": [], "tokens": [],
+                "followup_word_id": p["word_id"], "verb_slot": p["slot"],
+                "grammar_hint": p["label"], "lang": "es"})
+        logger.info("story  follow-ups planned=%d written=%d", len(plan), len(written))
+    except ai.StoryCancelled:
+        raise
+    except Exception as e:
+        logger.warning("story  follow-ups skipped — %s", e)
+
+
 ALLOWED_MODELS = {
     "glm-4-flash",
     "glm-4-air",
@@ -766,6 +815,10 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
                 progress_key=progress_key, grammar_focus=grammar_focus,
                 grammar_pct=grammar_pct, mode=mode, lang=lang,
                 batch_size=batch_size)
+            # Folgesätze (#1401): appended after the main sentences, so the
+            # position loop below numbers them last.
+            _append_followups(sentences, cards, lang=lang, model=model,
+                              progress_key=progress_key)
         for i, s in enumerate(sentences):
             s["position"] = i
         gen_params = _gen_params_dict(
@@ -793,6 +846,7 @@ def _generate_and_store_body(deck_id: int, category: str, today: str, cards: lis
         }
     if story:
         story["sentences"] = _add_tokens(database.get_story_sentences(story["id"]), lang=lang)
+        story["followups"] = _story_followups(story["id"], lang)
         logger.info("story  SAVED   deck=%d cat=%s sentences=%d",
                     deck_id, category, len(story["sentences"]))
         _log_story(story)
@@ -1109,6 +1163,7 @@ def get_story(deck_id: int, category: str,
     story = database.get_active_story(today, category, deck_id, lang=lang)
     if story:
         story["sentences"] = _add_tokens(database.get_story_sentences(story["id"]), lang=lang)
+        story["followups"] = _story_followups(story["id"], lang)
         logger.info("story  CACHED  deck=%d cat=%s lang=%s sentences=%d story_id=%d",
                     deck_id, category, lang, len(story["sentences"]), story["id"])
         _log_story(story)
@@ -1408,6 +1463,7 @@ def get_one_story(story_id: int):
     if story is None:
         raise HTTPException(404, "story not found")
     story["sentences"] = _add_tokens(story["sentences"], lang=story["lang"])
+    story["followups"] = _story_followups(story["id"], story["lang"])
     return story
 
 
@@ -1418,6 +1474,7 @@ def get_history_story(deck_id: int, category: str, lang: str | None = None):
     story = database.get_latest_story(deck_id, category, lang=lang)
     if story:
         story["sentences"] = _add_tokens(database.get_story_sentences(story["id"]), lang=lang)
+        story["followups"] = _story_followups(story["id"], lang)
     return story
 
 
