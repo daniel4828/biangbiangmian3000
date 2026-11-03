@@ -6326,6 +6326,7 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .conj-r-btn.conj-r-fail.active { background: #ef4444; border-color: #ef4444; color: #fff; }
 .conj-r-btn.conj-r-ok.active   { background: #22c55e; border-color: #22c55e; color: #fff; }
 /* Shown when 1-4 is pressed before richtig/falsch was chosen */
+.r-btn.r-pending { outline: 2px solid #f59e0b; outline-offset: 2px; }
 .conj-rating-row.conj-need { animation: conj-need-shake 0.45s; outline: 2px solid #f59e0b; outline-offset: 2px; border-radius: 8px; }
 @keyframes conj-need-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
 

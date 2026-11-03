@@ -15657,9 +15657,20 @@ function _renderMultiRatingIfNeeded() {
 // ── Conjugation rating (Spanish verb slots → Musterkarten) ───────────────────
 // null = no choice (nothing is sent), true = richtig, false = falsch.
 let _conjChoice = null;
+// A 1-4 rating pressed before richtig/falsch is remembered here and submitted
+// as soon as the conjugation is rated, so the rating needs only one press.
+let _conjPendingRating = null;
+
+function _setConjPendingRating(rating) {
+  _conjPendingRating = rating;
+  document.querySelectorAll('.r-btn').forEach(b => {
+    b.classList.toggle('r-pending', rating != null && b.getAttribute('onclick') === `rate(${rating})`);
+  });
+}
 
 function _resetConjRating() {
   _conjChoice = null;
+  _setConjPendingRating(null);
   const row = document.getElementById('conj-rating-row');
   if (row) row.style.display = 'none';
   _syncConjButtons();
@@ -15676,6 +15687,7 @@ function _renderConjRatingRow() {
   const show = !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null);
   row.style.display = show ? '' : 'none';
   row.classList.remove('conj-need');
+  _setConjPendingRating(null);
   const lbl = document.getElementById('conj-rating-pattern');
   if (lbl) lbl.textContent = show ? (sentence.conj_pattern_label || '') : '';
   _syncConjButtons();
@@ -15687,6 +15699,11 @@ function setConjChoice(ok) {
   _conjChoice = (_conjChoice === ok) ? null : ok;   // clicking the active one deselects
   row.classList.remove('conj-need');
   _syncConjButtons();
+  if (_conjChoice !== null && _conjPendingRating != null) {
+    const pending = _conjPendingRating;
+    _setConjPendingRating(null);
+    rate(pending);
+  }
 }
 
 // ── Folgesätze (#1401) ───────────────────────────────────────────────────────
@@ -15723,7 +15740,7 @@ function _renderFollowup() {
   if (!st) return;
   const f = st.items[st.idx];
   document.getElementById('followup-head').textContent =
-    `Folgesatz ${st.idx + 1}/${st.items.length} · ${f.conj_pattern_label || ''}`;
+    `Frase extra ${st.idx + 1}/${st.items.length} · ${f.conj_pattern_label || ''}`;
   document.getElementById('followup-lemma').textContent = f.lemma || f.word_zh || '';
   document.getElementById('followup-hint').textContent = f.grammar_hint || '';
   document.getElementById('followup-de').textContent = f.sentence_de || '';
@@ -15816,6 +15833,7 @@ async function rate(rating) {
   // richtig/falsch choice is silently skipped.
   const _conjRowGate = document.getElementById('conj-rating-row');
   if (_conjRowGate && _conjRowGate.style.display !== 'none' && _conjChoice === null) {
+    _setConjPendingRating(rating);
     _conjRowGate.classList.remove('conj-need');
     void _conjRowGate.offsetWidth;   // restart the animation on repeated presses
     _conjRowGate.classList.add('conj-need');
