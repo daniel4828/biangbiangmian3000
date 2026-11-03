@@ -228,10 +228,10 @@
             <div class="followup-de" id="followup-de"></div>
             <div class="followup-es" id="followup-es" style="display:none"></div>
             <div class="followup-actions">
-              <button type="button" class="conj-r-btn" id="followup-reveal-btn" onclick="followupReveal()">Aufdecken</button>
-              <button type="button" class="conj-r-btn conj-r-fail active" id="followup-btn-fail" style="display:none" onclick="followupRate(false)">✗ falsch</button>
-              <button type="button" class="conj-r-btn conj-r-ok active" id="followup-btn-ok" style="display:none" onclick="followupRate(true)">✓ richtig</button>
-              <button type="button" class="conj-r-btn" id="followup-skip-btn" onclick="followupSkip()">Überspringen</button>
+              <button type="button" class="conj-r-btn" id="followup-reveal-btn" onclick="followupReveal()">Mostrar</button>
+              <button type="button" class="conj-r-btn conj-r-fail active" id="followup-btn-fail" style="display:none" onclick="followupRate(false)">✗ incorrecta</button>
+              <button type="button" class="conj-r-btn conj-r-ok active" id="followup-btn-ok" style="display:none" onclick="followupRate(true)">✓ correcta</button>
+              <button type="button" class="conj-r-btn" id="followup-skip-btn" onclick="followupSkip()">Saltar</button>
             </div>
           </div>
 
@@ -444,11 +444,11 @@
             <!-- Optional second rating: conjugation pattern right/wrong (Spanish verb slots) -->
             <div class="conj-rating-row" id="conj-rating-row" style="display:none">
               <div class="conj-rating-label">
-                <span>Konjugation</span>
+                <span>¿Conjugación correcta?</span>
                 <small id="conj-rating-pattern"></small>
               </div>
-              <button type="button" class="conj-r-btn conj-r-fail" id="conj-btn-fail" onclick="setConjChoice(false)">✗ falsch</button>
-              <button type="button" class="conj-r-btn conj-r-ok" id="conj-btn-ok" onclick="setConjChoice(true)">✓ richtig</button>
+              <button type="button" class="conj-r-btn conj-r-fail" id="conj-btn-fail" onclick="setConjChoice(false)">✗ incorrecta</button>
+              <button type="button" class="conj-r-btn conj-r-ok" id="conj-btn-ok" onclick="setConjChoice(true)">✓ correcta</button>
             </div>
             <!-- Free-text note carried over to the next time this card is seen -->
             <div class="next-note-row" id="next-note-row">
