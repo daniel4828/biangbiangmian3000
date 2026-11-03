@@ -6331,13 +6331,12 @@ table.fsrs-table td.ivl { font-weight: 700; }
 @keyframes conj-need-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
 
 /* Folgesätze: extra conjugation sentences after a creating card (#1401) */
-.followup-panel { display: flex; flex-direction: column; gap: 10px; padding: 16px 12px; }
-.followup-head { font-size: 12px; color: var(--muted); }
-.followup-lemma { font-size: 22px; font-weight: 600; color: var(--text); }
-.followup-hint { font-size: 13px; color: var(--muted); }
-.followup-de { font-size: 17px; line-height: 1.5; color: var(--text); }
-.followup-es { font-size: 19px; line-height: 1.5; color: var(--text); }
-.followup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.followup-banner { font-size: 12px; font-weight: 600; color: #f59e0b; padding: 4px 12px; }
+/* While a Folgesatz is shown only the conjugation rating exists (#1434) */
+body.followup-mode #rating-row,
+body.followup-mode #next-note-row,
+body.followup-mode .fsrs-inspect-row,
+body.followup-mode #undo-btn { display: none !important; }
 
 /* Settings: pattern table (#1395) */
 .conj-pat-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }

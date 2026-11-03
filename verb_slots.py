@@ -471,6 +471,75 @@ def validate_weights(lang: str, data) -> dict:
     return out
 
 
+def _focus_tense() -> str | None:
+    """Today's focus tense (Zeit des Tages, #1434) or None (off / failure)."""
+    try:
+        import tense_focus
+        cur = tense_focus.current()
+        return cur["tense"] if cur else None
+    except Exception as e:
+        logger.warning("tense focus unavailable, using the normal rotation — %s", e)
+        return None
+
+
+def _followup_reserve() -> int:
+    """Persons a creating card reserves for its Folgesätze (0 when they are off)."""
+    try:
+        import conj_patterns
+        s = conj_patterns.settings()
+        if s["enabled"] and s["followups_per_day"] > 0 and s["prod_per_verb"] > 1:
+            return s["prod_per_verb"] - 1
+    except Exception as e:
+        logger.warning("follow-up settings unavailable — %s", e)
+    return 0
+
+
+def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
+    """Slots in focus mode (#1434): a pointer over PERSONS (starting at yo for
+    every call), one person per card; a creating card also reserves the next
+    persons for its Folgesätze. Form cards keep their fixed tense. Cards with no
+    form in the tense are left out (the caller uses the normal logic)."""
+    out: dict[int, dict] = {}
+    reserve = _followup_reserve()
+    use_patterns = False
+    try:
+        import conj_patterns
+        use_patterns = conj_patterns.settings()["enabled"]
+    except Exception as e:
+        logger.warning("conjugation pattern settings unavailable — %s", e)
+    p = 0
+    for card in cards:
+        word = card.get("word_zh") or ""
+        parsed = parse_form_card(word)
+        if parsed:
+            lemma, tense = parsed
+        elif is_slottable_verb(word, lang):
+            lemma, tense = word.strip().lower(), focus_tense
+        else:
+            continue
+        for k in range(len(PERSONS)):
+            pos = p + k
+            person = PERSONS[pos % len(PERSONS)]
+            form = target_form(lemma, tense, person, lang)
+            if not form:
+                continue
+            entry = {"slot": f"{tense}:{person}", "form": form,
+                     "label": lexicon.slot_label(tense, person)}
+            if use_patterns:
+                try:
+                    pat = conj_patterns.pattern_for(lemma, tense, person, lang)
+                    if pat:
+                        entry["pattern"] = pat["key"]
+                except Exception as e:
+                    logger.warning("pattern of %r failed — %s", lemma, e)
+            out[card["word_id"]] = entry
+            p = pos + 1
+            if card.get("category") == "creating":
+                p += reserve
+            break
+    return out
+
+
 def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                  rng: random.Random | None = None,
                  weights: dict | None = None, conj_states: dict | None = None,
@@ -502,6 +571,16 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
         cfg = config(lang)
         if not cfg:
             return {}
+        # Zeit des Tages (#1434): one tense, fixed person order. Cards it cannot
+        # serve (no form in that tense) go through the normal logic below.
+        focus_result: dict[int, dict] = {}
+        if lang == _FORM_LANG:
+            focus = _focus_tense()
+            if focus:
+                focus_result = _assign_focus(cards, focus, lang)
+                cards = [c for c in cards if c["word_id"] not in focus_result]
+                if not cards:
+                    return focus_result
         planner = None
         if lang == _FORM_LANG and (usage is None or conj_states is not None):
             try:
@@ -592,6 +671,7 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
             if planner is not None and pattern_key:
                 entry["pattern"] = pattern_key
             result[card["word_id"]] = entry
+        result.update(focus_result)
         return result
     except Exception as e:
         logger.warning("verb slot assignment failed — %s", e)

@@ -915,6 +915,48 @@ def _card_lang(card: dict, story_lang: str) -> str:
     return story_lang
 
 
+def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
+                          per_verb: int, remaining: int) -> list[dict]:
+    """Folgesätze in Zeit-des-Tages mode (#1434): for each Spanish creating card
+    the next `per_verb` persons after the main sentence's person (cyclic over
+    PERSONS), in the focus tense (form cards: their fixed tense). Persons
+    without a form or pattern are skipped; no due/new ordering and no pattern
+    dedupe. Card by card, stopping at the daily cap."""
+    out: list[dict] = []
+    for card, main_slot in entries:
+        if not main_slot or card.get("category") != "creating" \
+                or _card_lang(card, lang) != LANG:
+            continue
+        head = verb_headword(card.get("word_zh") or "")
+        lemma = verb_slots._slot_lemma(card.get("word_zh") or "", LANG)
+        if not head or not lemma:
+            continue
+        raw_lemma, fixed_tense = head
+        tense = fixed_tense or focus_tense
+        main_person = main_slot.partition(":")[2]
+        if main_person not in PERSONS:
+            continue
+        start = PERSONS.index(main_person)
+        taken = 0
+        for i in range(1, len(PERSONS)):
+            if taken >= per_verb:
+                break
+            if remaining <= 0:
+                return out
+            person = PERSONS[(start + i) % len(PERSONS)]
+            form = verb_slots.target_form(raw_lemma, tense, person, LANG)
+            pat = pattern_for(lemma, tense, person, LANG) if form else None
+            if not pat:
+                continue
+            out.append({
+                "word_id": card["word_id"], "lemma": lemma, "slot": f"{tense}:{person}",
+                "form": form, "label": lexicon.slot_label(tense, person),
+                "pattern": pat["key"], "pattern_label": label_for_key(pat["key"])})
+            taken += 1
+            remaining -= 1
+    return out
+
+
 def plan_followups(entries: list, lang: str, today=None, conj_states=None,
                    rng=None) -> list[dict]:
     """Plan the Folgesätze of one story (#1401).
@@ -946,6 +988,9 @@ def plan_followups(entries: list, lang: str, today=None, conj_states=None,
         remaining = s["followups_per_day"] - database.count_followups_for_date(today)
         if remaining <= 0:
             return []
+        focus = verb_slots._focus_tense()
+        if focus:
+            return _plan_followups_focus(entries, lang, focus, per_verb, remaining)
         states = conj_states if conj_states is not None else database.get_conj_states(LANG)
         wts = verb_slots.weights(LANG)
         w_tense, w_person = wts.get("tenses") or {}, wts.get("persons") or {}

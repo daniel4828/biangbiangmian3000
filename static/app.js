@@ -4132,7 +4132,94 @@ function openSettings() {
   _loadDailyTarget();
   _loadEsSlotWeights();
   _loadEsConj();
+  _loadEsTenseFocus();
   _loadSentencePrompt();
+}
+
+// ── Zeit des Tages: one Spanish tense per day (#1434) ───────────────────────
+let _esTenseFocus = null;        // {settings, current, available} from /api/es/tense-focus
+let _esTenseFocusError = '';
+let _esTenseFocusBusy = false;
+
+async function _loadEsTenseFocus() {
+  try {
+    _esTenseFocus = await api('GET', '/api/es/tense-focus');
+    _esTenseFocusError = '';
+  } catch (e) {
+    _esTenseFocus = null;
+    _esTenseFocusError = e.message;
+  }
+  renderSettings();
+}
+
+function _esTenseFocusHtml() {
+  if (_esTenseFocusError) return `<div class="keymap-label">${_escHtml(_esTenseFocusError)}</div>`;
+  if (!_esTenseFocus) return '<div class="keymap-label">Lädt…</div>';
+  const { settings: s, current: cur, available } = _esTenseFocus;
+  const dis = _esTenseFocusBusy ? 'disabled' : '';
+  const today = cur
+    ? `Heute: <b>${_escHtml(cur.label)}</b> (${Number(cur.index) + 1}/${Number(cur.count)}) · Wechsel am ${_escHtml(cur.next_change)}`
+    : 'Aus';
+  const boxes = available.map(t => `
+    <label class="keymap-label" style="display:inline-flex;align-items:center;gap:6px;margin-right:12px">
+      <input type="checkbox" ${s.tenses.includes(t.code) ? 'checked' : ''} ${dis}
+             data-tense-code="${_escHtml(t.code)}" onchange="saveEsTenseFocusTenses()"
+             style="width:18px;height:18px;cursor:pointer">${_escHtml(t.label)}
+    </label>`).join('');
+  return `
+    <div class="keymap-row">
+      <span class="keymap-label">Zeit des Tages aktiv</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${s.enabled ? 'checked' : ''} ${dis}
+               onchange="saveEsTenseFocus({enabled: this.checked})" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    <div class="keymap-row">
+      <span class="keymap-label">${today}</span>
+      <span>
+        <button class="keymap-reset-all" onclick="stepEsTenseFocus(-1)" ${dis}>← Zurück</button>
+        <button class="keymap-reset-all" onclick="stepEsTenseFocus(1)" ${dis}>Weiter →</button>
+      </span>
+    </div>
+    <div class="keymap-row">
+      <span class="keymap-label">Tage pro Zeit</span>
+      <input type="number" min="1" max="30" step="1" value="${_escHtml(String(s.days))}" style="width:80px" ${dis}
+             onchange="saveEsTenseFocus({days: Number(this.value)})">
+    </div>
+    <div class="keymap-row" style="flex-wrap:wrap">${boxes}</div>`;
+}
+
+async function saveEsTenseFocus(partial) {
+  if (_esTenseFocusBusy) return;
+  _esTenseFocusBusy = true;
+  try {
+    _esTenseFocus = await api('PUT', '/api/es/tense-focus', partial);
+  } catch (e) {
+    showError('Zeit des Tages konnte nicht gespeichert werden: ' + e.message);
+    try { _esTenseFocus = await api('GET', '/api/es/tense-focus'); } catch (_) { /* keep old */ }
+  } finally {
+    _esTenseFocusBusy = false;
+    renderSettings();
+  }
+}
+
+function saveEsTenseFocusTenses() {
+  const tenses = [...document.querySelectorAll('input[data-tense-code]')]
+    .filter(el => el.checked).map(el => el.dataset.tenseCode);
+  return saveEsTenseFocus({ tenses });
+}
+
+async function stepEsTenseFocus(delta) {
+  if (_esTenseFocusBusy) return;
+  _esTenseFocusBusy = true;
+  try {
+    _esTenseFocus = await api('POST', '/api/es/tense-focus/step', { delta });
+  } catch (e) {
+    showError('Zeit konnte nicht gewechselt werden: ' + e.message);
+  } finally {
+    _esTenseFocusBusy = false;
+    renderSettings();
+  }
 }
 
 // ── Spanish conjugation pattern cards (Musterkarten, #1395) ─────────────────
@@ -4801,6 +4888,11 @@ function renderSettings() {
       </div>
     </div>` };
   pages.spanish = { title: 'Spanish', icon: '🇪🇸', desc: 'Irregular verb cards, verb slot weights', html: `
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Zeit des Tages</h2>
+      <p class="keymap-hint">Pro Tag genau eine Zeit; darin laufen die Personen in fester Reihenfolge (yo, tú, él, nosotros, vosotros, ellos). Folgesätze nehmen die jeweils nächsten Personen.</p>
+      ${_esTenseFocusHtml()}
+    </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Konjugations-Musterkarten</h2>
       <p class="keymap-hint">Bei Verben mit Konjugations-Slot bewertest du nach dem Aufdecken zusätzlich die Konjugation (✓/✗, Tasten u/i). Geplant werden Muster, nicht Verben: Ein falsches Muster kommt in ein paar Tagen mit einem anderen Verb wieder. Erkennen (Reading + Listening) und Bilden (Creating) werden getrennt geplant – Listening beeinflusst Creating nicht.</p>
@@ -15684,7 +15776,9 @@ function _syncConjButtons() {
 function _renderConjRatingRow() {
   const row = document.getElementById('conj-rating-row');
   if (!row) return;
-  const show = !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null);
+  // Folgesätze (#1434): the conjugation rating is the only rating there.
+  const show = _followupState ? !!sentence
+    : !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null);
   row.style.display = show ? '' : 'none';
   row.classList.remove('conj-need');
   _setConjPendingRating(null);
@@ -15696,6 +15790,7 @@ function _renderConjRatingRow() {
 function setConjChoice(ok) {
   const row = document.getElementById('conj-rating-row');
   if (!row || row.style.display === 'none') return;
+  if (_followupState) { followupRate(ok); return; }   // Folgesatz: rate + advance (#1434)
   _conjChoice = (_conjChoice === ok) ? null : ok;   // clicking the active one deselects
   row.classList.remove('conj-need');
   _syncConjButtons();
@@ -15708,10 +15803,13 @@ function setConjChoice(ok) {
 
 // ── Folgesätze (#1401) ───────────────────────────────────────────────────────
 // After a creating card of a Spanish verb, 1-2 more sentences with the SAME verb
-// (each another conjugation pattern) are shown one by one: German first, reveal
-// the Spanish sentence, then rate only the conjugation (richtig/falsch). The
-// vocabulary card's scheduling is untouched. Panel: #followup-panel.
-let _followupState = null;            // {items, idx, revealed, busy, card, resolve, prev}
+// are shown one by one. Since #1434 they look exactly like a normal creating card:
+// each Folgesatz is loaded (loadCard) as a synthetic copy of the rated card whose
+// sentence is the Folgesatz. On the back only the conjugation row is offered;
+// choosing richtig/falsch posts the rating and moves on. Vocabulary scheduling is
+// untouched. While _followupState is set: rate()/undo/requeue are disabled, the
+// 1-4 row is hidden (body.followup-mode) and #followup-banner shows "Frase extra i/n".
+let _followupState = null;            // {items, idx, busy, card, resolve}
 const _followupDone = new Set();      // sentence ids already rated or skipped
 
 function _pendingFollowups(ratedCard) {
@@ -15722,77 +15820,46 @@ function _pendingFollowups(ratedCard) {
 
 function _runFollowups(ratedCard, items) {
   return new Promise(resolve => {
-    const front = document.getElementById('side-front');
-    const back = document.getElementById('side-back');
-    _followupState = {
-      items, idx: 0, revealed: false, busy: false, card: ratedCard, resolve,
-      prev: { front: front?.style.display ?? '', back: back?.style.display ?? '' },
-    };
-    if (front) front.style.display = 'none';
-    if (back) back.style.display = 'none';
-    document.getElementById('followup-panel').style.display = '';
-    _renderFollowup();
+    _followupState = { items, idx: 0, busy: false, card: ratedCard, resolve };
+    document.body.classList.add('followup-mode');
+    _showFollowup();
   });
 }
 
-function _renderFollowup() {
+// Load the current Folgesatz through the normal card path (a creating card).
+function _showFollowup() {
   const st = _followupState;
   if (!st) return;
   const f = st.items[st.idx];
-  document.getElementById('followup-head').textContent =
-    `Frase extra ${st.idx + 1}/${st.items.length} · ${f.conj_pattern_label || ''}`;
-  document.getElementById('followup-lemma').textContent = f.lemma || f.word_zh || '';
-  document.getElementById('followup-hint').textContent = f.grammar_hint || '';
-  document.getElementById('followup-de').textContent = f.sentence_de || '';
-  const es = document.getElementById('followup-es');
-  es.textContent = '';
-  if (st.revealed) {
-    // Sentence text is AI output: only text nodes and one <b>, never innerHTML.
-    const text = f.sentence_zh || '';
-    let m = null;
-    if (f.form) {
-      const esc = f.form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      m = new RegExp(`(^|[^\\p{L}\\p{N}_])(${esc})(?![\\p{L}\\p{N}_])`, 'iu').exec(text);
-    }
-    if (m) {
-      const start = m.index + m[1].length;
-      es.appendChild(document.createTextNode(text.slice(0, start)));
-      const b = document.createElement('b');
-      b.textContent = m[2];
-      es.appendChild(b);
-      es.appendChild(document.createTextNode(text.slice(start + m[2].length)));
-    } else {
-      es.textContent = text;
-    }
+  const synthetic = {
+    ...st.card,
+    intervals: {},
+    next_note: '',
+    // The followup row is hydrated like a story sentence; it only lacks the
+    // word_ids link to the card (so the card path accepts it as its sentence).
+    again_sentence: { ...f, word_ids: [st.card.word_id], conj_rating: true },
+  };
+  const banner = document.getElementById('followup-banner');
+  if (banner) {
+    banner.textContent = `Frase extra ${st.idx + 1}/${st.items.length}`;
+    banner.style.display = '';
   }
-  es.style.display = st.revealed ? '' : 'none';
-  document.getElementById('followup-reveal-btn').style.display = st.revealed ? 'none' : '';
-  document.getElementById('followup-btn-fail').style.display = st.revealed ? '' : 'none';
-  document.getElementById('followup-btn-ok').style.display = st.revealed ? '' : 'none';
-}
-
-function followupReveal() {
-  const st = _followupState;
-  if (!st || st.revealed) return;
-  st.revealed = true;
-  _renderFollowup();
+  loadCard(synthetic, _lastCounts);
 }
 
 function _finishFollowups() {
   const st = _followupState;
   if (!st) return;
   _followupState = null;
-  document.getElementById('followup-panel').style.display = 'none';
-  const front = document.getElementById('side-front');
-  const back = document.getElementById('side-back');
-  if (front) front.style.display = st.prev.front;
-  if (back) back.style.display = st.prev.back;
+  document.body.classList.remove('followup-mode');
+  const banner = document.getElementById('followup-banner');
+  if (banner) banner.style.display = 'none';
   st.resolve();
 }
 
 async function followupRate(ok) {
   const st = _followupState;
-  if (!st || !st.revealed || st.busy) return;
+  if (!st || st.busy) return;
   st.busy = true;
   const f = st.items[st.idx];
   try {
@@ -15804,9 +15871,8 @@ async function followupRate(ok) {
   _followupDone.add(f.id);
   st.busy = false;
   st.idx += 1;
-  st.revealed = false;
   if (st.idx >= st.items.length) _finishFollowups();
-  else _renderFollowup();
+  else _showFollowup();
 }
 
 function followupSkip() {
@@ -15816,19 +15882,24 @@ function followupSkip() {
   _finishFollowups();
 }
 
-// Keys while the panel is open. Returns true when the key was consumed; every
-// plain key is swallowed so the review shortcuts (1-4, reveal, …) can't hit the
-// card hidden behind the panel.
+// Actions that would touch the real card / session while a Folgesatz is shown.
+// Escape (skip) is handled in the main Escape branch, richtig/falsch via
+// setConjChoice; everything else (reveal, translation toggles, …) works as on
+// any creating card.
+const _FOLLOWUP_BLOCKED_ACTIONS = ['new-sentence', 'undo', 'suspend-reading', 'suspend-listening',
+  'suspend-creating', 'delete-card', 'delete-card-alt', 'leech', 'regen-all', 'deck-options',
+  'story-modal'];
 function _followupKeyDown(e) {
-  if (e.key === 'Escape') { e.preventDefault(); followupSkip(); return true; }
-  if (e.key === _key('reveal')) { e.preventDefault(); followupReveal(); return true; }
-  if (e.key === _key('conj-ok')) { e.preventDefault(); followupRate(true); return true; }
-  if (e.key === _key('conj-fail')) { e.preventDefault(); followupRate(false); return true; }
-  return true;
+  if (_FOLLOWUP_BLOCKED_ACTIONS.some(id => e.key === _key(id))) {
+    e.preventDefault();
+    return true;
+  }
+  return false;
 }
 
 // ── Submit rating ───────────────────────────────────────────────────────────
 async function rate(rating) {
+  if (_followupState) return;   // Folgesätze only take the conjugation rating (#1434)
   // The conjugation must be rated first: otherwise 1-4 rates the card and the
   // richtig/falsch choice is silently skipped.
   const _conjRowGate = document.getElementById('conj-rating-row');
@@ -15876,7 +15947,10 @@ async function rate(rating) {
     // Folgesätze (#1401): extra conjugation sentences for this verb, shown after
     // a creating card and BEFORE the next card is loaded.
     const followups = _pendingFollowups(ratedCard);
-    if (followups.length) await _runFollowups(ratedCard, followups);
+    if (followups.length) {
+      if (result.counts) _lastCounts = result.counts;
+      await _runFollowups(ratedCard, followups);
+    }
     if (!result.next_card) {
       _lastCounts = result.counts || _lastCounts;
       rootDeckId = null;
@@ -15899,6 +15973,7 @@ async function rate(rating) {
 // untouched. The card is soft-requeued ~1 min out while a new sentence
 // regenerates in the background, so the user reviews other cards meanwhile.
 async function requeueNewSentence() {
+  if (_followupState) return;
   const btn = document.getElementById('new-sentence-btn');
   if (btn) btn.disabled = true;
   try {
@@ -15926,6 +16001,7 @@ async function requeueNewSentence() {
 
 // ── Undo last rating ─────────────────────────────────────────────────────────
 async function undoReview() {
+  if (_followupState) return;
   try {
     const result = await api('POST', '/api/review/undo');
     showView('review');
@@ -19865,8 +19941,8 @@ function renderFsrsInspector() {
 document.addEventListener('keydown', async e => {
   const inInput = _isEditableFocusTarget(document.activeElement);
 
-  // Folgesatz panel (#1401): handles reveal / richtig / falsch / Escape itself and
-  // keeps every other review key (1-4, …) away from the card behind it.
+  // Folgesatz (#1401/#1434): shown as a normal creating card; only the keys that
+  // would touch the real card (undo, suspend, new sentence, …) are blocked.
   if (_followupState && !inInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (_followupKeyDown(e)) return;
   }
@@ -19952,6 +20028,12 @@ document.addEventListener('keydown', async e => {
         document.activeElement.blur();
         return;
       }
+    }
+    // Escape skips the remaining Folgesätze (#1434)
+    if (_followupState) {
+      e.preventDefault();
+      followupSkip();
+      return;
     }
   }
 
