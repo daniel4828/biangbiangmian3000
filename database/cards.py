@@ -110,6 +110,129 @@ def promote_saved_word(word_id: int, target_deck_ids: dict,
     return reset_word_to_new(word_id, target_deck_ids, due, from_deck_id=saved_deck_id)
 
 
+def saved_form_cards(saved_deck_id: int) -> list[dict]:
+    """Spanish irregular form entries ({id, word_zh}) with a live card in the
+    given (Saved) deck, ordered by entry id."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT DISTINCT e.id, e.word_zh FROM entries e
+               JOIN cards c ON c.word_id=e.id
+               WHERE e.source='irregular-forms' AND e.lang='es'
+                 AND c.deleted_at IS NULL AND c.deck_id=? ORDER BY e.id""",
+            (saved_deck_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+FORM_PAUSE_KEY = "es_tense_focus_paused"
+FORM_RELEASED_KEY = "es_form_intro_released"
+
+
+def sync_form_card_pause(focus_tense: str | None) -> int:
+    """One-way introduction gate for Spanish irregular form cards (#1438).
+
+    The tense of the day only decides WHEN a form card is introduced: today's
+    tense is added to app_settings['es_form_intro_released'] (never removed),
+    and only brand-new cards of a not-yet-released tense are paused
+    (state='suspended', pre_suspend_state remembers 'new'; ids go into
+    app_settings['es_tense_focus_paused']). learning/review/relearn cards are
+    never paused. Marker cards whose tense is released are restored and stay
+    active on later days. Manual suspensions, leeches and ★ List cards are
+    never touched; a marker card now in a 'Saved' deck stays parked and leaves
+    the marker. focus_tense None (focus off) restores every marker card and
+    leaves the released set alone. Idempotent. Returns the number of state
+    changes."""
+    import json
+    from verb_slots import parse_form_card
+
+    conn = get_db()
+    try:
+        raw = conn.execute("SELECT value FROM app_settings WHERE key=?",
+                           (FORM_PAUSE_KEY,)).fetchone()
+        marker: set[int] = set()
+        if raw and raw["value"]:
+            try:
+                parsed = json.loads(raw["value"])
+                if not isinstance(parsed, list):
+                    raise ValueError("not a list")
+                marker = {int(i) for i in parsed}
+            except (ValueError, TypeError):
+                logger.warning("form card pause marker is broken, starting empty")
+        original = set(marker)
+        raw_rel = conn.execute("SELECT value FROM app_settings WHERE key=?",
+                               (FORM_RELEASED_KEY,)).fetchone()
+        released: list[str] = []  # ordered: tenses in the order they were released
+        if raw_rel and raw_rel["value"]:
+            try:
+                parsed = json.loads(raw_rel["value"])
+                if not isinstance(parsed, list):
+                    raise ValueError("not a list")
+                for t in parsed:
+                    if str(t) not in released:
+                        released.append(str(t))
+            except (ValueError, TypeError):
+                logger.warning("form card released-tenses setting is broken, starting empty")
+                released = []
+        released_original = list(released)
+        if focus_tense is not None and focus_tense not in released:
+            released.append(focus_tense)
+
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """SELECT c.id, c.state, c.pre_suspend_state, e.word_zh, d.name AS deck_name
+               FROM cards c JOIN entries e ON e.id=c.word_id
+               JOIN decks d ON d.id=c.deck_id
+               WHERE c.deleted_at IS NULL AND e.source='irregular-forms' AND e.lang='es'"""
+        ).fetchall()
+        changed = 0
+        seen = set()
+        for r in rows:
+            cid = r["id"]
+            seen.add(cid)
+            parsed_card = parse_form_card(r["word_zh"])
+            in_saved = r["deck_name"] == "Saved"
+            if cid in marker and (r["state"] != "suspended" or in_saved):
+                marker.discard(cid)  # no longer ours to restore
+                continue
+            if parsed_card is None:
+                continue
+            tense = parsed_card[1]
+            if (cid in marker and r["state"] == "suspended"
+                    and (focus_tense is None or tense in released)):
+                conn.execute(
+                    "UPDATE cards SET state=COALESCE(pre_suspend_state,'new'), "
+                    "pre_suspend_state=NULL WHERE id=?", (cid,))
+                marker.discard(cid)
+                changed += 1
+            elif (cid not in marker and focus_tense is not None and tense not in released
+                  and r["state"] == "new"):
+                conn.execute(
+                    "UPDATE cards SET pre_suspend_state=state, state='suspended' WHERE id=?",
+                    (cid,))
+                marker.add(cid)
+                changed += 1
+        marker &= seen  # drop ids of deleted / vanished cards
+        if marker != original:
+            conn.execute(
+                "INSERT INTO app_settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (FORM_PAUSE_KEY, json.dumps(sorted(marker))))
+        if released != released_original:
+            conn.execute(
+                "INSERT INTO app_settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (FORM_RELEASED_KEY, json.dumps(released)))
+        conn.commit()
+        return changed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def set_card_note(card_id: int, note: str | None) -> None:
     """Store (or clear) the free-text 'note for next time' on a card.
 

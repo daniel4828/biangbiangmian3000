@@ -376,7 +376,7 @@ def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
             import lexicon
             lemma, tense = parsed
             forms.append(lemma)
-            forms.extend(f for f in (lexicon.form_for(lemma, tense, p, lang)
+            forms.extend(f for f in (verb_slots.target_form(lemma, tense, p, lang)
                                      for p in verb_slots.PERSONS) if f)
     except Exception as e:
         logger.debug("form-card forms unavailable for %s — %s", word, e)

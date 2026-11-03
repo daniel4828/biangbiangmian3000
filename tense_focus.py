@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 LANG = "es"
 KEY = "es_tense_focus"
+RELEASED_KEY = "es_form_intro_released"  # ordered list, see database.sync_form_card_pause
 MIN_DAYS, MAX_DAYS = 1, 30
 _KNOWN_KEYS = {"enabled", "tenses", "days"}
 
@@ -129,6 +130,34 @@ def current(today=None) -> dict | None:
     except Exception as e:
         logger.warning("tense focus unavailable — %s", e)
         return None
+
+
+def sync_form_cards() -> int:
+    """Pause irregular form cards of other tenses than today's, restore the
+    rest (#1438). Returns the number of cards changed. A failing current()
+    while the focus is enabled must not mass-restore, so it changes nothing."""
+    cur = current()
+    s = settings()
+    if cur is None and s["enabled"]:
+        logger.warning("tense focus: current tense unavailable, form card pause not synced")
+        return 0
+    if cur is not None:
+        released = []
+        raw = database.get_app_setting(RELEASED_KEY)
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                released = [str(t) for t in parsed] if isinstance(parsed, list) else []
+            except ValueError:
+                logger.warning("tense focus: released tenses setting is broken")
+        if (released and all(t in released for t in s["tenses"])
+                and cur["tense"] != released[-1]):
+            # The introduction round is over: back to the normal pattern planner.
+            logger.info("tense focus: all %d tenses introduced, switching the focus off",
+                        len(s["tenses"]))
+            save({"enabled": False})
+            return database.sync_form_card_pause(None)
+    return database.sync_form_card_pause(cur["tense"] if cur else None)
 
 
 def validate(body) -> dict:

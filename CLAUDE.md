@@ -559,9 +559,9 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **槽位选法（#1306 起加权）**（`verb_slots.assign_slots()`）：选 `(已用次数+1)/权重` 最小的槽位（次数跨所有西语动词），所以长期占比≈权重占比；并列 → 权重大的 → 最久没用的（从没用过算最久）→ 随机；权重 0 = 永不选。槽位权重 = 时态权重 × 人称权重，**形态卡（#1296，时态固定）只用人称权重**。同一篇故事内每选一次就给本地计数 +1，所以一篇故事会铺开到不同槽位。**历史就是 `story_sentences.verb_slot` 列**（`database.verb_slot_usage(lang)` 聚合），不建新表
 - **默认权重**在 `languages.py` 的 `es["verb_slots"]`（`tense_weights` / `person_weights`，百分比）：时态 ind_pres 62 / ind_pret 14 / ind_impf 8 / subj_pres 7 / ind_fut 5 / perf 4 / subj_impf 1.3；人称 3s 47 / 1s 22.5 / 2s 12 / 3p 11 / 1p 7 / 2p 0.4。来源：doozan/spanish_data 的 frequency.csv（OpenSubtitles）按 es-lexicon 标签汇总。配置里没有权重的时态按 1（`ind_cond` 按 3）
 - **设置页可改权重**：设置页 Spanish 块的 "Verb slot weights"，覆盖值存 `app_settings.es_verb_slot_weights`（JSON `{"tenses":{},"persons":{}}`），`verb_slots.weights(lang)` = 默认值叠加覆盖值（只认已知代码、值须为 0–1000 的有限数；存的数据损坏就忽略并回落默认）；`GET/PUT/DELETE /api/es/verb-slot-weights`（PUT 校验失败 400，DELETE = 恢复默认）
-- **启用哪些时态在 `languages.py` 的 `es["verb_slots"]`**：现在是 Presente → Indefinido → Imperfecto → Perfecto。解锁 Futuro 就在 `tenses` 里追加 `"ind_fut"`（Subjuntivo 之后再说）。法语没有 `verb_slots` → 功能关闭，提示词逐字不变
+- **启用哪些时态在 `languages.py` 的 `es["verb_slots"]`**：现在是全部七个：Presente → Indefinido → Imperfecto → Perfecto → Futuro → Subjuntivo presente → Subjuntivo imperfecto。法语没有 `verb_slots` → 功能关闭，提示词逐字不变
 - **Perfecto 是组合出来的**（`perf` 不是词汇表里的时态码）：`haber` 现在时对应人称 + 过去分词（`ha hablado`）。覆盖词汇表里约 2,900 个动词（#1305 起来自 Wiktionary 变位表）；没有该形式的槽位自动跳过
-- **自反动词暂不支持**（`quejarse` 等以 `se` 结尾的不定式）：代词要挪到变位形前面（`me quejé`），平表做不出来
+- **自反动词已支持**（#1301，`quejarse` 等）：`target_form()` 把代词放到变位形前面（`me quejé`、`me he quejado`）；形态卡（#1296）不收自反动词
 - **匹配规则**：句子含目标形式（词边界、不分大小写）→ 记下 `verb_slot`/`grammar_hint`；AI 写了别的形式但仍能匹配（不定式、`surface_forms`）→ 卡片照收、**不挂标签**（标签会撒谎）。补漏句（`_patch_missing`）同样无槽位
 - **`database.surface_forms()` 对非中文并入 `lexicon.forms_of()`**：AI 生成的 `entry_forms` 不全时，高亮/填空/知识模式匹配照样认得变位形
 - **只在 story/qa/expository 三个模式生效**（`ai.generate_story` 的非中文分支）；知识模式和 Again 单句重生成不变，因此那些句子没有标签
@@ -569,14 +569,14 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 
 ## 西班牙语不规则动词形态卡（#1296）
 
-不规则动词需要专门练：每个（不规则动词 × 不规则时态）一张卡，如 `tener · Indefinido`，**不是每人称一张**；人称在卡内轮换。约 25 个最常用不规则动词 × 至多 3 个不规则时态，≤60 张。
+不规则动词需要专门练：每个（不规则动词 × 时态）一张卡，如 `tener · Indefinido`，**不是每人称一张**；人称在卡内轮换。**#1438 起**：25 个最常用不规则动词 × 全部七个时态（含该动词本身规则的时态，如 `tener · Imperfecto`），最多 175 张（`form_card_candidates(max_verbs=25, limit=175)`，任一人称缺形式的时态跳过）；每个时态日会引入约 25 张该时态的形态卡（其余新卡由「今日时态」的引入闸门暂挡，见下）。原来的「只收不规则时态、≤60 张」不再成立。
 
 - **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=六个人称的完整一行（逗号分隔）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
-- **不规则性由数据推出，不手写清单**：`verb_slots.irregular_tenses()` 把词汇表里的形式与 `regular_form()` 规则生成的规则形式逐人称比较；**拼写变化（busqué、leyó）也算不规则**，这是有意的——它们正是值得练的。考察的时态 `FORM_CARD_TENSES` = pret → pres → fut → impf
+- **不规则性由数据推出，不手写清单**：`verb_slots.irregular_tenses()` 把词汇表里的形式与 `regular_form()` 规则生成的规则形式逐人称比较；**拼写变化（busqué、leyó）也算不规则**，这是有意的——它们正是值得练的。判断不规则用的时态 `FORM_CARD_TENSES` = pret → pres → fut → impf（含义不变）；形态卡可带的时态是 `FORM_CARD_ALL_TENSES`（七个，`perf` 经 `target_form()` 组合成 `he tenido`；`parse_form_card`、`surface_forms`、`assign_slots` 都按它走）。规则的时态，规律说明写「Regelmäßig in dieser Zeit.」
 - **人称轮换复用 `assign_slots()`**：词头能被 `parse_form_card()` 解析成形态卡时，时态固定、只在六个人称里按"全局最少用、并列取最久没用"挑；`es["verb_slots"]` 启用的时态配置对形态卡不起作用。规则动词完全不变
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
 - **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选
-- **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升
+- **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升，或带 body `{"activate": true}`（#1438）一次把所有还在 Saved 里的形态卡经 `promote_saved_word` 搬进今天的 Español Daily `creating` 牌组（结果多 `activated[]`；不带 body 的旧调用照旧）
 - 测试见 `tests/test_irregular_forms.py`
 
 ## 西语变位表与区块初始状态（#1356）
@@ -604,7 +604,7 @@ Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**�
 - 句子对象多 `conj_pattern` / `conj_pattern_label` / `conj_rating`（`database/stories._hydrate_sentence`）
 - 测试见 `tests/test_conj_patterns.py`、`tests/test_conj_pullforward.py`、`tests/test_conj_followups.py`
 
-## 西语「今日时态」（#1434）
+## 西语今日时态（#1434、#1438）
 
 七个时态同时出现、人称还按频率加权，练起来太乱。现在**每天只练一个时态**，时态内的人称按**固定顺序**轮：yo → tú → él → nosotros → vosotros → ellos（`verb_slots.PERSONS`，包含 vosotros，人称权重在此模式下被忽略）。
 
@@ -615,7 +615,10 @@ Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**�
 - **API**：`GET /api/es/tense-focus`（`{settings, current, available}`）、`PUT`（部分更新，校验失败 400）、`POST /api/es/tense-focus/step`（`{delta: 1|-1}`）。设置页 Spanish 区块「Zeit des Tages」在最上面
 - **前端：Folgesätze现在渲染成普通 creating 卡**：`_runFollowups` 把每条 Folgesatz 做成评分卡的合成副本交给 `loadCard()`（正面德语句 + 词库/输入，背面揭晓）。`_followupState` 存在时 `rate()`/撤销/换句被禁用，1–4 评分行隐藏（`body.followup-mode`），背面只有 ¿Conjugación correcta?，点 ✓/✗（或 u/i）立即 POST `/api/conj/followup-rate` 并进入下一条；Escape = 跳过剩余。顶部 `#followup-banner` 显示「Frase extra i/n」。旧的 `#followup-panel` 已删除
 - **测试**：`tests/test_tense_focus.py`；`tests/conftest.py` 的 autouse 夹具默认把 `tense_focus.current` 打桩成 None（其它测试断言旧轮换），用 `@pytest.mark.tense_focus` 退出
-- **暂未做**：形态卡（#1296）不按「今日时态」筛选（它们固定自己的时态，只借用人称顺序）
+- **形态卡的「引入闸门」（#1438，单向，不是每日过滤器）**：形态卡（#1296）固定自己的时态，今日时态只决定它**什么时候被引入**；引入之后就是普通卡，按 FSRS 到期复习，与当天是哪个时态无关。`database.sync_form_card_pause(focus_tense)`：今日时态加入已释放集合 `app_settings.es_form_intro_released`（JSON 时态码列表，只增不减，设置页箭头前进/后退也会释放那个时态）；只把**还没释放时态的 `new` 卡**设为 `state='suspended'`（`pre_suspend_state` 记 `new`），卡 id 记进 `app_settings.es_tense_focus_paused`；learning/review/relearn 永不暂停。标记里时态已释放的卡被恢复，之后天天留在队列里（没做完的 Presente 明天还在）；关闭聚焦时恢复全部标记卡且不改释放集合。手动挂起、leech、★ List 的卡不在标记里，永不动；被搬进 `Saved` 的卡留在原地并移出标记。幂等，返回变动张数
+  - **一轮结束后自动关闭**：七个时态都引入过之后（`tense_focus.sync_form_cards()` 发现设置里的全部时态都在 `es_form_intro_released`——有序列表，按引入顺序追加——且今天的时态不是最后一个），今日时态自动关闭、恢复全部标记卡，回到模式调度器（聚焦模式会绕过它）；想再来一轮要在设置页重新打开并清空 `es_form_intro_released`
+  - **为什么不在每个到期查询里过滤**：到期/计数/队列/统计约十条查询，每条都加一个条件迟早漏一条；`suspended` 本来就被所有地方遵守
+  - **同步点**：`ensure_daily_targets`（lang 为 es 或多语言时）**先暂停、再补每日目标**，任何一次取队列都会经过它（每个 Anki 日换时态时自动生效）；`PUT /api/es/tense-focus`、`POST .../step`、`POST /api/es/irregular-form-cards` 带 activate 时立即同步并失效内存队列。`tense_focus.sync_form_cards()`：聚焦开启但 `current()` 失败时什么都不做，避免一次抖动把全部卡恢复
 
 ## 每日 50 张卡自动补充（#1281）
 
@@ -1231,7 +1234,11 @@ GET    /api/dict/history[?q=&limit=]                 → 历史列表（不含 r
 GET    /api/dict/history/{id} ；DELETE /api/dict/history/{id}  → 单条 / 删除；不存在均 404（不假装成功）
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它
 GET  /api/add-word-ai/progress/{job_id}              → 轮询后台生成+导入的结果
-POST /api/es/irregular-form-cards                    → 创建西语不规则动词形态卡进 Español ★ List（#1296）：{created[], skipped[], errors[]}；零 AI、幂等；无 es 词汇表 → 400
+POST /api/es/irregular-form-cards                    → 创建西语动词形态卡进 Español ★ List（#1296；#1438 起 25 动词 × 7 时态）：{created[], skipped[], errors[], activated[]}；零 AI、幂等；无 es 词汇表 → 400
+                                                       可选 body {"activate": true}（#1438）→ 同时把 Saved 里的形态卡搬进今天的 creating 牌组并同步暂停；activate 非布尔 → 400；无 body 照旧
+GET    /api/es/tense-focus                           → 今日时态（#1434）：{settings, current, available}
+PUT    /api/es/tense-focus                           → 部分更新 {enabled?, tenses?, days?}；校验失败 400；成功后同步形态卡暂停（#1438）
+POST   /api/es/tense-focus/step                      → body {delta: 1|-1}，前进/后退一个时态；同样同步形态卡暂停
 GET    /api/es/verb-slot-weights                     → 西语动词槽位权重（#1306）：{weights, defaults, labels{tenses,persons}}
 PUT    /api/es/verb-slot-weights                     → body {tenses:{code:w}, persons:{code:w}}；未知代码/负数/非数字/整组全 0 → 400；返回同 GET
 DELETE /api/es/verb-slot-weights                     → 恢复默认权重；返回同 GET

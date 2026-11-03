@@ -582,7 +582,7 @@ def add_word_to_list(word_zh: str, lang: str = "zh") -> dict:
     }
 
 
-def seed_es_irregular_form_cards() -> dict:
+def seed_es_irregular_form_cards(activate: bool = False) -> dict:
     """Create the Spanish irregular-verb form cards (#1296) in Español ★ List.
 
     One entry per (irregular verb, irregular tense) — "tener · Indefinido" —
@@ -598,7 +598,12 @@ def seed_es_irregular_form_cards() -> dict:
     conjugation tables, day decks) and would add nothing here except an
     intermediate Daily deck to move the card out of again.
 
-    Returns {"created": [word_zh], "skipped": [word_zh], "errors": [str]}.
+    activate=True (#1438) additionally moves every form card still parked in
+    the Spanish Saved deck into today's Spanish Daily `creating` deck as a
+    fresh new card (database.promote_saved_word, same as Browse's promote).
+
+    Returns {"created": [word_zh], "skipped": [word_zh], "errors": [str],
+    "activated": [word_zh]}.
     """
     import lexicon
     import verb_slots
@@ -606,6 +611,7 @@ def seed_es_irregular_form_cards() -> dict:
     created: list[str] = []
     skipped: list[str] = []
     errors: list[str] = []
+    activated: list[str] = []
     saved_deck_id = database.get_or_create_saved_deck("es")
     for cand in verb_slots.form_card_candidates("es"):
         word_zh = cand["word_zh"]
@@ -630,16 +636,45 @@ def seed_es_irregular_form_cards() -> dict:
         except Exception as e:
             logger.exception("irregular form card %r failed: %s", word_zh, e)
             errors.append(f"{word_zh}: {e}")
-    return {"created": created, "skipped": skipped, "errors": errors}
+    if activate:
+        target_day = database.anki_today().isoformat()
+        daily_deck_id, _ = database.get_or_create_daily_deck(target_day, "es")
+        leaf_decks = database.get_or_create_category_decks(daily_deck_id, target_day)
+        rows = database.saved_form_cards(saved_deck_id)
+        for r in rows:
+            try:
+                if database.promote_saved_word(
+                        r["id"], {"creating": leaf_decks["creating"]}, saved_deck_id, target_day):
+                    activated.append(r["word_zh"])
+            except Exception as e:
+                logger.exception("activating form card %r failed: %s", r["word_zh"], e)
+                errors.append(f"{r['word_zh']}: {e}")
+    return {"created": created, "skipped": skipped, "errors": errors, "activated": activated}
+
+
+def _sync_form_pause_and_invalidate() -> None:
+    """Pause/restore off-tense form cards (#1438) and drop the cached queues if
+    anything changed."""
+    import tense_focus
+    if tense_focus.sync_form_cards():
+        queue_mgr.invalidate()
 
 
 @router.post("/api/es/irregular-form-cards")
-def create_es_irregular_form_cards():
-    """Create the irregular-verb form cards in Español ★ List (#1296)."""
+def create_es_irregular_form_cards(body: dict | None = None):
+    """Create the irregular-verb form cards in Español ★ List (#1296).
+    Optional JSON body {"activate": true} also moves them into today's deck (#1438)."""
     import lexicon
+    activate = (body or {}).get("activate", False)
+    if not isinstance(activate, bool):
+        raise HTTPException(status_code=400, detail="'activate' must be true or false")
     if not lexicon.available("es"):
         raise HTTPException(status_code=400, detail="Spanish lexicon is not available")
-    return seed_es_irregular_form_cards()
+    result = seed_es_irregular_form_cards(activate=activate)
+    if activate:
+        _sync_form_pause_and_invalidate()
+        queue_mgr.invalidate()
+    return result
 
 
 def _verb_slot_weights_payload() -> dict:
@@ -704,6 +739,7 @@ def put_es_tense_focus(body: dict):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     tense_focus.save(clean)
+    _sync_form_pause_and_invalidate()
     return _tense_focus_payload()
 
 
@@ -718,6 +754,7 @@ def step_es_tense_focus(body: dict):
         tense_focus.step(delta)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _sync_form_pause_and_invalidate()
     return _tense_focus_payload()
 
 
