@@ -50,6 +50,13 @@ TABLE = {
 }
 
 
+PARTICIPLES = {"ser": "sido", "tener": "tenido", "haber": "habido"}
+SUBJ_TENER = {
+    "subj_pres": "tenga tengas tenga tengamos tengáis tengan",
+    "subj_impf": "tuviera tuvieras tuviera tuviéramos tuvierais tuvieran",
+}
+
+
 def _lexicon():
     lemmas, verbs = {}, {}
     for lemma, (rank, tenses) in TABLE.items():
@@ -57,6 +64,11 @@ def _lexicon():
         for tense, row in tenses.items():
             for person, form in zip(PERSONS, row.split()):
                 verbs.setdefault(form, []).append([lemma, tense, person])
+    for lemma, part in PARTICIPLES.items():  # #1438: composed Perfecto
+        verbs.setdefault(part, []).append([lemma, "part", ""])
+    for tense, row in SUBJ_TENER.items():
+        for person, form in zip(PERSONS, row.split()):
+            verbs.setdefault(form, []).append(["tener", tense, person])
     return {"lemmas": lemmas, "forms": {}, "verbs": verbs}
 
 
@@ -142,7 +154,8 @@ def test_word_roundtrip_and_non_matching():
     assert word == "tener · Indefinido"
     assert verb_slots.parse_form_card(word) == ("tener", "ind_pret")
     assert verb_slots.parse_form_card("hacer · Futuro") is None  # lexicon lacks hacer
-    assert verb_slots.parse_form_card("tener · Subjuntivo presente") is None
+    assert verb_slots.parse_form_card("ser · Subjuntivo presente") is None  # no forms
+    assert verb_slots.parse_form_card("tener · Subjuntivo presente") == ("tener", "subj_pres")
     assert verb_slots.parse_form_card("tener") is None
     assert verb_slots.parse_form_card("") is None
     assert verb_slots.parse_form_card(None) is None
@@ -165,12 +178,14 @@ def test_pattern_notes():
 def test_candidates_order_and_caps():
     cands = verb_slots.form_card_candidates("es")
     words = [c["word_zh"] for c in cands]
-    assert words[0] == "ser · Indefinido"
+    assert words[0] == "ser · Presente"  # order follows the configured tenses (#1438)
     assert "hablar · Indefinido" not in words
     assert "buscar · Indefinido" in words
     assert all(len(c["row"]) == 6 for c in cands)
     ser = [c for c in cands if c["lemma"] == "ser"]
-    assert len(ser) == 3  # max_tenses
+    # #1438: every tense with six forms; the fixture has no ser subjunctive
+    assert {c["tense"] for c in ser} == {"ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut"}
+    assert "tener · Imperfecto" in words  # regular in this tense, still a card
     capped = verb_slots.form_card_candidates("es", max_verbs=1)
     assert {c["lemma"] for c in capped} == {"ser"}
     assert len(verb_slots.form_card_candidates("es", limit=2)) == 2

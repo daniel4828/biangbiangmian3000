@@ -192,13 +192,29 @@ def _daily_leaf(conn, today, category, preset_id, lang='zh'):
 def ensure_daily_targets(lang: str | None) -> int:
     """Fill one registered language, or every language when `lang` is None or
     the multi-language sentinel. Disabled languages return 0 immediately."""
+    total = 0
+    es_involved = lang == 'es' or not languages.is_valid_lang(lang)
+    if es_involved:
+        # Pause off-tense form cards first so the fill sees the final queue (#1438).
+        total += _sync_form_pause()
     if languages.is_valid_lang(lang):
-        total = ensure_daily_target(lang)
+        total += ensure_daily_target(lang)
     else:
-        total = sum(ensure_daily_target(l) for l in languages.LANGUAGES)
-    if lang == 'es' or not languages.is_valid_lang(lang):
+        total += sum(ensure_daily_target(l) for l in languages.LANGUAGES)
+    if es_involved:
         total += _pull_conj_cards()
     return total
+
+
+def _sync_form_pause() -> int:
+    """Zeit des Tages (#1438): pause irregular form cards of other tenses.
+    Must never break the daily-target fill."""
+    try:
+        import tense_focus
+        return tense_focus.sync_form_cards()
+    except Exception as e:
+        logging.getLogger(__name__).warning('form card pause sync failed - %s', e)
+        return 0
 
 
 def _pull_conj_cards() -> int:

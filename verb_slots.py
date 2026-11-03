@@ -128,6 +128,10 @@ def describe(slot: str) -> str:
 
 _FORM_LANG = "es"
 FORM_CARD_TENSES = ("ind_pret", "ind_pres", "ind_fut", "ind_impf")
+# Tenses a form card may carry (#1438): the seven of the "Zeit des Tages"
+# rotation. FORM_CARD_TENSES above stays the set used to judge irregularity.
+FORM_CARD_ALL_TENSES = ("ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut",
+                        "subj_pres", "subj_impf")
 PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
 _SEP = " · "
 
@@ -225,8 +229,8 @@ def form_card_word(lemma: str, tense: str) -> str:
 def parse_form_card(word: str) -> tuple[str, str] | None:
     """Inverse of form_card_word(): "tener · Indefinido" -> ("tener", "ind_pret").
 
-    None unless the pattern matches, the label maps back to a FORM_CARD_TENSES
-    tense, and the lexicon knows that verb in that tense. Never raises."""
+    None unless the pattern matches, the label maps back to a FORM_CARD_ALL_TENSES
+    tense, and the verb has a form in that tense (#1438: all seven). Never raises."""
     try:
         if not word or _SEP not in word:
             return None
@@ -234,9 +238,9 @@ def parse_form_card(word: str) -> tuple[str, str] | None:
         lemma, label = lemma.strip().lower(), label.strip()
         if not lemma or len(lemma.split()) != 1:
             return None
-        for tense in FORM_CARD_TENSES:
+        for tense in FORM_CARD_ALL_TENSES:
             if lexicon._TENSE_LABELS.get(tense) == label:
-                if lexicon.form_for(lemma, tense, "1s", _FORM_LANG) is None:
+                if target_form(lemma, tense, "1s", _FORM_LANG) is None:
                     return None
                 return lemma, tense
         return None
@@ -280,6 +284,19 @@ def _pattern(lemma: str, tense: str, row: list[str]) -> tuple[str, str]:
     share a pattern, for the "Wie: …" list. An EMPTY key means "generic note,
     no real pattern category" — such cards get no "Wie:" (it would group
     unrelated verbs: ser, estar, ver, saber)."""
+    if tense == "perf":
+        part = row[0].split()[-1] if row and row[0] else ""
+        if part and not part.lower().endswith(("ado", "ido")):
+            return "perf_part", f"Unregelmäßiges Partizip: {part} (haber + Partizip)."
+        return "", "Regelmäßig in dieser Zeit (haber + Partizip)."
+    if tense == "subj_pres":
+        return "", "Subjuntivo: Stamm von der 1. Sg. (yo) des Indikativs abgeleitet."
+    if tense == "subj_impf":
+        return "", "Subjuntivo Imperfecto: Stamm von der 3. Pl. Indefinido (-ron → -ra/-ras/…)."
+    if tense in ("ind_pres", "ind_pret", "ind_impf", "ind_fut"):
+        regs = [regular_form(lemma, tense, p) for p in PERSONS]
+        if all(regs) and all(f.lower() == r.lower() for f, r in zip(row, regs)):
+            return "", "Regelmäßig in dieser Zeit."
     if tense == "ind_pret":
         reg1 = (regular_form(lemma, tense, "1s") or "").lower()
         first = row[0].lower()
@@ -333,10 +350,11 @@ def pattern_note(lemma: str, tense: str, row: list[str], lang: str) -> str:
         return ""
 
 
-def form_card_candidates(lang: str, max_verbs: int = 25, max_tenses: int = 3,
-                         limit: int = 60) -> list[dict]:
+def form_card_candidates(lang: str, max_verbs: int = 25, limit: int = 175) -> list[dict]:
     """The form cards worth creating: the `max_verbs` most frequent irregular
-    verbs × their first `max_tenses` irregular tenses, capped at `limit`.
+    verbs × ALL configured tenses (also those in which the verb is regular,
+    e.g. "tener · Imperfecto"), capped at `limit` (25 × 7 = 175). A tense is
+    skipped when any of its six forms is unavailable.
 
     Each item: {lemma, tense, word_zh, row (6 forms), note_de}. Deterministic.
 
@@ -344,17 +362,21 @@ def form_card_candidates(lang: str, max_verbs: int = 25, max_tenses: int = 3,
     items: list[dict] = []
     keys: list[str] = []
     try:
+        cfg = config(lang)
+        tenses = list(cfg["tenses"]) if cfg else []
         verbs = 0
         for lemma in lexicon.verb_lemmas(lang):
             if verbs >= max_verbs or len(items) >= limit:
                 break
             if lemma.endswith("se"):
                 continue
+            if not irregular_tenses(lemma, lang):
+                continue
             taken = 0
-            for tense in irregular_tenses(lemma, lang):
-                if taken >= max_tenses or len(items) >= limit:
+            for tense in tenses:
+                if len(items) >= limit:
                     break
-                row = _lexicon_row(lemma, tense)
+                row = [target_form(lemma, tense, p, lang) for p in PERSONS]
                 if not all(row):
                     continue
                 key, note = _pattern(lemma, tense, row)
@@ -610,7 +632,7 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                 # person rotates; the enabled-tenses config does not apply.
                 lemma, tense = parsed
                 for person in PERSONS:
-                    form = lexicon.form_for(lemma, tense, person, lang)
+                    form = target_form(lemma, tense, person, lang)
                     if form:
                         options.append((f"{tense}:{person}", form, w_person.get(person, 1.0)))
             elif is_slottable_verb(word, lang):
