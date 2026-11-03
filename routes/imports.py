@@ -682,6 +682,45 @@ def reset_es_verb_slot_weights():
     return _verb_slot_weights_payload()
 
 
+def _tense_focus_payload() -> dict:
+    """Shared response of the tense-focus endpoints (#1434)."""
+    import tense_focus
+    return {"settings": tense_focus.settings(), "current": tense_focus.current(),
+            "available": tense_focus.available()}
+
+
+@router.get("/api/es/tense-focus")
+def get_es_tense_focus():
+    """Zeit des Tages: setting, today's tense and the selectable tenses (#1434)."""
+    return _tense_focus_payload()
+
+
+@router.put("/api/es/tense-focus")
+def put_es_tense_focus(body: dict):
+    """Partial update {enabled?, tenses?, days?} (#1434)."""
+    import tense_focus
+    try:
+        clean = tense_focus.validate(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    tense_focus.save(clean)
+    return _tense_focus_payload()
+
+
+@router.post("/api/es/tense-focus/step")
+def step_es_tense_focus(body: dict):
+    """Jump to the previous/next tense, body {"delta": 1|-1} (#1434)."""
+    import tense_focus
+    delta = body.get("delta") if isinstance(body, dict) else None
+    if isinstance(delta, bool) or delta not in (1, -1):
+        raise HTTPException(status_code=400, detail="'delta' must be 1 or -1")
+    try:
+        tense_focus.step(delta)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _tense_focus_payload()
+
+
 @router.get("/api/es/conj-settings")
 def get_es_conj_settings():
     """Conjugation pattern scheduler settings (#1395)."""

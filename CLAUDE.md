@@ -604,6 +604,19 @@ Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**�
 - 句子对象多 `conj_pattern` / `conj_pattern_label` / `conj_rating`（`database/stories._hydrate_sentence`）
 - 测试见 `tests/test_conj_patterns.py`、`tests/test_conj_pullforward.py`、`tests/test_conj_followups.py`
 
+## 西语「今日时态」（#1434）
+
+七个时态同时出现、人称还按频率加权，练起来太乱。现在**每天只练一个时态**，时态内的人称按**固定顺序**轮：yo → tú → él → nosotros → vosotros → ellos（`verb_slots.PERSONS`，包含 vosotros，人称权重在此模式下被忽略）。
+
+- **`tense_focus.py`**：设置存 `app_settings.es_tense_focus`（JSON `{enabled, tenses, days, anchor_date, anchor_index}`），默认开启、七个时态按 `languages.py` 的规范顺序（Presente → Indefinido → Imperfecto → Perfecto → Futuro → Subj. presente → Subj. imperfecto），`days`=每个时态持续几天（1–30）。当天时态 = `tenses[(anchor_index + 天数差 // days) % n]`，到头回绕。没有锚点时 `settings()` 把「今天、第 0 个」写进去。用户只勾选参与的时态，顺序永远是规范顺序。`current()` 全程不抛异常（失败返回 None = 回到旧逻辑）
+- **改 `days`/`tenses` 会以今天重新锚定**，并保持「今天的时态」不变（它被取消勾选时回到第一个）；`step(±1)` = 手动前进/后退一个时态，从今天起算
+- **`verb_slots.assign_slots` 聚焦模式**：每次调用（每篇故事）指针从 yo 开始，按卡片顺序每张取下一个人称；该时态里没有形式的卡片走旧逻辑。形态卡（#1296）时态仍是卡片固定的，人称同样按指针。**creating 卡会为 Folgesätze 预留后续人称**（`prod_per_verb − 1` 个，Folgesätze 关闭时为 0）。不写任何持久化的使用计数
+- **Folgesätze 聚焦模式**（`conj_patterns.plan_followups`）：主句人称之后的下 `prod_per_verb − 1` 个人称（循环），同一时态；没有形式/没有 pattern 的人称跳过；不做「到期/新」排序也不做 pattern 去重；仍受每日上限约束
+- **API**：`GET /api/es/tense-focus`（`{settings, current, available}`）、`PUT`（部分更新，校验失败 400）、`POST /api/es/tense-focus/step`（`{delta: 1|-1}`）。设置页 Spanish 区块「Zeit des Tages」在最上面
+- **前端：Folgesätze现在渲染成普通 creating 卡**：`_runFollowups` 把每条 Folgesatz 做成评分卡的合成副本交给 `loadCard()`（正面德语句 + 词库/输入，背面揭晓）。`_followupState` 存在时 `rate()`/撤销/换句被禁用，1–4 评分行隐藏（`body.followup-mode`），背面只有 ¿Conjugación correcta?，点 ✓/✗（或 u/i）立即 POST `/api/conj/followup-rate` 并进入下一条；Escape = 跳过剩余。顶部 `#followup-banner` 显示「Frase extra i/n」。旧的 `#followup-panel` 已删除
+- **测试**：`tests/test_tense_focus.py`；`tests/conftest.py` 的 autouse 夹具默认把 `tense_focus.current` 打桩成 None（其它测试断言旧轮换），用 `@pytest.mark.tense_focus` 退出
+- **暂未做**：形态卡（#1296）不按「今日时态」筛选（它们固定自己的时态，只借用人称顺序）
+
 ## 每日 50 张卡自动补充（#1281）
 
 设置页的 **Daily card target** 开关默认开启；仅针对中文，按现有 Anki 学习日边界计算。当天到期且可学习的不同卡片与当天已经作答的不同卡片合计不足 50 时，从 Leech、★ List 交替补入，两个列表内部按 SUBTLEX-CH 整词词频排名升序（未收录排末尾）；一方耗尽后继续使用另一方。重复作答只算一张卡。为遵守同词卡片的埋藏规则，每天每词最多自动补一张，且跳过当天已经安排或作答的词；候选不足时只补现有可用的卡。

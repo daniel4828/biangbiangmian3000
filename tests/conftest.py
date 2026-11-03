@@ -40,10 +40,26 @@ def pytest_configure(config):
     # PytestUnknownMarkWarning on every one of those tests.
     config.addinivalue_line(
         "markers",
+        "tense_focus: test exercises tense_focus itself (the autouse fixture that "
+        "switches Zeit des Tages off for the other tests is skipped)",
+    )
+    config.addinivalue_line(
+        "markers",
         "real_youtube_calls: test exercises knowledge.youtube's own "
         "fetch_duration/download_audio (stubs subprocess.run instead) and "
         "must skip the autouse tripwire that stubs those functions themselves",
     )
+
+
+@pytest.fixture(autouse=True)
+def _tense_focus_off_by_default(request, monkeypatch):
+    """Zeit des Tages (#1434) is ON by default in production; the older slot /
+    follow-up tests assert the normal rotation, so it is switched off here.
+    Tests of the focus itself opt in with @pytest.mark.tense_focus."""
+    if request.node.get_closest_marker("tense_focus"):
+        return
+    import tense_focus
+    monkeypatch.setattr(tense_focus, "current", lambda today=None: None)
 
 
 @pytest.fixture(autouse=True)
