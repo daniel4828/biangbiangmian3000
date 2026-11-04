@@ -627,7 +627,7 @@ def seed_es_irregular_form_cards(activate: bool = False) -> dict:
                 "note_type": "grammar",
                 "pos": "Verbform",
                 "definition": info.get("gloss_en") or "",
-                "definition_de": ", ".join(cand["row"]),
+                "definition_de": info.get("gloss_de") or "",
                 "notes": cand["note_de"],
                 "source": "irregular-forms",
             })

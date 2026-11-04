@@ -9,7 +9,7 @@
   <link rel="manifest" href="/static/manifest.webmanifest">
   <meta name="theme-color" content="#f1f5f9">
   <script src="/static/theme.js?v=2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=24">
+  <link rel="stylesheet" href="/static/style.css?v=25">
   <!-- Dictionary-result styling, shared with the standalone /dict page
        (#1055): the header search box renders lookups with shared.js's
        renderDictResult(), so both pages must load the same sheet. -->
@@ -418,6 +418,7 @@
               <div class="word-pin" id="word-pin"></div>
               <div class="word-pos-row"><span class="word-pos" id="word-pos"></span><span class="word-register" id="word-register" style="display:none"></span></div>
               <div class="word-def-de" id="word-def-de" style="display:none"></div>
+              <div class="word-conj-row" id="word-conj-row" style="display:none"></div>
               <div class="word-def" id="word-def"></div>
               <div class="word-def-fr" id="word-def-fr" style="display:none"></div>
             </div>
@@ -605,6 +606,7 @@
           <span id="wd-def-regen"></span>
         </div>
         <div class="wd-def-de" id="wd-def-de" style="display:none"></div>
+        <div class="wd-conj-row" id="wd-conj-row" style="display:none"></div>
         <div class="wd-def" id="wd-def"></div>
         <div class="wd-def-zh" id="wd-def-zh" style="display:none"></div>
         <div class="wd-def-fr" id="wd-def-fr" style="display:none"></div>
@@ -914,7 +916,7 @@
 <div id="word-tip" style="display:none"></div>
 <script src="/static/shared.js?v=7"></script>
 <script src="/static/home-discovery.js?v=2"></script>
-<script src="/static/app.js?v=31"></script>
+<script src="/static/app.js?v=32"></script>
 
 <!-- Edit card modal -->
 <div id="edit-modal-overlay" onclick="closeEditCard()" style="display:none"></div>

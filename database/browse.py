@@ -1,6 +1,7 @@
 import sqlite3
 from .core import get_db, anki_today
 from .cards import get_card
+from .entries import form_card_view
 from word_frequency import frequency_rank
 
 
@@ -37,6 +38,7 @@ def get_words_for_browse(lang: str | None = None) -> list[dict]:
         r = dict(r)
         wid = r["id"]
         if wid not in words:
+            form_card_view(r)  # swap a stored conjugation row for the German gloss (#1444)
             words[wid] = {
                 "id": wid,
                 "word_zh": r["word_zh"],
@@ -147,6 +149,7 @@ def search_entries(q: str, lang: str | None = None, limit: int = 20) -> list[dic
     for r in rows:
         d = dict(r)
         d.pop("rank", None)  # SQL-only sort key, not part of the row contract
+        form_card_view(d)
         results.append(d)
     return results
 

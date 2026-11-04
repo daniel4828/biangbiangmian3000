@@ -30,6 +30,9 @@ def _attach_again_sentence(card: dict | None) -> dict | None:
 
     Not gated on card state: the requeue button leaves scheduling untouched, so
     the card can be in any state when it reappears with its new sentence."""
+    # Every served review card passes here: fix form-card glosses once (#1444).
+    if card:
+        database.form_card_view(card)
     if (card and card.get("note_type") != "sentence" and card.get("word_id")):
         today = database.anki_today().isoformat()
         again = database.get_again_sentence_for_word(card["word_id"], today)
