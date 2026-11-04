@@ -328,7 +328,7 @@ def _generate_and_import_word(word_zh: str, lang: str, deck_id: int,
     # The entry's id goes back in the summary (#1149): the tap-a-word popup
     # opens the freshly generated entry as soon as it lands, and looking it
     # up client-side by the typed string would miss a normalised headword.
-    entry = database.get_word_by_zh(stored_word) if result.get("imported") else None
+    entry = database.get_word_by_zh(stored_word, lang) if result.get("imported") else None
     if to_list and entry:
         # Only now do the freshly created cards exist to move (#677).
         database.stage_word_in_saved(
@@ -405,7 +405,7 @@ def add_word_ai(body: dict):
     # discards the word's FSRS memory (stability/difficulty/interval/lapses)
     # irreversibly, so the response says exactly what was thrown away rather
     # than reporting a bland success.
-    existing = database.get_word_by_zh(word_zh)
+    existing = database.get_word_by_zh(word_zh, lang)
     if existing is None and lang != "zh":
         # Typed an inflected form of a word already in the database (#924):
         # "mangeons" has to reach the existing `manger` entry. Without this the
@@ -539,7 +539,7 @@ def add_word_to_list(word_zh: str, lang: str = "zh") -> dict:
     if not is_valid_lang(lang):
         raise ValueError(f"Unknown language: {lang!r}")
 
-    existing = database.get_word_by_zh(word_zh)
+    existing = database.get_word_by_zh(word_zh, lang)
     if existing is None and lang != "zh":
         # Same inflected-form lookup as add_word_ai (#924).
         existing = database.get_word_by_form(word_zh, lang)
@@ -574,7 +574,7 @@ def add_word_to_list(word_zh: str, lang: str = "zh") -> dict:
         # Never claim success over a garbage/empty AI response.
         raise ValueError("AI returned no entry")
     stored_word = result["word_zh"]
-    entry = database.get_word_by_zh(stored_word)
+    entry = database.get_word_by_zh(stored_word, lang)
     return {
         "status": "added",
         "word_zh": stored_word,
@@ -845,7 +845,7 @@ def save_word(body: dict):
 
     saved_deck_id = database.get_or_create_saved_deck(lang)
 
-    existing = database.get_word_by_zh(word_zh)
+    existing = database.get_word_by_zh(word_zh, lang)
     if existing is None and lang != "zh":
         # Same lemma resolution as /api/add-word-ai (#924): a conjugated form
         # of a known word must not become a second, contentless entry.
