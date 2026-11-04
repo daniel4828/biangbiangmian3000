@@ -9,7 +9,7 @@
   <link rel="manifest" href="/static/manifest.webmanifest">
   <meta name="theme-color" content="#f1f5f9">
   <script src="/static/theme.js?v=2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=25">
+  <link rel="stylesheet" href="/static/style.css?v=26">
   <!-- Dictionary-result styling, shared with the standalone /dict page
        (#1055): the header search box renders lookups with shared.js's
        renderDictResult(), so both pages must load the same sheet. -->
@@ -341,7 +341,10 @@
                  above the target sentence (replaces the old light bulb, issue #452) -->
             <div class="news-back-source" id="news-back-source" style="display:none"></div>
             <!-- 1. Sentence (listening/reading back; hidden for creating) -->
-            <div id="grammar-hint-back" class="grammar-hint-tag" style="display:none"></div>
+            <div class="grammar-hint-row" id="grammar-hint-row">
+              <div id="grammar-hint-back" class="grammar-hint-tag" style="display:none"></div>
+              <div id="grammar-pattern-back" class="grammar-hint-tag" style="display:none"></div>
+            </div>
             <div class="sentence-row" id="sentence-row-back">
               <div class="sentence" id="sentence-back"></div>
             </div>
@@ -916,7 +919,7 @@
 <div id="word-tip" style="display:none"></div>
 <script src="/static/shared.js?v=7"></script>
 <script src="/static/home-discovery.js?v=2"></script>
-<script src="/static/app.js?v=32"></script>
+<script src="/static/app.js?v=33"></script>
 
 <!-- Edit card modal -->
 <div id="edit-modal-overlay" onclick="closeEditCard()" style="display:none"></div>

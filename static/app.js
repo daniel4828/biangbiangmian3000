@@ -13040,7 +13040,7 @@ function revealAnswer() {
   // Translation row goes ABOVE the foreign-language sentence on the back (#1427).
   {
     const _tr = document.getElementById('sentence-trans-row');
-    const _anchor = document.getElementById(isCreating ? 'creating-answer-section' : 'grammar-hint-back');
+    const _anchor = document.getElementById(isCreating ? 'creating-answer-section' : 'grammar-hint-row');
     if (_tr && _anchor) _anchor.parentNode.insertBefore(_tr, _anchor);
   }
 
@@ -15846,10 +15846,32 @@ function setConjChoice(ok) {
 let _followupState = null;            // {items, idx, busy, card, resolve}
 const _followupDone = new Set();      // sentence ids already rated or skipped
 
+// #1448: Folgesätze wait a few cards so the verb is no longer fresh in mind.
+const _FOLLOWUP_GAP_MIN = 3, _FOLLOWUP_GAP_MAX = 7;
+let _followupQueue = [];   // [{card, item, dueIn}]
+
+function _enqueueFollowups(ratedCard, items, rand = Math.random) {
+  let dueIn = 0;
+  for (const item of items) {
+    dueIn += _FOLLOWUP_GAP_MIN + Math.floor(rand() * (_FOLLOWUP_GAP_MAX - _FOLLOWUP_GAP_MIN + 1));
+    _followupQueue.push({ card: ratedCard, item, dueIn });
+  }
+}
+
+// One rated card has passed. Returns the entries now due (all when flush) and
+// keeps the rest queued.
+function _takeDueFollowups(flush) {
+  for (const q of _followupQueue) q.dueIn -= 1;
+  const due = _followupQueue.filter(q => flush || q.dueIn <= 0);
+  _followupQueue = _followupQueue.filter(q => !due.includes(q));
+  return due;
+}
+
 function _pendingFollowups(ratedCard) {
   if (!ratedCard || ratedCard.category !== 'creating') return [];
   return (story?.followups || []).filter(f =>
-    f.id != null && f.followup_word_id === ratedCard.word_id && !_followupDone.has(f.id));
+    f.id != null && f.followup_word_id === ratedCard.word_id && !_followupDone.has(f.id)
+    && !_followupQueue.some(q => q.item.id === f.id));
 }
 
 function _runFollowups(ratedCard, items) {
@@ -15978,12 +16000,14 @@ async function rate(rating) {
       _retentionData = r;
       _updateReviewRRBadge(deckId);
     }).catch(() => {});
-    // Folgesätze (#1401): extra conjugation sentences for this verb, shown after
-    // a creating card and BEFORE the next card is loaded.
-    const followups = _pendingFollowups(ratedCard);
-    if (followups.length) {
+    // Folgesätze (#1401): extra conjugation sentences for a verb, queued after its
+    // creating card and shown a few cards later (#1448), BEFORE the next card loads.
+    const dueFollowups = _takeDueFollowups(false);
+    _enqueueFollowups(ratedCard, _pendingFollowups(ratedCard));
+    if (!result.next_card) dueFollowups.push(..._takeDueFollowups(true));
+    if (dueFollowups.length) {
       if (result.counts) _lastCounts = result.counts;
-      await _runFollowups(ratedCard, followups);
+      for (const entry of dueFollowups) await _runFollowups(entry.card, [entry.item]);
     }
     if (!result.next_card) {
       _lastCounts = result.counts || _lastCounts;
@@ -17135,9 +17159,8 @@ function _renderGrammarHint(s) {
   const r = (wordDetails && card && wordDetails.id === card.word_id)
     ? wordDetails.verb_regularity : null;
   if (text && r) text += r === 'irregular' ? ' · irreg.' : ' · reg.';
-  // Back: append the conjugation pattern (Musterkarten)
-  const backText = (text && s?.conj_pattern_label)
-    ? `${text} — Muster: ${s.conj_pattern_label}` : text;
+  // Second back box: the conjugation pattern (Musterkarten), only next to a tense box
+  const patternText = text ? _patternOnly(s?.conj_pattern_label) : '';
   // Reading/listening: the tag on the front would reveal what is being tested.
   const cat = card?.category || category;
   const frontAllowed = cat !== 'reading' && cat !== 'listening';
@@ -17153,10 +17176,20 @@ function _renderGrammarHint(s) {
   for (const id of Object.keys(show)) {
     const el = document.getElementById(id);
     if (!el) continue;
-    const t = id === 'grammar-hint-back' ? backText : text;
-    el.textContent = t;
-    el.style.display = (t && show[id]) ? '' : 'none';
+    el.textContent = text;
+    el.style.display = (text && show[id]) ? '' : 'none';
   }
+  const pat = document.getElementById('grammar-pattern-back');
+  if (pat) {
+    pat.textContent = patternText;
+    pat.style.display = patternText ? '' : 'none';
+  }
+}
+
+// "Presente · -er (regelmäßig)" → "-er (regelmäßig)": the tense is in the other box (#1448).
+function _patternOnly(label) {
+  const parts = String(label || '').split(' · ');
+  return (parts.length > 1 ? parts.slice(1).join(' · ') : parts[0]).trim();
 }
 
 // Front side: context (above the Chinese sentence) + source line (below it).
