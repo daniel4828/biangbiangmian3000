@@ -525,7 +525,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 
 - **每种语言一棵平行的牌组树**，根名在 `languages.py` 的 `deck_root`（zh → `Daily`，fr → `Français`）：`Français::<日期> · Listening/…` + `Français::Saved`，牌组本身 `lang='fr'`。**必须如此**——全应用的语言过滤（`_lang_subquery_clause`、`get_descendant_leaf_deck_ids`）筛的是 `decks.lang` 而不是 `entries.lang`，法语卡放进中文牌组会在 fr 标签下消失、反而混进中文复习队列（生产库里 #726 之前导入的那 7 个法语词正是这个状态）
 - `Français::Saved` 的**牌组名仍是 `Saved`**（路径末段），所以 Browse 的 saved 视图（认 `deck_name === 'Saved'`）一行都不用改
-- **已存在的词按 `entries.lang` 落点，不听请求参数**：`word_zh` 是全局唯一的，lang 传错会把同一个词的三张卡撒进两棵语言树，两个标签下都看不见它。`promote_saved`（Browse 的 → Add to Daily）同理
+- **已有词按请求语言查（#1450）**：词条按 `(word_zh, lang)` 唯一，同形词在不同语言是不同词条；不带语言查询会把西语 `venir` 认成法语词并把法语卡搬进 Saved。`promote_saved` 仍按该词条自己的语言落点
 - **按语言校验输入文字体系**（zh 必须含汉字；fr 不能含汉字且要有拉丁字母）：加词框没有反问的机会（`de-zh-bot`/`de-fr-bot` 技能是靠追问"你指哪个意思"的），把德语词喂给法语提示词会静默生成一个错词条。查文字体系分不出法语和德语，但至少挡住 `生态` 走法语提示词
 - 法语输出**自带 `lang: fr` 头**，不靠目标牌组的语言推断——条目格式（`word:`/`level:`/`examples[].fr`）和 lang 必须一致，写在文档里能整类消灭"法语词条被当中文导入"
 - 复习界面长按菜单的两个按钮（`+ Add to Daily`、`★ Save for later`）按**当前卡片的语言**走（`currentCardLang()`），跟主页在哪个标签无关——词是从这张卡里挑出来的

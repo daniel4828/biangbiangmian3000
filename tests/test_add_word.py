@@ -801,6 +801,23 @@ ENTRY_YAML_FR_VERB = """- type: word
 """
 
 
+ENTRY_YAML_FR_VENIR = """- type: word
+  date: "08/13"
+  word: venir
+  pos: verbe
+  english: to come
+  german: kommen
+  level: "A1"
+  register: neutral
+  note: |
+    Unregelmäßiges Verb auf -ir.
+  examples:
+    - fr: Je viens de Paris.
+      english: I come from Paris.
+      german: Ich komme aus Paris.
+"""
+
+
 def _fr_leaf_decks(day=None):
     day = day or database.anki_today().isoformat()
     deck_id, _ = database.get_or_create_daily_deck(day, "fr")
@@ -880,22 +897,85 @@ def test_listed_french_word_is_promoted_inside_its_own_tree(tmp_db):
     assert decks == set(_fr_leaf_decks(today).values())
 
 
-def test_existing_word_ignores_a_wrong_lang_and_follows_its_own(tmp_db):
-    """word_zh is globally unique, so trusting the request's lang would scatter
-    one word's cards over two language trees and hide it under both tabs."""
+def test_wrong_lang_request_does_not_touch_another_languages_entry(tmp_db):
+    """Entries are unique on (word_zh, lang) (#803, #1450): a request in another
+    language must not find the French entry, so its cards stay where they are
+    (here the wrong-script check rejects the request instead)."""
     _run_add_word("séjour", yaml_text=ENTRY_YAML_FR, lang="fr", day="list")
     entry_id = database.get_word_by_zh("séjour")["id"]
 
-    with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
-        body = client.post("/api/add-word-ai",
-                           json={"word_zh": "séjour", "lang": "zh", "confirm": True}).json()
+    def _cards():
+        conn = database.get_db()
+        rows = conn.execute(
+            "SELECT id, deck_id, state FROM cards WHERE word_id=? AND deleted_at IS NULL "
+            "ORDER BY id", (entry_id,)).fetchall()
+        conn.close()
+        return [tuple(r) for r in rows]
 
-    assert body["deck_path"].startswith("Français::")
+    before = _cards()
+    with patch.object(ai, "_call_api", side_effect=AssertionError("AI was called")):
+        r = client.post("/api/add-word-ai",
+                        json={"word_zh": "séjour", "lang": "zh", "confirm": True})
+    assert r.status_code == 400
+    assert _cards() == before
+
+
+ENTRY_YAML_ES_VENIR = """- type: word
+  date: "11/04"
+  word: venir
+  pos: verbo
+  english: to come
+  german: kommen
+  level: "A1"
+  register: neutral
+  note: |
+    Unregelmäßiges Verb auf -ir.
+  examples:
+    - es: Vengo de casa.
+      english: I come from home.
+      german: Ich komme von zu Hause.
+  conjugations:
+    presente:
+      yo: vengo
+      tú: vienes
+    participio: venido
+"""
+
+
+def test_same_spelling_in_another_language_is_a_new_entry(tmp_db):
+    """French `venir` already exists; adding Spanish `venir` must generate a new
+    es entry and leave the French cards alone (#1450)."""
+    _run_add_word("venir", yaml_text=ENTRY_YAML_FR_VENIR, lang="fr", day="list")
+    fr_entry = database.get_word_by_zh("venir", "fr")
+    assert fr_entry is not None
+
+    def _fr_cards():
+        conn = database.get_db()
+        rows = conn.execute(
+            "SELECT id, deck_id, state FROM cards WHERE word_id=? AND deleted_at IS NULL "
+            "ORDER BY id", (fr_entry["id"],)).fetchall()
+        conn.close()
+        return [tuple(r) for r in rows]
+
+    before = _fr_cards()
+    assert before
+
+    with patch.object(ai, "_call_api", return_value=ENTRY_YAML_ES_VENIR):
+        result = routes.imports.add_word_to_list("venir", "es")
+
+    assert result["status"] == "added"
+    es_entry = database.get_word_by_zh("venir", "es")
+    assert es_entry is not None and es_entry["id"] != fr_entry["id"]
+    assert result["entry_id"] == es_entry["id"]
+    assert _fr_cards() == before
+    # The new Spanish cards are parked in the Spanish Saved deck.
+    es_saved = database.get_or_create_saved_deck("es")
     conn = database.get_db()
-    decks = {row["deck_id"] for row in conn.execute(
-        "SELECT deck_id FROM cards WHERE word_id=? AND deleted_at IS NULL", (entry_id,))}
+    es_decks = {r["deck_id"] for r in conn.execute(
+        "SELECT deck_id FROM cards WHERE word_id=? AND deleted_at IS NULL",
+        (es_entry["id"],))}
     conn.close()
-    assert decks == set(_fr_leaf_decks().values())
+    assert es_decks == {es_saved}
 
 
 def test_wrong_script_is_rejected_per_language(tmp_db):
