@@ -186,6 +186,53 @@ def test_plan_followups_focus_skips_non_creating_and_no_main_slot(real_lex):
                                         conj_states={}) == []
 
 
+# --- person types by irregularity (#1440) ------------------------------------------
+
+def test_focus_persons_by_irregularity_type(real_lex):
+    assert conj_patterns.focus_persons("pensar", "ind_pres") == ["1s", "1p"]
+    assert conj_patterns.focus_persons("salir", "ind_pres") == ["1s", "2s"]
+    assert conj_patterns.focus_persons("tener", "ind_pres") == ["1s", "2s", "1p"]
+    assert conj_patterns.focus_persons("ser", "ind_pres") == list(verb_slots.PERSONS)
+    assert conj_patterns.focus_persons("hablar", "ind_pres") == []
+
+
+def test_assign_slots_creating_irregular_keeps_pointer(real_lex):
+    cards = [_card(1, "salir", "creating"), _card(2, "pensar", "creating"),
+             _card(3, "hablar", "creating")]
+    out = verb_slots.assign_slots(cards, "es", usage={})
+    assert out[1]["slot"] == "ind_pres:1s" and out[1]["form"] == "salgo"
+    assert out[2]["slot"] == "ind_pres:1s"
+    assert out[3]["slot"] == "ind_pres:1s"  # pointer was not moved
+
+
+def test_assign_slots_reading_irregular_uses_pointer(real_lex):
+    cards = [_card(1, "hablar"), _card(2, "salir")]
+    out = verb_slots.assign_slots(cards, "es", usage={})
+    assert out[1]["slot"] == "ind_pres:1s" and out[2]["slot"] == "ind_pres:2s"
+
+
+def test_plan_followups_form_card_ser_gets_five_followups(real_lex):
+    word = verb_slots.form_card_word("ser", "ind_pres")
+    entries = [(_card(1, word, "creating"), "ind_pres:1s")]
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == [
+        "ind_pres:2s", "ind_pres:3s", "ind_pres:1p", "ind_pres:2p", "ind_pres:3p"]
+
+
+def test_plan_followups_pensar_only_nosotros(real_lex):
+    entries = [(_card(1, "pensar", "creating"), "ind_pres:1s")]
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pres:1p"]
+
+
+def test_plan_followups_cap_is_spread_round_robin(real_lex):
+    database.set_app_setting(conj_patterns.KEY_FOLLOWUPS_PER_DAY, "2")
+    entries = [(_card(1, "ser", "creating"), "ind_pres:1s"),
+               (_card(2, "salir", "creating"), "ind_pres:1s")]
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert sorted(f["word_id"] for f in out) == [1, 2]
+
+
 # --- API -------------------------------------------------------------------------
 
 def test_api_roundtrip(clock):

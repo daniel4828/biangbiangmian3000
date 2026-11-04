@@ -393,6 +393,38 @@ def slot_pattern(word_zh: str, slot: str, lang: str = LANG) -> dict | None:
         return None
 
 
+def focus_persons(lemma: str, tense: str, lang: str = LANG) -> list[str]:
+    """Persons a creating card practises in Zeit-des-Tages mode (#1440), by the
+    verb's irregularity type in `tense`:
+    - no irregular person (regular verb) -> [] (caller uses the person pointer);
+    - a single-verb pattern (kind "verb": ser, ir, estar, ... or a Sonderform)
+      -> every person that has a pattern, in PERSONS order;
+    - otherwise one person per distinct pattern: irregular patterns first, then
+      regular ones, each in PERSONS order (pensar: 1s, 1p; salir: 1s, 2s).
+    Never raises ([] on any failure)."""
+    try:
+        pats = []
+        for person in PERSONS:
+            pat = pattern_for(lemma, tense, person, lang)
+            if pat:
+                pats.append((person, pat))
+        if not any(p["kind"] != "regular" for _, p in pats):
+            return []
+        if any(p["kind"] == "verb" for _, p in pats):
+            return [person for person, _ in pats]
+        seen: set = set()
+        irregular, regular = [], []
+        for person, pat in pats:
+            if pat["key"] in seen:
+                continue
+            seen.add(pat["key"])
+            (regular if pat["kind"] == "regular" else irregular).append(person)
+        return irregular + regular
+    except Exception as e:
+        logger.warning("focus_persons(%r, %r) failed — %s", lemma, tense, e)
+        return []
+
+
 def _special_irregular(base: str, tense: str) -> bool:
     for person in (PERSONS if tense != "perf" else ("1s",)):
         form, reg = _lex_form(base, tense, person), _regular(base, tense, person)
@@ -917,12 +949,15 @@ def _card_lang(card: dict, story_lang: str) -> str:
 
 def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
                           per_verb: int, remaining: int) -> list[dict]:
-    """Folgesätze in Zeit-des-Tages mode (#1434): for each Spanish creating card
-    the next `per_verb` persons after the main sentence's person (cyclic over
-    PERSONS), in the focus tense (form cards: their fixed tense). Persons
-    without a form or pattern are skipped; no due/new ordering and no pattern
-    dedupe. Card by card, stopping at the daily cap."""
-    out: list[dict] = []
+    """Folgesätze in Zeit-des-Tages mode (#1434, #1440): for each Spanish creating
+    card, in the focus tense (form cards: their fixed tense). Candidates are the
+    persons of focus_persons() without the main sentence's person (not limited
+    by `per_verb`); for regular verbs the next `per_verb` persons after the main
+    person (cyclic over PERSONS). Persons without a form or pattern are skipped;
+    no due/new ordering and no pattern dedupe. The daily cap `remaining` is
+    spread round-robin over the cards (round 1: one candidate per card, round 2:
+    the next, ...); the result is grouped by card in entries order."""
+    cands: list[tuple[dict, str, list[dict]]] = []
     for card, main_slot in entries:
         if not main_slot or card.get("category") != "creating" \
                 or _card_lang(card, lang) != LANG:
@@ -936,25 +971,44 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
         main_person = main_slot.partition(":")[2]
         if main_person not in PERSONS:
             continue
-        start = PERSONS.index(main_person)
-        taken = 0
-        for i in range(1, len(PERSONS)):
-            if taken >= per_verb:
+        plan = focus_persons(lemma, tense, LANG)
+        if plan:
+            order = [p for p in plan if p != main_person]
+            limit = len(order)
+        else:
+            start = PERSONS.index(main_person)
+            order = [PERSONS[(start + i) % len(PERSONS)] for i in range(1, len(PERSONS))]
+            limit = per_verb
+        items: list[dict] = []
+        for person in order:
+            if len(items) >= limit:
                 break
-            if remaining <= 0:
-                return out
-            person = PERSONS[(start + i) % len(PERSONS)]
             form = verb_slots.target_form(raw_lemma, tense, person, LANG)
             pat = pattern_for(lemma, tense, person, LANG) if form else None
             if not pat:
                 continue
-            out.append({
+            items.append({
                 "word_id": card["word_id"], "lemma": lemma, "slot": f"{tense}:{person}",
                 "form": form, "label": lexicon.slot_label(tense, person),
                 "pattern": pat["key"], "pattern_label": label_for_key(pat["key"])})
-            taken += 1
-            remaining -= 1
-    return out
+        if items:
+            cands.append((card, main_person, items))
+
+    chosen: list[list[dict]] = [[] for _ in cands]
+    rnd = 0
+    while remaining > 0:
+        progressed = False
+        for idx, (_card, _mp, items) in enumerate(cands):
+            if remaining <= 0:
+                break
+            if rnd < len(items):
+                chosen[idx].append(items[rnd])
+                remaining -= 1
+                progressed = True
+        if not progressed:
+            break
+        rnd += 1
+    return [f for group in chosen for f in group]
 
 
 def plan_followups(entries: list, lang: str, today=None, conj_states=None,

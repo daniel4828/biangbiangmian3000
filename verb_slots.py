@@ -519,8 +519,11 @@ def _followup_reserve() -> int:
 def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
     """Slots in focus mode (#1434): a pointer over PERSONS (starting at yo for
     every call), one person per card; a creating card also reserves the next
-    persons for its Folgesätze. Form cards keep their fixed tense. Cards with no
-    form in the tense are left out (the caller uses the normal logic)."""
+    persons for its Folgesätze. Exception (#1440): a creating card of an
+    irregular verb takes the first person of conj_patterns.focus_persons() (its
+    irregularity type) and leaves the pointer untouched. Form cards keep their
+    fixed tense. Cards with no form in the tense are left out (the caller uses
+    the normal logic)."""
     out: dict[int, dict] = {}
     reserve = _followup_reserve()
     use_patterns = False
@@ -539,12 +542,10 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
             lemma, tense = word.strip().lower(), focus_tense
         else:
             continue
-        for k in range(len(PERSONS)):
-            pos = p + k
-            person = PERSONS[pos % len(PERSONS)]
+        def make_entry(person: str) -> dict | None:
             form = target_form(lemma, tense, person, lang)
             if not form:
-                continue
+                return None
             entry = {"slot": f"{tense}:{person}", "form": form,
                      "label": lexicon.slot_label(tense, person)}
             if use_patterns:
@@ -554,6 +555,25 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
                         entry["pattern"] = pat["key"]
                 except Exception as e:
                     logger.warning("pattern of %r failed — %s", lemma, e)
+            return entry
+
+        # creating + irregular verb: the irregularity type picks the person (#1440)
+        if use_patterns and card.get("category") == "creating":
+            try:
+                plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang)
+                        if target_form(lemma, tense, x, lang)]
+            except Exception as e:
+                logger.warning("focus persons of %r failed — %s", lemma, e)
+                plan = []
+            entry = make_entry(plan[0]) if plan else None
+            if entry:
+                out[card["word_id"]] = entry
+                continue
+        for k in range(len(PERSONS)):
+            pos = p + k
+            entry = make_entry(PERSONS[pos % len(PERSONS)])
+            if not entry:
+                continue
             out[card["word_id"]] = entry
             p = pos + 1
             if card.get("category") == "creating":
