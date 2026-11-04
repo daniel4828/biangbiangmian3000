@@ -12906,9 +12906,12 @@ function showFront() {
   const wordDefRowWb  = document.getElementById('creating-word-def-wb-row');
   if (isCreating) {
     const parts = [];
+    // #1442: form card → infinitive only; its definition_de is the answer
+    const formLemma = formCardLemma(card);
+    if (formLemma) parts.push(formLemma);
     if (card.definition) parts.push(`🇬🇧 ${card.definition}`);
     if (card.definition_fr) parts.push(`🇫🇷 ${card.definition_fr}`);
-    if (card.definition_de) parts.push(`🇩🇪 ${card.definition_de}`);
+    if (card.definition_de && !formLemma) parts.push(`🇩🇪 ${card.definition_de}`);
     const defText = parts.join('<br>');
     // Only one placement is active (word bank for cloze, plain otherwise); clear the other.
     const activeHint = isCloze ? wordDefHintWb : wordDefHint;
@@ -12934,7 +12937,7 @@ function showFront() {
       // Sentence notes or quick mode: text input
       const prompt = isSentence
         ? (card.source_sentence || card.definition || '')
-        : (card.definition_de || card.definition || '');
+        : (formCardLemma(card) || card.definition_de || card.definition || '');
       document.getElementById('sentence-en-front').textContent = prompt;
       document.getElementById('creating-input-label').textContent = isSentence ? 'Your translation in Chinese' : 'Write the word in Chinese';
       document.getElementById('creating-input').placeholder = 'Type here…';
@@ -15633,6 +15636,15 @@ function wordBankAddToken(num) {
   inp.focus();
 }
 
+// #1442: form cards (#1296) keep the whole conjugation row in definition_de,
+// so it must never be used as a front-side hint: it is the answer. Returns
+// the infinitive for a form card ("estar · Presente" → "estar"), else ''.
+function formCardLemma(c) {
+  if (!c || c.note_type !== 'grammar') return '';
+  const m = /^(\S+) · \S/.exec(c.word_zh || '');
+  return m ? m[1] : '';
+}
+
 async function renderWordBankUI() {
   await _buildWordBank();
   if (!wordBankOrder.length) {
@@ -15650,8 +15662,9 @@ async function renderWordBankUI() {
     skelEl.classList.toggle('wb-latin', currentCardLang() !== 'zh');
     const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     // Hint shown faintly inside the target word's blank (first target only):
-    // prefer the German definition, fall back to English when no German exists.
-    const deHint = (card.definition_de || card.definition || '').trim();
+    // prefer the German definition, fall back to English when no German exists
+    // (form cards: the infinitive, since their definition_de is the answer, #1442).
+    const deHint = (formCardLemma(card) || card.definition_de || card.definition || '').trim();
     let deShown = false;
     let slotIdx = 0;
     skelEl.innerHTML = wordBankOrder.map(tok => {
