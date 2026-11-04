@@ -577,6 +577,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
 - **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选
 - **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升，或带 body `{"activate": true}`（#1438）一次把所有还在 Saved 里的形态卡经 `promote_saved_word` 搬进今天的 Español Daily `creating` 牌组（结果多 `activated[]`；不带 body 的旧调用照旧）
+- 🔴 **形态卡的 `definition_de` 是答案，不是释义**（#1442）：正面的空格提示、k 提示、quick mode 题面一律走 `app.js` 的 `formCardLemma()` 显示原形，别处新增正面提示时同样不能直接读这个字段
 - 测试见 `tests/test_irregular_forms.py`
 
 ## 西语变位表与区块初始状态（#1356）
