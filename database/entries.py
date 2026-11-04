@@ -86,9 +86,13 @@ def get_word(word_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def get_word_by_zh(word_zh: str) -> dict | None:
+def get_word_by_zh(word_zh: str, lang: str | None = None) -> dict | None:
     conn = get_db()
-    row = conn.execute("SELECT * FROM entries WHERE word_zh = ?", (word_zh,)).fetchone()
+    if lang is None:
+        row = conn.execute("SELECT * FROM entries WHERE word_zh = ?", (word_zh,)).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM entries WHERE word_zh = ? AND lang = ?",
+                           (word_zh, lang)).fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -408,8 +412,8 @@ def form_card_view(entry: dict | None) -> dict | None:
         stored = (entry.get("definition_de") or "").strip()
         if not stored or stored == row_text:
             gloss = ""
-            head = get_word_by_zh(lemma)
-            if head and head.get("lang") == "es" and (head.get("definition_de") or "").strip():
+            head = get_word_by_zh(lemma, "es")
+            if head and (head.get("definition_de") or "").strip():
                 gloss = head["definition_de"]
             else:
                 import lexicon
@@ -418,6 +422,35 @@ def form_card_view(entry: dict | None) -> dict | None:
     except Exception as e:
         logger.warning("form_card_view failed for %s — %s", entry.get("word_zh"), e)
     return entry
+
+
+def form_card_detail(word: dict | None) -> dict | None:
+    """Let a form card borrow etymology/examples/conjugations from the verb's
+    own es headword entry (#1446). Fills only values that are empty on the form
+    card; no DB writes; never raises. Mutates and returns `word`."""
+    if not word:
+        return word
+    try:
+        lang = word.get("word_lang") or word.get("lang")
+        if word.get("note_type") != "grammar" or lang != "es":
+            return word
+        import verb_slots
+        parsed = verb_slots.parse_form_card(word.get("word_zh"))
+        if not parsed:
+            return word
+        head = get_word_by_zh(parsed[0], "es")
+        if not head:
+            return word
+        if not (word.get("etymology") or "").strip():
+            word["etymology"] = head.get("etymology")
+        if not word.get("examples"):
+            word["examples"] = get_word_examples(head["id"])
+        if not word.get("conjugations"):
+            word["conjugations"] = get_word_conjugations(head["id"])
+        word["lemma_word_id"] = head["id"]
+    except Exception as e:
+        logger.warning("form_card_detail failed for %s — %s", word.get("word_zh"), e)
+    return word
 
 
 def forms_lookup(surface_forms: list[str], lang: str) -> set[str]:

@@ -283,6 +283,57 @@ def test_form_card_view_ignores_other_entries(tmp_db):
     assert database.form_card_view(None) is None
 
 
+def _head(lang="es", **kw):
+    d = {"word_zh": "tener", "lang": lang, "note_type": "vocabulary",
+         "definition_de": "haben", "etymology": "von lat. tenere"}
+    d.update(kw)
+    wid = database.insert_word(d)
+    database.insert_word_example(wid, "Tengo un perro.", None, None, "Ich habe einen Hund.", 0)
+    database.insert_word_conjugation(wid, "Presente", "yo", "tengo", 0)
+    return wid
+
+
+def test_form_card_detail_borrows_from_headword(tmp_db):
+    wid = _head()
+    w = database.form_card_detail(_fc(etymology=None, examples=[], conjugations=[]))
+    assert w["etymology"] == "von lat. tenere"
+    assert [e["example_zh"] for e in w["examples"]] == ["Tengo un perro."]
+    assert [c["form"] for c in w["conjugations"]] == ["tengo"]
+    assert w["lemma_word_id"] == wid
+
+
+def test_form_card_detail_keeps_own_values(tmp_db):
+    _head()
+    own_ex = [{"example_zh": "eigen"}]
+    w = database.form_card_detail(_fc(etymology="eigene Etymologie",
+                                      examples=own_ex, conjugations=[]))
+    assert w["etymology"] == "eigene Etymologie"
+    assert w["examples"] == own_ex
+    assert [c["form"] for c in w["conjugations"]] == ["tengo"]
+
+
+def test_form_card_detail_without_headword(tmp_db):
+    w = database.form_card_detail(_fc(etymology=None, examples=[], conjugations=[]))
+    assert w["etymology"] is None
+    assert w["examples"] == []
+    assert "lemma_word_id" not in w
+
+
+def test_form_card_detail_ignores_fr_headword(tmp_db):
+    _head(lang="fr")
+    w = database.form_card_detail(_fc(etymology=None, examples=[], conjugations=[]))
+    assert w["etymology"] is None
+    assert "lemma_word_id" not in w
+    assert database.form_card_detail(None) is None
+
+
+def test_get_word_by_zh_lang_filter(tmp_db):
+    _head(lang="fr")
+    assert database.get_word_by_zh("tener")["lang"] == "fr"
+    assert database.get_word_by_zh("tener", "es") is None
+    assert database.get_word_by_zh("tener", "fr")["lang"] == "fr"
+
+
 def test_endpoint_requires_lexicon(tmp_db):
     lexicon.inject("es", None)
     with pytest.raises(HTTPException) as exc:
