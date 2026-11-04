@@ -3660,6 +3660,11 @@ function renderWordDetail(word) {
   const defDeEl = document.getElementById('wd-def-de');
   defDeEl.textContent = word.definition_de ? `🇩🇪 ${word.definition_de}` : '';
   defDeEl.style.display = word.definition_de ? 'block' : 'none';
+  const conjEl = document.getElementById('wd-conj-row');
+  if (conjEl) {
+    conjEl.textContent = word.conjugation_row || '';
+    conjEl.style.display = word.conjugation_row ? 'block' : 'none';
+  }
   const defFrEl = document.getElementById('wd-def-fr');
   defFrEl.textContent = word.definition_fr ? `🇫🇷 ${word.definition_fr}` : '';
   defFrEl.style.display = word.definition_fr ? 'block' : 'none';
@@ -12906,12 +12911,12 @@ function showFront() {
   const wordDefRowWb  = document.getElementById('creating-word-def-wb-row');
   if (isCreating) {
     const parts = [];
-    // #1442: form card → infinitive only; its definition_de is the answer
-    const formLemma = formCardLemma(card);
-    if (formLemma) parts.push(formLemma);
+    // #1442/#1444: form card → first German sense only (infinitive fallback)
+    const formHint = formCardHint(card);
+    if (formHint) parts.push(`🇩🇪 ${formHint}`);
     if (card.definition) parts.push(`🇬🇧 ${card.definition}`);
     if (card.definition_fr) parts.push(`🇫🇷 ${card.definition_fr}`);
-    if (card.definition_de && !formLemma) parts.push(`🇩🇪 ${card.definition_de}`);
+    if (card.definition_de && !formHint) parts.push(`🇩🇪 ${card.definition_de}`);
     const defText = parts.join('<br>');
     // Only one placement is active (word bank for cloze, plain otherwise); clear the other.
     const activeHint = isCloze ? wordDefHintWb : wordDefHint;
@@ -12937,7 +12942,7 @@ function showFront() {
       // Sentence notes or quick mode: text input
       const prompt = isSentence
         ? (card.source_sentence || card.definition || '')
-        : (formCardLemma(card) || card.definition_de || card.definition || '');
+        : (formCardHint(card) || card.definition_de || card.definition || '');
       document.getElementById('sentence-en-front').textContent = prompt;
       document.getElementById('creating-input-label').textContent = isSentence ? 'Your translation in Chinese' : 'Write the word in Chinese';
       document.getElementById('creating-input').placeholder = 'Type here…';
@@ -13240,6 +13245,11 @@ function revealAnswer() {
   const wordDefDeEl = document.getElementById('word-def-de');
   wordDefDeEl.textContent = card.definition_de ? `🇩🇪 ${card.definition_de}` : '';
   wordDefDeEl.style.display = card.definition_de ? 'block' : 'none';
+  const wordConjEl = document.getElementById('word-conj-row');
+  if (wordConjEl) {
+    wordConjEl.textContent = card.conjugation_row || '';
+    wordConjEl.style.display = card.conjugation_row ? 'block' : 'none';
+  }
   const wordDefFrEl = document.getElementById('word-def-fr');
   wordDefFrEl.textContent = card.definition_fr ? `🇫🇷 ${card.definition_fr}` : '';
   wordDefFrEl.style.display = card.definition_fr ? 'block' : 'none';
@@ -15645,6 +15655,17 @@ function formCardLemma(c) {
   return m ? m[1] : '';
 }
 
+// #1444: German word for a form card's front hints. definition_de is the verb's
+// meaning (the server swaps out the stored conjugation row), so use its first
+// sense only; the infinitive is the fallback. Returns '' for other cards.
+function formCardHint(c) {
+  const lemma = formCardLemma(c);
+  if (!lemma) return '';
+  if (c.conjugation_row === undefined) return lemma;
+  const first = String(c.definition_de || '').split(/[,;\/]/)[0].trim();
+  return first || lemma;
+}
+
 async function renderWordBankUI() {
   await _buildWordBank();
   if (!wordBankOrder.length) {
@@ -15663,8 +15684,8 @@ async function renderWordBankUI() {
     const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     // Hint shown faintly inside the target word's blank (first target only):
     // prefer the German definition, fall back to English when no German exists
-    // (form cards: the infinitive, since their definition_de is the answer, #1442).
-    const deHint = (formCardLemma(card) || card.definition_de || card.definition || '').trim();
+    // (form cards: first German sense via formCardHint, #1444).
+    const deHint = (formCardHint(card) || card.definition_de || card.definition || '').trim();
     let deShown = false;
     let slotIdx = 0;
     skelEl.innerHTML = wordBankOrder.map(tok => {

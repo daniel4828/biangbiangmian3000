@@ -383,6 +383,43 @@ def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
     return sorted({f for f in forms if f}, key=len, reverse=True)
 
 
+def form_card_view(entry: dict | None) -> dict | None:
+    """Read-path fix for irregular-verb form cards (#1444).
+
+    Old rows store the six conjugated forms in definition_de. For such a card
+    (or one with an empty definition_de) swap in the verb's German meaning and
+    expose the row as `conjugation_row`. A differing definition_de is a real or
+    hand-edited gloss and stays. Mutates and returns `entry`; never raises.
+    """
+    if not entry:
+        return entry
+    try:
+        lang = entry.get("word_lang") or entry.get("lang")
+        if entry.get("note_type") != "grammar" or lang != "es":
+            return entry
+        import verb_slots
+        parsed = verb_slots.parse_form_card(entry.get("word_zh"))
+        if not parsed:
+            return entry
+        lemma, tense = parsed
+        row = [verb_slots.target_form(lemma, tense, p, "es") for p in verb_slots.PERSONS]
+        row_text = ", ".join(f for f in row if f)
+        entry["conjugation_row"] = row_text
+        stored = (entry.get("definition_de") or "").strip()
+        if not stored or stored == row_text:
+            gloss = ""
+            head = get_word_by_zh(lemma)
+            if head and head.get("lang") == "es" and (head.get("definition_de") or "").strip():
+                gloss = head["definition_de"]
+            else:
+                import lexicon
+                gloss = (lexicon.lemma_info(lemma, "es") or {}).get("gloss_de") or ""
+            entry["definition_de"] = gloss
+    except Exception as e:
+        logger.warning("form_card_view failed for %s — %s", entry.get("word_zh"), e)
+    return entry
+
+
 def forms_lookup(surface_forms: list[str], lang: str) -> set[str]:
     """Which of these surface forms belong to an already-studied entry in `lang`.
 

@@ -50,6 +50,7 @@ TABLE = {
 }
 
 
+DE = {"tener": "haben, besitzen"}  # German gloss in the fixture lexicon (#1444)
 PARTICIPLES = {"ser": "sido", "tener": "tenido", "haber": "habido"}
 SUBJ_TENER = {
     "subj_pres": "tenga tengas tenga tengamos tengáis tengan",
@@ -61,6 +62,8 @@ def _lexicon():
     lemmas, verbs = {}, {}
     for lemma, (rank, tenses) in TABLE.items():
         lemmas[lemma] = {"r": rank, "p": "v", "en": f"to {lemma}"}
+        if lemma in DE:
+            lemmas[lemma]["de"] = DE[lemma]
         for tense, row in tenses.items():
             for person, form in zip(PERSONS, row.split()):
                 verbs.setdefault(form, []).append([lemma, tense, person])
@@ -224,7 +227,7 @@ def test_seed_creates_suspended_creating_cards_once(tmp_db, monkeypatch):
     saved = database.get_or_create_saved_deck("es")
     entry = database.get_word_by_zh("tener · Indefinido")
     assert entry["lang"] == "es" and entry["note_type"] == "grammar"
-    assert entry["definition_de"] == "tuve, tuviste, tuvo, tuvimos, tuvisteis, tuvieron"
+    assert entry["definition_de"] == "haben, besitzen"
     assert "Starkes Indefinido" in entry["notes"]
     conn = database.get_db()
     cards = conn.execute("SELECT category, state, deck_id FROM cards WHERE word_id=?",
@@ -236,6 +239,48 @@ def test_seed_creates_suspended_creating_cards_once(tmp_db, monkeypatch):
     again = imports_routes.seed_es_irregular_form_cards()
     assert again["created"] == []
     assert len(again["skipped"]) == len(res["created"])
+
+
+TENER_PRET_ROW = "tuve, tuviste, tuvo, tuvimos, tuvisteis, tuvieron"
+
+
+def _fc(**kw):
+    d = {"word_zh": "tener · Indefinido", "lang": "es", "note_type": "grammar",
+         "definition_de": TENER_PRET_ROW}
+    d.update(kw)
+    return d
+
+
+def test_form_card_view_replaces_stored_row(tmp_db):
+    v = database.form_card_view(_fc())
+    assert v["conjugation_row"] == TENER_PRET_ROW
+    assert v["definition_de"] == "haben, besitzen"
+    assert database.form_card_view(_fc(definition_de=""))["definition_de"] == "haben, besitzen"
+    # review cards carry the language as word_lang
+    v = database.form_card_view(_fc(lang=None, word_lang="es"))
+    assert v["definition_de"] == "haben, besitzen"
+
+
+def test_form_card_view_prefers_headword_gloss(tmp_db):
+    database.insert_word({"word_zh": "tener", "lang": "es", "note_type": "vocabulary",
+                          "definition_de": "besitzen (Headword)"})
+    v = database.form_card_view(_fc())
+    assert v["definition_de"] == "besitzen (Headword)"
+
+
+def test_form_card_view_keeps_hand_edited_gloss(tmp_db):
+    v = database.form_card_view(_fc(definition_de="mein eigener Text"))
+    assert v["definition_de"] == "mein eigener Text"
+    assert v["conjugation_row"] == TENER_PRET_ROW
+
+
+def test_form_card_view_ignores_other_entries(tmp_db):
+    for e in (_fc(lang="fr"), _fc(lang="zh"), _fc(note_type="vocabulary"),
+              _fc(word_zh="tener")):
+        before = dict(e)
+        assert database.form_card_view(e) == before
+        assert "conjugation_row" not in e
+    assert database.form_card_view(None) is None
 
 
 def test_endpoint_requires_lexicon(tmp_db):

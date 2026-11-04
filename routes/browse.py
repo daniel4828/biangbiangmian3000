@@ -24,6 +24,7 @@ def trigger_import():
 def get_word_detail(word_id: int):
     word = database.get_word_full(word_id)
     if word:
+        database.form_card_view(word)
         word["cards"] = database.get_cards_for_word(word_id)
         # Article for noun headwords (#1294, "el clima"); display only — the
         # stored word_zh stays the bare lemma.

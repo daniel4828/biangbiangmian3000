@@ -1111,6 +1111,7 @@ body.ra-fullscreen-open #error-banner {
 .word-pos-row:has(.word-pos:empty):has(.word-register[style*="none"]) { display: none; }
 .word-def  { flex-basis: 100%; font-size: 14px; color: var(--muted); margin-bottom: 0; }
 .word-def-de { flex-basis: 100%; font-size: 16px; color: var(--text); font-weight: 700; margin-bottom: 0; }
+.word-conj-row { flex-basis: 100%; font-size: 15px; color: var(--text); margin-top: 4px; }
 .word-def-fr { flex-basis: 100%; font-size: 14px; color: var(--muted); margin-bottom: 0; }
 
 /* ── Edit card ───────────────────────────────────────── */
@@ -3231,6 +3232,7 @@ a.nav-btn { text-decoration: none; }
 #wd-def    { font-size: 14px; color: var(--muted); }
 .wd-def-zh { font-size: 14px; color: var(--muted); margin-top: 4px; }
 .wd-def-de { font-size: 16px; color: var(--text); font-weight: 700; margin-top: 4px; }
+.wd-conj-row { font-size: 15px; color: var(--text); margin-top: 4px; }
 .wd-def-fr { font-size: 14px; color: var(--muted); margin-top: 2px; }
 .word-register {
   display: inline-block;

@@ -571,13 +571,13 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 
 不规则动词需要专门练：每个（不规则动词 × 时态）一张卡，如 `tener · Indefinido`，**不是每人称一张**；人称在卡内轮换。**#1438 起**：25 个最常用不规则动词 × 全部七个时态（含该动词本身规则的时态，如 `tener · Imperfecto`），最多 175 张（`form_card_candidates(max_verbs=25, limit=175)`，任一人称缺形式的时态跳过）；每个时态日会引入约 25 张该时态的形态卡（其余新卡由「今日时态」的引入闸门暂挡，见下）。原来的「只收不规则时态、≤60 张」不再成立。
 
-- **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=六个人称的完整一行（逗号分隔）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
+- **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=动词德语释义（#1444）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
 - **不规则性由数据推出，不手写清单**：`verb_slots.irregular_tenses()` 把词汇表里的形式与 `regular_form()` 规则生成的规则形式逐人称比较；**拼写变化（busqué、leyó）也算不规则**，这是有意的——它们正是值得练的。判断不规则用的时态 `FORM_CARD_TENSES` = pret → pres → fut → impf（含义不变）；形态卡可带的时态是 `FORM_CARD_ALL_TENSES`（七个，`perf` 经 `target_form()` 组合成 `he tenido`；`parse_form_card`、`surface_forms`、`assign_slots` 都按它走）。规则的时态，规律说明写「Regelmäßig in dieser Zeit.」
 - **人称轮换复用 `assign_slots()`**：词头能被 `parse_form_card()` 解析成形态卡时，时态固定、只在六个人称里按"全局最少用、并列取最久没用"挑；`es["verb_slots"]` 启用的时态配置对形态卡不起作用。规则动词完全不变
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
 - **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选
 - **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升，或带 body `{"activate": true}`（#1438）一次把所有还在 Saved 里的形态卡经 `promote_saved_word` 搬进今天的 Español Daily `creating` 牌组（结果多 `activated[]`；不带 body 的旧调用照旧）
-- 🔴 **形态卡的 `definition_de` 是答案，不是释义**（#1442）：正面的空格提示、k 提示、quick mode 题面一律走 `app.js` 的 `formCardLemma()` 显示原形，别处新增正面提示时同样不能直接读这个字段
+- 🔴 形态卡 `definition_de` 存真释义（#1444）；生产库的旧行仍存变位表，所以读路径 `database.form_card_view()` 负责替换（存的值等于变位表或为空时，取同语言原形词条的释义，否则词汇表 `gloss_de`；手改过的不动）并给出 `conjugation_row`，背面和详情页单独一行显示；正面提示走 `formCardHint()`（第一个义项，空格里显示德语词），新增读路径要显示释义时同样要过这个函数
 - 测试见 `tests/test_irregular_forms.py`
 
 ## 西语变位表与区块初始状态（#1356）
