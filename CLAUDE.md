@@ -581,7 +581,8 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升，或带 body `{"activate": true}`（#1438）一次把所有还在 Saved 里的形态卡经 `promote_saved_word` 搬进今天的 Español Daily `creating` 牌组（结果多 `activated[]`；不带 body 的旧调用照旧）
 - 🔴 形态卡 `definition_de` 存真释义（#1444）；生产库的旧行仍存变位表，所以读路径 `database.form_card_view()` 负责替换（存的值等于变位表或为空时，取同语言原形词条的释义，否则词汇表 `gloss_de`；手改过的不动）并给出 `conjugation_row`，背面和详情页单独一行显示；正面提示走 `formCardHint()`（第一个义项，空格里显示德语词），新增读路径要显示释义时同样要过这个函数
 - 形态卡详情由 `database.form_card_detail()` 沿用同语言动词词条的词源、例句、变位表（#1446），只填形态卡自己为空的字段，不写库；动词没有词条时要先走加词管线建词条
-- 测试见 `tests/test_irregular_forms.py`
+- **形态卡主句不显示 `¿Conjugación correcta?`**：该行在形态卡上是重复的；结果由评分推出（Again = 错，其余 = 对），前端 `_derivedConjOk()` 照常带 `conj_ok` + `sentence_id` 上报，所以仍进入 Muster 排程。Folgesätze 仍手动 ✓/✗；普通词卡不变
+- 测试见 `tests/test_irregular_forms.py`、`tests/form_card_conj_derive.test.cjs`
 
 ## 西语变位表与区块初始状态（#1356）
 
