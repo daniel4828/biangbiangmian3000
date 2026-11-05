@@ -1,3 +1,5 @@
 # 由 deploy/install_cron.sh 安装进 anki 的 crontab（issue #1279）。改这里 → 合并到 main → 下一轮 deploy.sh 自动生效。
+# 部署行（deploy.sh，每分钟）也在这里（#1454）。
 # 模板里的 REPO_DIR 占位符安装时替换成仓库的绝对路径。
 0 */6 * * * /bin/bash @REPO_DIR@/scripts/backup_db.sh >> @REPO_DIR@/data/backup.log 2>&1
+* * * * * /bin/bash @REPO_DIR@/deploy/deploy.sh >> $HOME/deploy.log 2>&1

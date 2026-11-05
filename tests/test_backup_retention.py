@@ -208,6 +208,7 @@ LEGACY = ('0 */6 * * * sqlite3 /home/anki/biangbiangmian3000/data/srs.db ".backu
           '/home/anki/biangbiangmian3000/data/backups/srs_$(date +\\%Y-\\%m-\\%d_\\%H-\\%M-\\%S).db"')
 OTHER = "*/2 * * * * /home/anki/biangbiangmian3000/deploy/deploy.sh >> /home/anki/deploy.log 2>&1"
 UNRELATED = "* * * * * /home/anki/hoersaal/deploy/deploy.sh >> /home/anki/hoersaal-deploy.log 2>&1"
+LEGACY_DEPLOY = f"*/2 * * * * {ROOT}/deploy/deploy.sh >> /home/anki/deploy.log 2>&1"
 
 
 @pytest.fixture
@@ -240,6 +241,18 @@ def test_install_cron_replaces_legacy_line_and_keeps_others(fake_cron):
     assert OTHER in text and UNRELATED in text
     assert f"/bin/bash {ROOT}/scripts/backup_db.sh" in text
     assert text.count("biangbiangmian3000 managed") == 2  # begin + end
+
+
+def test_install_cron_replaces_manual_deploy_line(fake_cron):
+    store, run = fake_cron
+    store.write_text("\n".join([LEGACY_DEPLOY, UNRELATED]) + "\n")
+    r = run()
+    assert r.returncode == 0, r.stderr
+    text = store.read_text()
+    assert LEGACY_DEPLOY not in text
+    assert text.count(f"{ROOT}/deploy/deploy.sh") == 1
+    assert f"* * * * * /bin/bash {ROOT}/deploy/deploy.sh" in text
+    assert UNRELATED in text
 
 
 def test_install_cron_is_idempotent(fake_cron):

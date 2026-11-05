@@ -4,6 +4,7 @@
 # deploy.sh 每轮都调用它；内容没变就什么都不写（幂等）。
 # - 只管两个标记之间的那一块，其余 cron 行原样保留
 # - 顺带删掉旧的手工备份行（sqlite3 … .backup … data/backups/srs_…），它被 scripts/backup_db.sh 取代
+# - 顺带删掉本仓库手工的部署行（含 ${REPO_DIR}/deploy/deploy.sh 的行；别的项目的部署行不动，#1454）
 # - crontab -l 出错（不是"还没有 crontab"）时直接放弃，绝不拿空内容覆盖
 #
 # 用法：install_cron.sh [--dry-run]
@@ -30,7 +31,8 @@ fi
 
 KEPT="$(printf '%s\n' "$CURRENT" \
     | awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' \
-    | grep -vE 'sqlite3 .*\.backup .*data/backups/srs_' || true)"
+    | grep -vE 'sqlite3 .*\.backup .*data/backups/srs_' \
+    | grep -vF "${REPO_DIR}/deploy/deploy.sh" || true)"
 # 去掉末尾空行，免得每轮多出一行而永远"不一样"
 KEPT="$(printf '%s\n' "$KEPT" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
 
