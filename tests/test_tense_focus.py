@@ -133,16 +133,12 @@ def test_assign_slots_focus_follows_the_day_tense(real_lex):
     assert out[1]["slot"] == "ind_pret:1s" and out[1]["form"] == "hablé"
 
 
-def test_assign_slots_focus_reserves_persons_for_followups(real_lex):
+def test_assign_slots_focus_creating_regular_moves_one_person(real_lex):
     cards = [_card(1, "hablar", "creating"), _card(2, "comer", "creating")]
     out = verb_slots.assign_slots(cards, "es", usage={})
-    # default prod_per_verb 3 -> 2 persons reserved after the first card
     assert out[1]["slot"] == "ind_pres:1s"
-    assert out[2]["slot"] == "ind_pres:1p"
-    assert out[1]["pattern"] == "reg:ind_pres:ar"
-    database.set_app_setting(conj_patterns.KEY_FOLLOWUPS_PER_DAY, "0")
-    out = verb_slots.assign_slots(cards, "es", usage={})
     assert out[2]["slot"] == "ind_pres:2s"
+    assert out[1]["pattern"] == "reg:ind_pres:ar"
 
 
 def test_assign_slots_form_card_keeps_its_tense(real_lex):
@@ -160,23 +156,17 @@ def test_assign_slots_focus_off_uses_normal_rotation(real_lex):
 
 # --- plan_followups --------------------------------------------------------------
 
-def test_plan_followups_focus_uses_next_persons(real_lex):
+def test_plan_followups_focus_regular_verb_gets_none(real_lex):
     entries = [(_card(1, "hablar", "creating"), "ind_pres:1s")]
     out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == ["ind_pres:2s", "ind_pres:3s"]
-    assert [f["form"] for f in out] == ["hablas", "habla"]
-    assert all(f["pattern"] == "reg:ind_pres:ar" for f in out)  # no pattern dedupe
+    assert out == []
 
 
-def test_plan_followups_focus_wraps_persons_and_respects_cap(real_lex):
-    entries = [(_card(1, "hablar", "creating"), "ind_pres:3p"),
-               (_card(2, "comer", "creating"), "ind_pres:1s")]
+def test_plan_followups_form_card_regular_tense_gets_none(real_lex):
+    word = verb_slots.form_card_word("tener", "ind_impf")
+    entries = [(_card(1, word, "creating"), "ind_impf:1s")]
     out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [(f["word_id"], f["slot"]) for f in out] == [
-        (1, "ind_pres:1s"), (1, "ind_pres:2s"), (2, "ind_pres:2s"), (2, "ind_pres:3s")]
-    database.set_app_setting(conj_patterns.KEY_FOLLOWUPS_PER_DAY, "3")
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert len(out) == 3
+    assert out == []
 
 
 def test_plan_followups_focus_skips_non_creating_and_no_main_slot(real_lex):

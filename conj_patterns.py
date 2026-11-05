@@ -948,12 +948,14 @@ def _card_lang(card: dict, story_lang: str) -> str:
 
 
 def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
-                          per_verb: int, remaining: int) -> list[dict]:
+                          remaining: int) -> list[dict]:
     """Folgesätze in Zeit-des-Tages mode (#1434, #1440): for each Spanish creating
     card, in the focus tense (form cards: their fixed tense). Candidates are the
-    persons of focus_persons() without the main sentence's person (not limited
-    by `per_verb`); for regular verbs the next `per_verb` persons after the main
-    person (cyclic over PERSONS). Persons without a form or pattern are skipped;
+    persons of focus_persons() without the main sentence's person. Regular verbs
+    (focus_persons empty, including a form card whose verb is regular in its
+    tense, e.g. `tener · Imperfecto`) get no Folgesätze (#1452): all persons
+    belong to one pattern card, so only the first rating of the day changes the
+    schedule. Persons without a form or pattern are skipped;
     no due/new ordering and no pattern dedupe. The daily cap `remaining` is
     spread round-robin over the cards (round 1: one candidate per card, round 2:
     the next, ...); the result is grouped by card in entries order."""
@@ -972,17 +974,11 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
         if main_person not in PERSONS:
             continue
         plan = focus_persons(lemma, tense, LANG)
-        if plan:
-            order = [p for p in plan if p != main_person]
-            limit = len(order)
-        else:
-            start = PERSONS.index(main_person)
-            order = [PERSONS[(start + i) % len(PERSONS)] for i in range(1, len(PERSONS))]
-            limit = per_verb
+        if not plan:
+            continue
+        order = [p for p in plan if p != main_person]
         items: list[dict] = []
         for person in order:
-            if len(items) >= limit:
-                break
             form = verb_slots.target_form(raw_lemma, tense, person, LANG)
             pat = pattern_for(lemma, tense, person, LANG) if form else None
             if not pat:
@@ -1044,7 +1040,7 @@ def plan_followups(entries: list, lang: str, today=None, conj_states=None,
             return []
         focus = verb_slots._focus_tense()
         if focus:
-            return _plan_followups_focus(entries, lang, focus, per_verb, remaining)
+            return _plan_followups_focus(entries, lang, focus, remaining)
         states = conj_states if conj_states is not None else database.get_conj_states(LANG)
         wts = verb_slots.weights(LANG)
         w_tense, w_person = wts.get("tenses") or {}, wts.get("persons") or {}
