@@ -1,8 +1,9 @@
 #!/bin/bash
 # 自动部署脚本 —— 无需 GitHub secrets/webhook，靠 cron 轮询实现“推送即上线”。
 #
-# 用法：配合 cron 每 2 分钟运行一次，例如在服务器上执行 `crontab -e` 后添加：
-#   */2 * * * * /home/anki/biangbiangmian3000/deploy/deploy.sh >> /home/anki/deploy.log 2>&1
+# 用法：cron 行由 deploy/crontab.managed 管理，每分钟运行一次（#1454）；
+# 不要再手工 `crontab -e`。首次安装仍需在服务器上手工运行一次 `bash deploy/install_cron.sh`，
+# 之后每轮 deploy.sh 都会自己同步。
 #
 # 行为：
 #   1. git fetch 获取 origin/main 最新提交

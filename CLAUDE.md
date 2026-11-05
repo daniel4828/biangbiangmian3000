@@ -249,7 +249,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 ### 数据库与部署
 
 - **唯一生产数据库在服务器上**（`/home/anki/biangbiangmian3000/data/srs.db`）。本地开发只用 `run.dev.sh` + `data/dev.db`。**本地的 `data/srs.db` 已过时，绝不要把它当作现状或复制回服务器。**
-- **自动部署：** 服务器 cron 每 2 分钟运行 `deploy/deploy.sh`——**PR 合并到 main ≈ 2 分钟后自动上线**（拉取、装依赖、重启 systemd 服务 `biangbiangmian3000`）
+- **自动部署：** 服务器 cron 每分钟运行 `deploy/deploy.sh`——**PR 合并到 main ≈ 1 分钟后自动上线**（拉取、装依赖、重启 systemd 服务 `biangbiangmian3000`）。这行 cron 由 `deploy/crontab.managed` 管理（`deploy.sh` 每轮调用 `install_cron.sh` 同步，#1454）
 - **自动备份（#1279）：** 服务器 cron 每 6 小时跑 `scripts/backup_db.sh`（快照 + zstd 压缩 + `scripts/backup_retention.py` 清理：2 天全留 → 14 天每天一份 → 60 天每周一份 → 更早每月永久一份；只认 `srs_<时间>.db[.zst]`，一次性手工备份不碰）。🔴 **这行 cron 由仓库管理**：写在 `deploy/crontab.managed`，`deploy.sh` 每轮调用 `deploy/install_cron.sh` 同步进 crontab——改备份 cron 只改那个文件，不要 `crontab -e`。2026-10 之前它是手工加的一行、从不删除，攒到 37 GB 把磁盘塞到 94%
 - HTTPS 由 Caddy 反向代理提供（证书自动续期）；从零搭建教程见 `DEPLOY.md`
 
@@ -258,10 +258,10 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 **Claude 有服务器的 SSH 免密访问权限，排查线上问题时直接连上去看，不要让 Daniel 手动跑命令转述结果。**
 
 - **排查线上故障第一步永远是看日志**：`journalctl -u biangbiangmian3000` —— 播客卡死（#565/#566）、早晨预生成失败（#517）这些事故，日志里都写着原因，靠猜要多花几小时
-- 常用途径：读 systemd 服务状态与日志、看 cron 是否在跑、确认部署是否真的上线了（`deploy/deploy.sh` 每 2 分钟一轮）、查生产数据库的**只读**问题
+- 常用途径：读 systemd 服务状态与日志、看 cron 是否在跑、确认部署是否真的上线了（`deploy/deploy.sh` 每分钟一轮）、查生产数据库的**只读**问题
 - **服务器时区是 `Asia/Shanghai`（UTC+8），不是德国时间**（2026-08-14 实测确认）：`anki_today()` 用 `datetime.now()` 即服务器本地时间，所以 Anki 日分界按中国时间算。诊断"今天有多少卡到期"时按德国时间推算必然对不上
 - 🔴 **生产库上的写操作要先问 Daniel**：`/home/anki/biangbiangmian3000/data/srs.db` 是唯一真库。只读查询（`SELECT`）随便跑；`UPDATE`/`DELETE`/迁移必须先说清楚要改什么、影响多少行，得到同意再动。备份是每 6 小时一次，最坏能丢 6 小时
-- **改代码仍然走 PR，不要 SSH 上去直接改文件**：服务器每 2 分钟 `git pull`，手改的文件下一轮就被覆盖，而且改动不进版本库、没人知道（R1/R9 在服务器上同样成立）
+- **改代码仍然走 PR，不要 SSH 上去直接改文件**：服务器每分钟 `git pull`，手改的文件下一轮就被覆盖，而且改动不进版本库、没人知道（R1/R9 在服务器上同样成立）
 - **具体连接方式（主机、用户名、密钥路径）保存在 Claude 的项目记忆中，不写入公开仓库** —— 本仓库是公开的
 
 ---
@@ -726,7 +726,7 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
   - **搜索改成 `FROM <addr> SINCE <日期>`**，下界取「订阅那一刻（`mail_senders.auto_since`）」和「最近 `_AUTO_LOOKBACK_DAYS`=3 天」中较晚的一个：前者兑现界面上写着的「订阅只对以后的邮件生效，不回溯」（一封历史邮件 = 一次付费 AI 调用），后者防止老订阅每轮回扫多年邮件。`auto_since` 只在**关 → 开**那一下写入，重复点已经打开的开关不刷新它，否则窗口会往前跳、中间到的邮件永远处理不到
   - **两段式取信**：先只取信封（`_ENVELOPE_PARTS`）做发件人精确匹配 + Message-ID 去重，确定要处理了才 `BODY.PEEK[]` 下正文。IMAP 的 `FROM` 只是子串匹配，原来那版会先把子串命中的陌生邮件正文拉进本进程再判断（#755 的教训）；顺带也不用每五分钟把已处理过的通讯整封重下一遍
   - **永久失败记进 `app_settings['mail_abandoned_message_ids']`**（保留最近 200 条）：正文太短这类失败重试一百次结果一样，而没有已读标志可用了，不记就等于每 5 分钟重试一次直到滑出时间窗。暂时性失败（网络/AI 抖动）什么都不记，下一轮自然重试（`ingest_url()`/`ingest_text()` 幂等，重试安全）
-- **邮件通讯（`knowledge/newsletter.py`，#925）**：Daniel 每天早上收到 F.A.Z. Frühdenker，服务器直接从他的 Gmail 收（#960，不再需要转发规则）。`newsletter@nl.faz.net` 的自动开关由 `init_db()` 用 `INSERT OR IGNORE` 种进 `mail_senders`——用 OR IGNORE 而不是 UPDATE，是因为他在界面上关掉之后，每 2 分钟一次的重启不能再给他打开。新 `kind='newsletter'`（该列**没有 CHECK 约束**，加值不需要迁移生产库），知识页有独立的 📰 标签且**没有粘贴框**——通讯只从邮箱进来
+- **邮件通讯（`knowledge/newsletter.py`，#925）**：Daniel 每天早上收到 F.A.Z. Frühdenker，服务器直接从他的 Gmail 收（#960，不再需要转发规则）。`newsletter@nl.faz.net` 的自动开关由 `init_db()` 用 `INSERT OR IGNORE` 种进 `mail_senders`——用 OR IGNORE 而不是 UPDATE，是因为他在界面上关掉之后，每次部署的重启不能再给他打开。新 `kind='newsletter'`（该列**没有 CHECK 约束**，加值不需要迁移生产库），知识页有独立的 📰 标签且**没有粘贴框**——通讯只从邮箱进来
   - **必须排在 `mailbox.py` 的 URL 分支之前**：通讯正文里有几十个 faz.net 付费墙链接，走 URL 分支等于每轮对每个链接做一次注定失败的网络往返，而真正的内容就在邮件正文里。入库仍走**同一个** `ingest_text()`，只是多传一个 `kind`
   - **入库后立即同步处理**（转录+摘要+通知），同 `signal_inbox.py`——"早上就要读"的语义
   - **`_HTMLTextExtractor` 必须在块级标签处插入换行**（#925 改的）：原来 `"".join(chunks)` 一个换行都不产生，压缩成一行的营销邮件因此整封是**一行**，而 `clean_body()` 是按行删样板的——那一行里只要有 "Abbestellen"，整封正文就被删光。#668 的粘贴正文路径同样受益（原来段落会被粘成一坨喂给 AI）
@@ -804,7 +804,7 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
   - 四张新表 `knowledge_tags` / `knowledge_item_tags` / `knowledge_lists` / `knowledge_list_items`，访问函数在**新模块 `database/knowledge.py`**（`database/podcast.py` 已经 440 行，而且标签/列表是"怎么组织素材"，不是"怎么抓素材"）
   - **标签名大小写不敏感唯一**（`idx_knowledge_tags_name ... COLLATE NOCASE`）：筛选栏里 `Politik` 和 `politik` 各管一半，比没有标签更糟。`rename_tag()` 改成已存在的名字 = **合并**，这是收拾 AI 造出的近义标签的唯一出口
   - **`knowledge_item_tags.source`（`user`/`ai`）是硬边界**：`set_item_tags(source=...)` 只替换**同 source** 的行，所以 AI 重新打标签永远删不掉 Daniel 手打的，反之亦然。手动打一个 AI 已经猜到的标签会把它**升级成 `user`**（他认领了它）。别处不许直接写 `knowledge_item_tags`
-  - **回填是幂等的，不是靠一次性标记**：每条 UPDATE 都限定在目标列仍为 NULL 的行上——生产每 2 分钟重启一次，`init_db()` 就跑一次（#688 的教训）。`processed_at` 回填 `COALESCE(email_sent_at, created_at)` 且只填 `summarized` 行；`author` **不回填**（错的作者比空的更糟）
+  - **回填是幂等的，不是靠一次性标记**：每条 UPDATE 都限定在目标列仍为 NULL 的行上——生产每次部署都重启一次，`init_db()` 就跑一次（#688 的教训）。`processed_at` 回填 `COALESCE(email_sent_at, created_at)` 且只填 `summarized` 行；`author` **不回填**（错的作者比空的更糟）
   - 内置的 `Read Later` 列表按 **`is_builtin` 而不是名字**判断存在：否则 Daniel 一改名，下次重启就又冒出一个 `Read Later`
   - `idx_episodes_processed_at` 建在 `core.py` 的迁移里而不是 `schema.sql`：schema 在**第 2 阶段**执行，那时旧库上 `ALTER TABLE`（第 3 阶段）还没跑，列还不存在，`CREATE INDEX` 会直接报错
 - **元数据可手改（#937）**：详情页 ✎ Edit → 标题 / 作者 / 平台 / 发布日期 / 链接 / 标签，走 `PATCH /api/podcast/episodes/{id}`（body 只带改动的字段，空字符串 = 清空，缺席 = 不动）
@@ -829,7 +829,7 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
   - **每条素材只出一行结果**：一个词通常同时出现在转录、两份摘要和两个 rendition 里，四行同一篇文章会把别的全挤出屏幕
   - **用户输入的查询绝不可能变成 FTS5 语法**：每个 token 都加引号变成短语前缀（`"klima"*`），再用 AND 连接。`AND`/`NEAR`/`"`/`*` 打进去就是搜索词，不是操作符也不是报错
   - **索引不用触发器**：写在 `schema.sql` 里的触发器，之后改这些列的人根本看不见它；而且两个数据源要解析 JSON，SQL 做不到。挂钩点是 `database.update_episode()` 里的 `_SEARCHABLE_COLUMNS` 判断（转录和摘要本来就都从这一个瓶颈过）、`save_knowledge_rendition()` / `delete_knowledge_renditions()`、以及 `update_episode_metadata()`（#937 的手改走的不是 `update_episode`）
-  - 首次全量建索引在 `init_db()` 里，**用 `app_settings.knowledge_fts_built` 标记只跑一次**：它要读遍库里所有转录，而生产每 2 分钟重启一次（#688 的教训）
+  - 首次全量建索引在 `init_db()` 里，**用 `app_settings.knowledge_fts_built` 标记只跑一次**：它要读遍库里所有转录，而生产每次部署都重启一次（#688 的教训）
   - `knowledge_fts` 是虚拟表**没有外键**，所以删素材时必须显式删它的索引行，否则会一直返回已经不存在的素材
 - **列表 / Read Later / 归档 / 左右滑动（#940）**：摄取和阅读是两个时刻——素材抓下来、摘要跑完，往往几天后才真去读。在此之前没有任何地方记录"这个我还想读"和"这个我读完了"
   - 内置 `Read Later` **可以改名但不能删**（`is_builtin`）：滑动手势没有它就无处可放，而且它是按 `is_builtin` 找的、不是按名字，所以改名不影响手势

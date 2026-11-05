@@ -199,17 +199,17 @@ PR 流程即可——自动部署会连同主页一起拉取更新，详见 `hom
 `deploy/deploy.sh` 会定期检查 `origin/main` 是否有新提交，有的话自动拉取、装依赖、重启服务。
 不需要 GitHub Actions/webhook，只需要服务器主动轮询。
 
+以 `anki` 用户运行一次：
+
 ```bash
-crontab -e
+cd /home/anki/biangbiangmian3000 && bash deploy/install_cron.sh
 ```
 
-添加一行（每 2 分钟检查一次）：
+它把 `deploy/crontab.managed` 里的 cron 行（备份和部署都在里面，#1454）写进 `anki` 的 crontab：
+部署每分钟检查一次。之后每轮 `deploy.sh` 会自己同步，不要再手工 `crontab -e`；
+旧的手工 `*/2` 部署行会被自动删掉。
 
-```
-*/2 * * * * /home/anki/biangbiangmian3000/deploy/deploy.sh >> /home/anki/deploy.log 2>&1
-```
-
-`deploy.sh` 内部用 `flock` 防止并发运行；如果两分钟内上一次部署还没跑完，会自动跳过。
+`deploy.sh` 内部用 `flock` 防止并发运行；如果一分钟内上一次部署还没跑完，会自动跳过。
 
 要让 `deploy.sh` 里的 `sudo systemctl restart biangbiangmian3000` 免密码执行，
 给 `anki` 用户加一条 sudoers 规则（用 `sudo visudo -f /etc/sudoers.d/biangbiangmian3000`）：
@@ -253,7 +253,7 @@ rsync -avz anki@<服务器IP>:/home/anki/biangbiangmian3000/data/backups/ ~/Docu
 
 1. 浏览器访问 `https://your-domain.example.com`，确认页面加载。
 2. `curl -s https://your-domain.example.com/api/decks` 应返回 200 和牌组 JSON。
-3. 修改本地代码，`git push` 到 `main` 后，最多等 2 分钟，`tail -f /home/anki/deploy.log`
+3. 修改本地代码，`git push` 到 `main` 后，最多等 1 分钟，`tail -f /home/anki/deploy.log`
    应能看到自动部署日志，且网站已更新（可以先在无关文件里加一行注释验证流程通不通）。
 
 ---
