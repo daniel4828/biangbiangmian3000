@@ -124,6 +124,51 @@ def verb_slot_usage(lang: str) -> dict[str, tuple[int, str | None]]:
     return {r["slot"]: (r["n"], r["last"]) for r in rows}
 
 
+def verb_slot_usage_by_word(word_ids: list[int]) -> dict[int, dict[str, tuple[int, str | None]]]:
+    """Per-word slot history: {word_id: {"ind_pret:3s": (count, last_generated_at)}}.
+
+    Counts main sentences (story_sentence_words) and Folgesätze
+    (story_sentences.followup_word_id, which have no story_sentence_words rows)
+    that carry a verb_slot. Words without history are absent. The story history
+    is the only memory, nothing is stored (Zeit des Tages rotation, #1440)."""
+    ids = sorted({int(w) for w in word_ids or []})
+    if not ids:
+        return {}
+    out: dict[int, dict[str, tuple[int, str | None]]] = {}
+    conn = get_db()
+    try:
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"""SELECT sw.word_id AS wid, ss.verb_slot AS slot, COUNT(*) AS n,
+                           MAX(s.generated_at) AS last
+                    FROM story_sentence_words sw
+                    JOIN story_sentences ss ON ss.id = sw.sentence_id
+                    JOIN stories s ON s.id = ss.story_id
+                    WHERE sw.word_id IN ({marks}) AND ss.verb_slot IS NOT NULL
+                    GROUP BY sw.word_id, ss.verb_slot""",
+                chunk,
+            ).fetchall()
+            rows += conn.execute(
+                f"""SELECT ss.followup_word_id AS wid, ss.verb_slot AS slot, COUNT(*) AS n,
+                           MAX(s.generated_at) AS last
+                    FROM story_sentences ss
+                    JOIN stories s ON s.id = ss.story_id
+                    WHERE ss.followup_word_id IN ({marks}) AND ss.verb_slot IS NOT NULL
+                    GROUP BY ss.followup_word_id, ss.verb_slot""",
+                chunk,
+            ).fetchall()
+            for r in rows:
+                slots = out.setdefault(r["wid"], {})
+                n, last = slots.get(r["slot"], (0, None))
+                new_last = max([x for x in (last, r["last"]) if x is not None], default=None)
+                slots[r["slot"]] = (n + r["n"], new_last)
+    finally:
+        conn.close()
+    return out
+
+
 def get_sentence_for_word(story_id: int, word_id: int) -> dict | None:
     """Return the first sentence (lowest position) in this story that contains word_id."""
     conn = get_db()
