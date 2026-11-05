@@ -1,3 +1,4 @@
+import app_tz  # noqa: F401  (sets the process time zone, #1456)
 import json
 import logging
 import os
