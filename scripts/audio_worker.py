@@ -20,9 +20,10 @@ Daniel 2026-09-05 定的规则就是这个脚本的全部内容：**「把 whisp
 把任务标回 pending，下一轮重来。转录是幂等的，重来不花钱也不丢东西——所以
 被打断记 pending 而不是 error（见 audio.AudioTrackAborted 的 docstring）。
 
-🔴 服务器时区是 `Asia/Shanghai`（UTC+8），不是德国时间（CLAUDE.md 记着这条，
-2026-08-14 实测确认）。下面的时间窗口用 `datetime.now()` 即服务器本地时间；
-按德国时间推算会让窗口整个错开六七个小时。
+🔴 服务器系统时区是 `Asia/Shanghai`（UTC+8），但进程时区由 `app_tz` 设定
+（默认 `Europe/Berlin`，`APP_TIMEZONE` 可覆盖，#1456）。下面的时间窗口用
+`datetime.now()`，即这个进程时区；所以本脚本必须先 import `app_tz`，
+否则窗口会按系统时区算，整个错开六七个小时。
 
 和 scripts/knowledge_mail_check.py 一样直接 `import database` +
 `database.init_db()` 在本进程里干活，不走 HTTP。
@@ -43,6 +44,7 @@ import time
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import app_tz  # noqa: E402,F401  (#1456)
 
 # 他多久没动过服务器才算「不在用」。半小时足够跨过一次泡茶，又不至于让
 # 队列在他真的走开之后还空等太久。
@@ -97,7 +99,7 @@ def _seconds_since_activity() -> float | None:
 
 
 def _in_quiet_window(now: datetime | None = None) -> bool:
-    now = now or datetime.now()   # 服务器本地时间 = Asia/Shanghai，见模块 docstring
+    now = now or datetime.now()   # 进程时区（app_tz，默认 Europe/Berlin），见模块 docstring
     minutes = now.hour * 60 + now.minute
     return _QUIET_START[0] * 60 + _QUIET_START[1] <= minutes < _QUIET_END[0] * 60 + _QUIET_END[1]
 

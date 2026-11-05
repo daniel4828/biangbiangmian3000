@@ -211,6 +211,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 │                          #   留着只是自检里多一行红字 + 每次多一个白跑的往返。**开不了的门不是后备**
 │                          #   `GET /api/translate-selftest` 逐条通道自检，报错里带拦截页标题（诊断就是那一句）
 ├── tts.py                 # edge-tts 封装（离线模式下只读缓存，#612）
+├── app_tz.py              # 进程时区（#1456）：默认 Europe/Berlin，APP_TIMEZONE 可覆盖；database/core.py 导入即生效，不改系统时区
 ├── routes/dictionary.py   # AI 词典 API（#746）：/api/dict/lookup + 历史；结果存 dict_queries（database/dictionary.py）
 ├── review_notify.py       # 复习收尾提醒（#701）：去重 + 发信，判定在 database.due_notification_status()
 │
@@ -259,7 +260,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 
 - **排查线上故障第一步永远是看日志**：`journalctl -u biangbiangmian3000` —— 播客卡死（#565/#566）、早晨预生成失败（#517）这些事故，日志里都写着原因，靠猜要多花几小时
 - 常用途径：读 systemd 服务状态与日志、看 cron 是否在跑、确认部署是否真的上线了（`deploy/deploy.sh` 每分钟一轮）、查生产数据库的**只读**问题
-- **服务器时区是 `Asia/Shanghai`（UTC+8），不是德国时间**（2026-08-14 实测确认）：`anki_today()` 用 `datetime.now()` 即服务器本地时间，所以 Anki 日分界按中国时间算。诊断"今天有多少卡到期"时按德国时间推算必然对不上
+- **服务器*系统*时区仍是 `Asia/Shanghai`（UTC+8）**（同服务器有其他项目，所以不改），但**应用进程由 `app_tz.py` 设为 `Europe/Berlin`**（`APP_TIMEZONE` 环境变量可覆盖，#1456）：`database/core.py` 一导入就生效，所以应用和所有 import `database` 的脚本里 `anki_today()`、`datetime.now()` 和 Anki 日分界都按德国时间。早晨预生成已搬进 `deploy/crontab.managed`，按德国时间 06:00（每小时触发、命令内判断，#1456）；其余手工行都是分钟级轮询，不依赖时区。SQLite 的 `datetime('now')`（`generated_at`、`reviewed_at`）是 UTC。诊断"今天有多少卡到期"时要分清是哪个时钟：应用进程 = 德国时间，crontab = 上海时间，SQLite `now` = UTC
 - 🔴 **生产库上的写操作要先问 Daniel**：`/home/anki/biangbiangmian3000/data/srs.db` 是唯一真库。只读查询（`SELECT`）随便跑；`UPDATE`/`DELETE`/迁移必须先说清楚要改什么、影响多少行，得到同意再动。备份是每 6 小时一次，最坏能丢 6 小时
 - **改代码仍然走 PR，不要 SSH 上去直接改文件**：服务器每分钟 `git pull`，手改的文件下一轮就被覆盖，而且改动不进版本库、没人知道（R1/R9 在服务器上同样成立）
 - **具体连接方式（主机、用户名、密钥路径）保存在 Claude 的项目记忆中，不写入公开仓库** —— 本仓库是公开的
@@ -334,6 +335,7 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 | `LOCAL_MODE_PROBE_HOSTS` | `api.deepseek.com,speech.platform.bing.com` | 本地模式判断有没有网时探测的主机（443 端口，任一连通即算在线） |
 | `ANKI_LOCAL_DB` | `data/offline.db` | 同步脚本的本地库路径；配合 `ANKI_REMOTE_DIR` 做演练时必须一起设 |
 | `PORT` | `8000` | 服务监听端口（`run.offline.sh` 用 8001） |
+| `APP_TIMEZONE` | `Europe/Berlin` | 应用进程时区（#1456）；空值 = 用系统时区 |
 | `LOG_LEVEL` | `INFO` | 日志级别（`DEBUG` 输出详细日志） |
 | `DEV_CLEAR_DB` | `` | 设为任意值启动时清空数据库——生产环境绝不要设置 |
 | `AUTH_USERNAME` / `AUTH_PASSWORD` | 可选 | 两者都设置时启用登录保护（保护所有路径，`/login` 除外）。主流程是 HTML 表单登录 + 一年期签名 Cookie（#666），Basic Auth 保留作 curl/脚本的回退 |
@@ -429,7 +431,7 @@ FSRS 用毕业评分播种初始 stability/difficulty：默认权重下 **Good �
 ## 队列设计
 
 `routes/queue_manager.py` 实现 Anki v3 风格的持久会话队列（SessionQueue/QueueManager）：
-- 每个 Anki 日（凌晨 4 点为界）首次访问时构建一次，之后在内存中维护
+- 每个 Anki 日（德国时间凌晨 4 点为界，设置页 Day boundary）首次访问时构建一次，之后在内存中维护
 - **主队列**：预先交错排列的卡片 ID（日内学习 + 复习 + 新建混合）；**日内学习队列**：按时间戳排序，每次取卡前检查
 - 失效条件：Anki 日期变更、撤销、队列耗尽、删除/埋藏卡片；缓存键 `(mode, deck_id_or_ids, category)`
 - `POST /api/review` 返回 `{next_card, counts}`——无需额外请求
@@ -1059,7 +1061,7 @@ Daniel 2026-08-21 定的三件事：**源书是德/英原版**（不是上传中
 
 ### 闲时队列（#1053）
 
-本地转录排进 `audio_jobs`，`scripts/audio_worker.py` 每 5 分钟一轮，四道闸门：没有任务 / 30 分钟内有人操作 / 落在早晨预生成窗口（05:30–09:30，**服务器本地时间 `Asia/Shanghai`**）/ 上一轮还在跑（PID 锁——8 GB 内存放不下两个 whisper）。
+本地转录排进 `audio_jobs`，`scripts/audio_worker.py` 每 5 分钟一轮，四道闸门：没有任务 / 30 分钟内有人操作 / 落在早晨预生成窗口（05:30–09:30，按进程时区，默认德国时间）/ 上一轮还在跑（PID 锁——8 GB 内存放不下两个 whisper）。
 
 - 🔴 **判断「他在用」只算带会话 Cookie 的请求**（#1071）：`due_check.py`/`podcast_check.py` 这两个 cron 是**走 HTTP 打自己 API** 的，5 分钟一次的心跳曾让这道闸门**永远开不了**，而日志上写着「1 分钟前还有动作」，看起来完全正常。修法不是把这两个路径加进黑名单（下一个 HTTP cron 会原样带回来），而是改判**谁在发请求**：浏览器带 Cookie，脚本走 Basic Auth。前端轮询端点的排除名单同时保留
 - **被打断标回 `pending` 不标 `error`**（`AudioTrackAborted`）：转录幂等，重来不花钱；记成 error 的话，他每次坐到电脑前都会把当时正在跑的那条永久判死
