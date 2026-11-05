@@ -504,28 +504,15 @@ def _focus_tense() -> str | None:
         return None
 
 
-def _followup_reserve() -> int:
-    """Persons a creating card reserves for its Folgesätze (0 when they are off)."""
-    try:
-        import conj_patterns
-        s = conj_patterns.settings()
-        if s["enabled"] and s["followups_per_day"] > 0 and s["prod_per_verb"] > 1:
-            return s["prod_per_verb"] - 1
-    except Exception as e:
-        logger.warning("follow-up settings unavailable — %s", e)
-    return 0
-
-
 def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
     """Slots in focus mode (#1434): a pointer over PERSONS (starting at yo for
-    every call), one person per card; a creating card also reserves the next
-    persons for its Folgesätze. Exception (#1440): a creating card of an
+    every call), one person per card (#1452: the pointer moves one step per card,
+    whatever the category). Exception (#1440): a creating card of an
     irregular verb takes the first person of conj_patterns.focus_persons() (its
     irregularity type) and leaves the pointer untouched. Form cards keep their
     fixed tense. Cards with no form in the tense are left out (the caller uses
     the normal logic)."""
     out: dict[int, dict] = {}
-    reserve = _followup_reserve()
     use_patterns = False
     try:
         import conj_patterns
@@ -576,8 +563,6 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
                 continue
             out[card["word_id"]] = entry
             p = pos + 1
-            if card.get("category") == "creating":
-                p += reserve
             break
     return out
 
