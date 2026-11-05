@@ -519,6 +519,15 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         use_patterns = conj_patterns.settings()["enabled"]
     except Exception as e:
         logger.warning("conjugation pattern settings unavailable — %s", e)
+    usage_by_word: dict = {}
+    if use_patterns:
+        try:
+            ids = [c["word_id"] for c in cards
+                   if c.get("category") == "creating" and c.get("word_id") is not None]
+            usage_by_word = database.verb_slot_usage_by_word(ids)
+        except Exception as e:
+            logger.warning("per-word slot usage unavailable — %s", e)
+            usage_by_word = {}
     p = 0
     for card in cards:
         word = card.get("word_zh") or ""
@@ -546,9 +555,15 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
 
         # creating + irregular verb: the irregularity type picks the person (#1440)
         if use_patterns and card.get("category") == "creating":
+            usage = usage_by_word.get(card.get("word_id"))
             try:
-                plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang)
+                plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang, usage=usage)
                         if target_form(lemma, tense, x, lang)]
+                if not plan and parsed:
+                    # form card whose verb is regular in this tense: rotate over
+                    # all persons by history, pointer untouched
+                    avail = [x for x in PERSONS if target_form(lemma, tense, x, lang)]
+                    plan = [conj_patterns.pick_person(avail, tense, usage)] if avail else []
             except Exception as e:
                 logger.warning("focus persons of %r failed — %s", lemma, e)
                 plan = []

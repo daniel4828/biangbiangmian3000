@@ -223,6 +223,129 @@ def test_plan_followups_cap_is_spread_round_robin(real_lex):
     assert sorted(f["word_id"] for f in out) == [1, 2]
 
 
+# --- groups + rotation by history (#1440) -------------------------------------------
+
+def _add_verb(word, lang="es"):
+    return database.insert_word({"word_zh": word, "lang": lang, "note_type": "vocabulary"})
+
+
+def _story(deck_id, sentences):
+    return database.create_story(DAY0.isoformat(), "creating", deck_id, sentences, lang="es")
+
+
+def test_focus_groups_contrast_and_exceptions(real_lex):
+    fg = conj_patterns.focus_groups
+    # y_3rd: only forms with a new y are the exception, accent-only forms join the contrast group
+    assert fg("creer", "ind_pret") == [["3s", "3p"], ["1s", "2s", "1p", "2p"]]
+    assert fg("sentir", "ind_pret") == [["3s", "3p"], ["1s", "2s", "1p", "2p"]]
+    assert len(fg("creer", "subj_impf")) == 1  # every person has the y
+    # pure spelling changes: no regular contrast group
+    assert fg("llegar", "ind_pret") == [["1s"], ["2s", "3s", "1p", "2p", "3p"]]
+    assert fg("buscar", "ind_pret") == [["1s"], ["2s", "3s", "1p", "2p", "3p"]]
+    # one pattern for all persons
+    assert fg("tener", "ind_pret") == [list(verb_slots.PERSONS)]
+    # single-verb patterns: every person on its own
+    assert fg("ser", "ind_pres") == [[p] for p in verb_slots.PERSONS]
+    assert fg("hablar", "ind_pres") == []
+
+
+def test_pick_person_order():
+    pp = conj_patterns.pick_person
+    group = ["1s", "2s", "3s"]
+    assert pp(group, "ind_pret", None) == "1s"
+    assert pp(group, "ind_pret", {}) == "1s"
+    assert pp(group, "ind_pret", {"ind_pret:1s": (1, "2026-01-02")}) == "2s"
+    # equal counts: the oldest last use wins, never used counts as oldest
+    usage = {"ind_pret:1s": (1, "2026-01-03"), "ind_pret:2s": (1, "2026-01-01"),
+             "ind_pret:3s": (1, "2026-01-02")}
+    assert pp(group, "ind_pret", usage) == "2s"
+    usage["ind_pret:2s"] = (2, "2026-01-01")
+    assert pp(group, "ind_pret", usage) == "3s"
+    # other tenses' usage is ignored
+    assert pp(group, "ind_pres", usage) == "1s"
+
+
+def test_focus_persons_uses_history(real_lex):
+    assert conj_patterns.focus_persons("creer", "ind_pret") == ["3s", "1s"]
+    usage = {"ind_pret:3s": (1, "2026-01-01"), "ind_pret:1s": (1, "2026-01-01")}
+    assert conj_patterns.focus_persons("creer", "ind_pret", usage=usage) == ["3p", "2s"]
+
+
+def test_verb_slot_usage_by_word_counts_main_and_followups(real_lex):
+    deck_id = database.get_or_create_deck("T")
+    w1, w2 = _add_verb("tener"), _add_verb("hablar")
+    _story(deck_id, [
+        {"position": 1, "sentence_zh": "Tuve.", "word_ids": [w1], "verb_slot": "ind_pret:1s"},
+        {"position": 2, "sentence_zh": "Tuviste.", "word_ids": [],
+         "followup_word_id": w1, "verb_slot": "ind_pret:2s"},
+        {"position": 3, "sentence_zh": "Tuve otra vez.", "word_ids": [],
+         "followup_word_id": w1, "verb_slot": "ind_pret:1s"},
+        {"position": 4, "sentence_zh": "Sin slot.", "word_ids": [w1]},
+        {"position": 5, "sentence_zh": "Habló.", "word_ids": [w2], "verb_slot": "ind_pret:3s"},
+    ])
+    assert database.verb_slot_usage_by_word([]) == {}
+    out = database.verb_slot_usage_by_word([w1, w2, 99999])
+    assert set(out) == {w1, w2}
+    assert out[w1]["ind_pret:1s"][0] == 2 and out[w1]["ind_pret:2s"][0] == 1
+    assert out[w1]["ind_pret:1s"][1]
+    assert set(out[w2]) == {"ind_pret:3s"}
+
+
+def test_assign_slots_tener_indefinido_rotates_with_history(real_lex):
+    tense_focus.step(1)  # Indefinido
+    deck_id = database.get_or_create_deck("T")
+    wid = _add_verb("tener")
+    cards = [_card(wid, "tener", "creating")]
+    assert verb_slots.assign_slots(cards, "es", usage={})[wid]["slot"] == "ind_pret:1s"
+    _story(deck_id, [{"position": 1, "sentence_zh": "Tuve.", "word_ids": [wid],
+                      "verb_slot": "ind_pret:1s"}])
+    out = verb_slots.assign_slots(cards, "es", usage={})
+    assert out[wid]["slot"] == "ind_pret:2s" and out[wid]["form"] == "tuviste"
+
+
+def test_assign_slots_form_card_regular_tense_rotates_without_pointer(real_lex):
+    tense_focus.step(1)
+    deck_id = database.get_or_create_deck("T")
+    word = verb_slots.form_card_word("tener", "ind_impf")
+    wid = _add_verb(word)
+    _story(deck_id, [{"position": 1, "sentence_zh": "Tenía.", "word_ids": [wid],
+                      "verb_slot": "ind_impf:1s"}])
+    cards = [_card(wid, word, "creating"), _card(2, "hablar", "reading")]
+    out = verb_slots.assign_slots(cards, "es", usage={})
+    assert out[wid]["slot"] == "ind_impf:2s"
+    assert out[2]["slot"] == "ind_pret:1s"  # pointer did not move
+
+
+def test_plan_followups_sentir_comes_from_contrast_group_and_rotates(real_lex):
+    tense_focus.step(1)
+    deck_id = database.get_or_create_deck("T")
+    wid = _add_verb("sentir")
+    entries = [(_card(wid, "sentir", "creating"), "ind_pret:1s")]
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pret:3s"]  # exception group, main in contrast group
+    _story(deck_id, [{"position": 1, "sentence_zh": "Sintió.", "word_ids": [],
+                      "followup_word_id": wid, "verb_slot": "ind_pret:3s"}])
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pret:3p"]
+    # main sentence in the exception group: the contrast group gets the followup
+    entries = [(_card(wid, "sentir", "creating"), "ind_pret:3s")]
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pret:1s"]
+
+
+def test_plan_followups_llegar_rotates_regular_followup(real_lex):
+    tense_focus.step(1)
+    deck_id = database.get_or_create_deck("T")
+    wid = _add_verb("llegar")
+    entries = [(_card(wid, "llegar", "creating"), "ind_pret:1s")]
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pret:2s"]
+    _story(deck_id, [{"position": 1, "sentence_zh": "Llegaste.", "word_ids": [],
+                      "followup_word_id": wid, "verb_slot": "ind_pret:2s"}])
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pret:3s"]
+
+
 # --- API -------------------------------------------------------------------------
 
 def test_api_roundtrip(clock):

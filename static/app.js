@@ -15807,12 +15807,22 @@ function _syncConjButtons() {
   document.getElementById('conj-btn-fail')?.classList.toggle('active', _conjChoice === false);
 }
 
+// Form cards (tener · Indefinido) only drill the conjugation, so the rating row is
+// redundant there: derive conj_ok from the card rating (Again = wrong, else right).
+// Returns null when nothing should be reported.
+function _derivedConjOk(c, s, rating) {
+  if (!formCardLemma(c)) return null;
+  if (!(s?.conj_rating && s?.conj_pattern && s?.id != null)) return null;
+  return rating > 1 ? 1 : 0;
+}
+
 function _renderConjRatingRow() {
   const row = document.getElementById('conj-rating-row');
   if (!row) return;
   // Folgesätze (#1434): the conjugation rating is the only rating there.
+  // Form cards: no manual row, the rating is derived in rate().
   const show = _followupState ? !!sentence
-    : !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null);
+    : !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null && !formCardLemma(card));
   row.style.display = show ? '' : 'none';
   row.classList.remove('conj-need');
   _setConjPendingRating(null);
@@ -15988,6 +15998,10 @@ async function rate(rating) {
     if (_conjChoice !== null && sentence?.id != null && _convRow && _convRow.style.display !== 'none') {
       url += `&conj_ok=${_conjChoice ? 1 : 0}&sentence_id=${sentence.id}`;
     }
+    // Form cards hide the row (it would be redundant): derive conj_ok from the rating.
+    // The row is hidden there, so the block above never fires - no double append.
+    const _derived = _derivedConjOk(card, sentence, rating);
+    if (_derived !== null) url += `&conj_ok=${_derived}&sentence_id=${sentence.id}`;
     const reviewedId = card.id;
     const ratedCard = card;
     const result = await api('POST', url);

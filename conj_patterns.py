@@ -393,14 +393,24 @@ def slot_pattern(word_zh: str, slot: str, lang: str = LANG) -> dict | None:
         return None
 
 
-def focus_persons(lemma: str, tense: str, lang: str = LANG) -> list[str]:
-    """Persons a creating card practises in Zeit-des-Tages mode (#1440), by the
-    verb's irregularity type in `tense`:
-    - no irregular person (regular verb) -> [] (caller uses the person pointer);
-    - a single-verb pattern (kind "verb": ser, ir, estar, ... or a Sonderform)
-      -> every person that has a pattern, in PERSONS order;
-    - otherwise one person per distinct pattern: irregular patterns first, then
-      regular ones, each in PERSONS order (pensar: 1s, 1p; salir: 1s, 2s).
+def _y_exception(base: str, tense: str, person: str) -> bool:
+    """True when the lexicon form has a "y" that is not already in the verb's
+    stem (leyó, creyeron) -- the real y_3rd exception; accent-only forms
+    (creíste, creímos) are not."""
+    form = _lex_form(base, tense, person)
+    return bool(form) and "y" in form.lower() and "y" not in base[:-2]
+
+
+def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
+    """Person groups a creating card practises in Zeit-des-Tages mode (#1440),
+    one group per pattern; the caller drills one person of every group
+    (pick_person). Irregular groups first, then the regular contrast group, each
+    in PERSONS order:
+    - no irregular person (regular verb) -> [];
+    - a single-verb pattern (kind "verb": ser, ir, ...) -> every person alone;
+    - y_3rd: only persons whose form has a new "y" (leyó, creyeron) are the
+      exception; accent-only persons (creíste) join the regular contrast group
+      (creer ind_pret: [["3s","3p"],["1s","2s","1p","2p"]]);
     Never raises ([] on any failure)."""
     try:
         pats = []
@@ -411,18 +421,43 @@ def focus_persons(lemma: str, tense: str, lang: str = LANG) -> list[str]:
         if not any(p["kind"] != "regular" for _, p in pats):
             return []
         if any(p["kind"] == "verb" for _, p in pats):
-            return [person for person, _ in pats]
-        seen: set = set()
-        irregular, regular = [], []
+            return [[person] for person, _ in pats]
+        base = verb_slots._base_verb(lemma)
+        irregular: dict[str, list[str]] = {}
+        regular: list[str] = []
         for person, pat in pats:
-            if pat["key"] in seen:
-                continue
-            seen.add(pat["key"])
-            (regular if pat["kind"] == "regular" else irregular).append(person)
-        return irregular + regular
+            if pat["kind"] == "regular":
+                regular.append(person)
+            elif pat["key"].endswith(":y_3rd") and not _y_exception(base, tense, person):
+                regular.append(person)
+            else:
+                irregular.setdefault(pat["key"], []).append(person)
+        return [g for g in list(irregular.values()) + [regular] if g]
     except Exception as e:
-        logger.warning("focus_persons(%r, %r) failed — %s", lemma, tense, e)
+        logger.warning("focus_groups(%r, %r) failed — %s", lemma, tense, e)
         return []
+
+
+def pick_person(group: list[str], tense: str, usage: dict | None = None) -> str:
+    """The person of `group` to drill next: fewest uses of the slot
+    ("{tense}:{person}") in `usage` ({slot: (count, last_generated_at)}), then
+    the oldest last use (never = oldest), then PERSONS order. Without usage that
+    is the first person of the group."""
+    usage = usage or {}
+
+    def key(person: str):
+        count, last = usage.get(f"{tense}:{person}") or (0, None)
+        return (count or 0, last or "", PERSONS.index(person) if person in PERSONS else 99)
+
+    return min(group, key=key)
+
+
+def focus_persons(lemma: str, tense: str, lang: str = LANG,
+                  usage: dict | None = None) -> list[str]:
+    """One person per focus_groups() group, chosen by pick_person with the verb's
+    own slot `usage` ({slot: (count, last)}; None = first person of each group).
+    [] for a regular verb (caller uses the person pointer)."""
+    return [pick_person(g, tense, usage) for g in focus_groups(lemma, tense, lang)]
 
 
 def _special_irregular(base: str, tense: str) -> bool:
@@ -951,7 +986,7 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
                           remaining: int) -> list[dict]:
     """Folgesätze in Zeit-des-Tages mode (#1434, #1440): for each Spanish creating
     card, in the focus tense (form cards: their fixed tense). Candidates are the
-    persons of focus_persons() without the main sentence's person. Regular verbs
+    one person per focus_groups() group without the main sentence's group. Regular verbs
     (focus_persons empty, including a form card whose verb is regular in its
     tense, e.g. `tener · Imperfecto`) get no Folgesätze (#1452): all persons
     belong to one pattern card, so only the first rating of the day changes the
@@ -960,6 +995,14 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
     spread round-robin over the cards (round 1: one candidate per card, round 2:
     the next, ...); the result is grouped by card in entries order."""
     cands: list[tuple[dict, str, list[dict]]] = []
+    word_ids = [card["word_id"] for card, main_slot in entries
+                if main_slot and card.get("category") == "creating"
+                and _card_lang(card, lang) == LANG and card.get("word_id") is not None]
+    try:
+        usage_by_word = database.verb_slot_usage_by_word(word_ids)
+    except Exception as e:
+        logger.warning("slot usage unavailable for followups — %s", e)
+        usage_by_word = {}
     for card, main_slot in entries:
         if not main_slot or card.get("category") != "creating" \
                 or _card_lang(card, lang) != LANG:
@@ -973,10 +1016,12 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
         main_person = main_slot.partition(":")[2]
         if main_person not in PERSONS:
             continue
-        plan = focus_persons(lemma, tense, LANG)
-        if not plan:
+        groups = focus_groups(lemma, tense, LANG)
+        if not groups:
             continue
-        order = [p for p in plan if p != main_person]
+        usage = usage_by_word.get(card["word_id"])
+        # groups holding the main person are covered by the main sentence
+        order = [pick_person(g, tense, usage) for g in groups if main_person not in g]
         items: list[dict] = []
         for person in order:
             form = verb_slots.target_form(raw_lemma, tense, person, LANG)
