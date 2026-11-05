@@ -411,8 +411,6 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
     - y_3rd: only persons whose form has a new "y" (leyó, creyeron) are the
       exception; accent-only persons (creíste) join the regular contrast group
       (creer ind_pret: [["3s","3p"],["1s","2s","1p","2p"]]);
-    - if every non-regular pattern is a spelling change (key ends ":ortho",
-      e.g. llegué), the regular contrast group is dropped (llegar: [["1s"]]).
     Never raises ([] on any failure)."""
     try:
         pats = []
@@ -434,9 +432,6 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
                 regular.append(person)
             else:
                 irregular.setdefault(pat["key"], []).append(person)
-        non_regular_keys = {p["key"] for _, p in pats if p["kind"] != "regular"}
-        if all(k.endswith(":ortho") for k in non_regular_keys):
-            regular = []
         return [g for g in list(irregular.values()) + [regular] if g]
     except Exception as e:
         logger.warning("focus_groups(%r, %r) failed — %s", lemma, tense, e)

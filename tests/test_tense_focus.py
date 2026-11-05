@@ -240,8 +240,8 @@ def test_focus_groups_contrast_and_exceptions(real_lex):
     assert fg("sentir", "ind_pret") == [["3s", "3p"], ["1s", "2s", "1p", "2p"]]
     assert len(fg("creer", "subj_impf")) == 1  # every person has the y
     # pure spelling changes: no regular contrast group
-    assert fg("llegar", "ind_pret") == [["1s"]]
-    assert fg("buscar", "ind_pret") == [["1s"]]
+    assert fg("llegar", "ind_pret") == [["1s"], ["2s", "3s", "1p", "2p", "3p"]]
+    assert fg("buscar", "ind_pret") == [["1s"], ["2s", "3s", "1p", "2p", "3p"]]
     # one pattern for all persons
     assert fg("tener", "ind_pret") == [list(verb_slots.PERSONS)]
     # single-verb patterns: every person on its own
@@ -333,11 +333,17 @@ def test_plan_followups_sentir_comes_from_contrast_group_and_rotates(real_lex):
     assert [f["slot"] for f in out] == ["ind_pret:1s"]
 
 
-def test_plan_followups_llegar_has_no_regular_followup(real_lex):
+def test_plan_followups_llegar_rotates_regular_followup(real_lex):
     tense_focus.step(1)
-    entries = [(_card(1, "llegar", "creating"), "ind_pret:1s")]
-    assert conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(),
-                                        conj_states={}) == []
+    deck_id = database.get_or_create_deck("T")
+    wid = _add_verb("llegar")
+    entries = [(_card(wid, "llegar", "creating"), "ind_pret:1s")]
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pret:2s"]
+    _story(deck_id, [{"position": 1, "sentence_zh": "Llegaste.", "word_ids": [],
+                      "followup_word_id": wid, "verb_slot": "ind_pret:2s"}])
+    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
+    assert [f["slot"] for f in out] == ["ind_pret:3s"]
 
 
 # --- API -------------------------------------------------------------------------
