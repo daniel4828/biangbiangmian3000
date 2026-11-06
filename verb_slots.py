@@ -505,8 +505,8 @@ def _focus_tense() -> str | None:
 
 
 def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
-    """Slots in focus mode (#1434): a pointer over PERSONS (starting at yo for
-    every call), one person per card (#1452: the pointer moves one step per card,
+    """Slots in focus mode (#1434): a pointer over PERSONS (starting at the
+    least-drilled person of the tense in the story history), one person per card (#1452: the pointer moves one step per card,
     whatever the category). Exception (#1440): a creating card of an
     irregular verb takes the first person of conj_patterns.focus_persons() (its
     irregularity type) and leaves the pointer untouched. Form cards keep their
@@ -528,7 +528,18 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         except Exception as e:
             logger.warning("per-word slot usage unavailable — %s", e)
             usage_by_word = {}
+    # Start the pointer at the least-drilled person of today's tense (history of
+    # every story in `lang`), not always at yo: a story with one or two verbs
+    # would otherwise only ever drill yo.
     p = 0
+    try:
+        hist = database.verb_slot_usage(lang)
+        def _key(i):
+            count, last = hist.get(f"{focus_tense}:{PERSONS[i]}") or (0, None)
+            return (count or 0, last or "", i)
+        p = min(range(len(PERSONS)), key=_key)
+    except Exception as e:
+        logger.warning("slot history unavailable, pointer starts at yo — %s", e)
     for card in cards:
         word = card.get("word_zh") or ""
         parsed = parse_form_card(word)

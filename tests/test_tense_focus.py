@@ -127,6 +127,15 @@ def test_assign_slots_focus_rotates_persons_in_order(real_lex):
     assert out[1]["form"] == "hablo" and out[5]["form"] == "estudiáis"
 
 
+def test_assign_slots_focus_pointer_continues_from_history(real_lex, monkeypatch):
+    # Kleine Geschichten (ein Verb) dürfen nicht immer bei yo anfangen.
+    hist = {"ind_pres:1s": (3, "2026-11-05"), "ind_pres:2s": (2, "2026-11-05"),
+            "ind_pres:3s": (2, "2026-11-04")}
+    monkeypatch.setattr(verb_slots.database, "verb_slot_usage", lambda lang: hist)
+    out = verb_slots.assign_slots([_card(1, "hablar"), _card(2, "comer")], "es", usage={})
+    assert out[1]["slot"] == "ind_pres:1p" and out[2]["slot"] == "ind_pres:2p"
+
+
 def test_assign_slots_focus_follows_the_day_tense(real_lex):
     tense_focus.step(1)
     out = verb_slots.assign_slots([_card(1, "hablar")], "es", usage={})
