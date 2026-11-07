@@ -6578,8 +6578,9 @@ body.gloss-on [data-gloss-tr]::after {
 .word-actions-grammar { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 /* #1140: the "the lookup failed" state — present, but plainly not a gloss. */
 .word-actions-gloss-missing { color: var(--muted); font-style: italic; }
-.word-actions-buttons { display: flex; gap: 8px; margin-top: 12px; }
+.word-actions-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .word-actions-buttons .word-table-btn { flex: 1; padding: 8px; font-size: 14px; }
+#word-actions-today, #word-actions-tomorrow { flex: 0 0 auto; min-width: 44px; }
 
 /* Phones get the same panel pinned to the word (#994), not a bottom sheet:
    the translation belongs next to what it explains, and a sheet at the far
