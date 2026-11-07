@@ -260,7 +260,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 
 - **排查线上故障第一步永远是看日志**：`journalctl -u biangbiangmian3000` —— 播客卡死（#565/#566）、早晨预生成失败（#517）这些事故，日志里都写着原因，靠猜要多花几小时
 - 常用途径：读 systemd 服务状态与日志、看 cron 是否在跑、确认部署是否真的上线了（`deploy/deploy.sh` 每分钟一轮）、查生产数据库的**只读**问题
-- **服务器*系统*时区仍是 `Asia/Shanghai`（UTC+8）**（同服务器有其他项目，所以不改），但**应用进程由 `app_tz.py` 设为 `Europe/Berlin`**（`APP_TIMEZONE` 环境变量可覆盖，#1456）：`database/core.py` 一导入就生效，所以应用和所有 import `database` 的脚本里 `anki_today()`、`datetime.now()` 和 Anki 日分界都按德国时间。早晨预生成已搬进 `deploy/crontab.managed`，按德国时间 06:00（每小时触发、命令内判断，#1456）；其余手工行都是分钟级轮询，不依赖时区。SQLite 的 `datetime('now')`（`generated_at`、`reviewed_at`）是 UTC。诊断"今天有多少卡到期"时要分清是哪个时钟：应用进程 = 德国时间，crontab = 上海时间，SQLite `now` = UTC
+- **服务器*系统*时区仍是 `Asia/Shanghai`（UTC+8）**（同服务器有其他项目，所以不改），但**应用进程由 `app_tz.py` 设为 `Europe/Berlin`**（`APP_TIMEZONE` 环境变量可覆盖，#1456）：`database/core.py` 一导入就生效，所以应用和所有 import `database` 的脚本里 `anki_today()`、`datetime.now()` 和 Anki 日分界都按德国时间。早晨预生成已搬进 `deploy/crontab.managed`，按德国时间 06:00（每小时触发、命令内判断，#1456）；其余手工行都是分钟级轮询，不依赖时区。SQLite 的 `datetime('now')`（`generated_at`、`reviewed_at`）是 UTC。诊断"今天有多少卡到期"时要分清是哪个时钟：应用进程 = 德国时间，crontab = 上海时间，SQLite `now` = UTC。**备份文件名 `srs_<时间>` 自 #1463 起是德国时间**（之前是上海时间；两种名字共存期间排序最多差 7 小时，无害）
 - 🔴 **生产库上的写操作要先问 Daniel**：`/home/anki/biangbiangmian3000/data/srs.db` 是唯一真库。只读查询（`SELECT`）随便跑；`UPDATE`/`DELETE`/迁移必须先说清楚要改什么、影响多少行，得到同意再动。备份是每 6 小时一次，最坏能丢 6 小时
 - **改代码仍然走 PR，不要 SSH 上去直接改文件**：服务器每分钟 `git pull`，手改的文件下一轮就被覆盖，而且改动不进版本库、没人知道（R1/R9 在服务器上同样成立）
 - **具体连接方式（主机、用户名、密钥路径）保存在 Claude 的项目记忆中，不写入公开仓库** —— 本仓库是公开的

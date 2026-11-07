@@ -16,12 +16,13 @@ BACKUP_DIR="${BACKUP_DIR:-$REPO_DIR/data/backups}"
 PYTHON="${BACKUP_PYTHON:-python3}"
 
 mkdir -p "$BACKUP_DIR"
-TS="$(date +%Y-%m-%d_%H-%M-%S)"
+# 文件名按德国时间（#1463）：系统时区是上海，Daniel 看名字时想的是德国时间
+TS="$(TZ=Europe/Berlin date +%Y-%m-%d_%H-%M-%S)"
 NAME="srs_${TS}.db"
 # 前缀是点、后缀 .partial：保留规则的正则对不上，中途失败也不会被当成快照
 TMP="${BACKUP_DIR}/.${NAME}.partial"
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+log() { echo "[$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 trap 'rm -f "$TMP" "${TMP}.zst"' EXIT
 
