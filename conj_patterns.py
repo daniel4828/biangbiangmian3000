@@ -23,6 +23,7 @@ raising.
 import json
 import logging
 import math
+import os
 import random
 import unicodedata
 from datetime import date, timedelta
@@ -407,12 +408,48 @@ def _y_exception(base: str, tense: str, person: str) -> bool:
     return bool(form) and "y" in form.lower() and "y" not in base[:-2]
 
 
+def _stem_only(base: str, tense: str) -> bool:
+    """True when every person = (some stem) + the REGULAR ending of that person
+    (accents ignored): a pure stem change, no irregular endings (#1470).
+    False when unsure (missing forms, no usable common prefix, perf)."""
+    try:
+        if tense == "perf":
+            return False
+        forms: dict[str, str] = {}
+        regs: dict[str, str] = {}
+        for person in PERSONS:
+            form = _lex_form(base, tense, person)
+            reg = _regular(base, tense, person)
+            if not form or not reg:
+                return False
+            forms[person] = _unaccent(form.lower())
+            regs[person] = _unaccent(reg.lower())
+        # longest common prefix, capped so that no regular ending is empty
+        prefix = os.path.commonprefix(list(regs.values()))
+        prefix = prefix[:max(0, min(len(r) for r in regs.values()) - 1)]
+        # an empty prefix (e.g. ir: stem "") is fine: the ending is then the
+        # whole regular form
+        for person in PERSONS:
+            ending = regs[person][len(prefix):]
+            if not ending:
+                return False
+            form = forms[person]
+            if not form.endswith(ending) or not form[:-len(ending)]:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
     """Person groups a creating card practises in Zeit-des-Tages mode (#1440),
     one group per pattern; the caller drills one person of every group
     (pick_person). Irregular groups first, then the regular contrast group, each
     in PERSONS order:
     - no irregular person (regular verb) -> [];
+    - stem change only (#1470): every person is a stem + the regular ending of
+      that person -> ONE group with all persons (no Folgesätze; the main
+      sentence's person rotates through pick_person);
     - a single-verb pattern (kind "verb": ser, ir, ...) -> every person alone;
     - y_3rd: only persons whose form has a new "y" (leyó, creyeron) are the
       exception; accent-only persons (creíste) join the regular contrast group
@@ -426,9 +463,11 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
                 pats.append((person, pat))
         if not any(p["kind"] != "regular" for _, p in pats):
             return []
+        base = verb_slots._base_verb(lemma)
+        if _stem_only(base, tense):
+            return [[person for person, _ in pats]]
         if any(p["kind"] == "verb" for _, p in pats):
             return [[person] for person, _ in pats]
-        base = verb_slots._base_verb(lemma)
         irregular: dict[str, list[str]] = {}
         regular: list[str] = []
         for person, pat in pats:

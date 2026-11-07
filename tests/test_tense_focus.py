@@ -188,9 +188,11 @@ def test_plan_followups_focus_skips_non_creating_and_no_main_slot(real_lex):
 # --- person types by irregularity (#1440) ------------------------------------------
 
 def test_focus_persons_by_irregularity_type(real_lex):
-    assert conj_patterns.focus_persons("pensar", "ind_pres") == ["1s", "1p"]
-    assert conj_patterns.focus_persons("salir", "ind_pres") == ["1s", "2s"]
-    assert conj_patterns.focus_persons("tener", "ind_pres") == ["1s", "2s", "1p"]
+    # #1470: stem change only (regular endings) -> one group with all persons
+    assert conj_patterns.focus_persons("pensar", "ind_pres") == ["1s"]
+    assert conj_patterns.focus_persons("salir", "ind_pres") == ["1s"]
+    assert conj_patterns.focus_persons("tener", "ind_pres") == ["1s"]
+    assert conj_patterns.focus_persons("estar", "ind_pres") == list(verb_slots.PERSONS)
     assert conj_patterns.focus_persons("ser", "ind_pres") == list(verb_slots.PERSONS)
     assert conj_patterns.focus_persons("hablar", "ind_pres") == []
 
@@ -218,16 +220,17 @@ def test_plan_followups_form_card_ser_gets_five_followups(real_lex):
         "ind_pres:2s", "ind_pres:3s", "ind_pres:1p", "ind_pres:2p", "ind_pres:3p"]
 
 
-def test_plan_followups_pensar_only_nosotros(real_lex):
+def test_plan_followups_pensar_stem_change_only_gets_none(real_lex):
+    # #1470: pensar ind_pres is a pure stem change -> no Folgesätze
     entries = [(_card(1, "pensar", "creating"), "ind_pres:1s")]
     out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == ["ind_pres:1p"]
+    assert out == []
 
 
 def test_plan_followups_cap_is_spread_round_robin(real_lex):
     database.set_app_setting(conj_patterns.KEY_FOLLOWUPS_PER_DAY, "2")
     entries = [(_card(1, "ser", "creating"), "ind_pres:1s"),
-               (_card(2, "salir", "creating"), "ind_pres:1s")]
+               (_card(2, "estar", "creating"), "ind_pres:1s")]  # estar: irregular endings (#1470)
     out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
     assert sorted(f["word_id"] for f in out) == [1, 2]
 
@@ -246,11 +249,12 @@ def test_focus_groups_contrast_and_exceptions(real_lex):
     fg = conj_patterns.focus_groups
     # y_3rd: only forms with a new y are the exception, accent-only forms join the contrast group
     assert fg("creer", "ind_pret") == [["3s", "3p"], ["1s", "2s", "1p", "2p"]]
-    assert fg("sentir", "ind_pret") == [["3s", "3p"], ["1s", "2s", "1p", "2p"]]
+    # #1470: stem change only (sintió = sint + io) -> one group
+    assert fg("sentir", "ind_pret") == [list(verb_slots.PERSONS)]
     assert len(fg("creer", "subj_impf")) == 1  # every person has the y
-    # pure spelling changes: no regular contrast group
-    assert fg("llegar", "ind_pret") == [["1s"], ["2s", "3s", "1p", "2p", "3p"]]
-    assert fg("buscar", "ind_pret") == [["1s"], ["2s", "3s", "1p", "2p", "3p"]]
+    # #1470: spelling changes are stem + regular ending (llegu+é) -> one group
+    assert fg("llegar", "ind_pret") == [list(verb_slots.PERSONS)]
+    assert fg("buscar", "ind_pret") == [list(verb_slots.PERSONS)]
     # one pattern for all persons
     assert fg("tener", "ind_pret") == [list(verb_slots.PERSONS)]
     # single-verb patterns: every person on its own
@@ -332,34 +336,50 @@ def test_assign_slots_form_card_regular_tense_rotates_without_pointer(real_lex):
     assert out[2]["slot"] == "ind_pret:1s"  # pointer did not move
 
 
-def test_plan_followups_sentir_comes_from_contrast_group_and_rotates(real_lex):
+def test_plan_followups_sentir_ind_pret_stem_only_gets_none(real_lex):
+    # #1470: sentir Indefinido is stem change only -> no Folgesätze
     tense_focus.step(1)
-    deck_id = database.get_or_create_deck("T")
     wid = _add_verb("sentir")
     entries = [(_card(wid, "sentir", "creating"), "ind_pret:1s")]
     out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == ["ind_pret:3s"]  # exception group, main in contrast group
-    _story(deck_id, [{"position": 1, "sentence_zh": "Sintió.", "word_ids": [],
-                      "followup_word_id": wid, "verb_slot": "ind_pret:3s"}])
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == ["ind_pret:3p"]
-    # main sentence in the exception group: the contrast group gets the followup
-    entries = [(_card(wid, "sentir", "creating"), "ind_pret:3s")]
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == ["ind_pret:1s"]
+    assert out == []
 
 
-def test_plan_followups_llegar_rotates_regular_followup(real_lex):
+def test_plan_followups_llegar_spelling_change_gets_none(real_lex):
+    # #1470: llegué = llegu + regular ending -> no Folgesätze
     tense_focus.step(1)
-    deck_id = database.get_or_create_deck("T")
     wid = _add_verb("llegar")
     entries = [(_card(wid, "llegar", "creating"), "ind_pret:1s")]
     out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == ["ind_pret:2s"]
-    _story(deck_id, [{"position": 1, "sentence_zh": "Llegaste.", "word_ids": [],
-                      "followup_word_id": wid, "verb_slot": "ind_pret:2s"}])
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == ["ind_pret:3s"]
+    assert out == []
+
+
+ALL_PERSONS = [["1s", "2s", "3s", "1p", "2p", "3p"]]
+
+
+@pytest.mark.parametrize("verb,tense", [
+    ("haber", "ind_fut"),
+    ("ser", "subj_pres"), ("estar", "subj_pres"), ("haber", "subj_pres"),
+    ("ir", "subj_pres"), ("ver", "subj_pres"), ("saber", "subj_pres"),
+    ("dar", "subj_pres"), ("sentir", "subj_pres"), ("poder", "subj_pres"),
+    ("querer", "subj_pres"), ("pensar", "subj_pres"), ("encontrar", "subj_pres"),
+    ("volver", "subj_pres"),
+    ("ser", "subj_impf"), ("ir", "subj_impf"), ("estar", "subj_impf"),
+    ("haber", "subj_impf"), ("dar", "subj_impf"),
+])
+def test_focus_groups_stem_only_is_one_group(real_lex, verb, tense):
+    out = conj_patterns.focus_groups(verb, tense)
+    assert len(out) == 1
+    assert out == ALL_PERSONS
+
+
+@pytest.mark.parametrize("verb,tense", [
+    ("ser", "ind_pres"), ("ir", "ind_pres"), ("estar", "ind_pres"),
+    ("dar", "ind_pres"), ("haber", "ind_pres"),
+    ("ser", "ind_pret"), ("ir", "ind_pret"),
+])
+def test_focus_groups_irregular_endings_stay_multi_group(real_lex, verb, tense):
+    assert len(conj_patterns.focus_groups(verb, tense)) > 1
 
 
 # --- API -------------------------------------------------------------------------
