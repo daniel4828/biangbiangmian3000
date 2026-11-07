@@ -87,14 +87,14 @@ def create_story(date_str: str, category: str, deck_id: int,
         tokens_json = json.dumps(s["tokens"], ensure_ascii=False) if s.get("tokens") else None
         sent_cur = conn.execute(
             """INSERT INTO story_sentences
-               (story_id, position, sentence_zh, sentence_en, sentence_de, sentence_fr, tokens, concept_en, concept_zh, reasoning_zh, source_url, context_de, source_title, source_name, verb_slot, grammar_hint, lang, followup_word_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (story_id, position, sentence_zh, sentence_en, sentence_de, sentence_fr, tokens, concept_en, concept_zh, reasoning_zh, source_url, context_de, source_title, source_name, verb_slot, grammar_hint, lang, followup_word_id, tense_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (story_id, s["position"], s["sentence_zh"],
              s.get("sentence_en", ""), s.get("sentence_de"), s.get("sentence_fr"), tokens_json,
              s.get("concept_en"), s.get("concept_zh"), s.get("reasoning_zh"), s.get("source_url"),
              s.get("context_de"), s.get("source_title"), s.get("source_name"),
              s.get("verb_slot"), s.get("grammar_hint"), s.get("lang"),
-             s.get("followup_word_id")),
+             s.get("followup_word_id"), s.get("tense_reason")),
         )
         sentence_id = sent_cur.lastrowid
         for word_id in s.get("word_ids", []):

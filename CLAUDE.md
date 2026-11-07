@@ -615,6 +615,7 @@ Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**�
 
 - **生成**：带槽位的动词句在词表行里多一个 `— context: …`（`verb_slots.tense_context()`），规则 `ai._TENSE_CONTEXT_RULE` 要求语境让该时态成为唯一自然选择（ayer / siempre / esta semana / ya …）。单语言与 🌐 多语言提示词、跟进句（`generate_conj_followups`，item 多带 `slot`）都用
 - **翻译**：`_fill_translations`（谷歌）之后 `ai._retranslate_tense_sentences()` 把**有 `verb_slot` 的句子**一次性交给 `DEFAULT_MODEL`（`translate_tense_sentences`，purpose `tense_translate`）重译，按 `verb_slots.tense_cue_de()` 用德语信号词体现时态（只列本批出现的时态）。失败或某句缺失 → 保留谷歌译文，绝不阻断故事；其它句子仍只走谷歌
+- **时态说明（#1485）**：同一次调用返回 `why`（1–2 句德语，点出信号词），存 `story_sentences.tense_reason`；跟进句同样（`generate_conj_followups` 的 `why`）。卡背「Warum diese Zeitform?」（`askTenseQuestion()`）有 `tense_reason` 时**直接显示、不发请求**，问答两条都放进对话历史，追问照常走 `/api/sentence-question`；旧句子没有说明时保持原行为
 - **开关**：设置页 Spanish「Zeitform-Signalwörter」，`app_settings.es_tense_cues`（默认开，`conj_patterns.tense_cues_active()`）；关闭时提示词与调用次数与之前一致
 - 测试见 `tests/test_verb_slots.py`、`tests/test_conj_followups.py`
 

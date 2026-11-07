@@ -16355,11 +16355,26 @@ function _addSentenceChatBubble(cls, text) {
   return el;
 }
 
+const _TENSE_QUESTION = 'Warum wird in diesem Satz diese Zeitform benutzt?';
+
 function askTenseQuestion() {
   if (!sentence?.sentence_zh) return;
   _bindSentenceChat();
   _setSentenceChatOpen(true);
-  sendSentenceChat('Warum wird in diesem Satz diese Zeitform benutzt?');
+  // #1485: the reason was written together with the translation — show it
+  // directly (no AI request). Both turns go into the history, so follow-up
+  // questions still reach the AI with that context. Only once per card.
+  const reason = (sentence.tense_reason || '').trim();
+  const chat = _sentenceChat;
+  const asked = chat.messages.some(m => m.role === 'user' && m.content === _TENSE_QUESTION);
+  if (reason && !asked) {
+    chat.messages.push({ role: 'user', content: _TENSE_QUESTION });
+    chat.messages.push({ role: 'assistant', content: reason });
+    _addSentenceChatBubble('sc-user', _TENSE_QUESTION);
+    _addSentenceChatBubble('sc-ai', reason);
+    return;
+  }
+  sendSentenceChat(_TENSE_QUESTION);
 }
 
 async function sendSentenceChat(quickText) {

@@ -325,6 +325,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN verb_slot TEXT")
     if "grammar_hint" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN grammar_hint TEXT")
+    # Why this tense (#1485): written with the LLM translation, shown by the
+    # card's "Warum diese Zeitform?" button without another AI request.
+    if "tense_reason" not in ss_cols:
+        conn.execute("ALTER TABLE story_sentences ADD COLUMN tense_reason TEXT")
     # Folgesatz (#1401): extra sentence for the same verb after a creating card;
     # holds the verb's entry id (the sentence itself has no story_sentence_words rows).
     if "followup_word_id" not in ss_cols:

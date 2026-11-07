@@ -467,7 +467,8 @@ def test_generate_story_es_tense_context_and_llm_translation(tmp_db, _no_transla
     def fake(model, messages, max_tokens, purpose, **kw):
         calls.append((purpose, messages[0]["content"]))
         if purpose == "tense_translate":
-            return '[{"index": 1, "de": "Gestern hat sie mit ihrer Mutter gesprochen."}]'
+            return ('[{"index": 1, "de": "Gestern hat sie mit ihrer Mutter gesprochen.", '
+                    '"why": "**ayer** = abgeschlossener Zeitpunkt."}]')
         return "1. Ayer ella habló con su madre.\n2. La casa es grande."
 
     with patch("ai._call_api", side_effect=fake):
@@ -479,6 +480,8 @@ def test_generate_story_es_tense_context_and_llm_translation(tmp_db, _no_transla
     assert "Ayer ella habló con su madre." in tprompt and "La casa" not in tprompt
     assert "gestern" in tprompt and "Imperfecto" not in tprompt  # only tenses present
     assert sentences[0]["sentence_de"] == "Gestern hat sie mit ihrer Mutter gesprochen."
+    assert sentences[0]["tense_reason"] == "**ayer** = abgeschlossener Zeitpunkt."
+    assert "tense_reason" not in sentences[1]
     assert "sentence_de" not in sentences[1] or sentences[1]["sentence_de"] != sentences[0]["sentence_de"]
 
 
@@ -519,8 +522,22 @@ def test_tense_cues_off_keeps_old_behaviour(tmp_db, _no_translation, monkeypatch
 def test_translate_tense_sentences_parses_and_drops_bad_rows():
     items = [{"sentence": "Ayer comí.", "slot": "ind_pret:1s"},
              {"sentence": "Siempre comía.", "slot": "ind_impf:1s"}]
-    reply = '```json\n[{"index": 2, "de": "Früher habe ich immer gegessen."}, {"index": 9, "de": "x"}, {"index": 1, "de": "  "}]\n```'
+    reply = ('```json\n[{"index": 2, "de": "Früher habe ich immer gegessen.", "why": "siempre"}, '
+             '{"index": 9, "de": "x"}, {"index": 1, "de": "  "}]\n```')
     with patch("ai._call_api", return_value=reply):
-        assert ai.translate_tense_sentences(items) == [None, "Früher habe ich immer gegessen."]
+        assert ai.translate_tense_sentences(items) == [
+            None, {"de": "Früher habe ich immer gegessen.", "why": "siempre"}]
+    with patch("ai._call_api", return_value='[{"index": 1, "de": "Gestern aß ich."}]'):
+        assert ai.translate_tense_sentences(items)[0] == {"de": "Gestern aß ich.", "why": ""}
     with patch("ai._call_api", return_value="kein json"):
         assert ai.translate_tense_sentences(items) == [None, None]
+
+
+def test_tense_reason_is_stored_and_read_back(tmp_db):
+    import database
+    deck = database.get_or_create_deck("ReasonDeck")
+    sid = database.create_story("2026-11-07", "creating", deck, [
+        {"position": 0, "sentence_zh": "Ayer comí.", "word_ids": [], "tokens": [],
+         "verb_slot": "ind_pret:1s", "tense_reason": "**ayer** → Indefinido"}])
+    rows = database.get_story_sentences(sid)
+    assert rows[0]["tense_reason"] == "**ayer** → Indefinido"
