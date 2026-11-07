@@ -484,37 +484,63 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
 
 
 def pick_person(group: list[str], tense: str, usage: dict | None = None,
-                local: dict | None = None) -> str:
-    """The person of `group` to drill next: fewest uses of the slot
-    ("{tense}:{person}") in `usage` ({slot: (count, last_generated_at)}), then
-    fewest picks of that slot in `local` ({slot: n}, the persons already given
-    to other cards of the same story), then the oldest last use (never =
-    oldest), then PERSONS order. Without usage/local that is the first person
-    of the group.
+                local: dict | None = None, weights: dict | None = None) -> str:
+    """The person of `group` to drill next.
+
+    Unweighted (weights None): fewest uses of the slot ("{tense}:{person}") in
+    `usage` ({slot: (count, last_generated_at)}), then fewest picks of that slot
+    in `local` ({slot: n}, the persons already given to other cards of the same
+    story), then the oldest last use (never = oldest), then PERSONS order.
+    Without usage/local that is the first person of the group.
+
+    Weighted (#1479, `weights` = {person: weight}, e.g. verb_slots.weights()
+    ["persons"]): smallest (uses + local picks + 1) / weight, so over time each
+    person is drilled about as often as it occurs in real Spanish (él ~ half,
+    vosotros rarely); weight 0 = never (unless the whole group is 0). Ties ->
+    larger weight, oldest last use, PERSONS order.
 
     `local` matters because cards introduced together have the same history
     (#1438 introduces ~25 form cards of a tense on one day): without it every
-    one of them got the same person in every story — one day all yo, the next
-    all tú."""
+    one of them got the same person in every story."""
     usage = usage or {}
     local = local or {}
+
+    def idx(person: str) -> int:
+        return PERSONS.index(person) if person in PERSONS else 99
+
+    if weights:
+        def w(person: str) -> float:
+            try:
+                return max(float(weights.get(person, 1.0)), 0.0)
+            except (TypeError, ValueError):
+                return 1.0
+        pool = [p for p in group if w(p) > 0] or list(group)
+
+        def wkey(person: str):
+            slot = f"{tense}:{person}"
+            count, last = usage.get(slot) or (0, None)
+            weight = w(person) or 1e-9
+            return (round(((count or 0) + local.get(slot, 0) + 1) / weight, 9),
+                    -weight, last or "", idx(person))
+        return min(pool, key=wkey)
 
     def key(person: str):
         slot = f"{tense}:{person}"
         count, last = usage.get(slot) or (0, None)
-        return (count or 0, local.get(slot, 0), last or "",
-                PERSONS.index(person) if person in PERSONS else 99)
+        return (count or 0, local.get(slot, 0), last or "", idx(person))
 
     return min(group, key=key)
 
 
 def focus_persons(lemma: str, tense: str, lang: str = LANG,
-                  usage: dict | None = None, local: dict | None = None) -> list[str]:
+                  usage: dict | None = None, local: dict | None = None,
+                  weights: dict | None = None) -> list[str]:
     """One person per focus_groups() group, chosen by pick_person with the verb's
     own slot `usage` ({slot: (count, last)}; None = first person of each group)
     and the story-local picks `local`. [] for a regular verb (caller uses the
     person pointer)."""
-    return [pick_person(g, tense, usage, local) for g in focus_groups(lemma, tense, lang)]
+    return [pick_person(g, tense, usage, local, weights)
+            for g in focus_groups(lemma, tense, lang)]
 
 
 def _special_irregular(base: str, tense: str) -> bool:
@@ -1062,6 +1088,7 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
     except Exception as e:
         logger.warning("slot usage unavailable for followups — %s", e)
         usage_by_word = {}
+    person_weights = verb_slots.focus_person_weights(LANG)
     for card, main_slot in entries:
         if not main_slot or card.get("category") != "creating" \
                 or _card_lang(card, lang) != LANG:
@@ -1080,7 +1107,8 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
             continue
         usage = usage_by_word.get(card["word_id"])
         # groups holding the main person are covered by the main sentence
-        order = [pick_person(g, tense, usage) for g in groups if main_person not in g]
+        order = [pick_person(g, tense, usage, None, person_weights)
+                 for g in groups if main_person not in g]
         items: list[dict] = []
         for person in order:
             form = verb_slots.target_form(raw_lemma, tense, person, LANG)

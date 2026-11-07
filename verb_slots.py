@@ -504,6 +504,20 @@ def _focus_tense() -> str | None:
         return None
 
 
+def focus_person_weights(lang: str) -> dict | None:
+    """Person weights for Zeit-des-Tages mode (#1479): weights(lang)["persons"]
+    (the editable "Verb slot weights", default = real usage frequency) when the
+    setting "weighted_persons" is on, else None (= even rotation). Never raises."""
+    try:
+        import tense_focus
+        if not tense_focus.settings().get("weighted_persons", True):
+            return None
+        return dict((weights(lang) or {}).get("persons") or {}) or None
+    except Exception as e:
+        logger.warning("person weights unavailable, rotating evenly — %s", e)
+        return None
+
+
 def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
     """Slots in focus mode (#1434). Every card rotates over the persons on its
     OWN (#1475): the person this word has drilled least in the tense (its story
@@ -537,8 +551,29 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
     # Slots already handed to other cards of this story.
     local: dict[str, int] = {}
 
+    pw = focus_person_weights(lang)
+
     def pick(avail: list[str], tense: str, usage: dict | None) -> str:
         usage = usage or {}
+        if pw:
+            def w(person: str) -> float:
+                try:
+                    return max(float(pw.get(person, 1.0)), 0.0)
+                except (TypeError, ValueError):
+                    return 1.0
+            pool = [x for x in avail if w(x) > 0] or list(avail)
+
+            def wkey(person: str):
+                # (this word's uses + uses given to other cards of this story + 1)
+                # / weight: long-run share of a person ~ its share of the weight
+                slot = f"{tense}:{person}"
+                wc, wlast = usage.get(slot) or (0, None)
+                gc, _glast = hist.get(slot) or (0, None)
+                weight = w(person) or 1e-9
+                return (round(((wc or 0) + local.get(slot, 0) + 1) / weight, 9),
+                        round(((gc or 0) + 1) / weight, 9), wlast or "",
+                        PERSONS.index(person))
+            return min(pool, key=wkey)
 
         def key(person: str):
             slot = f"{tense}:{person}"
@@ -579,7 +614,8 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         if use_patterns and card.get("category") == "creating":
             try:
                 plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang,
-                                                               usage=usage, local=local)
+                                                               usage=usage, local=local,
+                                                               weights=pw)
                         if target_form(lemma, tense, x, lang)]
             except Exception as e:
                 logger.warning("focus persons of %r failed — %s", lemma, e)

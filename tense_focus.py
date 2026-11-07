@@ -8,7 +8,10 @@ today's": the setting, the day math and the validation.
 
 Setting: app_settings key "es_tense_focus", JSON
     {"enabled": bool, "tenses": [codes], "days": int,
-     "anchor_date": "YYYY-MM-DD", "anchor_index": int}
+     "anchor_date": "YYYY-MM-DD", "anchor_index": int,
+     "weighted_persons": bool}
+`weighted_persons` (#1479, default on): persons rotate by real usage frequency
+(verb_slots.weights()["persons"]) instead of evenly.
 The tense of a day = tenses[(anchor_index + (day - anchor_date) // days) % n],
 so the rotation wraps around after the last tense. The user only toggles which
 tenses take part; their ORDER is always the canonical one of languages.py.
@@ -30,7 +33,7 @@ LANG = "es"
 KEY = "es_tense_focus"
 RELEASED_KEY = "es_form_intro_released"  # ordered list, see database.sync_form_card_pause
 MIN_DAYS, MAX_DAYS = 1, 30
-_KNOWN_KEYS = {"enabled", "tenses", "days"}
+_KNOWN_KEYS = {"enabled", "tenses", "days", "weighted_persons"}
 
 
 def canonical_tenses() -> list[str]:
@@ -68,7 +71,7 @@ def settings() -> dict:
     (today, index 0) so day 1 is the first tense and later days count from it."""
     canon = canonical_tenses()
     out = {"enabled": True, "tenses": list(canon), "days": 1,
-           "anchor_date": None, "anchor_index": 0}
+           "anchor_date": None, "anchor_index": 0, "weighted_persons": True}
     stored: dict = {}
     raw = database.get_app_setting(KEY)
     if raw:
@@ -82,6 +85,8 @@ def settings() -> dict:
             logger.warning("tense focus: stored value is not JSON, using defaults")
     if isinstance(stored.get("enabled"), bool):
         out["enabled"] = stored["enabled"]
+    if isinstance(stored.get("weighted_persons"), bool):
+        out["weighted_persons"] = stored["weighted_persons"]
     tenses = stored.get("tenses")
     if isinstance(tenses, list):
         picked = [t for t in canon if t in tenses]  # canonical order, known codes only
@@ -173,6 +178,10 @@ def validate(body) -> dict:
         if not isinstance(body["enabled"], bool):
             raise ValueError("'enabled' must be true or false")
         out["enabled"] = body["enabled"]
+    if "weighted_persons" in body:
+        if not isinstance(body["weighted_persons"], bool):
+            raise ValueError("'weighted_persons' must be true or false")
+        out["weighted_persons"] = body["weighted_persons"]
     if "tenses" in body:
         v = body["tenses"]
         canon = canonical_tenses()
