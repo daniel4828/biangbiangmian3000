@@ -258,6 +258,13 @@ def test_focus_groups_contrast_and_exceptions(real_lex):
     assert fg("hablar", "ind_pres") == []
 
 
+def test_focus_groups_perf_special_verbs_use_participle_group(real_lex):
+    # #1468: ver (visto) must not become six one-person groups in Perfecto
+    fg = conj_patterns.focus_groups
+    assert fg("ver", "perf") == [["1s", "2s", "3s", "1p", "2p", "3p"]]
+    assert fg("ver", "perf") == fg("hacer", "perf")
+
+
 def test_pick_person_order():
     pp = conj_patterns.pick_person
     group = ["1s", "2s", "3s"]

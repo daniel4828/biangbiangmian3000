@@ -337,6 +337,12 @@ def _classify(base: str, tense: str, person: str, form: str) -> dict:
         cls = _reg_class(tense, base)
         return {"key": f"reg:{tense}:{cls}", "label": _reg_label(tense, cls),
                 "kind": "regular"}
+    # #1468: in Perfecto only the participle can be irregular (haber changes with
+    # the person, identically for every verb), so even ser/ir/ver/... follow the
+    # shared participle group instead of becoming single-verb patterns.
+    if tense == "perf" and reg is not None and ("perf", "participle") in _GROUPS:
+        return {"key": "irr:perf:participle", "label": _GROUPS[("perf", "participle")],
+                "kind": "group"}
     if base in SPECIAL:
         return _verb_pattern(base, tense, sonder=False)
     group = None
@@ -488,6 +494,8 @@ def catalog(lang: str = LANG) -> list[dict]:
                     out.append({"key": f"irr:{tense}:{group}", "label": label,
                                 "kind": "group", "tense": tense})
             seen = set()
+            if tense == "perf":
+                continue  # #1468: no single-verb patterns in Perfecto (participle group only)
             for base in SPECIAL:
                 if _special_irregular(base, tense):
                     p = _verb_pattern(base, tense, sonder=False)
