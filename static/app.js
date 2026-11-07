@@ -22922,7 +22922,10 @@ function _openListeningItem(ownerKind, ownerId, bookId, pageNo, lang, variant) {
     if (!active || document.activeElement !== active) return;
     // Tastatur noch nicht offen → nichts tun (Desktop / Hardware-Tastatur).
     if (vv.height >= window.innerHeight - 60) return;
-    const r = active.getBoundingClientRect();
+    // Unterkante = „Check Answer“ (liegt unter dem Feld), sonst das Feld selbst.
+    const btn = document.getElementById('reveal-btn');
+    const anchor = (btn && btn.offsetParent) ? btn : active;
+    const r = anchor.getBoundingClientRect();
     const delta = r.bottom - vv.offsetTop - vv.height + 8;
     if (Math.abs(delta) > 2) window.scrollBy(0, delta);
   }
