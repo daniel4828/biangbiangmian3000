@@ -2366,15 +2366,13 @@ function _homeLanguageRows(allDeck, regularDecks) {
     const c = _sumCounts(g.decks);
     const open = expanded.has(g.lang);
     const label = _HOME_LANG_LABELS[g.lang] || _LANG_TAB_LABELS[g.lang] || g.lang;
-    const leaves = g.decks.flatMap(d => getDeepCategoryLeaves(d).concat(d.category ? [d] : []));
     const enabled = {};
     for (const cat of ['reading', 'listening', 'creating'])
       enabled[`${cat}_enabled`] = flatten(g.decks).some(d => d[`${cat}_enabled`]) ? 1 : 0;
     const pseudo = { ...allDeck, ...enabled, name: label.replace(/^\S+\s/, ''), children: g.decks };
-    // Pills/suspend act on the All root scoped to this language, exactly what
+    // Pills act on the All root scoped to this language, exactly what
     // the All row under this language's tab did before #1390.
     const setLang = s => s.replaceAll('event.stopPropagation();', `event.stopPropagation();_setLangQuiet('${g.lang}');`);
-    const allSusp = leaves.length > 0 && leaves.every(l => !!l.all_suspended);
     html += `
       <div class="tree-row tree-parent home-lang-row" data-lang="${g.lang}">
         <span class="tree-toggle" onclick="toggleHomeLang('${g.lang}')">${open ? '▼' : '▶'}</span>
@@ -2382,7 +2380,6 @@ function _homeLanguageRows(allDeck, regularDecks) {
           <span class="tree-name" onclick="startReviewLang('${g.lang}')" style="cursor:pointer;font-weight:600">${label}</span>
         </span>
         <span class="deck-counts"><span class="n-new">${c.new}</span>${lrnHtml(c)}<span class="n-rev">${c.review}</span></span>
-        ${setLang(`<div class="deck-menu-wrap"><button class="deck-susp-btn ${allSusp ? 'deck-all-suspended' : ''}" onclick="event.stopPropagation();toggleDeckAllSuspension(${allDeck.id})" title="${allSusp ? 'Unsuspend all cards' : 'Suspend all cards'}">${allSusp ? '▶' : '⏸'}</button></div>`)}
         <div class="cat-pills-row">${setLang(buildCategoryButtons(pseudo))}</div>
       </div>`;
     if (open) html += renderDeckRows(g.decks, 1, deckSortMode);
@@ -2461,8 +2458,7 @@ function renderDeckRows(decks, depth, sortMode) {
         ${rrBadge}
         <button class="${buryClass}" onclick="event.stopPropagation();toggleBury(${deck.id})" title="${buryTitle}">${buryIcon}</button>
         <div class="deck-menu-wrap">
-          <button class="deck-susp-btn ${deck.deck_all_suspended ? 'deck-all-suspended' : ''}" onclick="event.stopPropagation();toggleDeckAllSuspension(${deck.id})" title="${deck.deck_all_suspended ? 'Unsuspend all cards' : 'Suspend all cards'}">${deck.deck_all_suspended ? '▶' : '⏸'}</button>
-          <button class="gear-btn" onclick="event.stopPropagation();toggleDeckMenu(event,${deck.id},'${safeName}',${!!deck.filtered})" title="Deck options">⚙</button>
+          <button class="gear-btn" onclick="event.stopPropagation();toggleDeckMenu(event,${deck.id},'${safeName}',${!!deck.filtered},${!!deck.deck_all_suspended})" title="Deck options">⚙</button>
         </div>
         <div class="cat-pills-row">${buildCategoryButtons(deck)}</div>
       </div>`;
@@ -2556,7 +2552,7 @@ async function toggleMixNew(deckId) {
 }
 
 // ── Deck context menu ────────────────────────────────────────────────────────
-function toggleDeckMenu(e, id, safeName, filtered = false) {
+function toggleDeckMenu(e, id, safeName, filtered = false, allSuspended = false) {
   closeDeckMenu();
   const btn = e.currentTarget;
   const menu = document.createElement('div');
@@ -2573,6 +2569,7 @@ function toggleDeckMenu(e, id, safeName, filtered = false) {
       <button onclick="closeDeckMenu();openBrowseForDeck(${id})">Browse</button>
       <button onclick="closeDeckMenu();renameDeck(${id},'${safeName}')">Rename</button>
       <button onclick="closeDeckMenu();openOptions(${id})">Options</button>
+      <button onclick="closeDeckMenu();toggleDeckAllSuspension(${id})">${allSuspended ? 'Unsuspend all cards' : 'Suspend all cards'}</button>
       <button onclick="closeDeckMenu();deleteDeck(${id},'${safeName}')">Delete</button>
     `;
   }
