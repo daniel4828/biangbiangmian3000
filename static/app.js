@@ -22907,3 +22907,36 @@ function _openListeningItem(ownerKind, ownerId, bookId, pageNo, lang, variant) {
     _raOpenOwner({ kind: 'book_page', bookId, pageNo, lang });
   }
 }
+
+// Antwortfeld beim Tippen direkt über der Tastatur halten: iOS scrollt das
+// fokussierte Feld sonst weit nach oben, sodass der deutsche Satz und das
+// Zeit-/Personen-Etikett darüber verschwinden. Wir richten die Unterkante des
+// Feldes an der Unterkante des sichtbaren Bereichs (visualViewport) aus.
+(function _keepAnswerInputAboveKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const IDS = new Set(['creating-input', 'word-bank-input']);
+  let active = null;
+  let timers = [];
+  function align() {
+    if (!active || document.activeElement !== active) return;
+    // Tastatur noch nicht offen → nichts tun (Desktop / Hardware-Tastatur).
+    if (vv.height >= window.innerHeight - 60) return;
+    const r = active.getBoundingClientRect();
+    const delta = r.bottom - vv.offsetTop - vv.height + 8;
+    if (Math.abs(delta) > 2) window.scrollBy(0, delta);
+  }
+  function schedule() {
+    timers.forEach(clearTimeout);
+    timers = [50, 200, 400, 700].map(ms => setTimeout(align, ms));
+  }
+  document.addEventListener('focusin', e => {
+    if (!e.target || !IDS.has(e.target.id)) return;
+    active = e.target;
+    schedule();
+  });
+  document.addEventListener('focusout', e => {
+    if (e.target === active) { active = null; timers.forEach(clearTimeout); }
+  });
+  vv.addEventListener('resize', () => { if (active) schedule(); });
+})();
