@@ -540,6 +540,10 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         p = min(range(len(PERSONS)), key=_key)
     except Exception as e:
         logger.warning("slot history unavailable, pointer starts at yo — %s", e)
+    # Slots already handed to creating cards of this story (the pick_person
+    # path): cards with the same history spread over the persons instead of all
+    # getting the same one.
+    local: dict[str, int] = {}
     for card in cards:
         word = card.get("word_zh") or ""
         parsed = parse_form_card(word)
@@ -568,19 +572,21 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         if use_patterns and card.get("category") == "creating":
             usage = usage_by_word.get(card.get("word_id"))
             try:
-                plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang, usage=usage)
+                plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang,
+                                                               usage=usage, local=local)
                         if target_form(lemma, tense, x, lang)]
                 if not plan and parsed:
                     # form card whose verb is regular in this tense: rotate over
                     # all persons by history, pointer untouched
                     avail = [x for x in PERSONS if target_form(lemma, tense, x, lang)]
-                    plan = [conj_patterns.pick_person(avail, tense, usage)] if avail else []
+                    plan = [conj_patterns.pick_person(avail, tense, usage, local)] if avail else []
             except Exception as e:
                 logger.warning("focus persons of %r failed — %s", lemma, e)
                 plan = []
             entry = make_entry(plan[0]) if plan else None
             if entry:
                 out[card["word_id"]] = entry
+                local[entry["slot"]] = local.get(entry["slot"], 0) + 1
                 continue
         for k in range(len(PERSONS)):
             pos = p + k
