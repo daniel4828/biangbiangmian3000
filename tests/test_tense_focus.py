@@ -40,6 +40,14 @@ def real_lex(clock):
     lexicon.clear_cache()
 
 
+@pytest.fixture(autouse=True)
+def even_persons(request, monkeypatch):
+    # Die meisten Tests prüfen die gleichmäßige Rotation; die gewichtete
+    # (#1477) hat eigene Tests mit dem Marker "weighted_persons".
+    if "weighted_persons" not in request.keywords:
+        monkeypatch.setattr(verb_slots, "focus_person_weights", lambda lang: None)
+
+
 def _card(wid, word, category="reading"):
     return {"word_id": wid, "word_zh": word, "category": category}
 
@@ -439,3 +447,56 @@ def test_api_roundtrip(clock):
     r = client.post("/api/es/tense-focus/step", json={"delta": 1})
     assert r.status_code == 200 and r.json()["current"]["tense"] == "ind_pret"
     assert client.post("/api/es/tense-focus/step", json={"delta": 5}).status_code == 400
+
+
+# --- Personen nach Häufigkeit gewichten (#1477) ---------------------------------
+
+@pytest.mark.weighted_persons
+def test_weighted_default_on_and_switchable(real_lex):
+    assert tense_focus.settings()["weighted_persons"] is True
+    w = verb_slots.focus_person_weights("es")
+    assert w["3s"] > w["1s"] > w["2s"] > w["2p"]
+    tense_focus.save(tense_focus.validate({"weighted_persons": False}))
+    assert verb_slots.focus_person_weights("es") is None
+    with pytest.raises(ValueError):
+        tense_focus.validate({"weighted_persons": "ja"})
+
+
+@pytest.mark.weighted_persons
+def test_weighted_story_follows_real_frequency(real_lex):
+    verbs = ["hablar", "comer", "vivir", "trabajar", "estudiar", "caminar",
+             "cantar", "bailar", "mirar", "llamar", "tomar", "llevar"]
+    cards = [_card(i, w) for i, w in enumerate(verbs, 1)]
+    out = verb_slots.assign_slots(cards, "es", usage={})
+    persons = [out[c["word_id"]]["slot"].split(":")[1] for c in cards]
+    assert persons[0] == "3s"                     # häufigste Person zuerst
+    assert persons.count("3s") > persons.count("1s") > persons.count("1p")
+    assert "2p" not in persons                    # vosotros ist sehr selten
+    assert len(set(persons)) >= 4                 # trotzdem gemischt
+
+
+@pytest.mark.weighted_persons
+def test_weighted_card_rotates_on_its_own(real_lex):
+    tense_focus.step(1)
+    deck_id = database.get_or_create_deck("T")
+    wid = _add_verb("hablar")
+    _story(deck_id, [{"position": 1, "sentence_zh": "Habló.", "word_ids": [wid],
+                      "verb_slot": "ind_pret:3s"}])
+    out = verb_slots.assign_slots([_card(wid, "hablar")], "es", usage={})
+    assert out[wid]["slot"] == "ind_pret:3s"      # einmal geübt: 2/47 < 1/22.5
+    _story(deck_id, [{"position": 1, "sentence_zh": "Habló otra vez.", "word_ids": [wid],
+                      "verb_slot": "ind_pret:3s"}])
+    out = verb_slots.assign_slots([_card(wid, "hablar")], "es", usage={})
+    assert out[wid]["slot"] == "ind_pret:1s"      # zweimal: 3/47 > 1/22.5
+
+
+def test_pick_person_weighted():
+    pp = conj_patterns.pick_person
+    w = {"1s": 22.5, "2s": 12, "3s": 47, "1p": 7, "2p": 0.4, "3p": 11}
+    assert pp(["1s", "2s", "3s"], "ind_pres", None, None, w) == "3s"
+    assert pp(["1s", "2s"], "ind_pres", None, None, w) == "1s"                    # 1/22.5 < 1/12
+    assert pp(["1s", "2s"], "ind_pres", {"ind_pres:1s": (1, "x")}, None, w) == "2s"  # 2/22.5 > 1/12
+    assert pp(["1s", "2s"], "ind_pres", None, {"ind_pres:1s": 1}, w) == "2s"        # local zählt mit
+    # Gewicht 0 = nie, außer die ganze Gruppe ist 0
+    assert pp(["2p", "1p"], "ind_pres", None, None, {"2p": 0, "1p": 0.1}) == "1p"
+    assert pp(["2p"], "ind_pres", None, None, {"2p": 0}) == "2p"

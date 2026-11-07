@@ -45,6 +45,11 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
+        "weighted_persons: Zeit-des-Tages test of the frequency-weighted person "
+        "rotation (#1477); the other tense_focus tests pin the even rotation",
+    )
+    config.addinivalue_line(
+        "markers",
         "real_youtube_calls: test exercises knowledge.youtube's own "
         "fetch_duration/download_audio (stubs subprocess.run instead) and "
         "must skip the autouse tripwire that stubs those functions themselves",

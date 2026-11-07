@@ -4184,6 +4184,13 @@ function _esTenseFocusHtml() {
       </span>
     </div>
     <div class="keymap-row">
+      <span class="keymap-label" title="Personen so oft üben, wie sie im echten Spanisch vorkommen (Gewichte unter „Verb slot weights“). Aus = alle Personen gleich oft.">Personen nach Häufigkeit gewichten</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${s.weighted_persons !== false ? 'checked' : ''} ${dis}
+               onchange="saveEsTenseFocus({weighted_persons: this.checked})" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    <div class="keymap-row">
       <span class="keymap-label">Tage pro Zeit</span>
       <input type="number" min="1" max="30" step="1" value="${_escHtml(String(s.days))}" style="width:80px" ${dis}
              onchange="saveEsTenseFocus({days: Number(this.value)})">
