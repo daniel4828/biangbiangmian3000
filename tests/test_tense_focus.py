@@ -204,7 +204,7 @@ def test_assign_slots_creating_irregular_keeps_pointer(real_lex):
     assert out[1]["slot"] == "ind_pres:1s" and out[1]["form"] == "salgo"
     # pensar (nur Stammwechsel, eine Gruppe) weicht der von salir belegten Person aus
     assert out[2]["slot"] == "ind_pres:2s"
-    assert out[3]["slot"] == "ind_pres:1s"  # pointer was not moved
+    assert out[3]["slot"] == "ind_pres:3s"  # weicht den beiden belegten Personen aus
 
 
 def test_assign_slots_reading_irregular_uses_pointer(real_lex):
@@ -360,6 +360,20 @@ def test_pick_person_local_spreads_ties():
     # history still comes first
     assert pp(group, "ind_pret", {"ind_pret:2s": (1, "x"), "ind_pret:3s": (1, "x")},
               {"ind_pret:1s": 3}) == "1s"
+
+
+def test_each_card_rotates_on_its_own_history(real_lex):
+    # #1475: jede Karte rotiert für sich, auch Lese-/Hörkarten und normale Verben.
+    deck_id = database.get_or_create_deck("T")
+    w1, w2 = _add_verb("hablar"), _add_verb("comer")
+    _story(deck_id, [
+        {"position": 1, "sentence_zh": "Hablo.", "word_ids": [w1], "verb_slot": "ind_pres:1s"},
+        {"position": 2, "sentence_zh": "Hablas.", "word_ids": [w1], "verb_slot": "ind_pres:2s"},
+        {"position": 3, "sentence_zh": "Como.", "word_ids": [w2], "verb_slot": "ind_pres:1s"},
+    ])
+    out = verb_slots.assign_slots([_card(w1, "hablar"), _card(w2, "comer")], "es", usage={})
+    assert out[w1]["slot"] == "ind_pres:3s"
+    assert out[w2]["slot"] == "ind_pres:1p"  # 2s global schon geübt, 3s hier vergeben
 
 
 def test_plan_followups_sentir_ind_pret_stem_only_gets_none(real_lex):
