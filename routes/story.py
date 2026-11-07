@@ -408,7 +408,8 @@ def _append_followups(sentences: list, cards: list, *, lang: str, model: str,
                 "sentence_zh": w["sentence_es"], "sentence_de": w["sentence_de"],
                 "sentence_en": "", "word_ids": [], "tokens": [],
                 "followup_word_id": p["word_id"], "verb_slot": p["slot"],
-                "grammar_hint": p["label"], "lang": "es"})
+                "grammar_hint": p["label"], "lang": "es",
+                "tense_reason": w.get("tense_reason")})
         logger.info("story  follow-ups planned=%d written=%d", len(plan), len(written))
     except ai.StoryCancelled:
         raise

@@ -1150,16 +1150,17 @@ def _tense_rules_de(slots: list[str]) -> str:
     return "\n".join(lines)
 
 
-def translate_tense_sentences(items: list[dict], model: str = DEFAULT_MODEL) -> list[str | None]:
+def translate_tense_sentences(items: list[dict], model: str = DEFAULT_MODEL) -> list[dict | None]:
     """German translations that keep the Spanish tense recognisable (#1481).
 
     `items` = [{"sentence": "Ayer fui al cine.", "slot": "ind_pret:1s",
-    "lang_name": "Spanish"}, …]. Returns one entry per item: the German
-    sentence, or None where the reply had nothing usable. Never raises
+    "lang_name": "Spanish"}, …]. Returns one entry per item:
+    {"de": German sentence, "why": short German note on why this tense (#1485,
+    may be "")}, or None where the reply had nothing usable. Never raises
     (all None on any failure — the caller keeps Google's translation)."""
     if not items:
         return []
-    out: list[str | None] = [None] * len(items)
+    out: list[dict | None] = [None] * len(items)
     try:
         import verb_slots
         lines = "\n".join(
@@ -1181,13 +1182,17 @@ def translate_tense_sentences(items: list[dict], model: str = DEFAULT_MODEL) -> 
             "(e.g. 'gestern', 'früher immer', 'heute schon') rather than leave the "
             "tense ambiguous.\n"
             "- Keep the meaning, person and number; stay short and natural.\n"
-            "- Never name the tense, never use brackets, quotes or notes.\n"
+            "- Never name the tense in \"de\", never use brackets, quotes or notes there.\n"
+            f"- \"why\": 1–2 short German sentences for the learner explaining why the "
+            f"{lang_name} sentence uses this tense — name the signal word or context "
+            "(e.g. „ayer“ → abgeschlossener Zeitpunkt in der Vergangenheit) and how the "
+            "German translation shows it. May use **bold** for the signal words.\n"
             "Reply with ONLY a JSON array, no markdown fences, no explanation:\n"
-            '[{"index": 1, "de": "…"}, …]\n\n'
+            '[{"index": 1, "de": "…", "why": "…"}, …]\n\n'
             f"Sentences:\n{lines}"
         )
         raw = _call_api(model, [{"role": "user", "content": prompt}],
-                        200 + 120 * len(items), purpose="tense_translate")
+                        200 + 260 * len(items), purpose="tense_translate")
         start, end = raw.find("["), raw.rfind("]") + 1
         data = json.loads(raw[start:end]) if start != -1 and end != 0 else None
         if not isinstance(data, list):
@@ -1196,12 +1201,13 @@ def translate_tense_sentences(items: list[dict], model: str = DEFAULT_MODEL) -> 
         for row in data:
             if not isinstance(row, dict):
                 continue
-            idx, de = row.get("index"), row.get("de")
+            idx, de, why = row.get("index"), row.get("de"), row.get("why")
             if (isinstance(idx, bool) or not isinstance(idx, int)
                     or not 1 <= idx <= len(items) or out[idx - 1] is not None
                     or not isinstance(de, str) or not de.strip()):
                 continue
-            out[idx - 1] = de.strip()
+            out[idx - 1] = {"de": de.strip(),
+                            "why": why.strip() if isinstance(why, str) else ""}
         return out
     except StoryCancelled:
         raise
@@ -1226,9 +1232,11 @@ def _retranslate_tense_sentences(sentences: list[dict], progress_key: str | None
                       s.get("lang") or (lang if lang != MULTI_LANG else "es"))["name_en"]}
                  for s in todo]
         done = 0
-        for s, de in zip(todo, translate_tense_sentences(items)):
-            if de:
-                s["sentence_de"] = de
+        for s, res in zip(todo, translate_tense_sentences(items)):
+            if res:
+                s["sentence_de"] = res["de"]
+                if res["why"]:
+                    s["tense_reason"] = res["why"]
                 done += 1
         logger.info("tense translation: %d/%d sentences", done, len(todo))
     except StoryCancelled:
@@ -1268,6 +1276,9 @@ def generate_conj_followups(items: list[dict], model: str = DEFAULT_MODEL) -> li
             "do not show it) — translate the signal words and follow these rules:\n"
             f"{_tense_rules_de([it.get('slot', '') for it in items])}\n"
             "Never name the tense in the German, no brackets or notes.\n"
+            "Also add \"why\": 1–2 short German sentences explaining why the Spanish "
+            "sentence uses this tense, naming the signal word or context "
+            "(**bold** allowed).\n"
         ) if cues else ""
         prompt = (
             "For each numbered item below write ONE short, natural Spanish sentence "
@@ -1277,11 +1288,13 @@ def generate_conj_followups(items: list[dict], model: str = DEFAULT_MODEL) -> li
             "Every sentence must stand on its own; do not reuse the same situation.\n"
             + cue_block +
             "Reply with ONLY a JSON array, no markdown fences, no explanation:\n"
-            '[{"index": 1, "sentence_es": "…", "sentence_de": "…"}, …]\n\n'
-            f"Items:\n{lines}"
+            + ('[{"index": 1, "sentence_es": "…", "sentence_de": "…", "why": "…"}, …]\n\n'
+               if cues else
+               '[{"index": 1, "sentence_es": "…", "sentence_de": "…"}, …]\n\n')
+            + f"Items:\n{lines}"
         )
         raw = _call_api(model, [{"role": "user", "content": prompt}],
-                        200 + 160 * len(items), purpose="conj_followups")
+                        200 + (260 if cues else 160) * len(items), purpose="conj_followups")
         start, end = raw.find("["), raw.rfind("]") + 1
         data = json.loads(raw[start:end]) if start != -1 and end != 0 else None
         if not isinstance(data, list):
@@ -1303,7 +1316,11 @@ def generate_conj_followups(items: list[dict], model: str = DEFAULT_MODEL) -> li
                 logger.warning("generate_conj_followups: sentence %d lacks %r — dropped", idx, form)
                 continue
             seen.add(idx)
-            out.append({"index": idx - 1, "sentence_es": es.strip(), "sentence_de": de.strip()})
+            entry = {"index": idx - 1, "sentence_es": es.strip(), "sentence_de": de.strip()}
+            why = row.get("why")
+            if cues and isinstance(why, str) and why.strip():
+                entry["tense_reason"] = why.strip()
+            out.append(entry)
         return out
     except Exception as e:
         logger.warning("generate_conj_followups failed — %s", e)

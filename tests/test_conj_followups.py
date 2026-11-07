@@ -240,10 +240,22 @@ def test_generate_prompt_has_tense_cues(monkeypatch):
     assert "— context: a past habit" in seen[0]
     assert "früher" in seen[0] and "gestern, letzte Woche" not in seen[0]
     ai.generate_conj_followups(ITEMS)  # no slots -> old prompt
-    assert "context:" not in seen[1]
+    assert "context:" not in seen[1] and '"why"' not in seen[1]
     monkeypatch.setattr(ai, "_tense_cues_active", lambda: False)
     ai.generate_conj_followups([{**ITEMS[0], "slot": "ind_impf:1s"}])
     assert "context:" not in seen[2]
+
+
+def test_generate_returns_tense_reason(monkeypatch):
+    monkeypatch.setattr(ai, "_tense_cues_active", lambda: True)
+    monkeypatch.setattr(ai, "_call_api", lambda *a, **k: (
+        '[{"index": 1, "sentence_es": "Ayer tuve suerte.", "sentence_de": "Gestern hatte ich Glück.", '
+        '"why": "ayer = Zeitpunkt"}]'))
+    out = ai.generate_conj_followups([{**ITEMS[0], "slot": "ind_pret:1s"}])
+    assert out[0]["tense_reason"] == "ayer = Zeitpunkt"
+    monkeypatch.setattr(ai, "_tense_cues_active", lambda: False)
+    out = ai.generate_conj_followups([{**ITEMS[0], "slot": "ind_pret:1s"}])
+    assert "tense_reason" not in out[0]
 
 
 def test_generate_form_must_be_a_whole_word(monkeypatch):
