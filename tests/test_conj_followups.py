@@ -230,6 +230,22 @@ def test_generate_drops_invalid_forms(monkeypatch):
     assert '"tuve"' in seen["prompt"] and '"hablé"' in seen["prompt"]
 
 
+def test_generate_prompt_has_tense_cues(monkeypatch):
+    """#1481: with slots the prompt asks for a tense-fixing context and German
+    signal words (only for the tenses present); without slots it does not."""
+    monkeypatch.setattr(ai, "_tense_cues_active", lambda: True)
+    seen = []
+    monkeypatch.setattr(ai, "_call_api", lambda m, msgs, *a, **k: seen.append(msgs[0]["content"]) or "[]")
+    ai.generate_conj_followups([{**ITEMS[0], "slot": "ind_impf:1s"}])
+    assert "— context: a past habit" in seen[0]
+    assert "früher" in seen[0] and "gestern, letzte Woche" not in seen[0]
+    ai.generate_conj_followups(ITEMS)  # no slots -> old prompt
+    assert "context:" not in seen[1]
+    monkeypatch.setattr(ai, "_tense_cues_active", lambda: False)
+    ai.generate_conj_followups([{**ITEMS[0], "slot": "ind_impf:1s"}])
+    assert "context:" not in seen[2]
+
+
 def test_generate_form_must_be_a_whole_word(monkeypatch):
     monkeypatch.setattr(ai, "_call_api", lambda *a, **k: (
         '[{"index": 1, "sentence_es": "Ellos tuvieron suerte.", "sentence_de": "a"},'

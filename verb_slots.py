@@ -110,6 +110,59 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
         return None
 
 
+# Tense context (#1481): which context makes the tense the ONLY natural choice
+# (generation) and how a German translation keeps it recognisable (translation).
+# German has no Indefinido/Imperfecto split and uses Perfekt and Präteritum
+# almost interchangeably, so the tense must be carried by signal words.
+_TENSE_CONTEXT_ES = {
+    "ind_pres": "a habitual or current action — e.g. normalmente, ahora, cada día",
+    "ind_pret": "one completed action at a specific, finished point in the past — "
+                "include a marker such as ayer, anoche, el lunes pasado, en 2019, "
+                "hace dos años, de repente, una vez",
+    "ind_impf": "a past habit, ongoing background or state (not a completed event) — "
+                "include a marker such as siempre, cada verano, de niño, antes, "
+                "todos los días, mientras, cuando era joven",
+    "perf": "a past action within a time frame that still includes now, or life "
+            "experience — include a marker such as hoy, esta mañana, esta semana, "
+            "este año, ya, todavía no, nunca, alguna vez",
+    "ind_fut": "a future event — include a marker such as mañana, el año que viene, pronto",
+    "ind_cond": "a hypothetical or polite wish — e.g. with si…, me gustaría, en tu lugar",
+    "subj_pres": "a subjunctive trigger such as quiero que, ojalá, para que, es importante que",
+    "subj_impf": "a past or unreal subjunctive trigger such as quería que, si yo…, "
+                 "como si, ojalá (unreal)",
+}
+_TENSE_CUE_DE = {
+    "ind_pres": "Präsens; keep markers like normalerweise, jetzt, jeden Tag",
+    "ind_pret": "a single, completed event at a definite past time: the German must "
+                "contain a concrete time marker (gestern, letzte Woche, 2019, vor zwei "
+                "Jahren, plötzlich, einmal …) so it clearly reads as one finished event, "
+                "never as a habit or background",
+    "ind_impf": "a habit, repeated action, ongoing background or past state: the German "
+                "must make that explicit (früher, damals, immer, jeden Sommer, als Kind, "
+                "gerade, während …) so it never reads as one completed event",
+    "perf": "a past action inside a period that still includes now, or life experience: "
+            "use German Perfekt and keep/add a present-related marker (heute, heute "
+            "Morgen, diese Woche, dieses Jahr, schon, noch nie, noch nicht, schon "
+            "einmal …) so it never reads as a finished past point like 'gestern'",
+    "ind_fut": "Futur with werden plus a future marker (morgen, nächstes Jahr, bald …)",
+    "ind_cond": "Konjunktiv II with würde / hätte / wäre",
+    "subj_pres": "keep the trigger clearly visible (dass, damit, hoffentlich, es ist wichtig, dass …)",
+    "subj_impf": "keep the trigger clearly visible (wollte, dass …; wenn … wäre/hätte; als ob …)",
+}
+
+
+def tense_context(slot: str) -> str:
+    """English hint for the story prompt: which context makes this slot's tense
+    the only natural one. '' for unknown tenses."""
+    return _TENSE_CONTEXT_ES.get((slot or "").partition(":")[0], "")
+
+
+def tense_cue_de(slot: str) -> str:
+    """English instruction for the German translation of a sentence in this
+    slot's tense. '' for unknown tenses."""
+    return _TENSE_CUE_DE.get((slot or "").partition(":")[0], "")
+
+
 def describe(slot: str) -> str:
     """English description for the prompt: "Indefinido (preterite), 3rd person singular"."""
     tense, _, person = (slot or "").partition(":")

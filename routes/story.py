@@ -399,7 +399,8 @@ def _append_followups(sentences: list, cards: list, *, lang: str, model: str,
         ai._set_progress(progress_key, phase="generating",
                          msg="Writing follow-up sentences…", percent=95)
         written = ai.generate_conj_followups(
-            [{"form": p["form"], "lemma": p["lemma"], "label": p["label"]} for p in plan],
+            [{"form": p["form"], "lemma": p["lemma"], "label": p["label"],
+              "slot": p["slot"]} for p in plan],
             model=model)
         for w in written:
             p = plan[w["index"]]

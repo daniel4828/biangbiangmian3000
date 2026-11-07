@@ -4287,6 +4287,14 @@ function _esConjSettingsHtml() {
       </label>
     </div>
     <div class="keymap-row">
+      <span class="keymap-label">Zeitform-Signalwörter</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${s.tense_cues ? 'checked' : ''} ${dis}
+               onchange="saveEsConjSettings({tense_cues: this.checked})" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Sätze mit Verb-Slot bekommen Kontext, der die Zeit eindeutig macht (ayer, siempre, esta semana …), und die deutsche Übersetzung macht die KI statt Google, mit Signalwörtern (gestern / früher immer / heute schon …). Aus = nur Google.</div>
+    <div class="keymap-row">
       <span class="keymap-label">Muster pro Verb und Tag (Creating)</span>
       <input type="number" min="1" max="5" step="1" value="${_escHtml(String(s.prod_per_verb))}" style="width:80px" ${dis}
              onchange="saveEsConjSettings({prod_per_verb: Number(this.value)})">
