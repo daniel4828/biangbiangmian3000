@@ -1974,6 +1974,15 @@ def get_creating_all_suspended(deck_id: int) -> bool:
     return total > 0 and total == suspended
 
 
+# #1462: the ▶ (un-pause) half of the home-page toggles may only wake cards that
+# the ⏸ button itself suspended (those carry a pre_suspend_state). Leeches and
+# ★ List cards (decks named 'Saved') are suspended for other reasons and must stay so.
+_RESUMABLE_BY_TOGGLE_SQL = """
+                 AND pre_suspend_state IS NOT NULL
+                 AND COALESCE(is_leech, 0) = 0
+                 AND deck_id NOT IN (SELECT id FROM decks WHERE name = 'Saved')"""
+
+
 def toggle_deck_creating_suspension(deck_id: int) -> dict:
     """Toggle all creating cards in a deck between suspended and new.
 
@@ -2004,10 +2013,11 @@ def toggle_deck_creating_suspension(deck_id: int) -> dict:
         all_suspended = True
     else:
         conn.execute(
-            """UPDATE cards SET state=COALESCE(pre_suspend_state, 'new'), pre_suspend_state=NULL
+            f"""UPDATE cards SET state=pre_suspend_state, pre_suspend_state=NULL
                WHERE deck_id = ? AND category = 'creating'
                  AND deleted_at IS NULL AND state = 'suspended'
-                 AND word_id IN (SELECT id FROM entries WHERE note_type != 'sentence')""",
+                 AND word_id IN (SELECT id FROM entries WHERE note_type != 'sentence')
+                 {_RESUMABLE_BY_TOGGLE_SQL}""",
             (deck_id,),
         )
         all_suspended = False
@@ -2105,12 +2115,13 @@ def toggle_category_suspension(deck_id: int, category: str,
         )
     else:
         conn.execute(
-            f"""UPDATE cards SET state=COALESCE(pre_suspend_state, 'new'), pre_suspend_state=NULL
+            f"""UPDATE cards SET state=pre_suspend_state, pre_suspend_state=NULL
                 WHERE deck_id IN ({placeholders})
                   AND category = ?
                   AND state = 'suspended'
                   AND deleted_at IS NULL
-                  AND word_id IN (SELECT id FROM entries WHERE note_type != 'sentence')""",
+                  AND word_id IN (SELECT id FROM entries WHERE note_type != 'sentence')
+                  {_RESUMABLE_BY_TOGGLE_SQL}""",
             deck_ids + [category],
         )
     conn.commit()
@@ -2408,11 +2419,12 @@ def toggle_deck_all_suspension(deck_id: int, lang: str | None = None) -> dict:
         )
     else:
         conn.execute(
-            f"""UPDATE cards SET state=COALESCE(pre_suspend_state, 'new'), pre_suspend_state=NULL
+            f"""UPDATE cards SET state=pre_suspend_state, pre_suspend_state=NULL
                 WHERE deck_id IN ({placeholders})
                   AND state = 'suspended'
                   AND deleted_at IS NULL
-                  AND word_id IN (SELECT id FROM entries WHERE note_type != 'sentence')""",
+                  AND word_id IN (SELECT id FROM entries WHERE note_type != 'sentence')
+                  {_RESUMABLE_BY_TOGGLE_SQL}""",
             deck_ids,
         )
     conn.commit()
