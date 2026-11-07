@@ -9994,8 +9994,13 @@ function doWordTableAdd(idx, extraBtn) {
 // The add itself, keyed on the word dict rather than a table index (#1149):
 // the tap panel over a word the annotator did NOT flag has no table row to
 // point at, but goes through this very same path — one add pipeline (#643).
-function _addWordFromDict(w, btns) {
+// day (#1482): 'list' (default) | 'today' | 'tomorrow' — the tap panel's
+// T / T+1 buttons, same targets as the dictionary's (_DICT_ADD_TARGETS).
+const _TAP_ADD_LABELS = { list: '★ List', today: 'T', tomorrow: 'T+1' };
+
+function _addWordFromDict(w, btns, day) {
   if (!w || !btns.length) return;
+  day = _TAP_ADD_LABELS[day] ? day : 'list';
   // #1293: send the lemma, not the inflected form. `lemma` is a real lemma only
   // when the lexicon found exactly one (else it equals `word`; Chinese entries
   // carry none), so this is a no-op for everything but unambiguous Spanish forms.
@@ -10006,19 +10011,20 @@ function _addWordFromDict(w, btns) {
   // Generation takes ~30s in the background — the other rows stay clickable,
   // so several words can be queued up at once.
   //
-  // Always the ★ List (#715): a word met while reading goes to the staging
+  // ★ List by default (#715): a word met while reading goes to the staging
   // area, never straight into today's or tomorrow's review queue. Activating
-  // it is a separate, deliberate step in Browse's saved view.
+  // it is a separate, deliberate step in Browse's saved view — or the tap
+  // panel's explicit T / T+1 buttons.
   //
   // lang (#804): file the word under the language it was actually read in,
   // not always Chinese — same reasoning as #726's addWordViaAi lang param.
   const wordLang = _wordTableLang;
-  addWordViaAi(wordZh, 'list', (state, text, _deckPath, wordId) => {
+  addWordViaAi(wordZh, day, (state, text, _deckPath, wordId) => {
     // 'idle' (#888): the "already in your collection" confirmation was
     // cancelled — nothing happened, so put the row's button back as if it
     // had never been clicked.
     if (state === 'idle') {
-      _setWordBtns(btns, '★ List', { disabled: false, error: false, done: false });
+      _setWordBtns(btns, _TAP_ADD_LABELS[day], { disabled: false, error: false, done: false });
       return;
     }
     if (state === 'done' && wordId) _hintWordSaved(wordZh, wordLang, wordId);
@@ -10766,6 +10772,7 @@ function _openWordActions(idx, anchor) {
     ${glossHtml}
     <div class="word-actions-buttons">
       <button class="word-table-btn" id="word-actions-add">★ List</button>
+      ${_tapDayButtonsHtml()}
       <button class="word-table-btn" id="word-actions-known">✓ Known</button>
     </div>`;
   document.body.appendChild(box);
@@ -10775,6 +10782,7 @@ function _openWordActions(idx, anchor) {
   const knownBtn = box.querySelector('#word-actions-known');
   addBtn.onclick = () => doWordTableAdd(idx, addBtn);
   knownBtn.onclick = () => doWordTableKnown(idx, knownBtn);
+  _bindTapDayButtons(box, _wordTableWords[idx]);
 
   _placeWordActions(box, anchor);
   setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);
@@ -10822,6 +10830,7 @@ function _openKnownWordActions(key, anchor) {
     <div class="word-actions-buttons">${w.word_id
       ? `<button class="word-table-btn" id="word-actions-detail">📖 Details</button>`
       : `<button class="word-table-btn" id="word-actions-add">★ List</button>
+         ${_tapDayButtonsHtml()}
          <button class="word-table-btn" id="word-actions-generate">✨ Generate entry</button>`}
     </div>`;
   document.body.appendChild(box);
@@ -10837,6 +10846,7 @@ function _openKnownWordActions(key, anchor) {
     // word, so that is exactly what happens.
     addBtn.onclick = () => _addWordFromDict(w, [addBtn]);
     genBtn.onclick = () => _generateEntryFromDict(w, genBtn);
+    _bindTapDayButtons(box, w);
   }
   if (w.word_id) box.querySelector('#word-actions-detail').onclick = () => {
     const id = w.word_id;
@@ -10850,6 +10860,21 @@ function _openKnownWordActions(key, anchor) {
   _placeWordActions(box, anchor);
   setTimeout(() => document.addEventListener('click', _wordActionsOutside), 0);
   document.addEventListener('keydown', _wordActionsEscape, true);
+}
+
+// T / T+1 in the tap panel (#1482, Daniel 2026-11-07): straight into today's or
+// tomorrow's Daily deck, like the dictionary's buttons — the same one add
+// pipeline (#643), only the `day` differs from ★ List.
+function _tapDayButtonsHtml() {
+  return `<button class="word-table-btn" id="word-actions-today" title="Add to today's deck">T</button>
+      <button class="word-table-btn" id="word-actions-tomorrow" title="Add to tomorrow's deck">T+1</button>`;
+}
+
+function _bindTapDayButtons(box, w) {
+  for (const day of ['today', 'tomorrow']) {
+    const b = box.querySelector(`#word-actions-${day}`);
+    if (b) b.onclick = () => _addWordFromDict(w, [b], day);
+  }
 }
 
 // Pin the panel to the word itself on every screen size (#994). It used to
