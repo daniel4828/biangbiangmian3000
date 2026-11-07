@@ -8393,3 +8393,7 @@ body.hs-hidden:not(.dict-result-open) #hs-edge-tab {
 body.hs-hidden:not(.dict-result-open) #hs-edge-tab:hover { background: var(--hover-bg, rgba(0,0,0,.05)); color: var(--primary); }
 body.hs-hidden main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 body.hs-hidden #mini-player { bottom: max(8px, env(safe-area-inset-bottom)); }
+
+/* Übersetzung über dem Satz auf der Rückseite (#1427): Abstand zum Satz verkleinern */
+#sentence-trans-row:has(+ #grammar-hint-row) { margin-bottom: -14px; }
+#sentence-trans-row:has(+ #grammar-hint-row) + #grammar-hint-row:not(:has(> :not([style*="display:none"]))) { display: none; }
