@@ -505,11 +505,14 @@ def _focus_tense() -> str | None:
 
 
 def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
-    """Slots in focus mode (#1434): a pointer over PERSONS (starting at the
-    least-drilled person of the tense in the story history), one person per card (#1452: the pointer moves one step per card,
-    whatever the category). Exception (#1440): a creating card of an
-    irregular verb takes the first person of conj_patterns.focus_persons() (its
-    irregularity type) and leaves the pointer untouched. Form cards keep their
+    """Slots in focus mode (#1434). Every card rotates over the persons on its
+    OWN (#1475): the person this word has drilled least in the tense (its story
+    history, main sentences + Folgesätze), then the person given least often to
+    the other cards of this story (so cards with the same history — e.g. form
+    cards introduced together — differ), then the person least drilled over all
+    words, then the oldest last use, then PERSONS order. Exception (#1440): a
+    creating card of an irregular verb picks inside the persons of
+    conj_patterns.focus_persons() (its irregularity type). Form cards keep their
     fixed tense. Cards with no form in the tense are left out (the caller uses
     the normal logic)."""
     out: dict[int, dict] = {}
@@ -520,30 +523,31 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
     except Exception as e:
         logger.warning("conjugation pattern settings unavailable — %s", e)
     usage_by_word: dict = {}
-    if use_patterns:
-        try:
-            ids = [c["word_id"] for c in cards
-                   if c.get("category") == "creating" and c.get("word_id") is not None]
-            usage_by_word = database.verb_slot_usage_by_word(ids)
-        except Exception as e:
-            logger.warning("per-word slot usage unavailable — %s", e)
-            usage_by_word = {}
-    # Start the pointer at the least-drilled person of today's tense (history of
-    # every story in `lang`), not always at yo: a story with one or two verbs
-    # would otherwise only ever drill yo.
-    p = 0
     try:
-        hist = database.verb_slot_usage(lang)
-        def _key(i):
-            count, last = hist.get(f"{focus_tense}:{PERSONS[i]}") or (0, None)
-            return (count or 0, last or "", i)
-        p = min(range(len(PERSONS)), key=_key)
+        ids = [c["word_id"] for c in cards if c.get("word_id") is not None]
+        usage_by_word = database.verb_slot_usage_by_word(ids)
     except Exception as e:
-        logger.warning("slot history unavailable, pointer starts at yo — %s", e)
-    # Slots already handed to creating cards of this story (the pick_person
-    # path): cards with the same history spread over the persons instead of all
-    # getting the same one.
+        logger.warning("per-word slot usage unavailable — %s", e)
+        usage_by_word = {}
+    hist: dict = {}
+    try:
+        hist = database.verb_slot_usage(lang) or {}
+    except Exception as e:
+        logger.warning("slot history unavailable — %s", e)
+    # Slots already handed to other cards of this story.
     local: dict[str, int] = {}
+
+    def pick(avail: list[str], tense: str, usage: dict | None) -> str:
+        usage = usage or {}
+
+        def key(person: str):
+            slot = f"{tense}:{person}"
+            wc, wlast = usage.get(slot) or (0, None)
+            gc, _glast = hist.get(slot) or (0, None)
+            return (wc or 0, local.get(slot, 0), gc or 0, wlast or "",
+                    PERSONS.index(person))
+        return min(avail, key=key)
+
     for card in cards:
         word = card.get("word_zh") or ""
         parsed = parse_form_card(word)
@@ -553,6 +557,7 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
             lemma, tense = word.strip().lower(), focus_tense
         else:
             continue
+
         def make_entry(person: str) -> dict | None:
             form = target_form(lemma, tense, person, lang)
             if not form:
@@ -568,34 +573,24 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
                     logger.warning("pattern of %r failed — %s", lemma, e)
             return entry
 
+        usage = usage_by_word.get(card.get("word_id"))
+        entry = None
         # creating + irregular verb: the irregularity type picks the person (#1440)
         if use_patterns and card.get("category") == "creating":
-            usage = usage_by_word.get(card.get("word_id"))
             try:
                 plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang,
                                                                usage=usage, local=local)
                         if target_form(lemma, tense, x, lang)]
-                if not plan and parsed:
-                    # form card whose verb is regular in this tense: rotate over
-                    # all persons by history, pointer untouched
-                    avail = [x for x in PERSONS if target_form(lemma, tense, x, lang)]
-                    plan = [conj_patterns.pick_person(avail, tense, usage, local)] if avail else []
             except Exception as e:
                 logger.warning("focus persons of %r failed — %s", lemma, e)
                 plan = []
             entry = make_entry(plan[0]) if plan else None
-            if entry:
-                out[card["word_id"]] = entry
-                local[entry["slot"]] = local.get(entry["slot"], 0) + 1
-                continue
-        for k in range(len(PERSONS)):
-            pos = p + k
-            entry = make_entry(PERSONS[pos % len(PERSONS)])
-            if not entry:
-                continue
+        if entry is None:
+            avail = [x for x in PERSONS if target_form(lemma, tense, x, lang)]
+            entry = make_entry(pick(avail, tense, usage)) if avail else None
+        if entry:
             out[card["word_id"]] = entry
-            p = pos + 1
-            break
+            local[entry["slot"]] = local.get(entry["slot"], 0) + 1
     return out
 
 
