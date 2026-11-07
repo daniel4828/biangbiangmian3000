@@ -88,6 +88,8 @@ CASES = [
     ("tener", "subj_pres", "1p", "irr:subj_pres:yo_stem"),
     ("tener", "subj_impf", "1s", "irr:subj_impf:strong_u"),
     ("hacer", "perf", "1s", "irr:perf:participle"),
+    ("ver", "perf", "1s", "irr:perf:participle"),
+    ("ver", "perf", "3p", "irr:perf:participle"),
     ("ir", "ind_pres", "1s", "verb:ir:ind_pres"),
     ("ir", "ind_pret", "1s", "verb:ser_ir:ind_pret"),
     ("ser", "ind_pret", "1s", "verb:ser_ir:ind_pret"),
@@ -148,6 +150,9 @@ def test_catalog_deterministic_and_complete(real_lex):
     tenses = [c["tense"] for c in cat]
     assert tenses == sorted(tenses, key=order.index)
     assert conj_patterns.catalog("fr") == []
+    # #1468: Perfecto has no single-verb patterns (ver/ser/... use the participle group)
+    assert not [k for k in keys if k.startswith("verb:") and k.endswith(":perf")]
+    assert "verb:ver:perf" not in keys
 
 
 # --- settings ------------------------------------------------------------------
