@@ -202,7 +202,8 @@ def test_assign_slots_creating_irregular_keeps_pointer(real_lex):
              _card(3, "hablar", "creating")]
     out = verb_slots.assign_slots(cards, "es", usage={})
     assert out[1]["slot"] == "ind_pres:1s" and out[1]["form"] == "salgo"
-    assert out[2]["slot"] == "ind_pres:1s"
+    # pensar (nur Stammwechsel, eine Gruppe) weicht der von salir belegten Person aus
+    assert out[2]["slot"] == "ind_pres:2s"
     assert out[3]["slot"] == "ind_pres:1s"  # pointer was not moved
 
 
@@ -334,6 +335,31 @@ def test_assign_slots_form_card_regular_tense_rotates_without_pointer(real_lex):
     out = verb_slots.assign_slots(cards, "es", usage={})
     assert out[wid]["slot"] == "ind_impf:2s"
     assert out[2]["slot"] == "ind_pret:1s"  # pointer did not move
+
+
+def test_form_cards_with_same_history_spread_over_persons(real_lex):
+    # Formkarten, die am selben Tag eingeführt wurden, haben dieselbe Historie.
+    # Früher bekamen sie deshalb alle dieselbe Person (an einem Tag alle tú).
+    tense_focus.step(1)
+    deck_id = database.get_or_create_deck("T")
+    verbs = ["venir", "tener", "poner"]
+    wids = [_add_verb(verb_slots.form_card_word(v, "ind_impf")) for v in verbs]
+    _story(deck_id, [{"position": i, "sentence_zh": "x.", "word_ids": [w],
+                      "verb_slot": "ind_impf:1s"} for i, w in enumerate(wids, 1)])
+    cards = [_card(w, verb_slots.form_card_word(v, "ind_impf"), "creating")
+             for w, v in zip(wids, verbs)]
+    out = verb_slots.assign_slots(cards, "es", usage={})
+    slots = [out[w]["slot"] for w in wids]
+    assert slots == ["ind_impf:2s", "ind_impf:3s", "ind_impf:1p"]
+
+
+def test_pick_person_local_spreads_ties():
+    pp = conj_patterns.pick_person
+    group = ["1s", "2s", "3s"]
+    assert pp(group, "ind_pret", None, {"ind_pret:1s": 1}) == "2s"
+    # history still comes first
+    assert pp(group, "ind_pret", {"ind_pret:2s": (1, "x"), "ind_pret:3s": (1, "x")},
+              {"ind_pret:1s": 3}) == "1s"
 
 
 def test_plan_followups_sentir_ind_pret_stem_only_gets_none(real_lex):

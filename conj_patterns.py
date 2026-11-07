@@ -483,26 +483,38 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
         return []
 
 
-def pick_person(group: list[str], tense: str, usage: dict | None = None) -> str:
+def pick_person(group: list[str], tense: str, usage: dict | None = None,
+                local: dict | None = None) -> str:
     """The person of `group` to drill next: fewest uses of the slot
     ("{tense}:{person}") in `usage` ({slot: (count, last_generated_at)}), then
-    the oldest last use (never = oldest), then PERSONS order. Without usage that
-    is the first person of the group."""
+    fewest picks of that slot in `local` ({slot: n}, the persons already given
+    to other cards of the same story), then the oldest last use (never =
+    oldest), then PERSONS order. Without usage/local that is the first person
+    of the group.
+
+    `local` matters because cards introduced together have the same history
+    (#1438 introduces ~25 form cards of a tense on one day): without it every
+    one of them got the same person in every story — one day all yo, the next
+    all tú."""
     usage = usage or {}
+    local = local or {}
 
     def key(person: str):
-        count, last = usage.get(f"{tense}:{person}") or (0, None)
-        return (count or 0, last or "", PERSONS.index(person) if person in PERSONS else 99)
+        slot = f"{tense}:{person}"
+        count, last = usage.get(slot) or (0, None)
+        return (count or 0, local.get(slot, 0), last or "",
+                PERSONS.index(person) if person in PERSONS else 99)
 
     return min(group, key=key)
 
 
 def focus_persons(lemma: str, tense: str, lang: str = LANG,
-                  usage: dict | None = None) -> list[str]:
+                  usage: dict | None = None, local: dict | None = None) -> list[str]:
     """One person per focus_groups() group, chosen by pick_person with the verb's
-    own slot `usage` ({slot: (count, last)}; None = first person of each group).
-    [] for a regular verb (caller uses the person pointer)."""
-    return [pick_person(g, tense, usage) for g in focus_groups(lemma, tense, lang)]
+    own slot `usage` ({slot: (count, last)}; None = first person of each group)
+    and the story-local picks `local`. [] for a regular verb (caller uses the
+    person pointer)."""
+    return [pick_person(g, tense, usage, local) for g in focus_groups(lemma, tense, lang)]
 
 
 def _special_irregular(base: str, tense: str) -> bool:
