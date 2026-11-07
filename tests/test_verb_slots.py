@@ -455,3 +455,72 @@ def test_practice_counts_removed():
     # replaced by conjugation patterns (#1395, tests/test_conj_patterns.py)
     assert not hasattr(verb_slots, "practice_counts")
     assert not hasattr(database, "verb_slot_rows")
+
+
+# --- tense signal words + LLM German translation (#1481) ----------------------
+
+def test_generate_story_es_tense_context_and_llm_translation(tmp_db, _no_translation, monkeypatch):
+    monkeypatch.setattr(verb_slots, "assign_slots", lambda cards, lang, **kw: dict(_FIXED))
+    cards = [_card(1, "hablar"), _card(2, "casa")]
+    calls = []
+
+    def fake(model, messages, max_tokens, purpose, **kw):
+        calls.append((purpose, messages[0]["content"]))
+        if purpose == "tense_translate":
+            return '[{"index": 1, "de": "Gestern hat sie mit ihrer Mutter gesprochen."}]'
+        return "1. Ayer ella habló con su madre.\n2. La casa es grande."
+
+    with patch("ai._call_api", side_effect=fake):
+        sentences, prompt = ai.generate_story(cards, lang="es")
+    assert "— context: one completed action" in prompt
+    assert "ONLY natural choice" in prompt
+    assert [c[0] for c in calls] == ["story", "tense_translate"]
+    tprompt = calls[1][1]
+    assert "Ayer ella habló con su madre." in tprompt and "La casa" not in tprompt
+    assert "gestern" in tprompt and "Imperfecto" not in tprompt  # only tenses present
+    assert sentences[0]["sentence_de"] == "Gestern hat sie mit ihrer Mutter gesprochen."
+    assert "sentence_de" not in sentences[1] or sentences[1]["sentence_de"] != sentences[0]["sentence_de"]
+
+
+def test_tense_translation_failure_keeps_google(tmp_db, monkeypatch):
+    monkeypatch.setattr(verb_slots, "assign_slots", lambda cards, lang, **kw: dict(_FIXED))
+
+    def fill(parsed, progress_key=None, lang="zh"):
+        for s in parsed:
+            s["sentence_de"] = "GOOGLE"
+    monkeypatch.setattr(ai, "_fill_translations", fill)
+
+    def fake(model, messages, max_tokens, purpose, **kw):
+        if purpose == "tense_translate":
+            raise RuntimeError("down")
+        return "1. Ayer ella habló con su madre.\n2. La casa es grande."
+
+    with patch("ai._call_api", side_effect=fake):
+        sentences, _ = ai.generate_story([_card(1, "hablar"), _card(2, "casa")], lang="es")
+    assert [s["sentence_de"] for s in sentences] == ["GOOGLE", "GOOGLE"]
+
+
+def test_tense_cues_off_keeps_old_behaviour(tmp_db, _no_translation, monkeypatch):
+    import conj_patterns
+    conj_patterns.save_settings({"tense_cues": False})
+    monkeypatch.setattr(verb_slots, "assign_slots", lambda cards, lang, **kw: dict(_FIXED))
+    purposes = []
+
+    def fake(model, messages, max_tokens, purpose, **kw):
+        purposes.append(purpose)
+        return "1. Ayer ella habló con su madre.\n2. La casa es grande."
+
+    with patch("ai._call_api", side_effect=fake):
+        _, prompt = ai.generate_story([_card(1, "hablar"), _card(2, "casa")], lang="es")
+    assert "context:" not in prompt and "ONLY natural choice" not in prompt
+    assert purposes == ["story"]
+
+
+def test_translate_tense_sentences_parses_and_drops_bad_rows():
+    items = [{"sentence": "Ayer comí.", "slot": "ind_pret:1s"},
+             {"sentence": "Siempre comía.", "slot": "ind_impf:1s"}]
+    reply = '```json\n[{"index": 2, "de": "Früher habe ich immer gegessen."}, {"index": 9, "de": "x"}, {"index": 1, "de": "  "}]\n```'
+    with patch("ai._call_api", return_value=reply):
+        assert ai.translate_tense_sentences(items) == [None, "Früher habe ich immer gegessen."]
+    with patch("ai._call_api", return_value="kein json"):
+        assert ai.translate_tense_sentences(items) == [None, None]

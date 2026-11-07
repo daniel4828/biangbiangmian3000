@@ -552,6 +552,7 @@ def _multi_story_prompt(cards: list[dict], word_list: str, *, mode: str, topic: 
         "\n- For items marked with →: the sentence MUST contain exactly the quoted "
         "conjugated form (not the infinitive); you may add a subject pronoun or "
         "other words around it"
+        + (_TENSE_CONTEXT_RULE if _tense_cues_active() else "")
     ) if has_slots else ""
 
     return f"""{task_line}
@@ -855,6 +856,8 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
         else:
             slots = verb_slots.assign_slots(cards, lang) if verb_slots.config(lang) else {}
 
+    tense_cues = bool(slots) and _tense_cues_active()
+
     def _slot_form_in_sentence(form: str, sentence: str) -> bool:
         return re.search(rf"(?<!\w){re.escape(form)}(?!\w)", sentence, re.IGNORECASE) is not None
 
@@ -864,9 +867,11 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
         # "[Chinese] " / "[Spanish] " language tag in front of each item (multi only)
         tag = f"[{_multi_lang_label(_card_lang(c))}] " if multi else ""
         if slot:
+            ctx = verb_slots.tense_context(slot["slot"]) if tense_cues else ""
             word_list_lines.append(
                 f"{i + 1}. {tag}{c['word_zh']} → write exactly \"{slot['form']}\" "
-                f"({verb_slots.describe(slot['slot'])})")
+                f"({verb_slots.describe(slot['slot'])})"
+                + (f" — context: {ctx}" if ctx else ""))
         elif _is_sentence(c['word_zh'], _card_lang(c)):
             word_list_lines.append(f"{i + 1}. {tag}[SENTENCE] {c['word_zh']}")
         else:
@@ -929,6 +934,7 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
             "\n- For items marked with →: the sentence MUST contain exactly the quoted "
             "conjugated form (not the infinitive); you may add a subject pronoun or "
             "other words around it"
+            + (_TENSE_CONTEXT_RULE if tense_cues else "")
         ) if slots else ""
         prompt = f"""{task_line}
 
@@ -1045,6 +1051,7 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
                 _set_progress(progress_key, phase="translating",
                               msg="Translating sentences…", percent=88)
                 _fill_translations(parsed, progress_key=progress_key, lang=lang)
+                _retranslate_tense_sentences(parsed, progress_key=progress_key, lang=lang)
                 _set_progress(progress_key, phase="ai_done",
                               msg=f"✓ {len(parsed)} sentences (attempt {attempt + 1})", percent=93)
                 return parsed, prompt
@@ -1059,6 +1066,7 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
         _set_progress(progress_key, phase="translating",
                       msg="Translating sentences…", percent=88)
         _fill_translations(parsed, progress_key=progress_key, lang=lang)
+        _retranslate_tense_sentences(parsed, progress_key=progress_key, lang=lang)
         logger.info("generate_story: DONE — %.1fs total", time.time() - t_start)
         _set_progress(progress_key, phase="ai_done",
                       msg=f"✓ {len(parsed)} sentences (attempt {attempt + 1})", percent=93)
@@ -1071,6 +1079,7 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
             _set_progress(progress_key, phase="translating",
                           msg="Translating sentences…", percent=88)
             _fill_translations(parsed, progress_key=progress_key, lang=lang)
+            _retranslate_tense_sentences(parsed, progress_key=progress_key, lang=lang)
             _set_progress(progress_key, phase="ai_done",
                           msg=f"✓ {len(parsed)} sentences (patched)", percent=93)
             return parsed, prompt
@@ -1103,6 +1112,131 @@ def _patch_missing(sentences: list[dict], missing_word_ids: list[int],
         sentences.append(patched)
 
 
+# ---------------------------------------------------------------------------
+# Tense signal words (#1481)
+#
+# Google Translate keeps the meaning but loses the tense: German has no
+# Indefinido/Imperfecto split and uses Perfekt and Präteritum almost
+# interchangeably, so translating the German back picked the wrong tense.
+# Slotted sentences are therefore (1) generated with a context that makes the
+# tense the only natural choice and (2) translated by a cheap LLM that keeps
+# that context visible in German. Everything else stays on Google Translate.
+# ---------------------------------------------------------------------------
+
+_TENSE_CONTEXT_RULE = (
+    "\n- For items marked with →: the sentence must also make that tense the ONLY "
+    "natural choice — build in the context named after \"context:\" (a time "
+    "expression, signal word or trigger), so a learner who reads the sentence "
+    "translated into German can tell which tense to use"
+)
+
+
+def _tense_cues_active() -> bool:
+    try:
+        import conj_patterns
+        return conj_patterns.tense_cues_active()
+    except Exception:
+        return False
+
+
+def _tense_rules_de(slots: list[str]) -> str:
+    """One line per tense that occurs in `slots`: how German shows it."""
+    import verb_slots
+    lines = []
+    for tense in dict.fromkeys((sl or "").partition(":")[0] for sl in slots):
+        cue = verb_slots.tense_cue_de(tense)
+        if cue:
+            lines.append(f"- {verb_slots.describe(tense + ':').rstrip(', ')}: {cue}")
+    return "\n".join(lines)
+
+
+def translate_tense_sentences(items: list[dict], model: str = DEFAULT_MODEL) -> list[str | None]:
+    """German translations that keep the Spanish tense recognisable (#1481).
+
+    `items` = [{"sentence": "Ayer fui al cine.", "slot": "ind_pret:1s",
+    "lang_name": "Spanish"}, …]. Returns one entry per item: the German
+    sentence, or None where the reply had nothing usable. Never raises
+    (all None on any failure — the caller keeps Google's translation)."""
+    if not items:
+        return []
+    out: list[str | None] = [None] * len(items)
+    try:
+        import verb_slots
+        lines = "\n".join(
+            f'{i + 1}. [{verb_slots.describe(it["slot"])}] {it["sentence"]}'
+            for i, it in enumerate(items))
+        lang_name = items[0].get("lang_name") or "Spanish"
+        prompt = (
+            f"Translate each numbered {lang_name} sentence into natural German for a "
+            f"learner who will translate the German back into {lang_name} and must "
+            "then pick the SAME tense as the original. The tense of each sentence is "
+            "given in [brackets].\n\n"
+            "German does not distinguish these tenses by verb form alone (Perfekt and "
+            "Präteritum are used almost interchangeably), so the tense must be "
+            "unmistakable from the German wording:\n"
+            f"{_tense_rules_de([it['slot'] for it in items])}\n\n"
+            "Rules:\n"
+            "- Translate every time expression and signal word of the original.\n"
+            "- If the original has no such marker, add a short, natural one in German "
+            "(e.g. 'gestern', 'früher immer', 'heute schon') rather than leave the "
+            "tense ambiguous.\n"
+            "- Keep the meaning, person and number; stay short and natural.\n"
+            "- Never name the tense, never use brackets, quotes or notes.\n"
+            "Reply with ONLY a JSON array, no markdown fences, no explanation:\n"
+            '[{"index": 1, "de": "…"}, …]\n\n'
+            f"Sentences:\n{lines}"
+        )
+        raw = _call_api(model, [{"role": "user", "content": prompt}],
+                        200 + 120 * len(items), purpose="tense_translate")
+        start, end = raw.find("["), raw.rfind("]") + 1
+        data = json.loads(raw[start:end]) if start != -1 and end != 0 else None
+        if not isinstance(data, list):
+            logger.warning("translate_tense_sentences: reply is no JSON array: %.200s", raw)
+            return out
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            idx, de = row.get("index"), row.get("de")
+            if (isinstance(idx, bool) or not isinstance(idx, int)
+                    or not 1 <= idx <= len(items) or out[idx - 1] is not None
+                    or not isinstance(de, str) or not de.strip()):
+                continue
+            out[idx - 1] = de.strip()
+        return out
+    except StoryCancelled:
+        raise
+    except Exception as e:
+        logger.warning("translate_tense_sentences failed — %s", e)
+        return [None] * len(items)
+
+
+def _retranslate_tense_sentences(sentences: list[dict], progress_key: str | None = None,
+                                 lang: str = "zh") -> None:
+    """Replace Google's German of every slotted sentence (verb_slot set) by an
+    LLM translation that keeps the tense (#1481). In place; a sentence whose
+    LLM translation fails keeps Google's. No-op when the setting is off."""
+    try:
+        todo = [s for s in sentences if s.get("verb_slot") and s.get("sentence_zh")]
+        if not todo or not _tense_cues_active():
+            return
+        _set_progress(progress_key, phase="translating",
+                      msg=f"Translating tenses… ({len(todo)})", percent=92)
+        items = [{"sentence": s["sentence_zh"], "slot": s["verb_slot"],
+                  "lang_name": languages.get_lang_config(
+                      s.get("lang") or (lang if lang != MULTI_LANG else "es"))["name_en"]}
+                 for s in todo]
+        done = 0
+        for s, de in zip(todo, translate_tense_sentences(items)):
+            if de:
+                s["sentence_de"] = de
+                done += 1
+        logger.info("tense translation: %d/%d sentences", done, len(todo))
+    except StoryCancelled:
+        raise
+    except Exception as e:
+        logger.warning("_retranslate_tense_sentences skipped — %s", e)
+
+
 def generate_conj_followups(items: list[dict], model: str = DEFAULT_MODEL) -> list[dict]:
     """Folgesätze (#1401): ONE AI call writes a short Spanish sentence (plus a
     German translation) for every item of a story — each sentence must contain
@@ -1117,15 +1251,31 @@ def generate_conj_followups(items: list[dict], model: str = DEFAULT_MODEL) -> li
     if not items:
         return []
     try:
-        lines = "\n".join(
-            f'{i + 1}. "{it["form"]}" ({it.get("lemma", "")}, {it.get("label", "")})'
-            for i, it in enumerate(items))
+        import verb_slots
+        cues = _tense_cues_active() and any(it.get("slot") for it in items)
+
+        def _line(i, it):
+            line = f'{i + 1}. "{it["form"]}" ({it.get("lemma", "")}, {it.get("label", "")})'
+            ctx = verb_slots.tense_context(it.get("slot", "")) if cues else ""
+            return line + (f" — context: {ctx}" if ctx else "")
+
+        lines = "\n".join(_line(i, it) for i, it in enumerate(items))
+        cue_block = (
+            "Each sentence must make its tense the ONLY natural choice: build in the "
+            "context named after \"context:\" (time expression, signal word or trigger).\n"
+            "The German translation is used to translate back into Spanish, so the "
+            "tense must stay unmistakable in German (German Perfekt/Präteritum alone "
+            "do not show it) — translate the signal words and follow these rules:\n"
+            f"{_tense_rules_de([it.get('slot', '') for it in items])}\n"
+            "Never name the tense in the German, no brackets or notes.\n"
+        ) if cues else ""
         prompt = (
             "For each numbered item below write ONE short, natural Spanish sentence "
             "(CEFR A2, at most 12 words, everyday context) that contains EXACTLY the "
             "given conjugated form (spelled exactly like that, as a separate word), "
             "plus a natural German translation of the sentence.\n"
             "Every sentence must stand on its own; do not reuse the same situation.\n"
+            + cue_block +
             "Reply with ONLY a JSON array, no markdown fences, no explanation:\n"
             '[{"index": 1, "sentence_es": "…", "sentence_de": "…"}, …]\n\n'
             f"Items:\n{lines}"

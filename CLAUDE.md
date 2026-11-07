@@ -609,6 +609,15 @@ Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**�
 - 句子对象多 `conj_pattern` / `conj_pattern_label` / `conj_rating`（`database/stories._hydrate_sentence`）
 - 测试见 `tests/test_conj_patterns.py`、`tests/test_conj_pullforward.py`、`tests/test_conj_followups.py`
 
+## 西语时态信号词与 LLM 德语译文（#1481）
+
+谷歌翻译保留意思但丢时态：德语不分 Indefinido/Imperfecto，Perfekt 与 Präteritum 几乎通用，Daniel 从德语译回西语时因此常选错时态。
+
+- **生成**：带槽位的动词句在词表行里多一个 `— context: …`（`verb_slots.tense_context()`），规则 `ai._TENSE_CONTEXT_RULE` 要求语境让该时态成为唯一自然选择（ayer / siempre / esta semana / ya …）。单语言与 🌐 多语言提示词、跟进句（`generate_conj_followups`，item 多带 `slot`）都用
+- **翻译**：`_fill_translations`（谷歌）之后 `ai._retranslate_tense_sentences()` 把**有 `verb_slot` 的句子**一次性交给 `DEFAULT_MODEL`（`translate_tense_sentences`，purpose `tense_translate`）重译，按 `verb_slots.tense_cue_de()` 用德语信号词体现时态（只列本批出现的时态）。失败或某句缺失 → 保留谷歌译文，绝不阻断故事；其它句子仍只走谷歌
+- **开关**：设置页 Spanish「Zeitform-Signalwörter」，`app_settings.es_tense_cues`（默认开，`conj_patterns.tense_cues_active()`）；关闭时提示词与调用次数与之前一致
+- 测试见 `tests/test_verb_slots.py`、`tests/test_conj_followups.py`
+
 ## 西语今日时态（#1434、#1438）
 
 七个时态同时出现、人称还按频率加权，练起来太乱。现在**每天只练一个时态**，时态内的人称按**固定顺序**轮：yo → tú → él → nosotros → vosotros → ellos（`verb_slots.PERSONS`，包含 vosotros，人称权重在此模式下被忽略）。

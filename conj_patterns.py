@@ -57,6 +57,9 @@ MIN_RETENTION, MAX_RETENTION = 0.80, 0.97
 KEY_PULL_PER_DAY = "es_conj_pull_per_day"
 KEY_NO_BURY = "es_conj_irregular_no_bury"
 KEY_PULL_BATCH = "es_conj_pull_batch"
+# Tense signal words (#1481): story sentences carry a context that fixes the
+# tense, and their German translation (LLM instead of Google) keeps it visible.
+KEY_TENSE_CUES = "es_tense_cues"
 DEFAULT_PULL_PER_DAY = 10
 MAX_PULL_PER_DAY = 50
 
@@ -601,7 +604,9 @@ def settings() -> dict:
         except ValueError:
             logger.warning("conj settings: bad pull_per_day %r, using default", raw)
     no_bury = database.get_app_setting(KEY_NO_BURY) != "0"
-    return {"enabled": enabled,
+    tense_cues = database.get_app_setting(KEY_TENSE_CUES) != "0"
+    return {"tense_cues": tense_cues,
+            "enabled": enabled,
             "desired_retention": retention, "pull_per_day": pull,
             "irregular_creating_unburied": no_bury,
             "prod_per_verb": prod_per_verb, "followups_per_day": followups}
@@ -613,7 +618,8 @@ def validate_settings(body) -> dict:
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
     known = {"enabled", "desired_retention", "pull_per_day",
-             "irregular_creating_unburied", "prod_per_verb", "followups_per_day"}
+             "irregular_creating_unburied", "prod_per_verb", "followups_per_day",
+             "tense_cues"}
     unknown = sorted(set(body) - known)
     if unknown:
         raise ValueError(f"unknown setting(s): {', '.join(map(str, unknown))}")
@@ -626,6 +632,14 @@ def validate_settings(body) -> dict:
             out["enabled"] = bool(v)
         else:
             raise ValueError("'enabled' must be true or false")
+    if "tense_cues" in body:
+        v = body["tense_cues"]
+        if isinstance(v, bool):
+            out["tense_cues"] = v
+        elif isinstance(v, int) and v in (0, 1):
+            out["tense_cues"] = bool(v)
+        else:
+            raise ValueError("'tense_cues' must be true or false")
     if "prod_per_verb" in body:
         v = body["prod_per_verb"]
         if (isinstance(v, bool) or not isinstance(v, int)
@@ -675,8 +689,20 @@ def save_settings(clean: dict) -> None:
         database.set_app_setting(KEY_RETENTION, repr(float(clean["desired_retention"])))
     if "pull_per_day" in clean:
         database.set_app_setting(KEY_PULL_PER_DAY, str(int(clean["pull_per_day"])))
+    if "tense_cues" in clean:
+        database.set_app_setting(KEY_TENSE_CUES, "1" if clean["tense_cues"] else "0")
     if "irregular_creating_unburied" in clean:
         database.set_app_setting(KEY_NO_BURY, "1" if clean["irregular_creating_unburied"] else "0")
+
+
+def tense_cues_active() -> bool:
+    """Setting on (default) -> tense signal words in story sentences and an LLM
+    German translation that keeps the tense (#1481). Never raises (False on
+    error = Google-only translation, as before)."""
+    try:
+        return database.get_app_setting(KEY_TENSE_CUES) != "0"
+    except Exception:
+        return False
 
 
 def is_irregular_card_word(word_zh: str, lang: str = LANG) -> bool:
