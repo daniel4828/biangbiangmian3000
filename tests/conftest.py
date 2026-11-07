@@ -46,7 +46,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "weighted_persons: Zeit-des-Tages test of the frequency-weighted person "
-        "rotation (#1477); the other tense_focus tests pin the even rotation",
+        "rotation (#1479); the other tense_focus tests pin the even rotation",
     )
     config.addinivalue_line(
         "markers",

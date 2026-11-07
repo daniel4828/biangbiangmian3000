@@ -505,7 +505,7 @@ def _focus_tense() -> str | None:
 
 
 def focus_person_weights(lang: str) -> dict | None:
-    """Person weights for Zeit-des-Tages mode (#1477): weights(lang)["persons"]
+    """Person weights for Zeit-des-Tages mode (#1479): weights(lang)["persons"]
     (the editable "Verb slot weights", default = real usage frequency) when the
     setting "weighted_persons" is on, else None (= even rotation). Never raises."""
     try:

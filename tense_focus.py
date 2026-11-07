@@ -10,7 +10,7 @@ Setting: app_settings key "es_tense_focus", JSON
     {"enabled": bool, "tenses": [codes], "days": int,
      "anchor_date": "YYYY-MM-DD", "anchor_index": int,
      "weighted_persons": bool}
-`weighted_persons` (#1477, default on): persons rotate by real usage frequency
+`weighted_persons` (#1479, default on): persons rotate by real usage frequency
 (verb_slots.weights()["persons"]) instead of evenly.
 The tense of a day = tenses[(anchor_index + (day - anchor_date) // days) % n],
 so the rotation wraps around after the last tense. The user only toggles which

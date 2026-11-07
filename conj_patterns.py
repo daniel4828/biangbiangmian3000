@@ -493,7 +493,7 @@ def pick_person(group: list[str], tense: str, usage: dict | None = None,
     story), then the oldest last use (never = oldest), then PERSONS order.
     Without usage/local that is the first person of the group.
 
-    Weighted (#1477, `weights` = {person: weight}, e.g. verb_slots.weights()
+    Weighted (#1479, `weights` = {person: weight}, e.g. verb_slots.weights()
     ["persons"]): smallest (uses + local picks + 1) / weight, so over time each
     person is drilled about as often as it occurs in real Spanish (él ~ half,
     vosotros rarely); weight 0 = never (unless the whole group is 0). Ties ->

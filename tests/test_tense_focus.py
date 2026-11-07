@@ -43,7 +43,7 @@ def real_lex(clock):
 @pytest.fixture(autouse=True)
 def even_persons(request, monkeypatch):
     # Die meisten Tests prüfen die gleichmäßige Rotation; die gewichtete
-    # (#1477) hat eigene Tests mit dem Marker "weighted_persons".
+    # (#1479) hat eigene Tests mit dem Marker "weighted_persons".
     if "weighted_persons" not in request.keywords:
         monkeypatch.setattr(verb_slots, "focus_person_weights", lambda lang: None)
 
@@ -449,7 +449,7 @@ def test_api_roundtrip(clock):
     assert client.post("/api/es/tense-focus/step", json={"delta": 5}).status_code == 400
 
 
-# --- Personen nach Häufigkeit gewichten (#1477) ---------------------------------
+# --- Personen nach Häufigkeit gewichten (#1479) ---------------------------------
 
 @pytest.mark.weighted_persons
 def test_weighted_default_on_and_switchable(real_lex):
