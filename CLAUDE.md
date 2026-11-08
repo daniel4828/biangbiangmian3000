@@ -1249,6 +1249,7 @@ POST   /api/dict/lookup-stream                       → 同上 body，流式（
                                                        开流前的校验失败（空 query / 非法 lang / AI 关闭 / replace_id 不存在）仍是普通 HTTP 400/404；流内失败只发 error 事件且**不写库**
 GET    /api/dict/history[?q=&limit=]                 → 历史列表（不含 result_json；q 对 query/headline 做 LIKE）
 GET    /api/dict/history/{id} ；DELETE /api/dict/history/{id}  → 单条 / 删除；不存在均 404（不假装成功）
+POST /api/words/{id}/to-day                          → 词条详情页 → Today / → Tomorrow：body {day, confirm?}；只在 ★ List → 直接提升；已在学 → 先返回 needs_confirmation，confirm=true 才重置为新卡（同 #675/#888）
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它
 GET  /api/add-word-ai/progress/{job_id}              → 轮询后台生成+导入的结果
 POST /api/es/irregular-form-cards                    → 创建西语动词形态卡进 Español ★ List（#1296；#1438 起 25 动词 × 7 时态）：{created[], skipped[], errors[], activated[]}；零 AI、幂等；无 es 词汇表 → 400

@@ -1138,3 +1138,58 @@ def test_lemmatised_headword_still_reaches_the_saved_deck(tmp_db):
     conn.close()
     assert {r["deck_id"] for r in rows} == {saved_deck_id}
     assert all(r["state"] == "suspended" for r in rows)
+
+
+# ── Wortdetail: „→ Today / → Tomorrow“ per Wort-ID ──────────────────────────
+
+def test_word_to_day_promotes_saved_word_without_confirmation(tmp_db):
+    entry_id = client.post("/api/save-word",
+                           json={"word_zh": "生态", "pinyin": "shēngtài"}).json()["entry_id"]
+    r = client.post(f"/api/words/{entry_id}/to-day", json={"day": "tomorrow"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "promoted"
+
+    tomorrow = (database.anki_today() + timedelta(days=1)).isoformat()
+    conn = database.get_db()
+    rows = conn.execute("SELECT state, due FROM cards WHERE word_id=? AND deleted_at IS NULL",
+                        (entry_id,)).fetchall()
+    conn.close()
+    assert rows and all(r["state"] == "new" and r["due"] == tomorrow for r in rows)
+
+
+def test_word_to_day_resets_active_word_only_after_confirmation(tmp_db):
+    import importer
+    importer.import_yaml_content(ENTRY_YAML, database.get_or_create_deck_path("Kouyu::Test"))
+    entry_id = database.get_word_by_zh("生态")["id"]
+    conn = database.get_db()
+    conn.execute("UPDATE cards SET state='review', repetitions=3, stability=9.0 WHERE word_id=?",
+                 (entry_id,))
+    conn.commit()
+    conn.close()
+
+    preview = client.post(f"/api/words/{entry_id}/to-day", json={"day": "today"}).json()
+    assert preview["status"] == "needs_confirmation"
+    conn = database.get_db()
+    assert conn.execute("SELECT COUNT(*) c FROM cards WHERE word_id=? AND state='review'",
+                        (entry_id,)).fetchone()["c"] > 0
+    conn.close()
+
+    body = client.post(f"/api/words/{entry_id}/to-day",
+                       json={"day": "today", "confirm": True}).json()
+    assert body["status"] == "reset"
+    today = database.anki_today().isoformat()
+    leaf_ids = set(_today_leaf_decks().values())
+    conn = database.get_db()
+    rows = conn.execute("SELECT * FROM cards WHERE word_id=? AND deleted_at IS NULL",
+                        (entry_id,)).fetchall()
+    conn.close()
+    assert {r["deck_id"] for r in rows} == leaf_ids
+    assert all(r["state"] == "new" and r["due"] == today and r["stability"] is None
+               for r in rows)
+
+
+def test_word_to_day_rejects_bad_day_and_unknown_word(tmp_db):
+    assert client.post("/api/words/999999/to-day", json={"day": "today"}).status_code == 404
+    entry_id = client.post("/api/save-word", json={"word_zh": "生态"}).json()["entry_id"]
+    assert client.post(f"/api/words/{entry_id}/to-day",
+                       json={"day": "list"}).status_code == 400
