@@ -1597,8 +1597,11 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
     for deck_id, category in leaf_pairs:
         pr = get_preset_for_deck(deck_id)
         threshold = pr.get("learned_interval", 4)
+        # The new-card limit honours per-category preset overrides (#1492),
+        # like count_due() and the queue do.
+        cat_pr = get_preset_for_deck(deck_id, category)
         new_done = _count_new_introduced_today(conn, deck_id, category, today)
-        new_remaining_map[(deck_id, category)] = max(0, pr["new_per_day"] - new_done)
+        new_remaining_map[(deck_id, category)] = max(0, cat_pr["new_per_day"] - new_done)
 
         rows = conn.execute(
             f"""SELECT c.id, c.word_id, c.state, c.interval FROM cards c
