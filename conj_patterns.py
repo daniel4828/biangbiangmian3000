@@ -1124,7 +1124,9 @@ def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
         if not head or not lemma:
             continue
         raw_lemma, fixed_tense = head
-        tense = fixed_tense or focus_tense
+        # verbs follow their main sentence's tense (may differ from today's
+        # with a verb tense mix); form cards keep their fixed tense
+        tense = fixed_tense or main_slot.partition(":")[0] or focus_tense
         main_person = main_slot.partition(":")[2]
         if main_person not in PERSONS:
             continue

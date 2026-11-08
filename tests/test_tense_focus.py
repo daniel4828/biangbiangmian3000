@@ -500,3 +500,35 @@ def test_pick_person_weighted():
     # Gewicht 0 = nie, außer die ganze Gruppe ist 0
     assert pp(["2p", "1p"], "ind_pres", None, None, {"2p": 0, "1p": 0.1}) == "1p"
     assert pp(["2p"], "ind_pres", None, None, {"2p": 0}) == "2p"
+
+
+# --- verb_tenses: own tense mix for non-form verbs ---------------------------------
+
+def test_verb_tenses_validation(clock):
+    assert tense_focus.validate({"verb_tenses": None}) == {"verb_tenses": None}
+    assert tense_focus.validate({"verb_tenses": {"ind_impf": 20, "ind_pret": 80, "ind_fut": 0}}) \
+        == {"verb_tenses": {"ind_pret": 80, "ind_impf": 20}}
+    for bad in ({"xx": 1}, {"ind_pret": -1}, {"ind_pret": 0}, {"ind_pret": True}, [1]):
+        with pytest.raises(ValueError):
+            tense_focus.validate({"verb_tenses": bad})
+
+
+def test_verb_tenses_mix_for_verbs_form_cards_keep_focus(real_lex):
+    _set(enabled=True)  # today = Presente
+    tense_focus.save({"verb_tenses": {"ind_pret": 80, "ind_impf": 20}})
+    cards = [_card(i, w) for i, w in enumerate(
+        ["hablar", "comer", "vivir", "tomar", "llegar", "pasar", "dejar", "llamar",
+         "mirar", "entrar"], start=1)]
+    cards.append(_card(99, "tener · Indefinido"))
+    cards.append(_card(98, verb_slots.form_card_word("ser", "ind_pres")))
+    out = verb_slots.assign_slots(cards, "es")
+    tenses = [out[i]["slot"].split(":")[0] for i in range(1, 11)]
+    assert tenses.count("ind_pret") == 8 and tenses.count("ind_impf") == 2
+    assert out[99]["slot"].startswith("ind_pret:")
+    assert out[98]["slot"].startswith("ind_pres:")
+
+
+def test_verb_tenses_off_follows_focus(real_lex):
+    _set(enabled=True)
+    out = verb_slots.assign_slots([_card(1, "hablar")], "es")
+    assert out[1]["slot"].startswith("ind_pres:")
