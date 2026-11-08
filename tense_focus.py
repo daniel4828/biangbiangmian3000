@@ -9,7 +9,10 @@ today's": the setting, the day math and the validation.
 Setting: app_settings key "es_tense_focus", JSON
     {"enabled": bool, "tenses": [codes], "days": int,
      "anchor_date": "YYYY-MM-DD", "anchor_index": int,
-     "weighted_persons": bool}
+     "weighted_persons": bool, "verb_tenses": {code: weight} | null}
+`verb_tenses` (default null): when set, verbs that are NOT form cards ignore
+today's tense and get a tense by these weights (e.g. 80 Indefinido / 20
+Imperfecto); form cards keep following today's tense.
 `weighted_persons` (#1479, default on): persons rotate by real usage frequency
 (verb_slots.weights()["persons"]) instead of evenly.
 The tense of a day = tenses[(anchor_index + (day - anchor_date) // days) % n],
@@ -33,7 +36,8 @@ LANG = "es"
 KEY = "es_tense_focus"
 RELEASED_KEY = "es_form_intro_released"  # ordered list, see database.sync_form_card_pause
 MIN_DAYS, MAX_DAYS = 1, 30
-_KNOWN_KEYS = {"enabled", "tenses", "days", "weighted_persons"}
+_KNOWN_KEYS = {"enabled", "tenses", "days", "weighted_persons", "verb_tenses"}
+MAX_WEIGHT = 1000
 
 
 def canonical_tenses() -> list[str]:
@@ -71,7 +75,8 @@ def settings() -> dict:
     (today, index 0) so day 1 is the first tense and later days count from it."""
     canon = canonical_tenses()
     out = {"enabled": True, "tenses": list(canon), "days": 1,
-           "anchor_date": None, "anchor_index": 0, "weighted_persons": True}
+           "anchor_date": None, "anchor_index": 0, "weighted_persons": True,
+           "verb_tenses": None}
     stored: dict = {}
     raw = database.get_app_setting(KEY)
     if raw:
@@ -87,6 +92,11 @@ def settings() -> dict:
         out["enabled"] = stored["enabled"]
     if isinstance(stored.get("weighted_persons"), bool):
         out["weighted_persons"] = stored["weighted_persons"]
+    if stored.get("verb_tenses") is not None:
+        try:
+            out["verb_tenses"] = _clean_verb_tenses(stored["verb_tenses"])
+        except ValueError as e:
+            logger.warning("tense focus: stored verb_tenses ignored — %s", e)
     tenses = stored.get("tenses")
     if isinstance(tenses, list):
         picked = [t for t in canon if t in tenses]  # canonical order, known codes only
@@ -165,6 +175,36 @@ def sync_form_cards() -> int:
     return database.sync_form_card_pause(cur["tense"] if cur else None)
 
 
+def _clean_verb_tenses(v) -> dict | None:
+    """None/{} = off. Otherwise {known tense code: weight 0..MAX_WEIGHT}, zeros
+    dropped, canonical order, at least one positive weight. Raises ValueError."""
+    if v is None or v == {}:
+        return None
+    if not isinstance(v, dict):
+        raise ValueError("'verb_tenses' must be an object or null")
+    canon = canonical_tenses()
+    for code, w in v.items():
+        if code not in canon:
+            raise ValueError(f"unknown tense {code!r}")
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or not 0 <= w <= MAX_WEIGHT:
+            raise ValueError(f"weight of {code} must be a number between 0 and {MAX_WEIGHT}")
+    out = {t: v[t] for t in canon if t in v and v[t] > 0}
+    if not out:
+        raise ValueError("'verb_tenses' needs at least one weight above 0")
+    return out
+
+
+def verb_tense_weights() -> dict | None:
+    """Tense weights for non-form-card verbs while the focus is on, or None
+    (they follow today's tense). Never raises."""
+    try:
+        s = settings()
+        return s["verb_tenses"] if s["enabled"] else None
+    except Exception as e:
+        logger.warning("verb tense weights unavailable — %s", e)
+        return None
+
+
 def validate(body) -> dict:
     """Validate a partial payload; returns only the given keys, normalized
     (tenses deduped and in canonical order). Raises ValueError."""
@@ -182,6 +222,8 @@ def validate(body) -> dict:
         if not isinstance(body["weighted_persons"], bool):
             raise ValueError("'weighted_persons' must be true or false")
         out["weighted_persons"] = body["weighted_persons"]
+    if "verb_tenses" in body:
+        out["verb_tenses"] = _clean_verb_tenses(body["verb_tenses"])
     if "tenses" in body:
         v = body["tenses"]
         canon = canonical_tenses()

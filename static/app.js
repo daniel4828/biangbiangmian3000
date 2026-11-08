@@ -4195,7 +4195,40 @@ function _esTenseFocusHtml() {
       <input type="number" min="1" max="30" step="1" value="${_escHtml(String(s.days))}" style="width:80px" ${dis}
              onchange="saveEsTenseFocus({days: Number(this.value)})">
     </div>
-    <div class="keymap-row" style="flex-wrap:wrap">${boxes}</div>`;
+    <div class="keymap-row" style="flex-wrap:wrap">${boxes}</div>
+    ${_esVerbTensesHtml(s, available, dis)}`;
+}
+
+// Non-form-card verbs: own tense mix instead of today's tense (default off)
+const ES_VERB_TENSES_DEFAULT = { ind_pret: 80, ind_impf: 20 };
+
+function _esVerbTensesHtml(s, available, dis) {
+  const mix = s.verb_tenses;
+  const on = !!mix;
+  const inputs = on ? available.map(t => `
+    <label class="keymap-label" style="display:inline-flex;align-items:center;gap:6px;margin-right:12px">
+      ${_escHtml(t.label)}
+      <input type="number" min="0" max="1000" step="1" value="${_escHtml(String(mix[t.code] || 0))}" ${dis}
+             data-verb-tense="${_escHtml(t.code)}" onchange="saveEsVerbTenses()" style="width:64px">
+    </label>`).join('') : '';
+  return `
+    <div class="keymap-row">
+      <span class="keymap-label" title="Formkarten folgen weiter der Zeit des Tages. Alle anderen Verben bekommen ihre Zeit nach diesen Gewichten (z. B. 80 Indefinido / 20 Imperfecto).">Andere Verben: eigene Zeiten statt Zeit des Tages</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${on ? 'checked' : ''} ${dis}
+               onchange="saveEsTenseFocus({verb_tenses: this.checked ? ES_VERB_TENSES_DEFAULT : null})" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    ${on ? `<div class="keymap-row" style="flex-wrap:wrap">${inputs}</div>` : ''}`;
+}
+
+function saveEsVerbTenses() {
+  const mix = {};
+  document.querySelectorAll('input[data-verb-tense]').forEach(el => {
+    const v = Number(el.value);
+    if (v > 0) mix[el.dataset.verbTense] = v;
+  });
+  return saveEsTenseFocus({ verb_tenses: mix });
 }
 
 async function saveEsTenseFocus(partial) {

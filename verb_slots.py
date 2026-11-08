@@ -605,6 +605,30 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
     local: dict[str, int] = {}
 
     pw = focus_person_weights(lang)
+    verb_mix = None
+    try:
+        import tense_focus
+        verb_mix = tense_focus.verb_tense_weights()
+    except Exception as e:
+        logger.warning("verb tense weights unavailable — %s", e)
+    local_tense: dict[str, int] = {}
+
+    def pick_tense(lemma: str) -> str:
+        """Non-form verbs with a tense mix: weighted fair rotation over the
+        tenses (this story's picks first, then the global history), so the
+        long-run share of a tense ~ its share of the weight."""
+        opts = [t for t in verb_mix
+                if any(target_form(lemma, t, x, lang) for x in PERSONS)]
+        if not opts:
+            return focus_tense
+
+        def tkey(t: str):
+            w = float(verb_mix[t])
+            g = sum((c or 0) for slot, (c, _l) in hist.items()
+                    if slot.partition(":")[0] == t)
+            return (round((local_tense.get(t, 0) + 1) / w, 9),
+                    round((g + 1) / w, 9), -w)
+        return min(opts, key=tkey)
 
     def pick(avail: list[str], tense: str, usage: dict | None) -> str:
         usage = usage or {}
@@ -642,7 +666,8 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         if parsed:
             lemma, tense = parsed
         elif is_slottable_verb(word, lang):
-            lemma, tense = word.strip().lower(), focus_tense
+            lemma = word.strip().lower()
+            tense = pick_tense(lemma) if verb_mix else focus_tense
         else:
             continue
 
@@ -680,6 +705,8 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         if entry:
             out[card["word_id"]] = entry
             local[entry["slot"]] = local.get(entry["slot"], 0) + 1
+            if not parsed:
+                local_tense[tense] = local_tense.get(tense, 0) + 1
     return out
 
 
