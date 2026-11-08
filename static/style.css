@@ -3414,7 +3414,7 @@ a.nav-btn { text-decoration: none; }
 .wd-menu-item.wd-menu-item-active { color: var(--primary); font-weight: 600; }
 .wd-menu-item.wd-menu-item-danger { color: #dc2626; }
 .wd-menu-item.wd-menu-item-danger:hover { background: var(--red-bg, #fef2f2); }
-.wd-cards-head { display: flex; align-items: center; justify-content: space-between; }
+.wd-cards-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
 .wd-cat-circles { display: inline-flex; gap: 6px; margin-left: 10px; vertical-align: middle; }
 .wd-move-all-btn {
   font-size: 0.78rem;
@@ -8398,3 +8398,4 @@ body.hs-hidden #mini-player { bottom: max(8px, env(safe-area-inset-bottom)); }
 /* Übersetzung über dem Satz auf der Rückseite (#1427): Abstand zum Satz verkleinern */
 #sentence-trans-row:has(+ #grammar-hint-row) { margin-bottom: -14px; }
 #sentence-trans-row:has(+ #grammar-hint-row) + #grammar-hint-row:not(:has(> :not([style*="display:none"]))) { display: none; }
+.wd-cards-head-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }

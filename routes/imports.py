@@ -880,6 +880,54 @@ def save_word(body: dict):
     return {"status": "saved", "entry_id": entry_id, "saved_deck_id": saved_deck_id}
 
 
+@router.post("/api/words/{word_id}/to-day")
+def word_to_day(word_id: int, body: dict | None = None):
+    """Alle Karten eines Wortes in den heutigen/morgigen Daily-Stapel holen.
+
+    Body: {day: "today"|"tomorrow", confirm?: bool}. Für das Wortdetail-Fenster:
+    liegen die Karten nur in ★ List (Saved), ist das eine Beförderung; sind sie
+    schon aktiv, werden sie als neue Karten zurückgesetzt – dieselbe Operation
+    wie das erneute Hinzufügen eines bekannten Wortes (#675). Der Reset löscht
+    das FSRS-Gedächtnis unwiderruflich, deshalb meldet der erste Aufruf ohne
+    confirm nur, was passieren würde (wie #888), und schreibt nichts.
+    """
+    body = body or {}
+    day = (body.get("day") or "today").strip()
+    if day not in ("today", "tomorrow"):
+        raise HTTPException(status_code=400, detail="day must be 'today' or 'tomorrow'")
+    entry = database.get_word(word_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Word not found")
+    card_decks = _card_deck_ids(word_id)
+    if not card_decks:
+        raise HTTPException(status_code=404, detail="This word has no cards")
+
+    lang = entry.get("lang") or DEFAULT_LANG
+    saved_deck_id = database.get_or_create_saved_deck(lang)
+    status = "promoted" if card_decks <= {saved_deck_id} else "reset"
+    reps = _total_repetitions(word_id)
+    if status == "reset" and not body.get("confirm"):
+        return {
+            "status": "needs_confirmation", "action": status,
+            "word_zh": entry["word_zh"], "reviews_discarded": reps,
+        }
+
+    # Deck und Fälligkeit wandern immer gemeinsam, sonst liegt eine heute
+    # fällige Karte in einem gesperrten Zukunftsstapel (#636).
+    target_day = (database.anki_today()
+                  + timedelta(days=1 if day == "tomorrow" else 0)).isoformat()
+    daily_deck_id, deck_path = database.get_or_create_daily_deck(target_day, lang)
+    leaf_decks = database.get_or_create_category_decks(daily_deck_id, target_day)
+    moved = database.reset_word_to_new(word_id, leaf_decks, target_day)
+    queue_mgr.invalidate()
+    return {
+        "status": status, "word_zh": entry["word_zh"],
+        "deck_path": deck_path, "deck_id": daily_deck_id,
+        "cards_moved": moved,
+        "reviews_discarded": reps if status == "reset" else 0,
+    }
+
+
 @router.post("/api/saved/{word_id}/promote")
 def promote_saved(word_id: int, day: str = "today"):
     """Move a saved word's suspended cards into a daily deck as active new cards.

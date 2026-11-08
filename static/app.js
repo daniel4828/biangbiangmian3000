@@ -3774,7 +3774,11 @@ function renderWordDetailCards(cards, wordId) {
   }).join('');
   el.innerHTML = `<div class="wd-section-head wd-cards-head">
     <span>Cards <span class="wd-cat-circles">${circles}</span></span>
-    <button class="wd-move-all-btn" onclick="openMoveAllCardsPanel(${wordId})">Move all…</button>
+    <span class="wd-cards-head-actions">
+      <button class="wd-move-all-btn" onclick="wordCardsToDay(${wordId}, 'today')" title="Move all cards to today (active cards are reset to new)">→ Today</button>
+      <button class="wd-move-all-btn" onclick="wordCardsToDay(${wordId}, 'tomorrow')" title="Move all cards to tomorrow (active cards are reset to new)">→ Tomorrow</button>
+      <button class="wd-move-all-btn" onclick="openMoveAllCardsPanel(${wordId})">Move all…</button>
+    </span>
   </div>
   <div class="wd-move-all-panel" id="wd-move-all-${wordId}" style="display:none" onclick="event.stopPropagation()">
     <input id="wd-move-all-inp-${wordId}" class="wd-deck-picker-input" autocomplete="off" placeholder="Deck…"
@@ -3820,6 +3824,29 @@ function openMoveAllCardsPanel(wordId) {
   const inp = document.getElementById(`wd-move-all-inp-${wordId}`);
   inp.value = '';
   inp.focus();
+}
+
+// Wortdetail: alle Karten nach heute/morgen holen. Aus ★ List = befördern;
+// schon aktive Karten werden nach Rückfrage als neue Karten zurückgesetzt.
+async function wordCardsToDay(wordId, day) {
+  const dayLabel = day === 'tomorrow' ? 'tomorrow' : 'today';
+  try {
+    let res = await api('POST', `/api/words/${wordId}/to-day`, { day });
+    if (res.status === 'needs_confirmation') {
+      const n = res.reviews_discarded || 0;
+      const ok = await showConfirm(
+        `Reset "${res.word_zh}" to new cards for ${dayLabel}? Its progress` +
+        (n ? ` (${n} reviews)` : '') + ' will be lost.',
+        'Reset');
+      if (!ok) return;
+      res = await api('POST', `/api/words/${wordId}/to-day`, { day, confirm: true });
+    }
+    showNotice(`${res.status === 'reset' ? '↺ Reset' : '✓ Moved'} → ${res.deck_path}`);
+    const cards = await api('GET', `/api/words/${wordId}/cards`);
+    renderWordDetailCards(cards || [], wordId);
+  } catch (e) {
+    showError(`Move failed: ${e.message}`);
+  }
 }
 
 async function applyMoveAllCards(wordId) {
