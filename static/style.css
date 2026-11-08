@@ -2010,6 +2010,8 @@ body.ra-fullscreen-open #error-banner {
   border: 1px solid var(--border);
   border-radius: 999px;
 }
+.grammar-tense-blur { filter: blur(5px); cursor: pointer; user-select: none; transition: filter .15s; }
+.grammar-tense-blur.revealed { filter: none; cursor: default; user-select: auto; }
 .grammar-hint-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .grammar-hint-row .grammar-hint-tag { margin: 4px 0; border-radius: 8px; padding: 4px 12px; }
 

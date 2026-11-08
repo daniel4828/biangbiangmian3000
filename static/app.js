@@ -4320,6 +4320,14 @@ function _esConjSettingsHtml() {
       </label>
     </div>
     <div class="keymap-row">
+      <span class="keymap-label">Zeitform auf der Vorderseite verschwommen</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${_tenseBlurEnabled() ? 'checked' : ''}
+               onchange="setTenseBlur(this.checked)" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Im Etikett „Imperfecto · 3. Sg.“ ist die Zeit unscharf, bis du drauftippst; die Person bleibt lesbar. Nur auf diesem Gerät gespeichert.</div>
+    <div class="keymap-row">
       <span class="keymap-label">Zeitform-Signalwörter</span>
       <label class="switch-wrap">
         <input type="checkbox" ${s.tense_cues ? 'checked' : ''} ${dis}
@@ -17275,7 +17283,14 @@ function _renderGrammarHint(s) {
   for (const id of Object.keys(show)) {
     const el = document.getElementById(id);
     if (!el) continue;
-    el.textContent = text;
+    // Front: blur the tense so Daniel first works it out himself; a tap
+    // reveals it. The person stays readable. The back always shows it plain.
+    if (id !== 'grammar-hint-back' && text && _tenseBlurEnabled()) {
+      _setBlurredTenseHint(el, text);
+    } else {
+      el.textContent = text;
+      el.onclick = null;
+    }
     el.style.display = (text && show[id]) ? '' : 'none';
   }
   const pat = document.getElementById('grammar-pattern-back');
@@ -17283,6 +17298,31 @@ function _renderGrammarHint(s) {
     pat.textContent = patternText;
     pat.style.display = patternText ? '' : 'none';
   }
+}
+
+// Blurred tense on the front of the verb slot tag. Stored per device
+// (localStorage, default on); switch under Settings → Spanish.
+function _tenseBlurEnabled() {
+  try { return localStorage.getItem('esTenseBlur') !== 'false'; } catch { return true; }
+}
+function setTenseBlur(on) {
+  try { localStorage.setItem('esTenseBlur', on ? 'true' : 'false'); } catch {}
+  if (typeof sentence !== 'undefined' && sentence) _renderGrammarHint(sentence);
+}
+// "Imperfecto · 3. Sg. · irreg." → blurred "Imperfecto", rest plain. textContent only.
+function _setBlurredTenseHint(el, text) {
+  const parts = text.split(' · ');
+  el.textContent = '';
+  const tense = document.createElement('span');
+  tense.className = 'grammar-tense-blur';
+  tense.textContent = parts[0];
+  tense.title = 'Tippen zum Aufdecken';
+  el.appendChild(tense);
+  if (parts.length > 1) el.appendChild(document.createTextNode(' · ' + parts.slice(1).join(' · ')));
+  el.onclick = (e) => {
+    e.stopPropagation();
+    tense.classList.add('revealed');
+  };
 }
 
 // "Presente · -er (regelmäßig)" → "-er (regelmäßig)": the tense is in the other box (#1448).
