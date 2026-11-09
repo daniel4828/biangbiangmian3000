@@ -1101,10 +1101,8 @@ def _patch_missing(sentences: list[dict], missing_word_ids: list[int],
             continue
         # Multi (#1378): each card falls back in its own language
         card_lang = (card.get("word_lang") or "zh") if lang == MULTI_LANG else lang
-        if card_lang == "zh":
-            fallback_zh = card.get("source_sentence") or f"我学了{card['word_zh']}这个词。"
-        else:
-            fallback_zh = card.get("source_sentence") or f"J'ai appris le mot {card['word_zh']}."
+        fallback_zh = (card.get("source_sentence")
+                       or languages.fallback_sentence(card["word_zh"], card_lang))
         patched = {"word_ids": [wid], "sentence_zh": fallback_zh,
                    "sentence_en": "", "sentence_de": "", "sentence_fr": ""}
         if lang == MULTI_LANG:
@@ -2770,11 +2768,13 @@ def _fill_translations(sentences: list[dict], progress_key: str | None = None,
 
 def _fallback_sentences(cards: list[dict], lang: str = "zh") -> list[dict]:
     """Minimal sentences used when the AI response cannot be parsed."""
-    fallback = (lambda w: f"我学了{w}这个词。") if lang == "zh" else (lambda w: f"J'ai appris le mot {w}.")
+    def card_lang(c: dict) -> str:
+        return (c.get("word_lang") or "zh") if lang == MULTI_LANG else lang
+
     result = [
         {
             "word_ids": [c["word_id"]],
-            "sentence_zh": fallback(c["word_zh"]),
+            "sentence_zh": languages.fallback_sentence(c["word_zh"], card_lang(c)),
             "sentence_en": "",
             "sentence_de": "",
             "sentence_fr": "",
