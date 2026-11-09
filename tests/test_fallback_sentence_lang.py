@@ -63,3 +63,34 @@ def test_kahneman_fallback_does_not_crash():
 
     assert {s["word_ids"][0] for s in result} == {1, 2}
     assert _sentence_for(result, 2) == FALLBACK_ZH
+
+
+# ── #1501: the filler sentence must be in the card's own language ──
+
+import languages
+
+
+def test_fallback_sentence_per_language():
+    assert languages.fallback_sentence("努力", "zh") == "我学了努力这个词。"
+    assert languages.fallback_sentence("parler", "fr") == "J'ai appris le mot parler."
+    assert languages.fallback_sentence("hablar", "es") == "Aprendí la palabra hablar."
+
+
+def test_fallback_sentence_form_card_keeps_lemma_only():
+    assert (languages.fallback_sentence("creer · Subjuntivo presente", "es")
+            == "Aprendí la palabra creer.")
+
+
+def test_patch_missing_spanish_is_not_french():
+    sentences = []
+    ai._patch_missing(sentences, [7], {7: {"word_id": 7, "word_zh": "creer"}}, lang="es")
+    assert sentences[0]["sentence_zh"] == "Aprendí la palabra creer."
+
+
+def test_fallback_sentences_multi_uses_each_card_lang():
+    cards = [{"word_id": 1, "word_zh": "努力", "word_lang": "zh"},
+             {"word_id": 2, "word_zh": "hablar", "word_lang": "es"}]
+    with patch("ai._fill_translations", lambda sentences, **kw: None):
+        result = ai._fallback_sentences(cards, lang=ai.MULTI_LANG)
+    assert _sentence_for(result, 1) == "我学了努力这个词。"
+    assert _sentence_for(result, 2) == "Aprendí la palabra hablar."

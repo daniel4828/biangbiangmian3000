@@ -104,6 +104,8 @@ LANGUAGES = {
         "learner_level": "HSK 4-5",            # the learner's level
         "background_vocab": "HSK 1-2",         # default level cap for non-target words
         "sentence_limit": "15 Chinese characters",
+        # Filler sentence when the AI leaves a word out of a story (#1501).
+        "fallback_sentence": "我学了{word}这个词。",
         # ── Language-specific features (drive schema usage + frontend UI) ──
         "features": {**_SINITIC_BASE["features"]},
     },
@@ -120,6 +122,7 @@ LANGUAGES = {
         "learner_level": "CEFR B1",            # Daniel's French level (2026-07-06)
         "background_vocab": "CEFR A1-A2",
         "sentence_limit": "12 words",
+        "fallback_sentence": "J'ai appris le mot {word}.",
         "features": {**_ROMANCE_BASE["features"]},
     },
     "es": {
@@ -135,6 +138,7 @@ LANGUAGES = {
         "learner_level": "CEFR A2",
         "background_vocab": "CEFR A1",
         "sentence_limit": "12 words",
+        "fallback_sentence": "Aprendí la palabra {word}.",
         # Definite article by noun gender, shown in front of the headword in the
         # review card back and the word detail page (#1294: "la clima" errors
         # in the placement test). French is deliberately absent: it needs
@@ -220,6 +224,18 @@ def article_for(word: str | None, gender: str | None, lang: str | None) -> str |
         return None
     except Exception:
         return None
+
+
+def fallback_sentence(word: str, lang: str | None) -> str:
+    """Filler sentence for a word the AI left out of a story (#1501).
+
+    Must be in the card's own language: the French filler used to land in
+    Spanish decks. Form-card headwords ("creer · Subjuntivo presente") keep
+    only the lemma — the tense label is not part of a sentence.
+    """
+    word = (word or "").split(" · ")[0].strip()
+    template = get_lang_config(lang).get("fallback_sentence") or "{word}."
+    return template.format(word=word)
 
 
 def deck_root(lang: str | None) -> str:
