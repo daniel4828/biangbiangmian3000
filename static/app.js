@@ -14009,6 +14009,41 @@ function renderWordFreq() {
 // Verb conjugation section (issue #596) — French & future conjugating
 // languages. wordData.conjugations rows come pre-ordered by position; group
 // them back into per-tense cards (person '' = impersonal form, e.g. participle).
+// #1499: which tense to open in review mode. Hint ("Indefinido · 3. Sg." -> "Indefinido")
+// wins; else the tense whose form (longest) appears in the sentence; else null.
+function _conjOpenTense(tenses, byTense, hint, sentenceText) {
+  const toks = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z]+/).filter(x => x && x !== 'de' && x !== 'del');
+  const hintPart = String(hint || '').split(' · ')[0].trim();
+  const hTok = toks(hintPart);
+  if (hTok.length) {
+    let best = null, bestExtra = Infinity;
+    for (const t of tenses) {
+      const set = new Set(toks(t));
+      if (!hTok.every(x => set.has(x))) continue;
+      const extra = set.size - hTok.length;
+      if (extra < bestExtra) { best = t; bestExtra = extra; }
+    }
+    if (best !== null) return best;
+  }
+  const text = String(sentenceText || '').toLowerCase();
+  if (text) {
+    let best = null, bestLen = 0;
+    for (const t of tenses) {
+      for (const c of (byTense.get(t) || [])) {
+        const f = String(c.form || '').toLowerCase().trim();
+        if (!f || f.length <= bestLen) continue;
+        const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp('(^|[^\\p{L}])' + esc + '(?=$|[^\\p{L}])', 'iu').test(text)) {
+          best = t; bestLen = f.length;
+        }
+      }
+    }
+    if (best !== null) return best;
+  }
+  return null;
+}
+
 function renderConjugationSection(container, wordData) {
   const el = container ?? document.getElementById('conjugation-section');
   if (!el) return;
@@ -14042,7 +14077,16 @@ function renderConjugationSection(container, wordData) {
     const tip = `${p.label}\nBilden: ${stText(p.prod)}\nErkennen: ${stText(p.recog)}`;
     return `<span class="conj-dot ${mod}" title="${_escHtml(tip)}"></span>`;
   };
-  // #1340: one collapsible <details> per tense, only the first is open.
+  // #1340: one collapsible <details> per tense, only one is open.
+  // #1499: in review mode that is the tense the current sentence/form card uses; else the first.
+  let openT = tenses[0];
+  if (!container) {
+    let hint = (typeof sentence !== 'undefined' && sentence?.grammar_hint) || '';
+    const wz = (typeof card !== 'undefined' && card?.word_zh) || '';
+    if (!hint && wz.includes(' · ')) hint = wz.slice(wz.indexOf(' · ') + 3);
+    const text = (typeof sentence !== 'undefined' && sentence?.sentence_zh) || '';
+    openT = _conjOpenTense(tenses, byTense, hint, text) ?? tenses[0];
+  }
   const cell = c =>
     `<div class="conj-cell"><span class="conj-person">${_escHtml(c.person)}</span>` +
     `<span class="conj-form">${_escHtml(c.form)}${countSpan(c)}</span></div>`;
@@ -14061,7 +14105,7 @@ function renderConjugationSection(container, wordData) {
       ).join('');
     }
     const preview = list.map(c => _escHtml(c.form)).join(' · ');
-    return `<details class="conj-tense"${i === 0 ? ' open' : ''}>` +
+    return `<details class="conj-tense"${t === openT ? ' open' : ''}>` +
       `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}</span>` +
       `<span class="conj-tense-preview">${preview}</span><span class="conj-chevron">›</span></summary>` +
       `<div class="conj-tense-body">${body}</div></details>`;
