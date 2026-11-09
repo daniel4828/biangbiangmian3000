@@ -4374,6 +4374,14 @@ function _esConjSettingsHtml() {
     </div>
     <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Creating: nach der Karte folgen bis zu (N−1) Folgesätze mit demselben Verb, nur Konjugation bewerten. Fällige Muster zuerst, dann neue. Listening/Reading: 1 Muster pro Verb. Folgesätze gesamt: 0 = aus.</div>
     <div class="keymap-row">
+      <span class="keymap-label">Neues unregelmäßiges Verb: alle Muster beim ersten Mal</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${s.intro_series ? 'checked' : ''} ${dis}
+               onchange="saveEsConjSettings({intro_series: this.checked})" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Kommt die Creating-Karte eines neuen unregelmäßigen Verbs zum ersten Mal, folgen Folgesätze für jedes unregelmäßige Muster in allen Zeiten (tener: tengo, tiene, tenemos, tuvo, tenía, ha tenido, tendrá, tenga, tuviera). Zählt nicht gegen das Tageslimit. Regelmäßige Verben: nichts.</div>
+    <div class="keymap-row">
       <span class="keymap-label">Ziel-Behaltensrate</span>
       <input type="number" min="0.80" max="0.97" step="0.01" value="${_escHtml(String(s.desired_retention))}" style="width:80px" ${dis}
              onchange="saveEsConjSettings({desired_retention: Number(this.value)})">
