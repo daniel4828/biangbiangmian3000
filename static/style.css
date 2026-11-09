@@ -8355,7 +8355,7 @@ body.side-menu-open #side-menu-backdrop { opacity: 1; pointer-events: auto; }
 }
 @media (min-width: 1000px) {
   #side-menu { transform: none; padding-top: 72px; }
-  #side-menu-backdrop, #side-menu-btn { display: none; }
+  #side-menu-backdrop { display: none; }
   body.has-side-menu { padding-left: 240px; transition: padding-left .22s ease; }
   /* The composer and the dictionary sheet are position:fixed, so they are
      centred on the viewport unless told about the menu: centre them on the
