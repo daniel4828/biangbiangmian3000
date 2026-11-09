@@ -244,6 +244,9 @@
             <div class="card-toggle-bar" id="card-toggle-bar-front" style="display:none">
               <button class="card-toggle-btn" id="toggle-trans-btn-front" onclick="toggleCreatingFrontTranslation()"
                       data-shortcut-action="translation" data-shortcut-title="Toggle translation" title="Toggle translation (t)">译文</button>
+              <button class="card-toggle-btn" id="always-trans-btn-front" onclick="toggleAlwaysTranslation()"
+                      style="display:none" title="Always show translation" aria-label="Always show translation"
+                      aria-pressed="false">👀</button>
               <button class="card-toggle-btn card-star-btn" id="toggle-star-btn-front" onclick="toggleSentenceStar()" style="display:none" title="Star this sentence as a good example (Shift+F)">☆</button>
               <button class="card-toggle-btn card-flag-btn" id="toggle-flag-btn-front" onclick="toggleSentenceFlag()" style="display:none" title="Flag this sentence as a bad example (Shift+G)">⚐</button>
               <button class="card-toggle-btn" id="toggle-question-btn-front" onclick="openSentenceQuestionModal()" style="display:none" title="Ask AI about this sentence">？</button>

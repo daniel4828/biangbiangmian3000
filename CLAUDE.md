@@ -1268,6 +1268,10 @@ GET  /api/stats ；/api/retention ；/api/card-evolution（均支持 ?lang=）
 
 ---
 
+## 重组句子翻译常驻（#1494）
+
+Creating 正面工具栏在「译文」旁提供 👀 按钮，复用 `alwaysTranslation` localStorage 偏好。开启后立即显示翻译，并保留到下一张卡及刷新；关闭只改变后续默认，不隐藏当前翻译。手动隐藏翻译仍会取消常驻偏好。没有翻译时不显示按钮。
+
 ## 测试（`tests/`，`pytest tests/` 全套约 11 秒）
 
 - **隔离数据库只能打 `database.core.DB_PATH` 这个补丁**：`database/__init__.py` 是 `from .core import *`，`database.DB_PATH` 只是一份名字副本，`get_db()` 读的是 core 的模块全局。打错位置不会报错，测试会**静默写进真实的 `data/srs.db`**（#615，`test_importer`/`test_api` 曾这样跑了很久）。`tests/conftest.py` 还额外把 `DB_PATH` 指向临时目录兜底

@@ -16626,6 +16626,13 @@ function _syncFrontTransToggle() {
   const visible = !!(front && front.textContent && front.style.display !== 'none');
   btn.style.display = (front && front.textContent) ? '' : 'none';
   btn.classList.toggle('active', visible);
+  // Keep the persistent preference accessible before revealing the answer (#1494).
+  const alwaysBtn = document.getElementById('always-trans-btn-front');
+  if (alwaysBtn) {
+    alwaysBtn.style.display = (front && front.textContent) ? '' : 'none';
+    alwaysBtn.classList.toggle('active', _alwaysTranslation);
+    alwaysBtn.setAttribute('aria-pressed', String(_alwaysTranslation));
+  }
   _syncCardToggleBarFront();
 }
 
