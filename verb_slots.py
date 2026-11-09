@@ -181,10 +181,10 @@ def describe(slot: str) -> str:
 
 _FORM_LANG = "es"
 FORM_CARD_TENSES = ("ind_pret", "ind_pres", "ind_fut", "ind_impf")
-# Tenses a form card may carry (#1438): the seven of the "Zeit des Tages"
+# Tenses a form card may carry (#1438): the eight of the "Zeit des Tages"
 # rotation. FORM_CARD_TENSES above stays the set used to judge irregularity.
 FORM_CARD_ALL_TENSES = ("ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut",
-                        "subj_pres", "subj_impf")
+                        "subj_pres", "subj_impf", "ind_cond")
 PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
 _SEP = " · "
 
@@ -392,6 +392,14 @@ def _pattern(lemma: str, tense: str, row: list[str]) -> tuple[str, str]:
         return "fut_stem", f"Unregelmäßiger Futurstamm: {stem}- (Endungen regelmäßig)."
     if tense == "ind_impf":
         return "impf", "Nur ser, ir und ver haben ein unregelmäßiges Imperfecto."
+    if tense == "ind_cond":
+        first = row[0].lower() if row and row[0] else ""
+        if not first.endswith("ía"):
+            return "", _unregular_note(lemma, tense, row)
+        if first == lemma.lower() + "ía":
+            return "", "Regelmäßig in dieser Zeit (Infinitiv + -ía, -ías …)."
+        return "cond_stem", (f"Unregelmäßiger Condicionalstamm: {first[:-2]}- "
+                             "(wie im Futuro, Endungen -ía, -ías, -ía, -íamos, -íais, -ían).")
     return "", ""
 
 
@@ -403,11 +411,12 @@ def pattern_note(lemma: str, tense: str, row: list[str], lang: str) -> str:
         return ""
 
 
-def form_card_candidates(lang: str, max_verbs: int = 25, limit: int = 175) -> list[dict]:
+def form_card_candidates(lang: str, max_verbs: int = 25, limit: int | None = None) -> list[dict]:
     """The form cards worth creating: the `max_verbs` most frequent irregular
     verbs × ALL configured tenses (also those in which the verb is regular,
-    e.g. "tener · Imperfecto"), capped at `limit` (25 × 7 = 175). A tense is
-    skipped when any of its six forms is unavailable.
+    e.g. "tener · Imperfecto"), capped at `limit` (default: max_verbs ×
+    number of configured tenses). A tense is skipped when any of its six
+    forms is unavailable.
 
     Each item: {lemma, tense, word_zh, row (6 forms), note_de}. Deterministic.
 
@@ -417,6 +426,8 @@ def form_card_candidates(lang: str, max_verbs: int = 25, limit: int = 175) -> li
     try:
         cfg = config(lang)
         tenses = list(cfg["tenses"]) if cfg else []
+        if limit is None:
+            limit = max_verbs * len(tenses)
         verbs = 0
         for lemma in lexicon.verb_lemmas(lang):
             if verbs >= max_verbs or len(items) >= limit:

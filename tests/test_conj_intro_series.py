@@ -70,20 +70,20 @@ def test_intro_series_with_main_slot(real_lex):
     items, covered = conj_patterns.plan_intro_series(
         [(_card(1, "creating", "tener"), "ind_pres:3s")], "es")
     assert covered == {1}
-    assert len(items) == 8
+    assert len(items) == 9
     assert all(i["intro"] and i["word_id"] == 1 and i["lemma"] == "tener" for i in items)
     slots = [i["slot"] for i in items]
     pres = [s for s in slots if s.startswith("ind_pres:")]
     assert pres[0] == "ind_pres:1s"
     assert pres[1] in ("ind_pres:1p", "ind_pres:2p")
     assert not {"ind_pres:2s", "ind_pres:3s", "ind_pres:3p"} & set(slots)
-    for tense in ("ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf"):
+    for tense in ("ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf", "ind_cond"):
         assert sum(s.startswith(tense + ":") for s in slots) == 1
 
 
 def test_intro_series_without_main_slot(real_lex):
     items, _ = conj_patterns.plan_intro_series([(_card(1, "creating", "tener"), None)], "es")
-    assert len(items) == 9
+    assert len(items) == 10
     forms = {i["form"] for i in items}
     assert "tengo" in forms and "tuviera" in forms
 
@@ -100,7 +100,7 @@ def test_intro_series_skips_non_qualifying(real_lex):
 
 def test_plan_followups_includes_intro(real_lex):
     out = _plan([(_card(1, "creating", "tener"), None)])
-    assert len(out) == 9 and all(i.get("intro") for i in out)
+    assert len(out) == 10 and all(i.get("intro") for i in out)
 
 
 def test_intro_setting_off(real_lex):
@@ -117,7 +117,7 @@ def test_followups_per_day_zero_switches_intro_off(real_lex):
 def test_intro_not_truncated_by_daily_cap(real_lex):
     conj_patterns.save_settings({"followups_per_day": 2})
     out = _plan([(_card(1, "creating", "tener"), None)])
-    assert len(out) == 9 and all(i.get("intro") for i in out)
+    assert len(out) == 10 and all(i.get("intro") for i in out)
 
 
 def test_regular_followups_unchanged_for_non_new_card(real_lex):

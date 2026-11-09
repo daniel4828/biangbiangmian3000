@@ -105,6 +105,18 @@ def test_one_verb_yields_seven_cards_with_composed_perfecto():
     assert "hacer · Perfecto" in {c["word_zh"] for c in cands}
 
 
+def test_condicional_form_card(monkeypatch):
+    tener = dict(TENER, ind_cond="tendría tendrías tendría tendríamos tendríais tendrían")
+    monkeypatch.setitem(TABLE, "tener", (1, tener))
+    lexicon.inject("es", _lexicon())
+    assert verb_slots.parse_form_card("tener · Condicional") == ("tener", "ind_cond")
+    cands = {c["word_zh"]: c for c in verb_slots.form_card_candidates("es")}
+    card = cands["tener · Condicional"]
+    assert card["row"] == ["tendría", "tendrías", "tendría", "tendríamos",
+                           "tendríais", "tendrían"]
+    assert "tendr-" in card["note_de"]
+
+
 def test_subjunctive_notes_differ():
     cands = {c["tense"]: c for c in verb_slots.form_card_candidates("es")
              if c["lemma"] == "tener"}
@@ -132,8 +144,8 @@ def _walk(state, days_total):
 
 
 def test_focus_ends_itself_after_the_round(tmp_db, monkeypatch):
-    enabled = _walk(_clock(monkeypatch), 8)
-    assert enabled == [True] * 7 + [False]  # day 8 would wrap to Presente: off instead
+    enabled = _walk(_clock(monkeypatch), 9)
+    assert enabled == [True] * 8 + [False]  # day 9 would wrap to Presente: off instead
     assert tense_focus.settings()["enabled"] is False
     assert _released_list() == tense_focus.canonical_tenses()
 
@@ -141,8 +153,8 @@ def test_focus_ends_itself_after_the_round(tmp_db, monkeypatch):
 def test_focus_with_two_day_period_stays_on_for_both_days_of_last_tense(tmp_db, monkeypatch):
     state = _clock(monkeypatch)
     tense_focus.save(tense_focus.validate({"days": 2}))
-    enabled = _walk(state, 15)
-    assert enabled == [True] * 14 + [False]
+    enabled = _walk(state, 17)
+    assert enabled == [True] * 16 + [False]
     assert _released_list() == tense_focus.canonical_tenses()
 
 
@@ -150,8 +162,9 @@ def _released_list():
     return json.loads(database.get_app_setting("es_form_intro_released") or "[]")
 
 
-def test_parse_form_card_roundtrips_all_seven_tenses():
-    for tense in verb_slots.FORM_CARD_ALL_TENSES:
+def test_parse_form_card_roundtrips_all_tenses():
+    # ind_cond: the TENER fixture has no Condicional row, covered by test_condicional_form_card
+    for tense in (t for t in verb_slots.FORM_CARD_ALL_TENSES if t != "ind_cond"):
         word = verb_slots.form_card_word("tener", tense)
         assert verb_slots.parse_form_card(word) == ("tener", tense)
     assert verb_slots.parse_form_card("hacer · Futuro") is None  # no forms
