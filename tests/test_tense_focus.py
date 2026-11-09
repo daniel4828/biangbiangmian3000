@@ -15,7 +15,8 @@ pytestmark = pytest.mark.tense_focus
 
 _REAL_LEXICON = lexicon._RESOURCE_DIR / "es-lexicon.json.gz"
 DAY0 = date(2026, 3, 10)
-ORDER = ["ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf"]
+ORDER = ["ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf",
+         "ind_cond"]
 
 
 @pytest.fixture
@@ -61,7 +62,7 @@ def _set(**kw):
 def test_default_starts_with_presente_today(clock):
     cur = tense_focus.current()
     assert cur["tense"] == "ind_pres" and cur["index"] == 0
-    assert cur["count"] == 7 and cur["label"] == "Presente"
+    assert cur["count"] == 8 and cur["label"] == "Presente"
     assert cur["next_change"] == (DAY0 + timedelta(days=1)).isoformat()
     s = tense_focus.settings()  # anchor was persisted
     assert s["anchor_date"] == DAY0.isoformat() and s["anchor_index"] == 0
@@ -71,8 +72,15 @@ def test_index_advances_daily_and_wraps(clock):
     tense_focus.settings()
     for n, code in enumerate(ORDER):
         assert tense_focus.current(DAY0 + timedelta(days=n))["tense"] == code
-    assert tense_focus.current(DAY0 + timedelta(days=7))["tense"] == "ind_pres"
+    assert tense_focus.current(DAY0 + timedelta(days=8))["tense"] == "ind_pres"
     assert tense_focus.current(DAY0 + timedelta(days=3))["label"] == "Perfecto"
+
+
+def test_condicional_is_the_eighth_tense_of_the_rotation(clock):
+    anchor = date(2026, 11, 4)
+    _set(anchor_date=anchor.isoformat(), anchor_index=0, days=1)
+    assert tense_focus.current(date(2026, 11, 10))["tense"] == "subj_impf"
+    assert tense_focus.current(date(2026, 11, 11))["tense"] == "ind_cond"
 
 
 def test_days_per_tense(clock):
@@ -93,7 +101,7 @@ def test_disabled_and_corrupt_setting(clock):
 def test_step_moves_and_wraps(clock):
     assert tense_focus.step(1)["tense"] == "ind_pret"
     assert tense_focus.step(-1)["tense"] == "ind_pres"
-    assert tense_focus.step(-1)["tense"] == "subj_impf"
+    assert tense_focus.step(-1)["tense"] == "ind_cond"
     with pytest.raises(ValueError):
         tense_focus.step(2)
 
