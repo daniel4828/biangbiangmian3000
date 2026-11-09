@@ -1268,6 +1268,10 @@ GET  /api/stats ；/api/retention ；/api/card-evolution（均支持 ?lang=）
 
 ---
 
+## 桌面侧边菜单按钮（#1496）
+
+顶栏左侧 ☰ 在所有屏幕宽度下可见，点击复用 `toggleSideMenuCollapsed()`：桌面 ≥1000px 折叠/展开常驻菜单并保存 `sideMenuCollapsed`，与 ⌘B 一致；窄屏保持抽屉开关行为。即使桌面菜单已收起，也可通过按钮进入 Settings。
+
 ## 重组句子翻译常驻（#1494）
 
 Creating 正面工具栏在「译文」旁提供 👀 按钮，复用 `alwaysTranslation` localStorage 偏好。开启后立即显示翻译，并保留到下一张卡及刷新；关闭只改变后续默认，不隐藏当前翻译。手动隐藏翻译仍会取消常驻偏好。没有翻译时不显示按钮。
