@@ -371,6 +371,12 @@ def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
     except Exception as e:
         logger.debug("lexicon forms unavailable for %s — %s", word, e)
     try:
+        # Multi-word verb expressions "tener prisa" / "irle bien a alguien" (#1508).
+        import expressions
+        forms.extend(expressions.expression_forms(word, lang))
+    except Exception as e:
+        logger.debug("expression forms unavailable for %s — %s", word, e)
+    try:
         # Irregular-verb form card "tener · Indefinido" (#1296): the forms that
         # count are the six of that tense (plus the lemma) — this is what makes
         # highlight/cloze work on those cards.
