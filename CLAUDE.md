@@ -563,6 +563,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **设置页可改权重**：设置页 Spanish 块的 "Verb slot weights"，覆盖值存 `app_settings.es_verb_slot_weights`（JSON `{"tenses":{},"persons":{}}`），`verb_slots.weights(lang)` = 默认值叠加覆盖值（只认已知代码、值须为 0–1000 的有限数；存的数据损坏就忽略并回落默认）；`GET/PUT/DELETE /api/es/verb-slot-weights`（PUT 校验失败 400，DELETE = 恢复默认）
 - **启用哪些时态在 `languages.py` 的 `es["verb_slots"]`**：现在是全部七个：Presente → Indefinido → Imperfecto → Perfecto → Futuro → Subjuntivo presente → Subjuntivo imperfecto。法语没有 `verb_slots` → 功能关闭，提示词逐字不变
 - **Perfecto 是组合出来的**（`perf` 不是词汇表里的时态码）：`haber` 现在时对应人称 + 过去分词（`ha hablado`）。覆盖词汇表里约 2,900 个动词（#1305 起来自 Wiktionary 变位表）；没有该形式的槽位自动跳过
+- **多词动词短语（#1508）**：`tener prisa`、`irle bien a alguien`、`darse cuenta de algo` 由 `expressions.expression_forms()` 生成表层形：动词按词汇表变位 + 其余词原样；占位词（alguien/algo/qn/qch）连同前面的介词去掉；附着代词挪到动词前（`le va bien`，反身 `se` → me/te/se/nos/os）。并入 `database.surface_forms()`，故事匹配、复习高亮/填空、知识模式都认得 `tengo prisa`。批次里有这类短语时故事提示词多一条规则，否则逐字不变。法语没有词汇表，目前返回空
 - **自反动词已支持**（#1301，`quejarse` 等）：`target_form()` 把代词放到变位形前面（`me quejé`、`me he quejado`）；形态卡（#1296）不收自反动词
 - **匹配规则**：句子含目标形式（词边界、不分大小写）→ 记下 `verb_slot`/`grammar_hint`；AI 写了别的形式但仍能匹配（不定式、`surface_forms`）→ 卡片照收、**不挂标签**（标签会撒谎）。补漏句（`_patch_missing`）同样无槽位
 - **`database.surface_forms()` 对非中文并入 `lexicon.forms_of()`**：AI 生成的 `entry_forms` 不全时，高亮/填空/知识模式匹配照样认得变位形
