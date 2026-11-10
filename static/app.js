@@ -668,6 +668,11 @@ function showStateChangeAnim(transition) {
   el.className = 'state-anim';
   el.textContent = info.text;
   el.style.color = info.color;
+  // Fixed overlays use viewport coordinates; center on the sentence panel
+  // rather than the window, which also includes the navigation sidebar.
+  const panel = document.getElementById('review-card');
+  const rect = panel?.getBoundingClientRect();
+  if (rect?.width > 0) el.style.left = `${rect.left + rect.width / 2}px`;
   document.body.appendChild(el);
   el.addEventListener('animationend', () => el.remove(), { once: true });
   // Safety net in case animationend never fires (e.g. reduced-motion)
