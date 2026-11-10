@@ -505,9 +505,19 @@ def _guess_unmatched_lang(is_cjk: bool, parsed: list[dict], cards: list[dict], c
     return "zh"
 
 
+# Prompt rule for verb-initial multi-word expressions (#1508).
+_EXPR_RULE = (
+    "\n- For multi-word expressions that start with a verb (e.g. \"tener prisa\", "
+    "\"irle bien a alguien\"): conjugate the verb as the sentence needs, put attached "
+    "pronouns (le, se …) in their natural position, and replace placeholders like "
+    "alguien/algo with a concrete person or thing — keep the other words of the "
+    "expression unchanged"
+)
+
+
 def _multi_story_prompt(cards: list[dict], word_list: str, *, mode: str, topic: str | None,
                         max_hsk: int, grammar_first: str, has_slots: bool,
-                        card_langs: list[str]) -> str:
+                        card_langs: list[str], has_expr: bool = False) -> str:
     """Prompt for ONE coherent story whose sentences are each written in the
     language of their target word (#1378). Not user-customizable."""
     langs = list(dict.fromkeys(card_langs))
@@ -554,6 +564,8 @@ def _multi_story_prompt(cards: list[dict], word_list: str, *, mode: str, topic: 
         "other words around it"
         + (_TENSE_CONTEXT_RULE if _tense_cues_active() else "")
     ) if has_slots else ""
+    if has_expr:
+        slot_rule += _EXPR_RULE
 
     return f"""{task_line}
 
@@ -861,6 +873,18 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
     def _slot_form_in_sentence(form: str, sentence: str) -> bool:
         return re.search(rf"(?<!\w){re.escape(form)}(?!\w)", sentence, re.IGNORECASE) is not None
 
+    # Surface forms per non-zh card, computed once (no DB query per sentence).
+    # Covers conjugated multi-word expressions like "tener prisa" (#1508).
+    card_forms: dict[int, list[str]] = {}
+    for c in cards:
+        c_l = _card_lang(c)
+        if c_l != "zh":
+            card_forms[c["word_id"]] = database.surface_forms(c["word_id"], c["word_zh"], c_l)
+
+    import expressions
+    has_expr = any(expressions.expression_forms(c["word_zh"], _card_lang(c))
+                   for c in cards if _card_lang(c) != "zh")
+
     word_list_lines = []
     for i, c in enumerate(cards):
         slot = slots.get(c["word_id"])
@@ -908,7 +932,7 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
     elif multi:
         prompt = _multi_story_prompt(
             cards, word_list, mode=mode, topic=topic, max_hsk=max_hsk,
-            grammar_first=grammar_first, has_slots=bool(slots),
+            grammar_first=grammar_first, has_slots=bool(slots), has_expr=has_expr,
             card_langs=[_card_lang(c) for c in cards])
     else:
         cfg = languages.get_lang_config(lang)
@@ -936,6 +960,7 @@ def generate_story(cards: list[dict], topic: str | None = None, max_hsk: int = 2
             "other words around it"
             + (_TENSE_CONTEXT_RULE if tense_cues else "")
         ) if slots else ""
+        expr_rule = _EXPR_RULE if has_expr else ""
         prompt = f"""{task_line}
 
 {grammar_first}Target words (each must appear verbatim in at least one sentence):
@@ -949,7 +974,7 @@ Rules:
 - Use only simple {background_vocab} level vocabulary for non-target words; each sentence must contain exactly ONE target word from the list — do not use other target words from the list in that sentence
 - Keep each sentence short and simple (max {cfg["sentence_limit"]})
 {style_rule}
-- Each target word must appear in exactly the given form; you may adapt or drop its leading article (le/la/les/un/une) to fit the sentence{slot_rule}
+- Each target word must appear in exactly the given form; you may adapt or drop its leading article (le/la/les/un/une) to fit the sentence{slot_rule}{expr_rule}
 - NEVER highlight, quote, or mark target words in any way — no "quotes", no 「brackets」, no （parentheses）, no bold, no underline; write them as plain text embedded naturally in the sentence
 - NEVER use markdown formatting (**bold**, _italic_, etc.) anywhere in the output — write plain text only
 
@@ -1019,9 +1044,12 @@ Return ONLY a numbered list of {lang_name} sentences, no explanation:
                     # but attach no slot/tag — it would lie about what is drilled.
                     if not (_word_in_sentence(card["word_zh"], s_zh, c_lang) or any(
                             _slot_form_in_sentence(f, s_zh)
-                            for f in database.surface_forms(wid, card["word_zh"], c_lang))):
+                            for f in card_forms.get(wid, ()))):
                         continue
-                elif not _word_in_sentence(card["word_zh"], s_zh, c_lang):
+                elif not (_word_in_sentence(card["word_zh"], s_zh, c_lang) or any(
+                        _slot_form_in_sentence(f, s_zh)
+                        for f in card_forms.get(wid, ()))):
+                    # Conjugated forms of multi-word expressions count too (#1508).
                     continue
                 word_ids.append(wid)
                 seen_ids.add(wid)
