@@ -24,7 +24,7 @@ enum ServerSettings {
 @MainActor
 final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     private static let width: CGFloat = 580
-    private static let minHeight: CGFloat = 120
+    private static let minHeight: CGFloat = 60
 
     private let panel: KeyPanel
     private let webView: WKWebView

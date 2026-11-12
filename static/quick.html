@@ -90,8 +90,12 @@
   const bridge = () => (window.webkit && window.webkit.messageHandlers
                         && window.webkit.messageHandlers.quick) || null;
   function post(msg) { const b = bridge(); if (b) b.postMessage(msg); }
+  // Measure the content, not documentElement.scrollHeight: that one is never
+  // smaller than the viewport, so the native panel could grow but never shrink.
   function reportHeight() {
-    post({ type: 'height', value: document.documentElement.scrollHeight });
+    const cs = getComputedStyle(document.body);
+    const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    post({ type: 'height', value: Math.ceil(mainEl.getBoundingClientRect().height + pad) });
   }
   new ResizeObserver(reportHeight).observe(mainEl);
 
