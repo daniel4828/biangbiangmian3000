@@ -63,7 +63,7 @@
   <div class="top">
     <div class="langs" id="langs"></div>
     <button type="button" id="new">Neu</button>
-    <span class="kbd-hint">⌥⇧K</span>
+    <span class="kbd-hint" title="Tab: Sprache wechseln">⇥ Sprache · ⌥⇧K</span>
   </div>
   <textarea id="input" rows="1" placeholder="Wort, Satz oder Frage…" autofocus
             autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
@@ -102,6 +102,7 @@
   function setLang(l) {
     lang = l;
     try { localStorage.setItem('quickLang', l); } catch (e) { /* ignore */ }
+    post({ type: 'lang', value: l });  // native app keeps a copy (survives a cleared WebKit store)
     for (const b of langsEl.children) b.classList.toggle('active', b.dataset.lang === l);
   }
   function renderLangButtons(langs) {
@@ -115,6 +116,18 @@
     }));
     if (!langs.includes(lang)) lang = langs.includes('zh') ? 'zh' : langs[0];
     setLang(lang);
+  }
+  // Native app restores the last used language after load (see QuickPanel.swift).
+  window.quickSetLang = l => {
+    if ([...langsEl.children].some(b => b.dataset.lang === l)) setLang(l);
+    else lang = l;  // buttons from /api/langs not there yet; renderLangButtons applies it
+  };
+  // Tab / Shift+Tab: next / previous language.
+  function cycleLang(step) {
+    const codes = [...langsEl.children].map(b => b.dataset.lang);
+    if (!codes.length) return;
+    const i = codes.indexOf(lang);
+    setLang(codes[(i + step + codes.length) % codes.length]);
   }
   renderLangButtons(['zh', 'es', 'fr']);
   api('GET', '/api/langs?available=1').then(l => {
@@ -211,6 +224,11 @@
   }
 
   inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Tab' && !e.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      cycleLang(e.shiftKey ? -1 : 1);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
