@@ -968,6 +968,18 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 
 ---
 
+## Mac 快捷窗口与词典聊天（#1510）
+
+- `mac/` 里是原生 Mac 应用（用 `mac/install.sh` 构建安装）：全局快捷键弹出浮动面板，面板里是 WKWebView，加载服务器的 `/quick`；该应用不含任何词典逻辑
+- `/quick`（`static/quick.html`，不加载 `app.js`）是小型多轮聊天：输入框在最上方、回答向下增长；语言 zh/es/fr 存 `localStorage.quickLang`；「Neu」清空对话
+- 历史只存在前端；`POST /api/dict/chat` 无状态，客户端每轮发整段历史（服务端只取最后 20 条），助手那一轮的 content 用返回的 `history_text`
+- `ai.dictionary_chat()` 不用 system 角色：规则 + 转写全放在唯一一条 user 消息里；输出 JSON `{reply, entry|null, add[]}`，`entry` 与 /lookup 的词典契约完全一致，复用同一个校验函数
+- `add` 只在 Daniel 明确说「添加/speicher」时才填；页面对每个词自动走 `addWordViaAi(word,'list')`（仍是唯一加词入口，#643）
+- **一词一条目**：一个词不许在结果里变成两个可加入的选项。提示词要求只给一个 group/option，`de` 紧凑列全部义项，可选数组 `senses[]`（每义项 de + 例句）；前端 `_dictOption` 渲染编号义项列表
+- 安全网 `ai._merge_duplicate_options()`（lookup、stream、chat 的解析路径都会跑）：按 `zh`（strip+casefold）去重，重复项并入第一个选项的 `senses`，空 group 删除，不动 `sentence`
+- 原生面板通过 `window.webkit.messageHandlers.quick` 收 `{type:"height"}` / `{type:"close"}`；原生侧可调 `window.quickFocus()`
+- 测试见 `tests/test_dict_chat.py`
+
 ## 知识条目的「全文」视图（#972）
 
 - **复制原语言全文（#1247）**：知识详情顶部的 `Copy Transcript in Original Language` 直接复制 `transcript_zh` 保存的原文，独立于当前阅读语言、摘要/全文标签和 `transcript_de` 翻译。原文为空时隐藏。下方原有复制按钮有双语段落时标为 `(bilingual)`，否则标为 `(original language)`；共用剪贴板成功提示与 HTTP 回退。
@@ -1252,6 +1264,9 @@ POST   /api/dict/lookup-stream                       → 同上 body，流式（
                                                        开流前的校验失败（空 query / 非法 lang / AI 关闭 / replace_id 不存在）仍是普通 HTTP 400/404；流内失败只发 error 事件且**不写库**
 GET    /api/dict/history[?q=&limit=]                 → 历史列表（不含 result_json；q 对 query/headline 做 LIKE）
 GET    /api/dict/history/{id} ；DELETE /api/dict/history/{id}  → 单条 / 删除；不存在均 404（不假装成功）
+POST   /api/dict/chat                                → 无状态词典聊天（#1510）：body {messages:[{role,content}], lang, model?}（只保留最后 20 条，最后一条必须是非空 user，否则 400）
+                                                       → {reply, entry|null, add[], model, id|null, history_text}；entry 非空时按 /lookup 同样入 dict_queries；解析失败 500 且不写库
+GET    /quick                                        → Mac 快捷窗口页（#1510，不加载 app.js）
 POST /api/words/{id}/to-day                          → 词条详情页 → Today / → Tomorrow：body {day, confirm?}；只在 ★ List → 直接提升；已在学 → 先返回 needs_confirmation，confirm=true 才重置为新卡（同 #675/#888）
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它
 GET  /api/add-word-ai/progress/{job_id}              → 轮询后台生成+导入的结果

@@ -547,6 +547,16 @@ try:
             "Expires": "0",
         })
 
+    # Mac quick panel (#1510): small multi-turn dictionary chat loaded by the
+    # native app's WKWebView. Same no-app.js reasoning as /dict.
+    @app.get("/quick")
+    def quick_page():
+        return FileResponse("static/quick.html", headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        })
+
     # Bookmarkable knowledge-base tab links (#704): /knowledge/videos is the
     # browsing counterpart to /add and /save — a clean URL for the iPhone home
     # screen that lands on one sub-tab. Unlike those two this is *not* a
