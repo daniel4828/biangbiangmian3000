@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick Dictionary</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<!-- Mac quick panel (#1510): loaded by the native app's WKWebView. Like /dict
+     this page deliberately does NOT load app.js. -->
+<link rel="stylesheet" href="/static/dict-result.css">
+<style>
+  :root { color-scheme: light dark; --bg:#f4f5f7; --card:#fff; --fg:#1c1e21; --muted:#6b7075;
+          --line:#d7d9dd; --accent:#c7871f; --ok:#1f7a44; --err:#a3232b; --bubble:#e9ecf1; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181c; --card:#232629; --fg:#e6e6e6; --muted:#9aa0a6;
+            --line:#3a3d42; --ok:#6ed49b; --err:#ff9ba1; --bubble:#2f3338; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    padding: 12px; font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--fg);
+  }
+  #main { background: var(--card); border-radius: 14px; padding: 12px; }
+  .top { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; }
+  .langs { display: flex; gap: .3rem; }
+  .langs button, button#new {
+    padding: .25rem .7rem; font: inherit; font-size: .82rem; font-weight: 600;
+    color: var(--muted); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; cursor: pointer;
+  }
+  .langs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button#new { margin-left: auto; }
+  .kbd-hint { font-size: .72rem; color: var(--muted); }
+  textarea#input {
+    display: block; width: 100%; padding: .55rem .7rem; font: inherit; font-size: 1rem;
+    color: inherit; resize: none; overflow-y: auto; line-height: 1.4;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  }
+  textarea#input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+  #err { margin-top: .5rem; font-size: .85rem; color: var(--err); white-space: pre-wrap; }
+  #err:empty { display: none; }
+  #messages { margin-top: .6rem; }
+  .msg { margin-bottom: .6rem; }
+  .msg.user { display: flex; justify-content: flex-end; }
+  .msg.user .bubble {
+    max-width: 85%; padding: .35rem .7rem; border-radius: 12px; background: var(--bubble);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .msg.assistant .reply { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: .4rem; }
+  .msg.assistant .reply:empty { display: none; }
+  .msg.pending .reply { color: var(--muted); }
+  .adds { font-size: .85rem; }
+  .adds div { margin-top: .15rem; }
+  .adds .err { color: var(--err); }
+  .adds .ok { color: var(--ok); }
+  .adds .run { color: var(--muted); }
+  .entry:empty { display: none; }
+</style>
+</head>
+<body>
+<div id="main">
+  <div class="top">
+    <div class="langs" id="langs"></div>
+    <button type="button" id="new">Neu</button>
+    <span class="kbd-hint">⌥⇧K</span>
+  </div>
+  <textarea id="input" rows="1" placeholder="Wort, Satz oder Frage…" autofocus
+            autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
+  <div id="err"></div>
+  <div id="messages"></div>
+</div>
+
+<script src="/static/shared.js?v=8"></script>
+<script>
+  // Quick dictionary chat (#1510). Stateless server: the history lives here
+  // and is sent with every turn. All AI text goes in via textContent.
+  const inputEl = document.getElementById('input');
+  const errEl = document.getElementById('err');
+  const msgsEl = document.getElementById('messages');
+  const mainEl = document.getElementById('main');
+  const langsEl = document.getElementById('langs');
+  const LANG_LABELS = { zh: '中文', es: 'Español', fr: 'Français' };
+
+  let lang = 'zh';
+  try { lang = localStorage.getItem('quickLang') || 'zh'; } catch (e) { /* storage unavailable */ }
+  let history = [];  // [{role, content}]
+  let busy = false;
+
+  const bridge = () => (window.webkit && window.webkit.messageHandlers
+                        && window.webkit.messageHandlers.quick) || null;
+  function post(msg) { const b = bridge(); if (b) b.postMessage(msg); }
+  function reportHeight() {
+    post({ type: 'height', value: document.documentElement.scrollHeight });
+  }
+  new ResizeObserver(reportHeight).observe(mainEl);
+
+  function setLang(l) {
+    lang = l;
+    try { localStorage.setItem('quickLang', l); } catch (e) { /* ignore */ }
+    for (const b of langsEl.children) b.classList.toggle('active', b.dataset.lang === l);
+  }
+  function renderLangButtons(langs) {
+    langsEl.replaceChildren(...langs.map(l => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.lang = l;
+      b.textContent = LANG_LABELS[l] || l;
+      b.onclick = () => setLang(l);
+      return b;
+    }));
+    if (!langs.includes(lang)) lang = langs.includes('zh') ? 'zh' : langs[0];
+    setLang(lang);
+  }
+  renderLangButtons(['zh', 'es', 'fr']);
+  api('GET', '/api/langs?available=1').then(l => {
+    if (Array.isArray(l) && l.length) renderLangButtons(l);
+  }).catch(() => { /* keep the defaults */ });
+
+  function autosize() {
+    inputEl.style.height = 'auto';
+    const cs = getComputedStyle(inputEl);
+    const line = parseFloat(cs.lineHeight) || 20;
+    const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + 2;
+    const max = line * 6 + pad;
+    inputEl.style.height = Math.min(inputEl.scrollHeight, max) + 'px';
+    reportHeight();
+  }
+  inputEl.addEventListener('input', autosize);
+  autosize();
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function scrollToNewest() {
+    const last = msgsEl.lastElementChild;
+    if (last) last.scrollIntoView({ block: 'end' });
+    reportHeight();
+  }
+
+  function addWordStatus(container, word, wlang) {
+    const line = el('div', 'run', `★ ${word} …`);
+    container.append(line);
+    addWordViaAi(word, 'list', (state, text) => {
+      if (state === 'running') { line.className = 'run'; line.textContent = `★ ${word} … ${text || ''}`; }
+      else if (state === 'done') { line.className = 'ok'; line.textContent = `✓ ${word} hinzugefügt${text ? ' — ' + text : ''}`; }
+      else if (state === 'error') { line.className = 'err'; line.textContent = `⚠ ${word}: ${text}`; }
+      else if (state === 'idle') { line.className = 'run'; line.textContent = `${word}: abgebrochen`; }
+      scrollToNewest();
+    }, wlang);
+  }
+
+  async function send() {
+    const text = inputEl.value.trim();
+    if (!text || busy) return;
+    busy = true;
+    inputEl.disabled = true;
+    errEl.textContent = '';
+    const turnLang = lang;
+
+    const userMsg = el('div', 'msg user');
+    userMsg.append(el('div', 'bubble', text));
+    const pending = el('div', 'msg assistant pending');
+    pending.append(el('div', 'reply', '…'));
+    msgsEl.append(userMsg, pending);
+    scrollToNewest();
+
+    try {
+      const data = await api('POST', '/api/dict/chat', {
+        messages: [...history, { role: 'user', content: text }],
+        lang: turnLang,
+      });
+      history.push({ role: 'user', content: text });
+      history.push({ role: 'assistant', content: data.history_text || data.reply || '' });
+
+      const done = el('div', 'msg assistant');
+      done.append(el('div', 'reply', data.reply || ''));
+      if (data.entry) {
+        const box = el('div', 'entry');
+        renderDictResult(box, { id: data.id, query: text, lang: turnLang, result: data.entry },
+                         { addLang: turnLang });
+        done.append(box);
+      }
+      if (Array.isArray(data.add) && data.add.length) {
+        const adds = el('div', 'adds');
+        done.append(adds);
+        for (const w of data.add) addWordStatus(adds, w, turnLang);
+      }
+      pending.replaceWith(done);
+      inputEl.value = '';
+      autosize();
+    } catch (e) {
+      // Keep the input so he can resend; drop the optimistic bubbles.
+      userMsg.remove();
+      pending.remove();
+      errEl.textContent = e.message || 'Fehler';
+    } finally {
+      busy = false;
+      inputEl.disabled = false;
+      inputEl.focus();
+      scrollToNewest();
+    }
+  }
+
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      send();
+    }
+  });
+  document.getElementById('new').onclick = () => {
+    history = [];
+    msgsEl.replaceChildren();
+    errEl.textContent = '';
+    inputEl.value = '';
+    autosize();
+    inputEl.focus();
+  };
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') post({ type: 'close' });
+  });
+
+  function focusInput() {
+    inputEl.focus();
+    inputEl.select();
+  }
+  window.quickFocus = focusInput;
+  window.addEventListener('focus', focusInput);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') focusInput();
+  });
+  focusInput();
+</script>
+</body>
+</html>

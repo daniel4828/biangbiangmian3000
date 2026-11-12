@@ -511,6 +511,29 @@ function _dictOption(opt, wordLang, pending) {
     body.append(ex);
   }
 
+  // One word = one entry (#1510): all meanings of a word live in one option as
+  // a numbered senses list, each with its own example.
+  if (Array.isArray(opt.senses) && opt.senses.length) {
+    const list = document.createElement('ol');
+    list.className = 'dr-senses';
+    for (const s of opt.senses) {
+      if (!s || typeof s !== 'object') continue;  // partial stream
+      const li = document.createElement('li');
+      li.className = 'dr-sense';
+      if (s.de) li.append(_dictTextEl('div', 'dr-sense-de', s.de));
+      if (s.example_zh) {
+        const ex = document.createElement('div');
+        ex.className = 'dr-example';
+        ex.append(_dictTextEl('div', 'dr-ex-zh', s.example_zh));
+        if (s.example_pinyin) ex.append(_dictTextEl('div', 'dr-ex-pinyin', s.example_pinyin));
+        if (s.example_de) ex.append(_dictTextEl('div', 'dr-ex-de', s.example_de));
+        li.append(ex);
+      }
+      list.append(li);
+    }
+    body.append(list);
+  }
+
   row.append(body);
   // While streaming (pending) `zh` may be cut off mid-word — never addable.
   if (opt.zh && !pending) row.append(_dictAddButtons(opt.zh, wordLang));

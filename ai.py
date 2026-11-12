@@ -2245,13 +2245,22 @@ def generate_word_entry_yaml(word_zh: str, model: str = DEFAULT_MODEL,
     return f"lang: {lang}\nentries:\n" + textwrap.indent(entry, "  ")
 
 
-DICTIONARY_PROMPT = """You are a Chinese dictionary for a German-speaking learner (Daniel, HSK 4-5).
+# The rules are kept separate from the trailing "Input to look up" line so the
+# /quick chat (#1510) can reuse them inside its own wrapper prompt.
+DICTIONARY_RULES = """You are a Chinese dictionary for a German-speaking learner (Daniel, HSK 4-5).
 He types a word, phrase, or sentence in Chinese, German, or English and wants a
 structured lookup, not a chat reply. Never use Japanese.
 
 Behavior rules:
-- Chinese input -> give the FULL dictionary entry directly. List EVERY sense
-  (meaning) of the word/phrase, each as its own group. Do not ask him to
+- ONE WORD = ONE ENTRY (hard rule): a word may never appear as two addable
+  options anywhere in the result. Across the whole result every distinct word
+  appears in at most one group and one option.
+- Chinese input (a single word / chengyu / set phrase) -> give the FULL
+  dictionary entry directly as exactly ONE group with ONE option for that
+  word. Its "de" lists ALL meanings compactly ("1. ...; 2. ...; 3. ..."), and
+  the optional array "senses" holds one entry per meaning, each with its own
+  example: {{"de": "...", "example_zh": "...", "example_pinyin": "...",
+  "example_de": "..."}}. Do NOT create one group per sense. Do not ask him to
   choose anything and do not present alternative translations to pick from
   — there is nothing to choose, he already has the Chinese word.
 - German or English input (word, phrase, or a full sentence) -> always give an
@@ -2329,14 +2338,23 @@ a/b/c... never digits):
           "recommended": true,
           "example_zh": "老师又给我派任务了。",
           "example_pinyin": "Lǎoshī yòu gěi wǒ pài rènwu le.",
-          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben.",
+          "senses": [
+            {{
+              "de": "beauftragen, jdm. eine Aufgabe geben",
+              "example_zh": "老师又给我派任务了。",
+              "example_pinyin": "Lǎoshī yòu gěi wǒ pài rènwu le.",
+              "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+            }}
+          ]
         }}
       ]
     }}
   ]
-}}
+}}"""
 
-Input to look up: {query}"""
+_DICTIONARY_INPUT_LINE = "\n\nInput to look up: {query}"
+DICTIONARY_PROMPT = DICTIONARY_RULES + _DICTIONARY_INPUT_LINE
 
 
 # ---------------------------------------------------------------------------
@@ -2350,13 +2368,20 @@ Input to look up: {query}"""
 # no tone-mark transcription need).
 # ---------------------------------------------------------------------------
 
-DICTIONARY_PROMPT_ROMANCE = """You are a {lang_name} dictionary for a German-speaking learner (Daniel, {level}).
+DICTIONARY_RULES_ROMANCE = """You are a {lang_name} dictionary for a German-speaking learner (Daniel, {level}).
 He types a word, phrase, or sentence in {lang_name}, German, or English and wants
 a structured lookup, not a chat reply. Never use Japanese or Chinese.
 
 Behavior rules:
-- {lang_name} input -> give the FULL dictionary entry directly. List EVERY sense
-  (meaning) of the word/phrase, each as its own group. Do not ask him to
+- ONE WORD = ONE ENTRY (hard rule): a word may never appear as two addable
+  options anywhere in the result. Across the whole result every distinct lemma
+  appears in at most one group and one option.
+- {lang_name} input (a single word or fixed idiom) -> give the FULL dictionary
+  entry directly as exactly ONE group with ONE option for that word (its
+  lemma). Its "de" lists ALL meanings compactly ("1. rufen; 2. nennen;
+  3. anrufen"), and the optional array "senses" holds one entry per meaning,
+  each with its own example: {{"de": "...", "example_zh": "...",
+  "example_de": "..."}}. Do NOT create one group per sense. Do not ask him to
   choose anything and do not present alternative translations to pick from
   — there is nothing to choose, he already has the {lang_name} word.
 - German or English input (word, phrase, or a full sentence) -> always give an
@@ -2444,14 +2469,21 @@ Chinese dictionary) — put the {lang_name} word/sentence there:
           "register": "spoken_neutral",
           "recommended": true,
           "example_zh": "Le prof m'a encore confié une tâche.",
-          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben.",
+          "senses": [
+            {{
+              "de": "jdm. eine Aufgabe anvertrauen",
+              "example_zh": "Le prof m'a encore confié une tâche.",
+              "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+            }}
+          ]
         }}
       ]
     }}
   ]
-}}
+}}"""
 
-Input to look up: {query}"""
+DICTIONARY_PROMPT_ROMANCE = DICTIONARY_RULES_ROMANCE + _DICTIONARY_INPUT_LINE
 
 
 def _strip_code_fence(raw: str) -> str:
@@ -2523,7 +2555,52 @@ def parse_dictionary_response(raw: str) -> dict:
             f"dictionary_lookup: could not parse AI response as JSON: {e}. "
             f"Raw response (first 500 chars): {raw[:500]!r}"
         )
+    return _validate_dictionary_result(result, raw)
 
+
+def _merge_duplicate_options(result: dict) -> dict:
+    """One word = one entry (#1510): across ALL groups, options whose "zh"
+    was already seen are removed and folded into the first one as an extra
+    entry in its "senses" list; groups left without options are dropped.
+    Safety net for models that still emit one group per sense. The "sentence"
+    field is never touched."""
+    groups = result.get("groups")
+    if not isinstance(groups, list):
+        return result
+    seen: dict[str, dict] = {}
+    new_groups = []
+    for group in groups:
+        kept = []
+        for opt in group.get("options", []):
+            key = str(opt.get("zh", "")).strip().casefold()
+            first = seen.get(key)
+            if first is None:
+                seen[key] = opt
+                kept.append(opt)
+                continue
+            senses = first.get("senses")
+            if not isinstance(senses, list) or not senses:
+                # Make the first option's own meaning sense #1 so the numbered
+                # list is complete once a second sense is merged in.
+                senses = []
+                if first.get("de") or first.get("example_zh"):
+                    senses.append({k: first[k] for k in
+                                   ("de", "example_zh", "example_pinyin", "example_de")
+                                   if first.get(k)})
+                first["senses"] = senses
+            extra = {k: opt[k] for k in ("de", "example_zh", "example_pinyin", "example_de")
+                     if opt.get(k)}
+            if extra:
+                senses.append(extra)
+        if kept:
+            group["options"] = kept
+            new_groups.append(group)
+    result["groups"] = new_groups
+    return result
+
+
+def _validate_dictionary_result(result, raw: str = "") -> dict:
+    """Validate a parsed dictionary object and merge duplicate words."""
     if not isinstance(result, dict):
         raise ValueError(
             f"dictionary_lookup: expected a JSON object, got {type(result).__name__}. "
@@ -2550,7 +2627,101 @@ def parse_dictionary_response(raw: str) -> dict:
                     f"Raw response (first 500 chars): {raw[:500]!r}"
                 )
 
-    return result
+    return _merge_duplicate_options(result)
+
+
+_DICTIONARY_CHAT_WRAPPER = """You are the conversational front end of a dictionary for a German-speaking learner (Daniel, native German). Reply in GERMAN prose. Never use Japanese.
+
+Below are (1) the DICTIONARY RULES that define the structured entry format and (2) the conversation so far. Answer Daniel's LAST message.
+
+Output ONLY raw JSON, no markdown code fence, no prose around it:
+{{"reply": "<string>", "entry": <dictionary object or null>, "add": ["<lemma>", ...]}}
+
+Rules for the three fields:
+- If his message is just a word, phrase, or sentence to look up -> fill "entry" (exactly per the dictionary contract in the DICTIONARY RULES) and keep "reply" empty or one short line.
+- Questions (e.g. "3. Person Singular Präsens und Indefinido?", "wie konjugiert man das?", grammar, usage) -> answer in "reply" as compact plain text: no markdown, no tables; use line breaks and simple lists. Conjugation answers must list ALL requested forms. "entry" stays null unless a new word is introduced.
+- If he asks to get a word "zum Hinzufügen" / as an entry -> fill "entry" with that word (always the lemma / the whole verb, never a conjugated form).
+- ONLY when he explicitly asks to add/save words ("füg hinzu", "speicher", "add it") -> put the lemmas in "add" (max 5). Never fill "add" otherwise.
+- The conversation refers back to earlier turns ("das", "dieses Verb") — resolve such references from the transcript.
+- The "entry" object follows the DICTIONARY RULES below exactly, including ONE WORD = ONE ENTRY and the lemma rule.
+
+=== DICTIONARY RULES ===
+{rules}
+=== END DICTIONARY RULES ===
+
+=== CONVERSATION ===
+{transcript}
+=== END CONVERSATION ==="""
+
+_CHAT_MAX_MESSAGES = 20
+
+
+def _dictionary_rules(lang: str) -> str:
+    if lang == "zh":
+        return DICTIONARY_RULES.format()
+    if lang in ("fr", "es"):
+        cfg = languages.get_lang_config(lang)
+        return DICTIONARY_RULES_ROMANCE.format(
+            lang_name=cfg["name_en"], level=cfg["learner_level"],
+        )
+    raise ValueError(f"dictionary_chat: language {lang!r} is not supported yet (zh/fr/es only)")
+
+
+def _dictionary_chat_prompt(messages: list[dict], lang: str) -> str:
+    lines = []
+    for m in messages[-_CHAT_MAX_MESSAGES:]:
+        who = "Daniel" if m["role"] == "user" else "Assistant"
+        lines.append(f"{who}: {m['content']}")
+    # Braces in the rules were already resolved by .format(); the wrapper is
+    # formatted with the rules/transcript as plain arguments, so any braces in
+    # them are left alone.
+    return _DICTIONARY_CHAT_WRAPPER.format(
+        rules=_dictionary_rules(lang), transcript="\n".join(lines),
+    )
+
+
+def dictionary_chat(messages: list[dict], lang: str = "zh",
+                    model: str | None = None) -> tuple[dict, str]:
+    """One turn of the /quick dictionary chat (#1510). The client is stateless
+    and sends the history; no system role is used (the instructions live in the
+    single user message). Returns ({"reply","entry","add"}, model used); raises
+    ValueError on an unusable answer so nothing is stored."""
+    use_model = dictionary_model(model)
+    prompt = _dictionary_chat_prompt(messages, lang)
+    logger.info("[%s] dictionary_chat (%s): %s", use_model, lang, messages[-1]["content"][:80])
+    raw = _call_api(use_model, [{"role": "user", "content": prompt}], max_tokens=4000,
+                    purpose="dictionary_chat", thinking=False)
+    return parse_dictionary_chat_response(raw), use_model
+
+
+def parse_dictionary_chat_response(raw: str) -> dict:
+    stripped = _strip_code_fence(raw).strip()
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"dictionary_chat: could not parse AI response as JSON: {e}. "
+            f"Raw response (first 500 chars): {raw[:500]!r}"
+        )
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"dictionary_chat: expected a JSON object, got {type(data).__name__}. "
+            f"Raw response (first 500 chars): {raw[:500]!r}"
+        )
+    reply = data.get("reply")
+    reply = reply.strip() if isinstance(reply, str) else ""
+    add_raw = data.get("add")
+    add = [a.strip() for a in add_raw if isinstance(a, str) and a.strip()] \
+        if isinstance(add_raw, list) else []
+    entry = data.get("entry")
+    if entry is not None:
+        entry = _validate_dictionary_result(entry, raw)
+    if not reply and entry is None and not add:
+        raise ValueError(
+            f"dictionary_chat: AI returned neither reply, entry nor add. "
+            f"Raw response (first 500 chars): {raw[:500]!r}"
+        )
+    return {"reply": reply, "entry": entry, "add": add}
 
 
 DEFAULT_SENTENCE_QUESTION_TEMPLATE = (

@@ -1,0 +1,165 @@
+// Schwebendes Fenster mit WKWebView, das <Server>/quick lädt. Die Seite meldet ihre Höhe über den
+// Message-Handler "quick"; die Oberkante des Fensters bleibt fest, es wächst nach unten.
+import AppKit
+import WebKit
+
+/// Randloses Fenster, das Tastatureingaben annimmt, ohne die vordere App zu wechseln.
+final class KeyPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { (delegate as? QuickPanelController)?.hide() }
+}
+
+enum ServerSettings {
+    static let key = "serverURL"
+    static let defaultURL = "https://biangbiangmian3000.danielschreiber.eu"
+
+    static var base: String {
+        let stored = UserDefaults.standard.string(forKey: key) ?? ""
+        return stored.isEmpty ? defaultURL : stored
+    }
+
+    static var quickURL: URL? { URL(string: base + "/quick") }
+}
+
+@MainActor
+final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
+    private static let width: CGFloat = 580
+    private static let minHeight: CGFloat = 120
+
+    private let panel: KeyPanel
+    private let webView: WKWebView
+    /// Oberkante (Bildschirmkoordinaten), an der das Fenster hängt.
+    private var top: CGFloat = 0
+    private var maxHeight: CGFloat = 400
+    private var height: CGFloat = 120
+
+    var isVisible: Bool { panel.isVisible }
+
+    override init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let controller = WKUserContentController()
+        config.userContentController = controller
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.underPageBackgroundColor = .windowBackgroundColor
+        webView.autoresizingMask = [.width, .height]
+
+        panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: Self.minHeight),
+                         styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
+                         backing: .buffered, defer: true)
+        super.init()
+        controller.add(self, name: "quick")
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.delegate = self
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.minHeight))
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 14
+        container.layer?.masksToBounds = true
+        webView.frame = container.bounds
+        container.addSubview(webView)
+        panel.contentView = container
+
+        reload()
+    }
+
+    // MARK: Laden
+
+    func reload() {
+        guard let url = ServerSettings.quickURL else {
+            webView.loadHTMLString("<body style='font:14px -apple-system;padding:20px'>Ungültige Server-Adresse.</body>", baseURL: nil)
+            return
+        }
+        webView.load(URLRequest(url: url))
+    }
+
+    // MARK: Anzeigen
+
+    func toggle() {
+        if panel.isVisible { hide() } else { show() }
+    }
+
+    func show() {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        guard let area = screen?.visibleFrame else { return }
+        top = area.maxY - area.height / 3
+        maxHeight = max(Self.minHeight, area.height / 3)
+        height = min(max(height, Self.minHeight), maxHeight)
+        let originX = area.midX - Self.width / 2
+        panel.setFrame(NSRect(x: originX, y: top - height, width: Self.width, height: height), display: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(webView)
+        webView.evaluateJavaScript("window.quickFocus && window.quickFocus()", completionHandler: nil)
+    }
+
+    func hide() { panel.orderOut(nil) }
+
+    func windowDidResignKey(_ notification: Notification) { hide() }
+
+    private func setHeight(_ value: CGFloat) {
+        height = min(max(value, Self.minHeight), maxHeight)
+        let frame = NSRect(x: panel.frame.minX, y: top - height, width: Self.width, height: height)
+        panel.setFrame(frame, display: true, animate: false)
+    }
+
+    // MARK: Nachrichten der Seite
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        switch type {
+        case "height":
+            if let number = body["value"] as? NSNumber { setHeight(CGFloat(truncating: number)) }
+        case "close":
+            hide()
+        default:
+            break
+        }
+    }
+
+    // MARK: Navigation
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let path = webView.url?.path else { return }
+        if path == "/login" {
+            // Das Anmeldeformular braucht Platz, die Seite meldet dort keine Höhe.
+            setHeight(maxHeight)
+        } else if path == "/" || path.isEmpty {
+            // Nach der Anmeldung leitet der Server auf die ganze App weiter: zurück zur Schnellseite.
+            reload()
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        showLoadError(error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        showLoadError(error)
+    }
+
+    private func showLoadError(_ error: Error) {
+        // Abgebrochene Navigation (z. B. reload() während einer Weiterleitung) ist kein Fehler.
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        let message = error.localizedDescription
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+        webView.loadHTMLString("<body style='font:14px -apple-system;padding:20px;color:gray'>Laden fehlgeschlagen: \(message)<br><br>Menü → „Neu laden“ oder „Server-Adresse…“.</body>", baseURL: nil)
+    }
+
+    // Links mit target=_blank im Standardbrowser öffnen.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url { NSWorkspace.shared.open(url) }
+        return nil
+    }
+}

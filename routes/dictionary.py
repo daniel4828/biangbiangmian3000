@@ -58,6 +58,59 @@ def lookup(body: DictLookupRequest):
     return _store(query, body.lang, body.replace_id, result, model_used)
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str = ""
+
+
+class DictChatRequest(BaseModel):
+    messages: list[ChatMessage]
+    lang: str = "zh"
+    model: str | None = None
+
+
+@router.post("/api/dict/chat")
+def chat(body: DictChatRequest):
+    """Stateless multi-turn dictionary chat for the /quick panel (#1510)."""
+    msgs = [{"role": m.role, "content": (m.content or "").strip()} for m in body.messages]
+    if any(m["role"] not in ("user", "assistant") for m in msgs):
+        raise HTTPException(400, "each message needs role 'user' or 'assistant'")
+    msgs = msgs[-20:]
+    if not msgs or msgs[-1]["role"] != "user" or not msgs[-1]["content"]:
+        raise HTTPException(400, "last message must be a non-empty user message")
+    if ai_disabled():
+        raise HTTPException(400, "AI is disabled")
+    if body.lang not in ("zh", "fr", "es"):
+        raise HTTPException(400, f"language {body.lang!r} is not supported yet (zh/fr/es only)")
+
+    try:
+        data, model_used = ai.dictionary_chat(msgs, lang=body.lang, model=body.model)
+    except ValueError as e:
+        logger.error("dict chat failed: %s", e)
+        raise HTTPException(500, str(e))
+
+    entry = data["entry"]
+    row_id = None
+    if entry is not None:
+        row_id = _store(msgs[-1]["content"], body.lang, None, entry, model_used)["id"]
+
+    parts = [data["reply"]] if data["reply"] else []
+    if entry is not None:
+        head = entry.get("headline") or ""
+        head_de = entry.get("headline_de") or ""
+        parts.append(f"[Eintrag: {head} — {head_de}]" if head_de else f"[Eintrag: {head}]")
+    if data["add"]:
+        parts.append(f"[Hinzugefügt: {', '.join(data['add'])}]")
+    return {
+        "reply": data["reply"],
+        "entry": entry,
+        "add": data["add"],
+        "model": model_used,
+        "id": row_id,
+        "history_text": "\n".join(parts),
+    }
+
+
 def _validate_request(body: DictLookupRequest) -> str:
     """Shared up-front checks for both lookup endpoints. A bad language is the
     caller's mistake (400, not a 500 from the ValueError later); a missing

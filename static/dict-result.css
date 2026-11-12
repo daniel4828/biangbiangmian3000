@@ -76,6 +76,10 @@
 .dr-root .dr-option .dr-ex-zh { font-weight: 600; color: var(--dr-fg); }
 .dr-root .dr-option .dr-ex-pinyin { color: var(--dr-muted); }
 .dr-root .dr-option .dr-ex-de { opacity: .8; color: var(--dr-fg); }
+/* One word = one entry (#1510): numbered meanings inside a single option. */
+.dr-root .dr-option .dr-senses { margin: .4rem 0 0; padding-left: 1.2rem; }
+.dr-root .dr-option .dr-sense { margin-bottom: .35rem; font-size: .88rem; color: var(--dr-fg); }
+.dr-root .dr-option .dr-sense .dr-example { margin-top: .2rem; padding-top: .2rem; }
 
 .dr-root button.dr-star {
   flex-shrink: 0; width: 2.1rem; height: 2.1rem; padding: 0;
