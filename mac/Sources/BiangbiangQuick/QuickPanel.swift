@@ -7,6 +7,29 @@ import WebKit
 final class KeyPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { (delegate as? QuickPanelController)?.hide() }
+
+    /// Menüleisten-App ohne Bearbeiten-Menü, und das Fenster aktiviert die App nicht: ⌘V & Co.
+    /// erreichen das WKWebView sonst nie. Daher die Kurzbefehle hier selbst in die Responder-Kette schicken.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard event.type == .keyDown, flags.contains(.command), !flags.contains(.option), !flags.contains(.control),
+              let key = event.charactersIgnoringModifiers?.lowercased() else {
+            return super.performKeyEquivalent(with: event)
+        }
+        let shift = flags.contains(.shift)
+        let action: String?
+        switch key {
+        case "x" where !shift: action = "cut:"
+        case "c" where !shift: action = "copy:"
+        case "v" where !shift: action = "paste:"
+        case "v": action = "pasteAsPlainText:"
+        case "a" where !shift: action = "selectAll:"
+        case "z": action = shift ? "redo:" : "undo:"
+        default: action = nil
+        }
+        if let action, NSApp.sendAction(NSSelectorFromString(action), to: nil, from: self) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 enum ServerSettings {
@@ -19,6 +42,15 @@ enum ServerSettings {
     }
 
     static var quickURL: URL? { URL(string: base + "/quick") }
+
+    /// Zuletzt benutzte Sprache. Die Seite merkt sie sich auch in localStorage; hier zusätzlich,
+    /// damit sie nicht verloren geht, wenn WebKit seinen Speicher leert.
+    static let langKey = "quickLang"
+    static var lastLang: String? {
+        guard let value = UserDefaults.standard.string(forKey: langKey),
+              !value.isEmpty, value.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }
+        return value
+    }
 }
 
 @MainActor
@@ -121,6 +153,10 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
             if let number = body["value"] as? NSNumber { setHeight(CGFloat(truncating: number)) }
         case "close":
             hide()
+        case "lang":
+            if let value = body["value"] as? String, value.allSatisfy({ $0.isASCII && $0.isLetter }) {
+                UserDefaults.standard.set(value, forKey: ServerSettings.langKey)
+            }
         default:
             break
         }
@@ -133,6 +169,8 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         if path == "/login" {
             // Das Anmeldeformular braucht Platz, die Seite meldet dort keine Höhe.
             setHeight(maxHeight)
+        } else if path == "/quick", let lang = ServerSettings.lastLang {
+            webView.evaluateJavaScript("window.quickSetLang && window.quickSetLang('\(lang)')", completionHandler: nil)
         } else if path == "/" || path.isEmpty {
             // Nach der Anmeldung leitet der Server auf die ganze App weiter: zurück zur Schnellseite.
             reload()
