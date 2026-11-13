@@ -8191,43 +8191,14 @@ body #mini-player { bottom: calc(var(--search-bar-h) + max(8px, env(safe-area-in
   box-shadow: var(--shadow);
   z-index: 901;
   overflow: hidden;
-  /* JS opens it as flex and sets an explicit height (saved by dragging a top
-     corner); the body takes the rest and scrolls. */
-  flex-direction: column;
 }
-#dict-result-modal .edit-modal-header { padding: 16px 16px 0; flex: none; }
+#dict-result-modal .edit-modal-header { padding: 16px 16px 0; }
 #dict-result-body {
-  flex: 1 1 auto;
-  min-height: 0;
   padding: 16px;
   max-height: calc(100vh - var(--search-bar-h) - var(--kb-offset, 0px) - 120px);
   max-height: calc(100dvh - var(--search-bar-h) - var(--kb-offset, 0px) - 120px);
   overflow-y: auto;
 }
-/* Resize grips: the two top corners (the bottom edge sits on the search pill). */
-.dict-resize-handle {
-  position: absolute;
-  top: 0;
-  width: 22px;
-  height: 22px;
-  z-index: 2;
-  touch-action: none;
-}
-.dict-resize-handle.tl { left: 0; cursor: nwse-resize; }
-.dict-resize-handle.tr { right: 0; cursor: nesw-resize; }
-.dict-resize-handle::after {
-  content: '';
-  position: absolute;
-  top: 6px;
-  width: 8px;
-  height: 8px;
-  border-top: 2px solid var(--muted);
-  opacity: .45;
-}
-.dict-resize-handle.tl::after { left: 6px; border-left: 2px solid var(--muted); border-top-left-radius: 4px; }
-.dict-resize-handle.tr::after { right: 6px; border-right: 2px solid var(--muted); border-top-right-radius: 4px; }
-.dict-resize-handle:hover::after { opacity: .9; }
-body.dict-resizing { user-select: none; }
 /* #1271：内嵌词典始终跟随应用选择；独立 /dict 仍由系统决定。 */
 #dict-result-body.dr-root {
   --dr-bg: var(--bg);

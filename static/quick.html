@@ -16,13 +16,18 @@
             --line:#3a3d42; --ok:#6ed49b; --err:#ff9ba1; --bubble:#2f3338; }
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; }
+  html, body { margin: 0; height: 100%; }
+  /* #1520: input pinned to the bottom, messages scroll above it, the native
+     panel grows upwards (its bottom edge is fixed). */
   body {
     padding: 12px; font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: var(--bg); color: var(--fg);
+    background: var(--bg); color: var(--fg); overflow: hidden;
   }
-  #main { background: var(--card); border-radius: 14px; padding: 12px; }
-  .top { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; }
+  #main {
+    background: var(--card); border-radius: 14px; padding: 12px; height: 100%;
+    display: flex; flex-direction: column;
+  }
+  .top { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; flex: none; }
   .langs { display: flex; gap: .3rem; }
   .langs button, button#new {
     padding: .25rem .7rem; font: inherit; font-size: .82rem; font-weight: 600;
@@ -38,9 +43,18 @@
     border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
   }
   textarea#input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
-  #err { margin-top: .5rem; font-size: .85rem; color: var(--err); white-space: pre-wrap; }
+  textarea#input { flex: none; }
+  #err { flex: none; margin-bottom: .5rem; font-size: .85rem; color: var(--err); white-space: pre-wrap; }
   #err:empty { display: none; }
-  #messages { margin-top: .6rem; }
+  #messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  #log { padding-bottom: .2rem; }
+  #log:empty { padding: 0; }
+  /* Resize grips (native panel only): top edge = height, top corners = height + width. */
+  .grip { position: fixed; z-index: 10; display: none; }
+  body.native .grip { display: block; }
+  .grip.top { top: 0; left: 14px; right: 14px; height: 7px; cursor: ns-resize; }
+  .grip.topleft { top: 0; left: 0; width: 14px; height: 14px; cursor: nwse-resize; }
+  .grip.topright { top: 0; right: 0; width: 14px; height: 14px; cursor: nesw-resize; }
   .msg { margin-bottom: .6rem; }
   .msg.user { display: flex; justify-content: flex-end; }
   .msg.user .bubble {
@@ -65,11 +79,14 @@
     <button type="button" id="new">Neu</button>
     <span class="kbd-hint" title="Tab: Sprache wechseln">⇥ Sprache · ⌥⇧K</span>
   </div>
+  <div id="messages"><div id="log"></div></div>
+  <div id="err"></div>
   <textarea id="input" rows="1" placeholder="Wort, Satz oder Frage…" autofocus
             autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
-  <div id="err"></div>
-  <div id="messages"></div>
 </div>
+<div class="grip top" data-edge="top"></div>
+<div class="grip topleft" data-edge="topleft"></div>
+<div class="grip topright" data-edge="topright"></div>
 
 <script src="/static/shared.js?v=8"></script>
 <script>
@@ -77,7 +94,8 @@
   // and is sent with every turn. All AI text goes in via textContent.
   const inputEl = document.getElementById('input');
   const errEl = document.getElementById('err');
-  const msgsEl = document.getElementById('messages');
+  const scrollerEl = document.getElementById('messages');
+  const msgsEl = document.getElementById('log');
   const mainEl = document.getElementById('main');
   const langsEl = document.getElementById('langs');
   const LANG_LABELS = { zh: '中文', es: 'Español', fr: 'Français' };
@@ -90,14 +108,26 @@
   const bridge = () => (window.webkit && window.webkit.messageHandlers
                         && window.webkit.messageHandlers.quick) || null;
   function post(msg) { const b = bridge(); if (b) b.postMessage(msg); }
-  // Measure the content, not documentElement.scrollHeight: that one is never
-  // smaller than the viewport, so the native panel could grow but never shrink.
+  // Natural height = everything around the scroller + the messages' own height.
+  // #main is stretched to the viewport, so measuring it alone could never shrink.
   function reportHeight() {
     const cs = getComputedStyle(document.body);
     const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-    post({ type: 'height', value: Math.ceil(mainEl.getBoundingClientRect().height + pad) });
+    const chrome = mainEl.getBoundingClientRect().height - scrollerEl.clientHeight;
+    post({ type: 'height', value: Math.ceil(pad + chrome + msgsEl.getBoundingClientRect().height) });
   }
-  new ResizeObserver(reportHeight).observe(mainEl);
+  function stickToBottom() { scrollerEl.scrollTop = scrollerEl.scrollHeight; }
+  new ResizeObserver(() => { reportHeight(); stickToBottom(); }).observe(msgsEl);
+  window.addEventListener('resize', stickToBottom);
+  if (bridge()) {
+    document.body.classList.add('native');
+    for (const g of document.querySelectorAll('.grip')) {
+      g.addEventListener('mousedown', e => {
+        e.preventDefault();
+        post({ type: 'resizeStart', edge: g.dataset.edge });
+      });
+    }
+  }
 
   function setLang(l) {
     lang = l;
@@ -154,9 +184,8 @@
   }
 
   function scrollToNewest() {
-    const last = msgsEl.lastElementChild;
-    if (last) last.scrollIntoView({ block: 'end' });
     reportHeight();
+    stickToBottom();
   }
 
   function addWordStatus(container, word, wlang) {
