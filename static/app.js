@@ -14771,6 +14771,65 @@ function closeDictResultModal() {
   document.body.classList.remove('dict-result-open');
 }
 
+// Resizable dictionary popup: a top corner drags width (symmetric, the sheet
+// stays centred over the search pill) and height (the bottom edge is pinned to
+// the pill). The last size is kept in localStorage and reapplied on open.
+// Without a saved size it opens at 75% of the available height.
+const _DICT_SIZE_KEY = 'dictPopupSize';
+function _dictPopupSavedSize() {
+  try {
+    const v = JSON.parse(localStorage.getItem(_DICT_SIZE_KEY) || 'null');
+    if (v && Number.isFinite(v.w) && Number.isFinite(v.h)) return v;
+  } catch (e) { /* storage unavailable: use the default size */ }
+  return null;
+}
+function _applyDictPopupSize(size) {
+  const m = document.getElementById('dict-result-modal');
+  if (!m || m.style.display === 'none') return;
+  const side = parseFloat(getComputedStyle(m).getPropertyValue('--side-menu-w')) || 0;
+  const avail = window.innerWidth - side;
+  const maxW = avail - 24;
+  const maxH = m.getBoundingClientRect().bottom - 12;
+  const h = Math.max(160, Math.min(size ? size.h : maxH * 0.75, maxH));
+  m.style.height = h + 'px';
+  if (size) {
+    const w = Math.max(280, Math.min(size.w, maxW));
+    m.style.width = w + 'px';
+    m.style.left = (side + (avail - w) / 2) + 'px';
+    m.style.right = 'auto';
+  } else {
+    m.style.width = m.style.left = m.style.right = '';
+  }
+}
+function _startDictResize(e, corner) {
+  e.preventDefault();
+  const m = document.getElementById('dict-result-modal');
+  const r = m.getBoundingClientRect();
+  const x0 = e.clientX, y0 = e.clientY;
+  const sign = corner === 'tr' ? 1 : -1;
+  let moved = false;
+  document.body.classList.add('dict-resizing');
+  const onMove = ev => {
+    moved = true;
+    _applyDictPopupSize({ w: r.width + sign * 2 * (ev.clientX - x0), h: r.height - (ev.clientY - y0) });
+  };
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    document.body.classList.remove('dict-resizing');
+    if (!moved) return;
+    const now = m.getBoundingClientRect();
+    try {
+      localStorage.setItem(_DICT_SIZE_KEY, JSON.stringify({ w: Math.round(now.width), h: Math.round(now.height) }));
+    } catch (err) { /* not saved: the size still holds for this popup */ }
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onUp);
+}
+window.addEventListener('resize', () => _applyDictPopupSize(_dictPopupSavedSize()));
+
 // The /dict pipeline (#746), rendered in place by the very same function that
 // page uses (shared.js renderDictResult, extracted in #1055) — star buttons
 // included, so adding from here still goes through the one add-word pipeline
@@ -14793,7 +14852,8 @@ async function headerSearchLookup(q) {
   msg.textContent = 'Looking up…';
   body.appendChild(msg);
   document.getElementById('dict-result-overlay').style.display = 'block';
-  document.getElementById('dict-result-modal').style.display = 'block';
+  document.getElementById('dict-result-modal').style.display = 'flex';
+  _applyDictPopupSize(_dictPopupSavedSize());
   // #1321: lifts the search pill above the overlay (see style.css).
   document.body.classList.add('dict-result-open');
   // Keep the text selected so typing replaces the old query. Never call

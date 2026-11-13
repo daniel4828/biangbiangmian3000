@@ -1244,6 +1244,9 @@
      standalone /dict page uses (#643/#668: one implementation per feature). -->
 <div id="dict-result-overlay" onclick="closeDictResultModal()" style="display:none"></div>
 <div id="dict-result-modal" style="display:none">
+  <!-- Drag a top corner to resize; the size is remembered (bottom stays on the search pill). -->
+  <div class="dict-resize-handle tl" title="Drag to resize" onpointerdown="_startDictResize(event, 'tl')"></div>
+  <div class="dict-resize-handle tr" title="Drag to resize" onpointerdown="_startDictResize(event, 'tr')"></div>
   <div class="edit-modal-header">
     <span class="edit-modal-title" id="dict-result-title">Dictionary</span>
     <button class="edit-modal-close" onclick="closeDictResultModal()">✕</button>
