@@ -137,3 +137,56 @@ def test_prompt_contains_prior_turns(tmp_db):
 def test_lookup_prompts_unchanged_shape():
     assert "Input to look up: llamar" in ai._dictionary_prompt("llamar", "es")
     assert "Input to look up: 派" in ai._dictionary_prompt("派", "zh")
+
+
+# ---------------------------------------------------------------------------
+# Streaming chat (#1524): POST /api/dict/chat-stream
+# ---------------------------------------------------------------------------
+
+def _events(resp):
+    out = []
+    for block in resp.text.split("\n\n"):
+        for line in block.split("\n"):
+            if line.startswith("data: "):
+                out.append(json.loads(line[len("data: "):]))
+    return out
+
+
+def _stream_of(text, n=9):
+    def fake(*args, **kwargs):
+        yield from (text[i:i + n] for i in range(0, len(text), n))
+    return fake
+
+
+def test_chat_stream_deltas_then_done_same_body_as_chat(tmp_db):
+    full = json.dumps({"reply": "", "entry": copy.deepcopy(LLAMAR), "add": []}, ensure_ascii=False)
+    body = {"messages": [{"role": "user", "content": "llamar"}], "lang": "es"}
+    with patch.object(ai, "_stream_api", _stream_of(full)):
+        r = client.post("/api/dict/chat-stream", json=body)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    events = _events(r)
+    deltas = [e for e in events if e["type"] == "delta"]
+    assert len(deltas) > 1 and "".join(e["text"] for e in deltas) == full
+    assert events[-1]["type"] == "done"
+    data = events[-1]["data"]
+    assert data["entry"]["headline"] == "llamar"
+    assert data["id"] is not None
+    assert data["history_text"].startswith("[Eintrag: llamar")
+    assert len(database.list_dict_queries()) == 1
+
+
+def test_chat_stream_bad_json_is_error_event_and_nothing_stored(tmp_db):
+    body = {"messages": [{"role": "user", "content": "llamar"}], "lang": "es"}
+    with patch.object(ai, "_stream_api", _stream_of("kein json")):
+        r = client.post("/api/dict/chat-stream", json=body)
+    events = _events(r)
+    assert events[-1]["type"] == "error" and events[-1]["detail"]
+    assert not any(e["type"] == "done" for e in events)
+    assert database.list_dict_queries() == []
+
+
+def test_chat_stream_validation_is_plain_400(tmp_db):
+    r = client.post("/api/dict/chat-stream",
+                    json={"messages": [{"role": "assistant", "content": "x"}], "lang": "es"})
+    assert r.status_code == 400

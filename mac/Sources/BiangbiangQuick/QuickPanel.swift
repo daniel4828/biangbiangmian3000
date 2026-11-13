@@ -86,7 +86,8 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
     private var maxHeight: CGFloat = 400
     /// Höhe, die die Seite zuletzt gemeldet hat.
     private var contentHeight: CGFloat = minHeight
-    /// Nach dem Ziehen behält das Fenster die gezogene Höhe, bis es geschlossen wird.
+    /// Direkt nach dem Ziehen behält das Fenster die gezogene Höhe, bis sich der Inhalt ändert
+    /// (neue Nachricht, neuer Chat) – dann gilt wieder: Inhaltshöhe, höchstens maxHeight (#1524).
     private var pinned = false
     private var resizeMonitor: Any?
 
@@ -186,6 +187,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
     }
 
     private func setContentHeight(_ value: CGFloat) {
+        if abs(value - contentHeight) >= 1 { pinned = false }
         contentHeight = value
         if resizeMonitor == nil { applyFrame() }
     }

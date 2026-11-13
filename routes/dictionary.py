@@ -69,9 +69,7 @@ class DictChatRequest(BaseModel):
     model: str | None = None
 
 
-@router.post("/api/dict/chat")
-def chat(body: DictChatRequest):
-    """Stateless multi-turn dictionary chat for the /quick panel (#1510)."""
+def _validate_chat(body: DictChatRequest) -> list[dict]:
     msgs = [{"role": m.role, "content": (m.content or "").strip()} for m in body.messages]
     if any(m["role"] not in ("user", "assistant") for m in msgs):
         raise HTTPException(400, "each message needs role 'user' or 'assistant'")
@@ -82,17 +80,54 @@ def chat(body: DictChatRequest):
         raise HTTPException(400, "AI is disabled")
     if body.lang not in ("zh", "fr", "es"):
         raise HTTPException(400, f"language {body.lang!r} is not supported yet (zh/fr/es only)")
+    return msgs
 
+
+@router.post("/api/dict/chat")
+def chat(body: DictChatRequest):
+    """Stateless multi-turn dictionary chat for the /quick panel (#1510)."""
+    msgs = _validate_chat(body)
     try:
         data, model_used = ai.dictionary_chat(msgs, lang=body.lang, model=body.model)
     except ValueError as e:
         logger.error("dict chat failed: %s", e)
         raise HTTPException(500, str(e))
+    return _finish_chat(msgs, body.lang, data, model_used)
 
+
+@router.post("/api/dict/chat-stream")
+def chat_stream(body: DictChatRequest):
+    """Streaming /quick chat (#1524), same contract as /api/dict/lookup-stream:
+    validation errors are plain HTTP errors before the stream starts; deltas
+    follow; the answer is parsed and stored only once complete, and a failure
+    becomes an `error` event with nothing written. `done` carries exactly the
+    body /api/dict/chat would have returned."""
+    msgs = _validate_chat(body)
+    model_used = ai.dictionary_model(body.model)
+
+    def gen():
+        try:
+            parts = []
+            for delta in ai.dictionary_chat_stream(msgs, lang=body.lang, model=body.model):
+                parts.append(delta)
+                yield _sse({"type": "delta", "text": delta})
+            data = ai.parse_dictionary_chat_response("".join(parts))
+            result = _finish_chat(msgs, body.lang, data, model_used)
+        except Exception as e:  # noqa: BLE001 — every failure must reach the client as an error event
+            logger.error("dict chat (stream) failed: %s", e)
+            yield _sse({"type": "error", "detail": str(e)})
+            return
+        yield _sse({"type": "done", "data": result})
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _finish_chat(msgs: list[dict], lang: str, data: dict, model_used: str) -> dict:
     entry = data["entry"]
     row_id = None
     if entry is not None:
-        row_id = _store(msgs[-1]["content"], body.lang, None, entry, model_used)["id"]
+        row_id = _store(msgs[-1]["content"], lang, None, entry, model_used)["id"]
 
     parts = [data["reply"]] if data["reply"] else []
     if entry is not None:

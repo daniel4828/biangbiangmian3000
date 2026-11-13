@@ -88,7 +88,7 @@
 <div class="grip topleft" data-edge="topleft"></div>
 <div class="grip topright" data-edge="topright"></div>
 
-<script src="/static/shared.js?v=8"></script>
+<script src="/static/shared.js?v=9"></script>
 <script>
   // Quick dictionary chat (#1510). Stateless server: the history lives here
   // and is sent with every turn. All AI text goes in via textContent.
@@ -215,11 +215,30 @@
     msgsEl.append(userMsg, pending);
     scrollToNewest();
 
+    // Streamed (#1524): the reply text and a pending entry paint as they arrive;
+    // the final render below replaces them with the validated, stored answer.
+    const liveReply = pending.querySelector('.reply');
+    const liveEntry = el('div', 'entry');
+    pending.append(liveEntry);
+    const onPartial = partial => {
+      if (typeof partial.reply === 'string' && partial.reply) {
+        pending.classList.remove('pending');
+        liveReply.textContent = partial.reply;
+      }
+      if (partial.entry && typeof partial.entry === 'object') {
+        pending.classList.remove('pending');
+        if (liveReply.textContent === '…') liveReply.textContent = '';
+        renderDictResult(liveEntry, { query: text, lang: turnLang, result: partial.entry },
+                         { addLang: turnLang, pending: true });
+      }
+      scrollToNewest();
+    };
+
     try {
-      const data = await api('POST', '/api/dict/chat', {
+      const data = await dictChatStream({
         messages: [...history, { role: 'user', content: text }],
         lang: turnLang,
-      });
+      }, onPartial);
       history.push({ role: 'user', content: text });
       history.push({ role: 'assistant', content: data.history_text || data.reply || '' });
 
