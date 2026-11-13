@@ -77,7 +77,7 @@
   <div class="top">
     <div class="langs" id="langs"></div>
     <button type="button" id="new">Neu</button>
-    <span class="kbd-hint" title="Tab: Sprache wechseln">⇥ Sprache · ⌥⇧K</span>
+    <span class="kbd-hint" title="Tab: Sprache wechseln · Shift+Tab: neuer Chat">⇥ Sprache · ⇧⇥ Neu · ⌥⇧K</span>
   </div>
   <div id="messages"><div id="log"></div></div>
   <div id="err"></div>
@@ -152,7 +152,7 @@
     if ([...langsEl.children].some(b => b.dataset.lang === l)) setLang(l);
     else lang = l;  // buttons from /api/langs not there yet; renderLangButtons applies it
   };
-  // Tab / Shift+Tab: next / previous language.
+  // Tab: next language (Shift+Tab starts a new chat, #1522).
   function cycleLang(step) {
     const codes = [...langsEl.children].map(b => b.dataset.lang);
     if (!codes.length) return;
@@ -255,7 +255,8 @@
   inputEl.addEventListener('keydown', e => {
     if (e.key === 'Tab' && !e.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
-      cycleLang(e.shiftKey ? -1 : 1);
+      if (e.shiftKey) newChat();
+      else cycleLang(1);
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -263,14 +264,17 @@
       send();
     }
   });
-  document.getElementById('new').onclick = () => {
+  // A reply still in flight would land in the new chat, so wait for it.
+  function newChat() {
+    if (busy) return;
     history = [];
     msgsEl.replaceChildren();
     errEl.textContent = '';
     inputEl.value = '';
     autosize();
     inputEl.focus();
-  };
+  }
+  document.getElementById('new').onclick = newChat;
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') post({ type: 'close' });
