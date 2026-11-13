@@ -2694,6 +2694,17 @@ def dictionary_chat(messages: list[dict], lang: str = "zh",
     return parse_dictionary_chat_response(raw), use_model
 
 
+def dictionary_chat_stream(messages: list[dict], lang: str = "zh", model: str | None = None):
+    """Streaming variant of dictionary_chat (#1524): yields raw text deltas.
+    The caller concatenates them and passes the full text to
+    parse_dictionary_chat_response() — nothing is validated or stored here."""
+    use_model = dictionary_model(model)
+    prompt = _dictionary_chat_prompt(messages, lang)
+    logger.info("[%s] dictionary_chat (stream, %s): %s", use_model, lang, messages[-1]["content"][:80])
+    yield from _stream_api(use_model, [{"role": "user", "content": prompt}], max_tokens=4000,
+                           purpose="dictionary_chat", thinking=False)
+
+
 def parse_dictionary_chat_response(raw: str) -> dict:
     stripped = _strip_code_fence(raw).strip()
     try:

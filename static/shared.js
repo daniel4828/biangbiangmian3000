@@ -661,8 +661,17 @@ function parsePartialJson(text) {
 // answer so far, and resolves with the stored record once the server has
 // validated and saved the full answer. Rejects on an error event, a broken
 // stream, or a stream that ends without a final event.
-async function dictLookupStream(body, onPartial) {
-  const path = '/api/dict/lookup-stream';
+function dictLookupStream(body, onPartial) {
+  return _dictSseStream('/api/dict/lookup-stream', body, onPartial, ev => ev.record);
+}
+
+// POST /api/dict/chat-stream (#1524): same stream protocol; resolves with the
+// body /api/dict/chat would return ({reply, entry, add, id, history_text}).
+function dictChatStream(body, onPartial) {
+  return _dictSseStream('/api/dict/chat-stream', body, onPartial, ev => ev.data);
+}
+
+async function _dictSseStream(path, body, onPartial, pickFinal) {
   const res = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -708,7 +717,7 @@ async function dictLookupStream(body, onPartial) {
         acc += ev.text;
         schedule();
       } else if (ev.type === 'done') {
-        record = ev.record;
+        record = pickFinal(ev);
       } else if (ev.type === 'error') {
         throw new Error(ev.detail || 'Lookup failed');
       }
