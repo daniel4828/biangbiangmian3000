@@ -1,5 +1,6 @@
 // Schwebendes Fenster mit WKWebView, das <Server>/quick lädt. Die Seite meldet ihre Höhe über den
-// Message-Handler "quick"; die Oberkante des Fensters bleibt fest, es wächst nach unten.
+// Message-Handler "quick"; die Unterkante des Fensters bleibt fest (ein Drittel über dem unteren
+// Bildschirmrand), es wächst nach oben – die Eingabezeile sitzt unten (#1520).
 import AppKit
 import WebKit
 
@@ -68,15 +69,26 @@ enum ServerSettings {
 
 @MainActor
 final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
-    private static let width: CGFloat = 580
+    private static let defaultWidth: CGFloat = 580
+    private static let minWidth: CGFloat = 360
     private static let minHeight: CGFloat = 60
+    /// Vom Nutzer gezogene Größe, gilt beim nächsten Öffnen als Höchstmaß.
+    private static let heightKey = "panelMaxHeight"
+    private static let widthKey = "panelWidth"
 
     private let panel: KeyPanel
     private let webView: WKWebView
-    /// Oberkante (Bildschirmkoordinaten), an der das Fenster hängt.
-    private var top: CGFloat = 0
+    /// Sichtbarer Bereich des aktuellen Bildschirms.
+    private var area = NSRect(x: 0, y: 0, width: 1440, height: 900)
+    /// Unterkante (Bildschirmkoordinaten), auf der das Fenster steht.
+    private var bottom: CGFloat = 0
+    private var width: CGFloat = defaultWidth
     private var maxHeight: CGFloat = 400
-    private var height: CGFloat = 120
+    /// Höhe, die die Seite zuletzt gemeldet hat.
+    private var contentHeight: CGFloat = minHeight
+    /// Nach dem Ziehen behält das Fenster die gezogene Höhe, bis es geschlossen wird.
+    private var pinned = false
+    private var resizeMonitor: Any?
 
     var isVisible: Bool { panel.isVisible }
 
@@ -89,7 +101,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         webView.underPageBackgroundColor = .windowBackgroundColor
         webView.autoresizingMask = [.width, .height]
 
-        panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: Self.minHeight),
+        panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: Self.defaultWidth, height: Self.minHeight),
                          styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
                          backing: .buffered, defer: true)
         super.init()
@@ -106,7 +118,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         panel.hasShadow = true
         panel.delegate = self
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.minHeight))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.defaultWidth, height: Self.minHeight))
         container.wantsLayer = true
         container.layer?.cornerRadius = 14
         container.layer?.masksToBounds = true
@@ -136,25 +148,81 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
     func show() {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
-        guard let area = screen?.visibleFrame else { return }
-        top = area.maxY - area.height / 3
-        maxHeight = max(Self.minHeight, area.height / 3)
-        height = min(max(height, Self.minHeight), maxHeight)
-        let originX = area.midX - Self.width / 2
-        panel.setFrame(NSRect(x: originX, y: top - height, width: Self.width, height: height), display: true)
+        guard let visible = screen?.visibleFrame else { return }
+        area = visible
+        bottom = area.minY + area.height / 3
+        let defaults = UserDefaults.standard
+        let storedHeight = CGFloat(defaults.double(forKey: Self.heightKey))
+        let storedWidth = CGFloat(defaults.double(forKey: Self.widthKey))
+        maxHeight = clampHeight(storedHeight > 0 ? storedHeight : area.height / 3)
+        width = clampWidth(storedWidth > 0 ? storedWidth : Self.defaultWidth)
+        pinned = false
+        applyFrame()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(webView)
         webView.evaluateJavaScript("window.quickFocus && window.quickFocus()", completionHandler: nil)
     }
 
-    func hide() { panel.orderOut(nil) }
+    func hide() {
+        endResize()
+        panel.orderOut(nil)
+    }
 
     func windowDidResignKey(_ notification: Notification) { hide() }
 
-    private func setHeight(_ value: CGFloat) {
-        height = min(max(value, Self.minHeight), maxHeight)
-        let frame = NSRect(x: panel.frame.minX, y: top - height, width: Self.width, height: height)
+    private func clampHeight(_ value: CGFloat) -> CGFloat {
+        min(max(value, Self.minHeight), max(Self.minHeight, area.maxY - bottom))
+    }
+
+    private func clampWidth(_ value: CGFloat) -> CGFloat {
+        min(max(value, Self.minWidth), max(Self.minWidth, area.width))
+    }
+
+    /// Unterkante fest, horizontal zentriert; Höhe = Inhalt, höchstens maxHeight.
+    private func applyFrame() {
+        let height = pinned ? maxHeight : min(max(contentHeight, Self.minHeight), maxHeight)
+        let frame = NSRect(x: area.midX - width / 2, y: bottom, width: width, height: height)
         panel.setFrame(frame, display: true, animate: false)
+    }
+
+    private func setContentHeight(_ value: CGFloat) {
+        contentHeight = value
+        if resizeMonitor == nil { applyFrame() }
+    }
+
+    // MARK: Größe ziehen
+
+    /// Die Seite meldet mousedown auf einem Griff (obere Kante / obere Ecken); ab hier verfolgen wir die Maus.
+    private func beginResize(edge: String) {
+        guard resizeMonitor == nil, NSEvent.pressedMouseButtons & 1 != 0 else { return }
+        let startMouse = NSEvent.mouseLocation
+        let startHeight = panel.frame.height
+        let startWidth = width
+        let horizontal: CGFloat = edge == "topleft" ? -1 : (edge == "topright" ? 1 : 0)
+        resizeMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .leftMouseUp {
+                self.endResize(save: true)
+                return event
+            }
+            let mouse = NSEvent.mouseLocation
+            self.maxHeight = self.clampHeight(startHeight + (mouse.y - startMouse.y))
+            // Zentriert: Ziehen an einer Ecke verbreitert auf beiden Seiten.
+            self.width = self.clampWidth(startWidth + 2 * horizontal * (mouse.x - startMouse.x))
+            self.pinned = true
+            self.applyFrame()
+            return nil
+        }
+    }
+
+    private func endResize(save: Bool = false) {
+        if let monitor = resizeMonitor {
+            NSEvent.removeMonitor(monitor)
+            resizeMonitor = nil
+        }
+        guard save else { return }
+        UserDefaults.standard.set(Double(maxHeight), forKey: Self.heightKey)
+        UserDefaults.standard.set(Double(width), forKey: Self.widthKey)
     }
 
     // MARK: Nachrichten der Seite
@@ -163,7 +231,9 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
         case "height":
-            if let number = body["value"] as? NSNumber { setHeight(CGFloat(truncating: number)) }
+            if let number = body["value"] as? NSNumber { setContentHeight(CGFloat(truncating: number)) }
+        case "resizeStart":
+            beginResize(edge: body["edge"] as? String ?? "top")
         case "close":
             hide()
         case "lang":
@@ -181,7 +251,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         guard let path = webView.url?.path else { return }
         if path == "/login" {
             // Das Anmeldeformular braucht Platz, die Seite meldet dort keine Höhe.
-            setHeight(maxHeight)
+            setContentHeight(maxHeight)
         } else if path == "/quick", let lang = ServerSettings.lastLang {
             webView.evaluateJavaScript("window.quickSetLang && window.quickSetLang('\(lang)')", completionHandler: nil)
         } else if path == "/" || path.isEmpty {
