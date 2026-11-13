@@ -27,7 +27,20 @@ final class KeyPanel: NSPanel {
         case "z": action = shift ? "redo:" : "undo:"
         default: action = nil
         }
-        if let action, NSApp.sendAction(NSSelectorFromString(action), to: nil, from: self) { return true }
+        // Nicht NSApp.sendAction(to: nil): Das sucht über NSApp.keyWindow, und das ist bei einem
+        // nichtaktivierenden Panel oft nil, weil die App selbst nie aktiv wird. Stattdessen direkt
+        // beim Ersthelfer dieses Fensters anfangen und die Responder-Kette hochlaufen.
+        if let action {
+            let selector = NSSelectorFromString(action)
+            var responder: NSResponder? = firstResponder
+            while let current = responder {
+                if current.responds(to: selector) {
+                    current.perform(selector, with: self)
+                    return true
+                }
+                responder = current.nextResponder
+            }
+        }
         return super.performKeyEquivalent(with: event)
     }
 }
