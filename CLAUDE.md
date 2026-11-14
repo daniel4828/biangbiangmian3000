@@ -971,7 +971,9 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 ## Mac 快捷窗口与词典聊天（#1510）
 
 - `mac/` 里是原生 Mac 应用（用 `mac/install.sh` 构建安装）：全局快捷键弹出浮动面板，面板里是 WKWebView，加载服务器的 `/quick`；该应用不含任何词典逻辑
-- `/quick`（`static/quick.html`，不加载 `app.js`）是小型多轮聊天：输入框在最上方、回答向下增长；语言 zh/es/fr 存 `localStorage.quickLang`；「Neu」清空对话
+- 🔴 **改完 Mac 应用（`mac/` 或 `static/quick.html`）就直接重启它**，不等 Daniel 说（2026-11-14 他明确要求）：改了 `mac/` → 合并后跑 `bash mac/install.sh`（构建+退出旧版+启动）；只改了 `quick.html` → 等部署上线后 `pkill -x biangbiang-quick; open "/Applications/Biangbiang Quick.app"`（页面只在启动时加载）。两者都要在沙箱外执行
+- 面板位置（#1528）：下边缘固定在屏幕高度 1/5 处，向上生长，最高到距顶部 1/5；拖动的高度存 `UserDefaults panelMaxHeight`，没存时用满这段空间。页面上报自然高度（逐个测固定部分，#1526），新问题锚定在消息区顶部，回答从头可读
+- `/quick`（`static/quick.html`，不加载 `app.js`）是小型多轮聊天：输入框固定在底部、回答在上方、面板向上生长；语言 zh/es/fr 存 `localStorage.quickLang`；「Neu」清空对话
 - 历史只存在前端；`POST /api/dict/chat` 无状态，客户端每轮发整段历史（服务端只取最后 20 条），助手那一轮的 content 用返回的 `history_text`
 - `ai.dictionary_chat()` 不用 system 角色：规则 + 转写全放在唯一一条 user 消息里；输出 JSON `{reply, entry|null, add[]}`，`entry` 与 /lookup 的词典契约完全一致，复用同一个校验函数
 - `add` 只在 Daniel 明确说「添加/speicher」时才填；页面对每个词自动走 `addWordViaAi(word,'list')`（仍是唯一加词入口，#643）
