@@ -161,21 +161,19 @@ def test_settings_defaults_and_validation(tmp_db):
     assert conj_patterns.settings() == {"enabled": True,
                                         "desired_retention": 0.90, "pull_per_day": 10,
                                         "irregular_creating_unburied": True,
-                                        "prod_per_verb": 3, "followups_per_day": 30,
-                                        "tense_cues": True, "intro_series": True}
-    clean = conj_patterns.validate_settings({"prod_per_verb": 5})
-    assert clean == {"prod_per_verb": 5}
-    conj_patterns.save_settings({"enabled": False, "prod_per_verb": 2,
-                                 "followups_per_day": 0, "desired_retention": 0.85})
+                                        "tense_cues": True}
+    clean = conj_patterns.validate_settings({"pull_per_day": 5})
+    assert clean == {"pull_per_day": 5}
+    conj_patterns.save_settings({"enabled": False, "pull_per_day": 2,
+                                 "desired_retention": 0.85})
     assert conj_patterns.settings() == {"enabled": False,
-                                        "desired_retention": 0.85, "pull_per_day": 10,
+                                        "desired_retention": 0.85, "pull_per_day": 2,
                                         "irregular_creating_unburied": True,
-                                        "prod_per_verb": 2, "followups_per_day": 0,
-                                        "tense_cues": True, "intro_series": True}
+                                        "tense_cues": True}
     for bad in ({"new_per_day": 5},  # removed in #1401: now an unknown key
-                {"prod_per_verb": 0}, {"prod_per_verb": 6}, {"prod_per_verb": 1.5},
-                {"prod_per_verb": True}, {"followups_per_day": -1},
-                {"followups_per_day": 101}, {"followups_per_day": True},
+                # removed with #1536: unknown keys like any other
+                {"prod_per_verb": 3}, {"followups_per_day": 30}, {"intro_series": True},
+                {"pull_per_day": -1}, {"pull_per_day": 51}, {"pull_per_day": True},
                 {"desired_retention": 0.79},
                 {"desired_retention": 0.98}, {"desired_retention": "x"},
                 {"enabled": "yes"}, {"nope": 1}, []):
@@ -501,23 +499,23 @@ def test_conj_settings_endpoints(client):
     assert client.get("/api/es/conj-settings").json() == {
         "enabled": True, "desired_retention": 0.9,
         "pull_per_day": 10, "irregular_creating_unburied": True,
-        "prod_per_verb": 3, "followups_per_day": 30, "tense_cues": True,
-        "intro_series": True}
-    r = client.put("/api/es/conj-settings", json={"prod_per_verb": 4})
-    assert r.status_code == 200 and r.json()["prod_per_verb"] == 4
+        "tense_cues": True}
+    r = client.put("/api/es/conj-settings", json={"pull_per_day": 4})
+    assert r.status_code == 200 and r.json()["pull_per_day"] == 4
     assert r.json()["enabled"] is True
     r = client.put("/api/es/conj-settings", json={"enabled": False, "desired_retention": 0.85})
     assert r.json() == {"enabled": False, "desired_retention": 0.85,
-                        "pull_per_day": 10, "irregular_creating_unburied": True,
-                        "prod_per_verb": 4, "followups_per_day": 30,
-                        "tense_cues": True, "intro_series": True}
+                        "pull_per_day": 4, "irregular_creating_unburied": True,
+                        "tense_cues": True}
     r = client.put("/api/es/conj-settings", json={"tense_cues": False})
     assert r.status_code == 200 and r.json()["tense_cues"] is False
     assert client.put("/api/es/conj-settings", json={"tense_cues": "no"}).status_code == 400
-    for bad in ({"new_per_day": 7}, {"prod_per_verb": 9}, {"followups_per_day": 101},
-                {"desired_retention": 0.5}, {"enabled": "yes"}, {"prod_per_verb": True}):
+    # prod_per_verb / followups_per_day / intro_series were removed with #1536
+    for bad in ({"new_per_day": 7}, {"prod_per_verb": 3}, {"followups_per_day": 10},
+                {"intro_series": True}, {"pull_per_day": 51},
+                {"desired_retention": 0.5}, {"enabled": "yes"}, {"pull_per_day": True}):
         assert client.put("/api/es/conj-settings", json=bad).status_code == 400
-    assert client.get("/api/es/conj-settings").json()["prod_per_verb"] == 4
+    assert client.get("/api/es/conj-settings").json()["pull_per_day"] == 4
 
 
 def test_conj_patterns_endpoint_shape(client, clock):

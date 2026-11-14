@@ -24,7 +24,6 @@ import json
 import logging
 import math
 import os
-import random
 import unicodedata
 from datetime import date, timedelta
 
@@ -47,12 +46,6 @@ _SER_IR_TENSES = ("ind_pret", "subj_impf")
 KEY_ENABLED = "es_conj_enabled"
 KEY_RETENTION = "es_conj_retention"
 DEFAULT_RETENTION = 0.90
-# Creating: up to N patterns per verb and day (the first is the story sentence,
-# the rest are Folgesätze, #1401); followups_per_day caps all Folgesätze (0 = off).
-KEY_PROD_PER_VERB = "es_conj_prod_per_verb"
-KEY_FOLLOWUPS_PER_DAY = "es_conj_followups_per_day"
-DEFAULT_PROD_PER_VERB, MIN_PROD_PER_VERB, MAX_PROD_PER_VERB = 3, 1, 5
-DEFAULT_FOLLOWUPS_PER_DAY, MAX_FOLLOWUPS_PER_DAY = 30, 100
 MIN_RETENTION, MAX_RETENTION = 0.80, 0.97
 KEY_PULL_PER_DAY = "es_conj_pull_per_day"
 KEY_NO_BURY = "es_conj_irregular_no_bury"
@@ -60,9 +53,6 @@ KEY_PULL_BATCH = "es_conj_pull_batch"
 # Tense signal words (#1481): story sentences carry a context that fixes the
 # tense, and their German translation (LLM instead of Google) keeps it visible.
 KEY_TENSE_CUES = "es_tense_cues"
-# Intro series (#1498): a NEW irregular verb shows every irregular pattern of
-# every tense the first time (default on).
-KEY_INTRO_SERIES = "es_conj_intro_series"
 DEFAULT_PULL_PER_DAY = 10
 MAX_PULL_PER_DAY = 50
 
@@ -454,7 +444,7 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
     in PERSONS order:
     - no irregular person (regular verb) -> [];
     - stem change only (#1470): every person is a stem + the regular ending of
-      that person -> ONE group with all persons (no Folgesätze; the main
+      that person -> ONE group with all persons (the main
       sentence's person rotates through pick_person);
     - a single-verb pattern (kind "verb": ser, ir, ...) -> every person alone;
     - y_3rd: only persons whose form has a new "y" (leyó, creyeron) are the
@@ -549,80 +539,6 @@ def focus_persons(lemma: str, tense: str, lang: str = LANG,
             for g in focus_groups(lemma, tense, lang)]
 
 
-def _common_prefix(words: list[str]) -> str:
-    """Longest common prefix of `words` ("" for an empty list)."""
-    if not words:
-        return ""
-    lo, hi = min(words), max(words)
-    n = 0
-    while n < len(lo) and lo[n] == hi[n]:
-        n += 1
-    return lo[:n]
-
-
-# Strong-preterite endings per person (tuve, tuviste, tuvo, ...): the stem of a
-# strong form is what is left after one of these (or the regular ending) is cut.
-_STRONG_PRET = {"1s": {"e", "i"}, "2s": {"iste"}, "3s": {"o", "e"},
-                "1p": {"imos"}, "2p": {"isteis"}, "3p": {"ieron", "eron"}}
-
-
-def intro_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
-    """Person groups of the intro series of a NEW irregular verb (#1498): one
-    sentence per group, so the first encounter shows every irregular pattern in
-    every tense.
-    - tense regular for this verb -> ONE group with every person;
-    - tense irregular -> one group per irregular stem (persons sharing a stem,
-      e.g. tener Presente: tengo | tienes, tiene, tienen) + one group with the
-      remaining regular persons (tenemos, tenéis); irregular groups first;
-    - Perfecto: the participle is the same for every person -> one group.
-    Unlike focus_groups() a pure stem change is NOT collapsed into one group:
-    tener Presente -> [["1s"], ["2s","3s","3p"], ["1p","2p"]]. Persons without a
-    lexicon form are left out. Never raises ([] on any failure)."""
-    try:
-        if lang != LANG:
-            return []
-        base = verb_slots._base_verb(lemma)
-        rows: dict[str, tuple] = {}
-        for person in PERSONS:
-            form = (verb_slots.target_form(base, "perf", person, LANG) if tense == "perf"
-                    else _lex_form(base, tense, person))
-            pat = pattern_for(lemma, tense, person, lang)
-            if not form or not pat:
-                continue
-            rows[person] = (form, _regular(base, tense, person), pat)
-        if not rows:
-            return []
-        if tense == "perf" or not any(r[2]["kind"] != "regular" for r in rows.values()):
-            return [list(rows)]
-        regs = {p: _unaccent(r[1].lower()) for p, r in rows.items() if r[1]}
-        # same cap as _stem_only: no regular ending may become empty
-        prefix = _common_prefix(list(regs.values()))
-        if regs:
-            prefix = prefix[:max(0, min(len(r) for r in regs.values()) - 1)]
-        irregular: dict[tuple, list[str]] = {}
-        regular: list[str] = []
-        for person, (form, _reg, pat) in rows.items():
-            if pat["kind"] == "regular":
-                regular.append(person)
-                continue
-            fu = _unaccent(form.lower())
-            ends = set()
-            if person in regs:
-                ends.add(regs[person][len(prefix):])
-            if tense == "ind_pret":
-                ends |= _STRONG_PRET[person]
-            if tense == "ind_pres" and person == "1s":
-                ends.add("oy")
-            stem = next((fu[:-len(e)] for e in sorted((e for e in ends if e), key=len, reverse=True)
-                         if fu.endswith(e) and fu[:-len(e)]), None)
-            key = ("stem", stem) if stem else ("form", fu)
-            irregular.setdefault(key, []).append(person)
-        return [g for g in list(irregular.values()) + [regular] if g]
-    except Exception as e:
-        logger.warning("intro_groups(%r, %r) failed — %s", lemma, tense, e)
-        return []
-
-
 def _special_irregular(base: str, tense: str) -> bool:
     for person in (PERSONS if tense != "perf" else ("1s",)):
         form, reg = _lex_form(base, tense, person), _regular(base, tense, person)
@@ -671,27 +587,12 @@ def catalog(lang: str = LANG) -> list[dict]:
 
 def settings() -> dict:
     """{"enabled", "desired_retention", "pull_per_day", "irregular_creating_unburied",
-    "prod_per_verb", "followups_per_day", "tense_cues", "intro_series" (#1498)};
-    defaults when unset, unparsable stored
+    "tense_cues"}; defaults when unset, unparsable stored
     values fall back to the default with a warning."""
     enabled, retention = True, DEFAULT_RETENTION
     raw = database.get_app_setting(KEY_ENABLED)
     if raw in ("0", "1"):
         enabled = raw == "1"
-    prod_per_verb = DEFAULT_PROD_PER_VERB
-    raw = database.get_app_setting(KEY_PROD_PER_VERB)
-    if raw not in (None, ""):
-        try:
-            prod_per_verb = max(MIN_PROD_PER_VERB, min(MAX_PROD_PER_VERB, int(raw)))
-        except ValueError:
-            logger.warning("conj settings: bad prod_per_verb %r, using default", raw)
-    followups = DEFAULT_FOLLOWUPS_PER_DAY
-    raw = database.get_app_setting(KEY_FOLLOWUPS_PER_DAY)
-    if raw not in (None, ""):
-        try:
-            followups = max(0, min(MAX_FOLLOWUPS_PER_DAY, int(raw)))
-        except ValueError:
-            logger.warning("conj settings: bad followups_per_day %r, using default", raw)
     raw = database.get_app_setting(KEY_RETENTION)
     if raw not in (None, ""):
         try:
@@ -709,12 +610,10 @@ def settings() -> dict:
             logger.warning("conj settings: bad pull_per_day %r, using default", raw)
     no_bury = database.get_app_setting(KEY_NO_BURY) != "0"
     tense_cues = database.get_app_setting(KEY_TENSE_CUES) != "0"
-    intro_series = database.get_app_setting(KEY_INTRO_SERIES) != "0"
-    return {"tense_cues": tense_cues, "intro_series": intro_series,
+    return {"tense_cues": tense_cues,
             "enabled": enabled,
             "desired_retention": retention, "pull_per_day": pull,
-            "irregular_creating_unburied": no_bury,
-            "prod_per_verb": prod_per_verb, "followups_per_day": followups}
+            "irregular_creating_unburied": no_bury}
 
 
 def validate_settings(body) -> dict:
@@ -723,8 +622,7 @@ def validate_settings(body) -> dict:
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
     known = {"enabled", "desired_retention", "pull_per_day",
-             "irregular_creating_unburied", "prod_per_verb", "followups_per_day",
-             "tense_cues", "intro_series"}
+             "irregular_creating_unburied", "tense_cues"}
     unknown = sorted(set(body) - known)
     if unknown:
         raise ValueError(f"unknown setting(s): {', '.join(map(str, unknown))}")
@@ -745,28 +643,6 @@ def validate_settings(body) -> dict:
             out["tense_cues"] = bool(v)
         else:
             raise ValueError("'tense_cues' must be true or false")
-    if "intro_series" in body:
-        v = body["intro_series"]
-        if isinstance(v, bool):
-            out["intro_series"] = v
-        elif isinstance(v, int) and v in (0, 1):
-            out["intro_series"] = bool(v)
-        else:
-            raise ValueError("'intro_series' must be true or false")
-    if "prod_per_verb" in body:
-        v = body["prod_per_verb"]
-        if (isinstance(v, bool) or not isinstance(v, int)
-                or not MIN_PROD_PER_VERB <= v <= MAX_PROD_PER_VERB):
-            raise ValueError(f"'prod_per_verb' must be an integer between "
-                             f"{MIN_PROD_PER_VERB} and {MAX_PROD_PER_VERB}")
-        out["prod_per_verb"] = v
-    if "followups_per_day" in body:
-        v = body["followups_per_day"]
-        if (isinstance(v, bool) or not isinstance(v, int)
-                or not 0 <= v <= MAX_FOLLOWUPS_PER_DAY):
-            raise ValueError(f"'followups_per_day' must be an integer between "
-                             f"0 and {MAX_FOLLOWUPS_PER_DAY}")
-        out["followups_per_day"] = v
     if "desired_retention" in body:
         v = body["desired_retention"]
         if (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
@@ -794,18 +670,12 @@ def save_settings(clean: dict) -> None:
     """Store the keys of a validate_settings() result."""
     if "enabled" in clean:
         database.set_app_setting(KEY_ENABLED, "1" if clean["enabled"] else "0")
-    if "prod_per_verb" in clean:
-        database.set_app_setting(KEY_PROD_PER_VERB, str(int(clean["prod_per_verb"])))
-    if "followups_per_day" in clean:
-        database.set_app_setting(KEY_FOLLOWUPS_PER_DAY, str(int(clean["followups_per_day"])))
     if "desired_retention" in clean:
         database.set_app_setting(KEY_RETENTION, repr(float(clean["desired_retention"])))
     if "pull_per_day" in clean:
         database.set_app_setting(KEY_PULL_PER_DAY, str(int(clean["pull_per_day"])))
     if "tense_cues" in clean:
         database.set_app_setting(KEY_TENSE_CUES, "1" if clean["tense_cues"] else "0")
-    if "intro_series" in clean:
-        database.set_app_setting(KEY_INTRO_SERIES, "1" if clean["intro_series"] else "0")
     if "irregular_creating_unburied" in clean:
         database.set_app_setting(KEY_NO_BURY, "1" if clean["irregular_creating_unburied"] else "0")
 
@@ -1154,305 +1024,3 @@ class SlotPlanner:
             self.planned_new.add((key, mode))
             return opt, key
         return None
-
-
-# ---------------------------------------------------------------------------
-# Folgesätze (#1401): extra conjugation sentences after a creating card
-# ---------------------------------------------------------------------------
-
-def verb_headword(word_zh: str):
-    """(infinitive to conjugate, fixed tense | None) of a slottable Spanish card
-    word, or None for any other word. The infinitive keeps a reflexive "se"
-    (verb_slots.target_form puts the pronoun in front); a form card
-    ("tener · Indefinido") carries its fixed tense. Never raises."""
-    try:
-        parsed = verb_slots.parse_form_card(word_zh)
-        if parsed:
-            return parsed[0], parsed[1]
-        if verb_slots.is_slottable_verb(word_zh, LANG):
-            return (word_zh or "").strip().lower(), None
-    except Exception:
-        pass
-    return None
-
-
-def _card_lang(card: dict, story_lang: str) -> str:
-    if story_lang == "multi":
-        return card.get("word_lang") or "zh"
-    return story_lang
-
-
-def _plan_followups_focus(entries: list, lang: str, focus_tense: str,
-                          remaining: int) -> list[dict]:
-    """Folgesätze in Zeit-des-Tages mode (#1434, #1440): for each Spanish creating
-    card, in the focus tense (form cards: their fixed tense). Candidates are the
-    one person per focus_groups() group without the main sentence's group. Regular verbs
-    (focus_persons empty, including a form card whose verb is regular in its
-    tense, e.g. `tener · Imperfecto`) get no Folgesätze (#1452): all persons
-    belong to one pattern card, so only the first rating of the day changes the
-    schedule. Persons without a form or pattern are skipped;
-    no due/new ordering and no pattern dedupe. The daily cap `remaining` is
-    spread round-robin over the cards (round 1: one candidate per card, round 2:
-    the next, ...); the result is grouped by card in entries order."""
-    cands: list[tuple[dict, str, list[dict]]] = []
-    word_ids = [card["word_id"] for card, main_slot in entries
-                if main_slot and card.get("category") == "creating"
-                and _card_lang(card, lang) == LANG and card.get("word_id") is not None]
-    try:
-        usage_by_word = database.verb_slot_usage_by_word(word_ids)
-    except Exception as e:
-        logger.warning("slot usage unavailable for followups — %s", e)
-        usage_by_word = {}
-    person_weights = verb_slots.focus_person_weights(LANG)
-    for card, main_slot in entries:
-        if not main_slot or card.get("category") != "creating" \
-                or _card_lang(card, lang) != LANG:
-            continue
-        head = verb_headword(card.get("word_zh") or "")
-        lemma = verb_slots._slot_lemma(card.get("word_zh") or "", LANG)
-        if not head or not lemma:
-            continue
-        raw_lemma, fixed_tense = head
-        # verbs follow their main sentence's tense (may differ from today's
-        # with a verb tense mix); form cards keep their fixed tense
-        tense = fixed_tense or main_slot.partition(":")[0] or focus_tense
-        main_person = main_slot.partition(":")[2]
-        if main_person not in PERSONS:
-            continue
-        groups = focus_groups(lemma, tense, LANG)
-        if not groups:
-            continue
-        usage = usage_by_word.get(card["word_id"])
-        # groups holding the main person are covered by the main sentence
-        order = [pick_person(g, tense, usage, None, person_weights)
-                 for g in groups if main_person not in g]
-        items: list[dict] = []
-        for person in order:
-            form = verb_slots.target_form(raw_lemma, tense, person, LANG)
-            pat = pattern_for(lemma, tense, person, LANG) if form else None
-            if not pat:
-                continue
-            items.append({
-                "word_id": card["word_id"], "lemma": lemma, "slot": f"{tense}:{person}",
-                "form": form, "label": lexicon.slot_label(tense, person),
-                "pattern": pat["key"], "pattern_label": label_for_key(pat["key"])})
-        if items:
-            cands.append((card, main_person, items))
-
-    chosen: list[list[dict]] = [[] for _ in cands]
-    rnd = 0
-    while remaining > 0:
-        progressed = False
-        for idx, (_card, _mp, items) in enumerate(cands):
-            if remaining <= 0:
-                break
-            if rnd < len(items):
-                chosen[idx].append(items[rnd])
-                remaining -= 1
-                progressed = True
-        if not progressed:
-            break
-        rnd += 1
-    return [f for group in chosen for f in group]
-
-
-def plan_intro_series(entries: list, lang: str) -> tuple[list[dict], set]:
-    """Intro series (#1498): the first time a NEW irregular verb comes, its
-    creating card is followed by one Folgesatz per intro_groups() group of every
-    enabled tense (weight > 0), so every irregular pattern is seen once.
-
-    `entries` = [(card dict, main_slot or None)] as in plan_followups. A card
-    qualifies when it is a Spanish creating card in state "new" of a PLAIN verb
-    (not a form card) that is irregular. The main sentence's own group is left
-    out. The person of each group is chosen like in Zeit-des-Tages mode
-    (pick_person with the person weights and the verb's slot history). Items
-    without a pattern (no form) are skipped.
-
-    Returns (items in the shape of _plan_followups_focus() + "intro": True,
-    word_ids that got at least one item). Never raises (warning, ([], set()))."""
-    try:
-        cfg = verb_slots.config(LANG)
-        if not cfg:
-            return [], set()
-        wts = verb_slots.weights(LANG)
-        w_tense, w_person = wts.get("tenses") or {}, wts.get("persons") or {}
-        tenses = [t for t in cfg["tenses"] if w_tense.get(t, 1.0) > 0]
-        picked = [(card, main_slot) for card, main_slot in entries
-                  if card.get("category") == "creating" and _card_lang(card, lang) == LANG
-                  and card.get("state") == "new" and card.get("word_id") is not None]
-        word_ids = [card["word_id"] for card, _ in picked]
-        try:
-            usage_by_word = database.verb_slot_usage_by_word(word_ids) if word_ids else {}
-        except Exception as e:
-            logger.warning("slot usage unavailable for intro series — %s", e)
-            usage_by_word = {}
-        items: list[dict] = []
-        covered: set = set()
-        local: dict = {}
-        for card, main_slot in picked:
-            word_zh = card.get("word_zh") or ""
-            head = verb_headword(word_zh)
-            if not head or head[1] is not None:
-                continue
-            lemma = verb_slots._slot_lemma(word_zh, LANG)
-            if not lemma or verb_slots.verb_regularity(head[0], LANG) != "irregular":
-                continue
-            main_tense, _, main_person = (main_slot or "").partition(":")
-            usage = usage_by_word.get(card["word_id"])
-            made = 0
-            for tense in tenses:
-                for group in intro_groups(lemma, tense, LANG):
-                    if tense == main_tense and main_person in group:
-                        continue  # the main sentence covers this group
-                    person = pick_person(group, tense, usage, local, w_person)
-                    form = verb_slots.target_form(head[0], tense, person, LANG)
-                    pat = pattern_for(lemma, tense, person, LANG) if form else None
-                    if not pat:
-                        continue
-                    slot = f"{tense}:{person}"
-                    local[slot] = local.get(slot, 0) + 1
-                    items.append({
-                        "word_id": card["word_id"], "lemma": lemma, "slot": slot,
-                        "form": form, "label": lexicon.slot_label(tense, person),
-                        "pattern": pat["key"], "pattern_label": label_for_key(pat["key"]),
-                        "intro": True})
-                    made += 1
-            if made:
-                covered.add(card["word_id"])
-        return items, covered
-    except Exception as e:
-        logger.warning("plan_intro_series failed — %s", e)
-        return [], set()
-
-
-def plan_followups(entries: list, lang: str, today=None, conj_states=None,
-                   rng=None) -> list[dict]:
-    """Plan the Folgesätze of one story (#1401, #1498).
-
-    First the intro series (plan_intro_series: NEW irregular verbs, every
-    irregular pattern once; setting es_conj_intro_series, default on). It is not
-    limited by the daily cap or prod_per_verb, but counts against the cap of the
-    regular Folgesätze below. followups_per_day = 0 switches both off. The
-    cards it covered are then left out of the regular planning:
-
-    `entries` = [(card dict, main_slot or None)] for the story's cards; `lang`
-    is the story language ("multi" = per card via card["word_lang"]). For every
-    Spanish CREATING card with a slottable verb (plain or form card) up to
-    prod_per_verb - 1 further DISTINCT production patterns are chosen: due ones
-    first (oldest due first), then new ones (highest slot weight first). Never
-    the pattern of any main sentence of this story, never one pattern twice in
-    the story. No rotation stage: nothing due/new = fewer follow-ups. Cards are
-    served round-robin so the daily cap (followups_per_day minus the Folgesätze
-    of today's stories) is spread over the verbs.
-
-    Returns [{word_id, lemma, slot, form, label, pattern, pattern_label}] (intro
-    items additionally carry "intro": True).
-    Total: any failure logs a warning and returns []."""
-    try:
-        s = settings()
-        if not s["enabled"] or s["followups_per_day"] <= 0:
-            return []
-        intro: list[dict] = []
-        covered: set = set()
-        if s["intro_series"]:
-            intro, covered = plan_intro_series(entries, lang)
-        rest = [(c, m) for c, m in entries if c.get("word_id") not in covered]
-        return intro + _plan_regular_followups(rest, lang, today, conj_states, rng,
-                                               reserved=len(intro))
-    except Exception as e:
-        logger.warning("plan_followups failed — %s", e)
-        return []
-
-
-def _plan_regular_followups(entries: list, lang: str, today=None, conj_states=None,
-                            rng=None, reserved: int = 0) -> list[dict]:
-    """The regular Folgesätze of plan_followups (#1401); `reserved` = intro
-    items already planned, subtracted from the daily cap."""
-    try:
-        s = settings()
-        per_verb = s["prod_per_verb"] - 1
-        if not s["enabled"] or s["followups_per_day"] <= 0 or per_verb <= 0:
-            return []
-        cfg = verb_slots.config(LANG)
-        if not cfg:
-            return []
-        if today is None:
-            today = database.anki_today().isoformat()
-        elif hasattr(today, "isoformat"):
-            today = today.isoformat()
-        remaining = (s["followups_per_day"] - database.count_followups_for_date(today)
-                     - reserved)
-        if remaining <= 0:
-            return []
-        focus = verb_slots._focus_tense()
-        if focus:
-            return _plan_followups_focus(entries, lang, focus, remaining)
-        states = conj_states if conj_states is not None else database.get_conj_states(LANG)
-        wts = verb_slots.weights(LANG)
-        w_tense, w_person = wts.get("tenses") or {}, wts.get("persons") or {}
-        rng = rng or random.Random()
-
-        # Patterns the story's main sentences already drill (every mode, every card)
-        used: set = set()
-        for card, main_slot in entries:
-            if main_slot and _card_lang(card, lang) == LANG:
-                pat = slot_pattern(card.get("word_zh") or "", main_slot, LANG)
-                if pat:
-                    used.add(pat["key"])
-
-        queues = []  # (card, lemma, {pattern: [(slot, form, weight)]}, ordered keys)
-        for card, _main in entries:
-            if card.get("category") != "creating" or _card_lang(card, lang) != LANG:
-                continue
-            head = verb_headword(card.get("word_zh") or "")
-            lemma = verb_slots._slot_lemma(card.get("word_zh") or "", LANG)
-            if not head or not lemma:
-                continue
-            raw_lemma, fixed_tense = head
-            by_pattern: dict = {}
-            tenses = [fixed_tense] if fixed_tense else list(cfg["tenses"])
-            for tense in tenses:
-                for person in (PERSONS if fixed_tense else cfg["persons"]):
-                    weight = (w_person.get(person, 1.0) if fixed_tense
-                              else w_tense.get(tense, 1.0) * w_person.get(person, 1.0))
-                    if weight <= 0:
-                        continue
-                    form = verb_slots.target_form(raw_lemma, tense, person, LANG)
-                    pat = pattern_for(lemma, tense, person, LANG) if form else None
-                    if not pat:
-                        continue
-                    by_pattern.setdefault(pat["key"], []).append(
-                        (f"{tense}:{person}", form, weight))
-            due, fresh = [], []
-            for key, opts in by_pattern.items():
-                row = states.get((key, "prod"))
-                if row and row.get("state") != "new":
-                    if row.get("due") and row["due"][:10] <= today:
-                        due.append((row["due"], key))
-                else:
-                    fresh.append((-max(o[2] for o in opts), key))
-            order = [k for _, k in sorted(due)] + [k for _, k in sorted(fresh)]
-            queues.append((card, lemma, by_pattern, order))
-
-        out: list[dict] = []
-        for _round in range(per_verb):
-            for card, lemma, by_pattern, order in queues:
-                if remaining <= 0:
-                    return out
-                key = next((k for k in order if k not in used), None)
-                if key is None:
-                    continue
-                used.add(key)
-                opts = by_pattern[key]
-                top = max(o[2] for o in opts)
-                slot, form, _w = rng.choice([o for o in opts if o[2] == top])
-                tense, _, person = slot.partition(":")
-                out.append({
-                    "word_id": card["word_id"], "lemma": lemma, "slot": slot,
-                    "form": form, "label": lexicon.slot_label(tense, person),
-                    "pattern": key, "pattern_label": label_for_key(key)})
-                remaining -= 1
-        return out
-    except Exception as e:
-        logger.warning("plan_followups failed — %s", e)
-        return []

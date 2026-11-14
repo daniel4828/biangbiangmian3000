@@ -179,28 +179,6 @@ def test_assign_slots_focus_off_uses_normal_rotation(real_lex):
     assert 1 in out  # normal logic ran (no focus pointer); slot is some enabled slot
 
 
-# --- plan_followups --------------------------------------------------------------
-
-def test_plan_followups_focus_regular_verb_gets_none(real_lex):
-    entries = [(_card(1, "hablar", "creating"), "ind_pres:1s")]
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert out == []
-
-
-def test_plan_followups_form_card_regular_tense_gets_none(real_lex):
-    word = verb_slots.form_card_word("tener", "ind_impf")
-    entries = [(_card(1, word, "creating"), "ind_impf:1s")]
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert out == []
-
-
-def test_plan_followups_focus_skips_non_creating_and_no_main_slot(real_lex):
-    entries = [(_card(1, "hablar", "reading"), "ind_pres:1s"),
-               (_card(2, "comer", "creating"), None)]
-    assert conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(),
-                                        conj_states={}) == []
-
-
 # --- person types by irregularity (#1440) ------------------------------------------
 
 def test_focus_persons_by_irregularity_type(real_lex):
@@ -227,29 +205,6 @@ def test_assign_slots_reading_irregular_uses_pointer(real_lex):
     cards = [_card(1, "hablar"), _card(2, "salir")]
     out = verb_slots.assign_slots(cards, "es", usage={})
     assert out[1]["slot"] == "ind_pres:1s" and out[2]["slot"] == "ind_pres:2s"
-
-
-def test_plan_followups_form_card_ser_gets_five_followups(real_lex):
-    word = verb_slots.form_card_word("ser", "ind_pres")
-    entries = [(_card(1, word, "creating"), "ind_pres:1s")]
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert [f["slot"] for f in out] == [
-        "ind_pres:2s", "ind_pres:3s", "ind_pres:1p", "ind_pres:2p", "ind_pres:3p"]
-
-
-def test_plan_followups_pensar_stem_change_only_gets_none(real_lex):
-    # #1470: pensar ind_pres is a pure stem change -> no Folgesätze
-    entries = [(_card(1, "pensar", "creating"), "ind_pres:1s")]
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert out == []
-
-
-def test_plan_followups_cap_is_spread_round_robin(real_lex):
-    database.set_app_setting(conj_patterns.KEY_FOLLOWUPS_PER_DAY, "2")
-    entries = [(_card(1, "ser", "creating"), "ind_pres:1s"),
-               (_card(2, "estar", "creating"), "ind_pres:1s")]  # estar: irregular endings (#1470)
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert sorted(f["word_id"] for f in out) == [1, 2]
 
 
 # --- groups + rotation by history (#1440) -------------------------------------------
@@ -308,18 +263,25 @@ def test_focus_persons_uses_history(real_lex):
     assert conj_patterns.focus_persons("creer", "ind_pret", usage=usage) == ["3p", "2s"]
 
 
-def test_verb_slot_usage_by_word_counts_main_and_followups(real_lex):
+def test_verb_slot_usage_by_word_counts_main_and_legacy_followups(real_lex):
     deck_id = database.get_or_create_deck("T")
     w1, w2 = _add_verb("tener"), _add_verb("hablar")
-    _story(deck_id, [
+    story_id = _story(deck_id, [
         {"position": 1, "sentence_zh": "Tuve.", "word_ids": [w1], "verb_slot": "ind_pret:1s"},
-        {"position": 2, "sentence_zh": "Tuviste.", "word_ids": [],
-         "followup_word_id": w1, "verb_slot": "ind_pret:2s"},
-        {"position": 3, "sentence_zh": "Tuve otra vez.", "word_ids": [],
-         "followup_word_id": w1, "verb_slot": "ind_pret:1s"},
+        {"position": 2, "sentence_zh": "Tuviste.", "word_ids": [], "verb_slot": "ind_pret:2s"},
+        {"position": 3, "sentence_zh": "Tuve otra vez.", "word_ids": [], "verb_slot": "ind_pret:1s"},
         {"position": 4, "sentence_zh": "Sin slot.", "word_ids": [w1]},
         {"position": 5, "sentence_zh": "Habló.", "word_ids": [w2], "verb_slot": "ind_pret:3s"},
     ])
+    # Legacy Folgesätze rows of the removed feature (#1536): nothing writes
+    # followup_word_id any more, so mark rows 2 and 3 by hand.
+    conn = database.get_db()
+    conn.execute("UPDATE story_sentences SET followup_word_id = ? "
+                 "WHERE story_id = ? AND position IN (2, 3)", (w1, story_id))
+    conn.commit()
+    conn.close()
+    # legacy rows never become part of the story's own sentences
+    assert [s["position"] for s in database.get_story_sentences(story_id)] == [1, 4, 5]
     assert database.verb_slot_usage_by_word([]) == {}
     out = database.verb_slot_usage_by_word([w1, w2, 99999])
     assert set(out) == {w1, w2}
@@ -390,24 +352,6 @@ def test_each_card_rotates_on_its_own_history(real_lex):
     out = verb_slots.assign_slots([_card(w1, "hablar"), _card(w2, "comer")], "es", usage={})
     assert out[w1]["slot"] == "ind_pres:3s"
     assert out[w2]["slot"] == "ind_pres:1p"  # 2s global schon geübt, 3s hier vergeben
-
-
-def test_plan_followups_sentir_ind_pret_stem_only_gets_none(real_lex):
-    # #1470: sentir Indefinido is stem change only -> no Folgesätze
-    tense_focus.step(1)
-    wid = _add_verb("sentir")
-    entries = [(_card(wid, "sentir", "creating"), "ind_pret:1s")]
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert out == []
-
-
-def test_plan_followups_llegar_spelling_change_gets_none(real_lex):
-    # #1470: llegué = llegu + regular ending -> no Folgesätze
-    tense_focus.step(1)
-    wid = _add_verb("llegar")
-    entries = [(_card(wid, "llegar", "creating"), "ind_pret:1s")]
-    out = conj_patterns.plan_followups(entries, "es", today=DAY0.isoformat(), conj_states={})
-    assert out == []
 
 
 ALL_PERSONS = [["1s", "2s", "3s", "1p", "2p", "3p"]]

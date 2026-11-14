@@ -470,8 +470,8 @@ CREATE TABLE IF NOT EXISTS story_sentences (
     grammar_hint TEXT,
     -- why this tense (German, written together with the LLM translation, #1485)
     tense_reason TEXT,
-    -- Folgesatz (#1401): extra conjugation sentence for this verb entry after its
-    -- creating card; such a sentence has no story_sentence_words rows
+    -- legacy, feature removed (#1536; was Folgesatz #1401): old rows are filtered
+    -- out (followup_word_id IS NULL), nothing writes this column any more
     followup_word_id INTEGER,
     -- language of this sentence in a multi-language story (#1378); NULL = the story's lang
     lang        TEXT,
