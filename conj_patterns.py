@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 LANG = "es"
 MODES = ("recog", "prod")
 TENSES = ("ind_pres", "ind_pret", "ind_impf", "ind_fut", "ind_cond",
-          "perf", "subj_pres", "subj_impf")
+          "perf", "subj_pres", "subj_impf", "imp_aff")
 PERSONS = verb_slots.PERSONS
 SPECIAL = ("ser", "ir", "estar", "haber", "dar", "ver")
 _SER_IR_TENSES = ("ind_pret", "subj_impf")
@@ -96,6 +96,14 @@ def _regular(base: str, tense: str, person: str) -> str | None:
         return stem + _SUBJ_IMPF[kind][idx]
     if tense == "perf":
         return stem + ("ado" if kind == "ar" else "ido")
+    if tense == "imp_aff":  # #1540: no yo; tú = él-Presente, vosotros = -d,
+        if person == "1s":  # usted/nosotros/ustedes = Subjuntivo presente
+            return None
+        if person == "2s":
+            return verb_slots.regular_form(base, "ind_pres", "3s")
+        if person == "2p":
+            return base[:-1] + "d"
+        return stem + _SUBJ_PRES[kind][idx]
     return None
 
 
@@ -118,6 +126,7 @@ _REG_CLASSES = {
     "perf": ("ar", "er_ir"),
     "subj_pres": ("ar", "er_ir"),
     "subj_impf": ("ar", "er_ir"),
+    "imp_aff": ("ar", "er_ir"),
 }
 _CLASS_LABEL = {"ar": "-ar", "er": "-er", "ir": "-ir", "er_ir": "-er/-ir", "all": None}
 
@@ -146,6 +155,10 @@ _GROUPS: dict[tuple[str, str], str] = {
     ("subj_impf", "strong_j"): "Subjuntivo imperfecto · starker Stamm auf -j (dijera, trajera)",
     ("subj_impf", "stem_3rd"): "Subjuntivo imperfecto · Stammwechsel (pidiera, durmiera)",
     ("subj_impf", "y_3rd"): "Subjuntivo imperfecto · i→y (leyera, oyera, construyera)",
+    ("imp_aff", "short_tu"): "Imperativo · kurze tú-Form (ten, pon, haz, di, sal, ven)",
+    ("imp_aff", "stem"): "Imperativo · Stammwechsel in der tú-Form (piensa, duerme, pide)",
+    ("imp_aff", "subj"): "Imperativo · usted/nosotros/ustedes vom unregelmäßigen "
+                         "Subjuntivo (tenga, hagamos, busquen)",
 }
 
 
@@ -318,6 +331,23 @@ def _group_subj_pres(base, person, form, reg):
     return None
 
 
+def _group_imp(base, person, form, reg):
+    """#1540: tú = short form (ten, haz, di) or stem change (piensa);
+    usted/nosotros/ustedes inherit any Subjuntivo irregularity (tenga, busque)."""
+    if person == "2s":
+        if len(form) <= 2 or not form.endswith(("a", "e")):
+            return "short_tu"
+        stem = base[:-2]
+        if _vowel_change(stem, reg[len(stem):], form, (
+                ("e", "ie", "e_ie"), ("o", "ue", "o_ue"), ("e", "i", "e_i"),
+                ("u", "ue", "u_ue"))):
+            return "stem"
+        return None
+    if person in ("3s", "1p", "3p"):
+        return "subj"
+    return None
+
+
 def _group_subj_impf(base):
     f3 = lexicon.form_for(base, "ind_pret", "3p", LANG)
     if not f3:
@@ -357,6 +387,8 @@ def _classify(base: str, tense: str, person: str, form: str) -> dict:
             group = _group_subj_impf(base)
         elif tense == "perf":
             group = "participle"
+        elif tense == "imp_aff":
+            group = _group_imp(base, person, form, reg)
     if group and (tense, group) in _GROUPS:
         return {"key": f"irr:{tense}:{group}", "label": _GROUPS[(tense, group)],
                 "kind": "group"}

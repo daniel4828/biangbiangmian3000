@@ -49,7 +49,8 @@ _TENSE_EN = {
                  "trigger such as 'que', 'ojalá', 'para que')",
     "subj_impf": "Imperfecto de subjuntivo (imperfect subjunctive, -ra form — needs a "
                  "trigger such as 'si', 'quería que', 'como si')",
-    "imp_aff": "Imperativo afirmativo (affirmative imperative)",
+    "imp_aff": "Imperativo (affirmative command addressed to someone — use the form "
+               "exactly as given, without attaching object pronouns)",
     "part": "Participio (past participle)",
     "ger": "Gerundio (gerund)",
 }
@@ -58,6 +59,9 @@ _REFLEXIVE_PRONOUN = {"1s": "me", "2s": "te", "3s": "se", "1p": "nos", "2p": "os
 _PERSON_EN = {"1s": "1st person singular", "2s": "2nd person singular",
               "3s": "3rd person singular", "1p": "1st person plural",
               "2p": "2nd person plural", "3p": "3rd person plural"}
+# Imperative persons are addressees (#1540): 3s/3p are the formal usted/ustedes.
+_IMP_PERSON_EN = {"2s": "tú", "3s": "usted (formal)", "1p": "nosotros (let's …)",
+                  "2p": "vosotros", "3p": "ustedes"}
 
 
 def config(lang: str) -> dict | None:
@@ -94,6 +98,9 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
     pronoun in front: "me quejé", "me he quejado" (#1301)."""
     try:
         lemma = (lemma or "").strip().lower()
+        if tense == "imp_aff" and lemma.endswith("se") and len(lemma) > 4:
+            # The imperative attaches the pronoun: quéjate, quejémonos (#1540).
+            return lexicon.form_for(lemma, tense, person, lang)
         pronoun = ""
         if lemma.endswith("se") and len(lemma) > 4:
             pronoun = _REFLEXIVE_PRONOUN.get(person, "")
@@ -133,7 +140,8 @@ _TENSE_CONTEXT_ES = {
     "subj_pres": "a subjunctive trigger such as quiero que, ojalá, para que, es importante que",
     "subj_impf": "a past or unreal subjunctive trigger such as quería que, si yo…, "
                  "como si, ojalá (unreal)",
-    "imp_aff": "a direct command or request addressed to someone — imperative",
+    "imp_aff": "a direct request or instruction in dialogue, e.g. ¡…, por favor!; "
+               "usted/ustedes = polite address, nosotros = let's …",
     "part": "the past participle, e.g. in a perfect tense (he/ha/hemos …) or as an adjective",
     "ger": "an ongoing action: estar/seguir + gerund, or a simultaneous action",
 }
@@ -154,7 +162,8 @@ _TENSE_CUE_DE = {
     "ind_cond": "Konjunktiv II with würde / hätte / wäre",
     "subj_pres": "keep the trigger clearly visible (dass, damit, hoffentlich, es ist wichtig, dass …)",
     "subj_impf": "keep the trigger clearly visible (wollte, dass …; wenn … wäre/hätte; als ob …)",
-    "imp_aff": "Imperativ: eine direkte Aufforderung, z. B. 'Bring …!'",
+    "imp_aff": "German imperative matching the addressee: du-form (Komm!), Sie-form for "
+               "usted/ustedes (Kommen Sie!), 'Lass uns …' for nosotros, ihr-form for vosotros",
     "part": "Perfekt oder Partizip als Adjektiv",
     "ger": "Verlaufsform: gerade dabei …, oder gleichzeitige Handlung",
 }
@@ -177,7 +186,8 @@ def describe(slot: str) -> str:
     tense, _, person = (slot or "").partition(":")
     if not person:  # participle / gerund: no person
         return _TENSE_EN.get(tense, tense)
-    return f"{_TENSE_EN.get(tense, tense)}, {_PERSON_EN.get(person, person)}"
+    persons = _IMP_PERSON_EN if tense == "imp_aff" else _PERSON_EN
+    return f"{_TENSE_EN.get(tense, tense)}, {persons.get(person, person)}"
 
 
 # ---------------------------------------------------------------------------

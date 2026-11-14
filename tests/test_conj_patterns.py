@@ -111,7 +111,7 @@ def test_pattern_for_real_lexicon(real_lex, lemma, tense, person, key):
 
 def test_pattern_for_none_cases(small_lex):
     assert conj_patterns.pattern_for("hablar", "ind_pres", "1s", "fr") is None
-    assert conj_patterns.pattern_for("hablar", "imp_aff", "2s", "es") is None  # unknown tense
+    assert conj_patterns.pattern_for("hablar", "imp_neg", "2s", "es") is None  # unknown tense
     assert conj_patterns.pattern_for("casa", "ind_pres", "1s", "es") is None  # no verb
     assert conj_patterns.pattern_for("hablar", "ind_fut", "1s", "es") is None  # no form
     assert conj_patterns.pattern_for(None, "ind_pres", "1s", "es") is None
@@ -387,8 +387,9 @@ def test_new_patterns_are_not_limited_per_day(real_conj):
 
 def test_all_patterns_introduced_falls_back_to_rotation(real_conj):
     cfg = verb_slots.config("es")
-    keys = sorted({conj_patterns.pattern_for("hablar", t, p)["key"]
-                   for t in cfg["tenses"] for p in cfg["persons"]})
+    pats = [conj_patterns.pattern_for("hablar", t, p)
+            for t in cfg["tenses"] for p in cfg["persons"]]
+    keys = sorted({p["key"] for p in pats if p})  # no yo imperative (#1540)
     states = {(k, "recog"): _state(k, "recog", LATER) for k in keys}
     for seed in range(5):
         out = _assign([_card(1, "reading")], states, seed=seed)
