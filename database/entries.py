@@ -86,6 +86,22 @@ def get_word(word_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def rename_entry(word_id: int, new_word_zh: str, notes: str | None = None) -> None:
+    """Change an entry's headword (and, when given, its notes). Raises
+    sqlite3.IntegrityError when UNIQUE(word_zh, lang) is violated. Cards and
+    review history hang off the id and stay."""
+    conn = get_db()
+    try:
+        if notes is None:
+            conn.execute("UPDATE entries SET word_zh=? WHERE id=?", (new_word_zh, word_id))
+        else:
+            conn.execute("UPDATE entries SET word_zh=?, notes=? WHERE id=?",
+                         (new_word_zh, notes, word_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_word_by_zh(word_zh: str, lang: str | None = None) -> dict | None:
     conn = get_db()
     if lang is None:
@@ -387,7 +403,8 @@ def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
             lemma, tense = parsed
             forms.append(lemma)
             forms.extend(f for f in (verb_slots.target_form(lemma, tense, p, lang)
-                                     for p in verb_slots.PERSONS) if f)
+                                     for p in verb_slots.form_card_persons(lemma, tense, lang))
+                         if f)
     except Exception as e:
         logger.debug("form-card forms unavailable for %s — %s", word, e)
     return sorted({f for f in forms if f}, key=len, reverse=True)
@@ -412,11 +429,15 @@ def form_card_view(entry: dict | None) -> dict | None:
         if not parsed:
             return entry
         lemma, tense = parsed
-        row = [verb_slots.target_form(lemma, tense, p, "es") for p in verb_slots.PERSONS]
+        row = [verb_slots.target_form(lemma, tense, p, "es")
+               for p in verb_slots.form_card_persons(lemma, tense, "es")]
         row_text = ", ".join(f for f in row if f)
         entry["conjugation_row"] = row_text
         stored = (entry.get("definition_de") or "").strip()
-        if not stored or stored == row_text:
+        # old rows stored all six persons, whatever the card rotates over now
+        six_text = ", ".join(f for f in (verb_slots.target_form(lemma, tense, p, "es")
+                                         for p in verb_slots.PERSONS) if f)
+        if not stored or stored in (row_text, six_text):
             gloss = ""
             head = get_word_by_zh(lemma, "es")
             if head and (head.get("definition_de") or "").strip():

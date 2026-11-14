@@ -124,8 +124,7 @@ def test_real_lexicon_has_haber_supplement():
     lexicon.clear_cache()
     assert lexicon.form_for("haber", "ind_pret", "1s", "es") == "hube"
     assert lexicon.form_for("haber", "part", "", "es") == "habido"
-    cands = verb_slots.form_card_candidates("es", max_verbs=200, limit=1000)
-    assert "haber" in {c["lemma"] for c in cands}
+    assert verb_slots.irregular_card_plan("haber", "es")
 
 
 def _full_usage(n=1, **overrides):

@@ -572,19 +572,24 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 
 ## 西班牙语不规则动词形态卡（#1296）
 
-不规则动词需要专门练：每个（不规则动词 × 时态）一张卡，如 `tener · Indefinido`，**不是每人称一张**；人称在卡内轮换。**#1438 起**：25 个最常用不规则动词 × 全部七个时态（含该动词本身规则的时态，如 `tener · Imperfecto`），最多 175 张（`form_card_candidates(max_verbs=25, limit=175)`，任一人称缺形式的时态跳过）；每个时态日会引入约 25 张该时态的形态卡（其余新卡由「今日时态」的引入闸门暂挡，见下）。原来的「只收不规则时态、≤60 张」不再成立。
+**#1539 起（Daniel 2026-11-14 定）**：每个**不规则动词 × 它含不规则形式的时态**一张卡（如 `traer · Indefinido`），卡内**只在不规则的人称之间轮换**（`traer · Presente` 永远是 traigo）。时态 `verb_slots.IRREGULAR_CARD_TENSES` = Presente、Indefinido、Imperfecto、Futuro、Imperativo（肯定）、Participio、Gerundio；**不含 Subjuntivo、Condicional**；Perfecto 不单独建卡，由 Participio 代表。例：traer → Presente/Indefinido/Imperativo；resolver → Presente/Imperativo/Participio；subir、buscar → 无。#1438 的「25 动词 × 全部时态」和 `form_card_candidates()` 已删除。
+
+- 🔴 **不规则 = 按发音与规则构词不同，纯拼写变化不算**（`verb_slots._phon()` 音位键：c/qu/z、g/gu/j、i/y、重音都归一）：busqué、cojo、venzo、leyó、traído、trayendo 都是规则的。`irregular_persons()` / `irregular_form_tenses()` / `irregular_tenses()` / `verb_regularity()`（reg./irreg. 标签）/ `form_is_irregular()`（变位表红点，#1537）共用这一个定义——**不许再写第二份比较**
+- **加新动词自动建卡**：`routes/imports._generate_and_import_word()` 对 es 调 `irregular_cards.create_cards_for_verb()`，卡片照抄该动词 creating 卡的牌组和到期日（在 ★ List 里就同样挂起）；Browse 提升动词时 `promote_form_cards()` 把它挂在 Saved 里的形态卡一起提升
+- **一次性迁移**：`scripts/migrate_irregular_form_cards.py`（默认 dry-run，`--write` 才写，幂等）。同动词同时态的旧卡原样保留（FSRS 进度不丢），旧 Perfecto 改名为 Participio，其余旧卡**软删除**（`deleted_at`——`review_log` 是 ON DELETE CASCADE，硬删会丢复习历史），缺的新卡取该动词旧形态卡里最早的到期日和牌组，没有旧卡则取它 creating 卡的
+- **Imperativo/Participio/Gerundio 不受「今日时态」引入闸门管**（`sync_form_card_pause` 只管 `FORM_CARD_ALL_TENSES`）：它们不在时态轮换里，被闸门挡住就永远放不出来
 
 - **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=动词德语释义（#1444）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
-- **不规则性由数据推出，不手写清单**：`verb_slots.irregular_tenses()` 把词汇表里的形式与 `regular_form()` 规则生成的规则形式逐人称比较；**拼写变化（busqué、leyó）也算不规则**，这是有意的——它们正是值得练的。判断不规则用的时态 `FORM_CARD_TENSES` = pret → pres → fut → impf（含义不变）；形态卡可带的时态是 `FORM_CARD_ALL_TENSES`（七个，`perf` 经 `target_form()` 组合成 `he tenido`；`parse_form_card`、`surface_forms`、`assign_slots` 都按它走）。规则的时态，规律说明写「Regelmäßig in dieser Zeit.」
+- **不规则性由数据推出，不手写清单**：词汇表形式 vs. 规则构词（见上面 #1539 的发音规则）；旧卡（规则时态、Subjuntivo、Condicional）`parse_form_card` 仍认得，只是迁移后已软删除
 - **人称轮换复用 `assign_slots()`**：词头能被 `parse_form_card()` 解析成形态卡时，时态固定、只在六个人称里按"全局最少用、并列取最久没用"挑；`es["verb_slots"]` 启用的时态配置对形态卡不起作用。规则动词完全不变
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
 - **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选
-- **建卡是显式动作**：设置页 Spanish 块的按钮 → `POST /api/es/irregular-form-cards`（无 es 词汇表 400）→ `routes/imports.seed_es_irregular_form_cards()`：直接 `insert_word` + `insert_card(state='suspended')` 进 `Español::Saved`（★ List），不经导入器、**零 AI**；已存在的词头跳过，所以幂等。要上线复习从 Browse 提升，或带 body `{"activate": true}`（#1438）一次把所有还在 Saved 里的形态卡经 `promote_saved_word` 搬进今天的 Español Daily `creating` 牌组（结果多 `activated[]`；不带 body 的旧调用照旧）
+- **设置页按钮** → `POST /api/es/irregular-form-cards` → `seed_es_irregular_form_cards()`：#1539 起只跑迁移计划里的 **create** 部分（给收藏里所有动词补缺的形态卡，从不删除/改名），零 AI、幂等；body `{"activate": true}`（#1438）仍会把 Saved 里的形态卡提升到今天
 - 🔴 形态卡 `definition_de` 存真释义（#1444）；生产库的旧行仍存变位表，所以读路径 `database.form_card_view()` 负责替换（存的值等于变位表或为空时，取同语言原形词条的释义，否则词汇表 `gloss_de`；手改过的不动）并给出 `conjugation_row`，背面和详情页单独一行显示；正面提示走 `formCardHint()`（第一个义项，空格里显示德语词），新增读路径要显示释义时同样要过这个函数
 - 形态卡详情由 `database.form_card_detail()` 沿用同语言动词词条的词源、例句、变位表（#1446），只填形态卡自己为空的字段，不写库；动词没有词条时要先走加词管线建词条
 - **形态卡主句不显示 `¿Conjugación correcta?`**：该行在形态卡上是重复的；结果由评分推出（Again = 错，其余 = 对），前端 `_derivedConjOk()` 照常带 `conj_ok` + `sentence_id` 上报，所以仍进入 Muster 排程。普通词卡不变
-- **Condicional（#1504）**：`ind_cond` 是今日时态轮换的第 8 个时态（`languages.py` 的 `tenses` 末尾）和形态卡时态（`FORM_CARD_ALL_TENSES`）；`form_card_candidates()` 默认上限 = 25 × 时态数
-- **Imperativo（#1540）**：`imp_aff` 是 `es.verb_slots.tenses` 的第 9 个时态，权重 8（OpenSubtitles：明确的命令式形式约占限定式 5%，歧义形式平分进去约 15%）。**规则动词也按权重轮到**；没有 yo，3s/3p 是 usted/ustedes（标签 `Imperativo · usted`）。反身动词用词汇表的后附形（`quéjate`，不是 `te quéjate`）。`lexicon.form_for` 对命令式取**最短**形式：Wiktionary 把带后附代词的变体（`estate`/`dese`/`mantente`）也标成同一槽位且排在前面。模式卡：`reg:imp_aff:ar|er_ir` + `irr:imp_aff:short_tu`（ten/haz/di）/ `stem`（piensa）/ `subj`（tenga/busque）。**不是形态卡时态**（`FORM_CARD_ALL_TENSES` 不变）；已存的今日时态设置不会自动加入它，要在设置页勾选
+- **Condicional（#1504）**：`ind_cond` 是今日时态轮换的第 8 个时态（`languages.py` 的 `tenses` 末尾）（#1539 起形态卡不再含 Condicional）
+- **Imperativo（#1540）**：`imp_aff` 是 `es.verb_slots.tenses` 的第 9 个时态，权重 8（OpenSubtitles：明确的命令式形式约占限定式 5%，歧义形式平分进去约 15%）。**规则动词也按权重轮到**；没有 yo，3s/3p 是 usted/ustedes（标签 `Imperativo · usted`）。反身动词用词汇表的后附形（`quéjate`，不是 `te quéjate`）。`lexicon.form_for` 对命令式取**最短**形式：Wiktionary 把带后附代词的变体（`estate`/`dese`/`mantente`）也标成同一槽位且排在前面。模式卡：`reg:imp_aff:ar|er_ir` + `irr:imp_aff:short_tu`（ten/haz/di）/ `stem`（piensa）/ `subj`（tenga/busque）。不在 `FORM_CARD_ALL_TENSES`（今日时态闸门不管它），但 #1539 起是形态卡时态（`IRREGULAR_CARD_TENSES`）；已存的今日时态设置不会自动加入它，要在设置页勾选
 - 测试见 `tests/test_irregular_forms.py`、`tests/form_card_conj_derive.test.cjs`
 
 ## 西语变位表与区块初始状态（#1356）
@@ -1271,7 +1276,7 @@ GET    /quick                                        → Mac 快捷窗口页（#
 POST /api/words/{id}/to-day                          → 词条详情页 → Today / → Tomorrow：body {day, confirm?}；只在 ★ List → 直接提升；已在学 → 先返回 needs_confirmation，confirm=true 才重置为新卡（同 #675/#888）
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它
 GET  /api/add-word-ai/progress/{job_id}              → 轮询后台生成+导入的结果
-POST /api/es/irregular-form-cards                    → 创建西语动词形态卡进 Español ★ List（#1296；#1438 起 25 动词 × 7 时态）：{created[], skipped[], errors[], activated[]}；零 AI、幂等；无 es 词汇表 → 400
+POST /api/es/irregular-form-cards                    → 给收藏里的西语不规则动词补缺的形态卡（#1296；#1539 起只建不规则时态）：{created[], skipped[], errors[], activated[]}；零 AI、幂等；无 es 词汇表 → 400
                                                        可选 body {"activate": true}（#1438）→ 同时把 Saved 里的形态卡搬进今天的 creating 牌组并同步暂停；activate 非布尔 → 400；无 body 照旧
 GET    /api/es/tense-focus                           → 今日时态（#1434）：{settings, current, available}
 PUT    /api/es/tense-focus                           → 部分更新 {enabled?, tenses?, days?}；校验失败 400；成功后同步形态卡暂停（#1438）

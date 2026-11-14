@@ -6294,22 +6294,17 @@ table.fsrs-table td.ivl { font-weight: 700; }
   transition: transform 0.15s;
 }
 .conj-tense[open] .conj-chevron { transform: rotate(90deg); }
-/* Pattern status dots (#1395) */
-.conj-dot {
+/* Irregular-form marker (#1537): on the tense header and on each irregular form */
+.conj-irr-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   margin-left: 6px;
   border-radius: 50%;
-  border: 1.5px solid var(--muted);
+  background: #ef4444;
   vertical-align: middle;
   flex-shrink: 0;
 }
-.conj-row > .conj-dot { margin-left: auto; }
-.conj-dot-new      { background: transparent; border-color: var(--muted); }
-.conj-dot-due      { background: #ef4444; border-color: #ef4444; }
-.conj-dot-learning { background: #f59e0b; border-color: #f59e0b; }
-.conj-dot-review   { background: #22c55e; border-color: #22c55e; }
 
 /* Conjugation rating row on the card back (#1395) */
 .conj-rating-row {

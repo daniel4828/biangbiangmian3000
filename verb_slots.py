@@ -51,6 +51,8 @@ _TENSE_EN = {
                  "trigger such as 'si', 'quería que', 'como si')",
     "imp_aff": "Imperativo (affirmative command addressed to someone — use the form "
                "exactly as given, without attaching object pronouns)",
+    "part": "Participio (past participle)",
+    "ger": "Gerundio (gerund)",
 }
 # Reflexive pronoun in front of the conjugated form (#1301).
 _REFLEXIVE_PRONOUN = {"1s": "me", "2s": "te", "3s": "se", "1p": "nos", "2p": "os", "3p": "se"}
@@ -140,6 +142,8 @@ _TENSE_CONTEXT_ES = {
                  "como si, ojalá (unreal)",
     "imp_aff": "a direct request or instruction in dialogue, e.g. ¡…, por favor!; "
                "usted/ustedes = polite address, nosotros = let's …",
+    "part": "the past participle, e.g. in a perfect tense (he/ha/hemos …) or as an adjective",
+    "ger": "an ongoing action: estar/seguir + gerund, or a simultaneous action",
 }
 _TENSE_CUE_DE = {
     "ind_pres": "Präsens; keep markers like normalerweise, jetzt, jeden Tag",
@@ -160,6 +164,8 @@ _TENSE_CUE_DE = {
     "subj_impf": "keep the trigger clearly visible (wollte, dass …; wenn … wäre/hätte; als ob …)",
     "imp_aff": "German imperative matching the addressee: du-form (Komm!), Sie-form for "
                "usted/ustedes (Kommen Sie!), 'Lass uns …' for nosotros, ihr-form for vosotros",
+    "part": "Perfekt oder Partizip als Adjektiv",
+    "ger": "Verlaufsform: gerade dabei …, oder gleichzeitige Handlung",
 }
 
 
@@ -178,6 +184,8 @@ def tense_cue_de(slot: str) -> str:
 def describe(slot: str) -> str:
     """English description for the prompt: "Indefinido (preterite), 3rd person singular"."""
     tense, _, person = (slot or "").partition(":")
+    if not person:  # participle / gerund: no person
+        return _TENSE_EN.get(tense, tense)
     persons = _IMP_PERSON_EN if tense == "imp_aff" else _PERSON_EN
     return f"{_TENSE_EN.get(tense, tense)}, {persons.get(person, person)}"
 
@@ -195,10 +203,23 @@ def describe(slot: str) -> str:
 _FORM_LANG = "es"
 FORM_CARD_TENSES = ("ind_pret", "ind_pres", "ind_fut", "ind_impf")
 # Tenses a form card may carry (#1438): the eight of the "Zeit des Tages"
-# rotation. FORM_CARD_TENSES above stays the set used to judge irregularity.
+# rotation. FORM_CARD_TENSES above is the set irregular_tenses() looks at.
 FORM_CARD_ALL_TENSES = ("ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut",
                         "subj_pres", "subj_impf", "ind_cond")
+# Tenses that get an irregular-verb form card (#1539): the four indicative
+# tenses, the affirmative imperative and the two non-finite forms. No
+# subjunctive/conditional (they follow the indicative), no "perf" (the
+# participle card stands for the perfect).
+IRREGULAR_CARD_TENSES = ("ind_pres", "ind_pret", "ind_impf", "ind_fut",
+                         "imp_aff", "part", "ger")
 PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
+# Every tense a form-card headword may name (old cards stay parseable).
+_PARSE_TENSES = FORM_CARD_ALL_TENSES + tuple(
+    t for t in IRREGULAR_CARD_TENSES if t not in FORM_CARD_ALL_TENSES)
+_IMP_PERSONS = ("2s", "3s", "1p", "2p", "3p")
+_NO_PERSON_TENSES = ("part", "ger")
+_IMP_LABEL_DE = {"2s": "tú", "3s": "usted", "1p": "nosotros", "2p": "vosotros",
+                 "3p": "ustedes"}
 _SEP = " · "
 
 _ENDINGS = {
@@ -213,6 +234,24 @@ _ENDINGS = {
     ("ind_impf", "ir"): ("ía", "ías", "ía", "íamos", "íais", "ían"),
 }
 _FUT_ENDINGS = ("é", "ás", "á", "emos", "éis", "án")
+_COND_ENDINGS = ("ía", "ías", "ía", "íamos", "íais", "ían")
+_SUBJ_PRES_ENDINGS = {
+    "ar": ("e", "es", "e", "emos", "éis", "en"),
+    "er": ("a", "as", "a", "amos", "áis", "an"),
+    "ir": ("a", "as", "a", "amos", "áis", "an"),
+}
+_SUBJ_IMPF_ENDINGS = {
+    "ar": (("ara", "aras", "ara", "áramos", "arais", "aran"),
+           ("ase", "ases", "ase", "ásemos", "aseis", "asen")),
+    "er": (("iera", "ieras", "iera", "iéramos", "ierais", "ieran"),
+           ("iese", "ieses", "iese", "iésemos", "ieseis", "iesen")),
+}
+_SUBJ_IMPF_ENDINGS["ir"] = _SUBJ_IMPF_ENDINGS["er"]
+_IMP_ENDINGS = {
+    "ar": {"2s": "a", "3s": "e", "1p": "emos", "2p": "ad", "3p": "en"},
+    "er": {"2s": "e", "3s": "a", "1p": "amos", "2p": "ed", "3p": "an"},
+    "ir": {"2s": "e", "3s": "a", "1p": "amos", "2p": "id", "3p": "an"},
+}
 _PERSON_DE = {"1s": "1. Sg.", "2s": "2. Sg.", "3s": "3. Sg.",
               "1p": "1. Pl.", "2p": "2. Pl.", "3p": "3. Pl."}
 
@@ -242,46 +281,141 @@ def _lexicon_row(lemma: str, tense: str) -> list[str | None]:
     return [lexicon.form_for(lemma, tense, p, _FORM_LANG) for p in PERSONS]
 
 
-def irregular_tenses(lemma: str, lang: str) -> list[str]:
-    """Tenses (FORM_CARD_TENSES order) in which any lexicon form differs from
-    the regular one (case-insensitive; persons the lexicon lacks are skipped).
+# --- Irregularity by PRONUNCIATION (#1539) -----------------------------------
+# A form is irregular when it sounds different from the regular formation.
+# Pure spelling changes are regular: busqué, pagué, cojo, venzo, leyó, trayendo.
+# Both sides are reduced to a rough "sound spelling" and compared.
 
-    Orthographic changes (busqué, leyó, empecé) count as irregular too — they
-    are exactly the forms worth drilling, so this is deliberate. Never raises."""
-    out = []
+def _strip_accents(s: str) -> str:
+    """Remove accents but keep ü (güe/güi sounds the u)."""
+    s = s.replace("ü", "\0")
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    return unicodedata.normalize("NFC", s).replace("\0", "ü")
+
+
+def _cons(s: str) -> str:
+    """Spelling of consonant sounds -> one symbol per sound (g/j, c/z/qu, gu)."""
+    s = s.replace("gü", "Gw")
+    s = re.sub(r"gu(?=[ei])", "G", s)
+    s = re.sub(r"gu(?=[ao])", "Gw", s)
+    s = re.sub(r"g(?=[ei])", "X", s)
+    s = s.replace("g", "G").replace("j", "X")
+    s = re.sub(r"qu(?=[ei])", "K", s)
+    s = re.sub(r"c(?=[ei])", "S", s)
+    return s.replace("c", "K").replace("z", "S")
+
+
+def _vow(s: str) -> str:
+    """y between vowels = i; ñ/ll swallow a following i."""
+    s = re.sub(r"(?<=[aeiou])y(?=[aeiou])", "i", s)
+    s = re.sub(r"(?<=ñ)i(?=[aeo])", "", s)
+    return re.sub(r"(?<=ll)i(?=[aeo])", "", s)
+
+
+def _phon(s: str) -> str:
+    return _vow(_cons(_strip_accents(s.lower())))
+
+
+def _sounds_regular(form: str, lemma: str, ending: str) -> bool:
+    """Does `form` sound like lemma[:-2] + `ending` (the regular formation)?"""
+    stem = _cons(_strip_accents(lemma))[:-2]  # the stem as pronounced in the infinitive
+    return _phon(form) == _vow(stem + _strip_accents(ending))
+
+
+def _regular_endings(end: str, tense: str, person: str) -> tuple[str, ...]:
+    """Regular endings of one table cell, relative to lemma[:-2] (futuro and
+    condicional: relative to the infinitive's ar/er/ir). () = no verdict."""
+    if end not in ("ar", "er", "ir"):
+        return ()
+    if tense == "part":
+        return ("ado" if end == "ar" else "ido",)
+    if tense == "ger":
+        return ("ando" if end == "ar" else "iendo",)
+    if tense == "imp_aff":
+        e = _IMP_ENDINGS[end].get(person)
+        return (e,) if e else ()
+    if person not in PERSONS:
+        return ()
+    idx = PERSONS.index(person)
+    if tense in ("ind_pres", "ind_pret", "ind_impf"):
+        return (_ENDINGS[(tense, end)][idx],)
+    if tense == "ind_fut":
+        return (end + _FUT_ENDINGS[idx],)
+    if tense == "ind_cond":
+        return (end + _COND_ENDINGS[idx],)
+    if tense == "subj_pres":
+        return (_SUBJ_PRES_ENDINGS[end][idx],)
+    if tense == "subj_impf":
+        return tuple(e[idx] for e in _SUBJ_IMPF_ENDINGS[end])
+    return ()
+
+
+def _cell_regular(form: str, lemma: str, tense: str, person: str) -> bool | None:
+    """True/False: does this cell sound regular? None = no verdict (not an
+    -ar/-er/-ir verb, unknown tense/person)."""
+    endings = _regular_endings(lemma[-2:], tense, person)
+    if not endings or not form:
+        return None
+    return any(_sounds_regular(form, lemma, e) for e in endings)
+
+
+def _row_irregular_persons(lemma: str, tense: str, forms: dict) -> list[str]:
+    """Persons (given order) of {person: form} that sound irregular."""
+    return [p for p, f in forms.items() if _cell_regular(f, lemma, tense, p) is False]
+
+
+def irregular_persons(lemma: str, tense: str, lang: str) -> list[str]:
+    """Persons (PERSONS order) whose lexicon form does not sound regular, for a
+    tense of IRREGULAR_CARD_TENSES. imp_aff only has 2s/3s/1p/2p/3p; part/ger
+    answer [""] when irregular, else []. Reflexive verbs are judged by the base
+    verb. Persons the lexicon lacks are skipped. Never raises."""
     try:
-        lemma = (lemma or "").strip().lower()
-        for tense in FORM_CARD_TENSES:
-            for person, form in zip(PERSONS, _lexicon_row(lemma, tense)):
-                if not form:
-                    continue
-                reg = regular_form(lemma, tense, person)
-                if reg is None:
-                    break
-                if form.lower() != reg.lower():
-                    out.append(tense)
-                    break
+        if lang != _FORM_LANG or tense not in IRREGULAR_CARD_TENSES:
+            return []
+        lemma = _base_verb(lemma)
+        if lemma[-2:] not in ("ar", "er", "ir"):
+            return []
+        if tense in _NO_PERSON_TENSES:
+            form = lexicon.form_for(lemma, tense, "", lang)
+            return [""] if _cell_regular(form or "", lemma, tense, "") is False else []
+        persons = _IMP_PERSONS if tense == "imp_aff" else PERSONS
+        forms = {p: lexicon.form_for(lemma, tense, p, lang) for p in persons}
+        return _row_irregular_persons(lemma, tense, {p: f for p, f in forms.items() if f})
     except Exception as e:
-        logger.debug("irregular_tenses(%r) failed — %s", lemma, e)
-    return out
+        logger.debug("irregular_persons(%r, %r) failed — %s", lemma, tense, e)
+        return []
+
+
+def irregular_form_tenses(lemma: str, lang: str) -> list[str]:
+    """Tenses of IRREGULAR_CARD_TENSES in which the verb has irregular persons
+    — the tenses that get a form card. Never raises."""
+    return [t for t in IRREGULAR_CARD_TENSES if irregular_persons(lemma, t, lang)]
+
+
+def irregular_tenses(lemma: str, lang: str) -> list[str]:
+    """Tenses (FORM_CARD_TENSES order) in which any lexicon form sounds
+    different from the regular formation (persons the lexicon lacks are
+    skipped).
+
+    Only pronunciation counts (#1539): spelling changes such as busqué, cojo,
+    leyó are regular. Stem changes (resuelvo), yo-go (tengo) and strong
+    preterites (tuve) are irregular. Never raises."""
+    return [t for t in FORM_CARD_TENSES if irregular_persons(lemma, t, lang)]
 
 
 def verb_regularity(lemma: str, lang: str) -> str | None:
     """"regular" / "irregular" for a verb headword, None when it is no verb
     the lexicon knows (#1315: Etikett "reg."/"irreg." auf der Karte).
 
-    Same definition as irregular_tenses() — orthographic changes count as
-    irregular. Never raises."""
+    "irregular" iff the verb has an irregular tense that gets a form card
+    (irregular_form_tenses(); pronunciation only, #1539). Never raises."""
     try:
         if lang != _FORM_LANG:
             return None
-        lemma = (lemma or "").strip().lower()
-        # Reflexiv (rendirse, quejarse): Regularität des Grundverbs gilt (#1352)
-        if len(lemma) > 4 and lemma.endswith(("arse", "erse", "irse")):
-            lemma = lemma[:-2]
+        lemma = _base_verb(lemma)  # Reflexiv (rendirse): Grundverb gilt (#1352)
         if not any(f for t in FORM_CARD_TENSES for f in _lexicon_row(lemma, t)):
             return None
-        return "irregular" if irregular_tenses(lemma, lang) else "regular"
+        return "irregular" if irregular_form_tenses(lemma, lang) else "regular"
     except Exception as e:
         logger.debug("verb_regularity(%r) failed — %s", lemma, e)
         return None
@@ -295,8 +429,27 @@ def form_card_word(lemma: str, tense: str) -> str:
 def parse_form_card(word: str) -> tuple[str, str] | None:
     """Inverse of form_card_word(): "tener · Indefinido" -> ("tener", "ind_pret").
 
-    None unless the pattern matches, the label maps back to a FORM_CARD_ALL_TENSES
-    tense, and the verb has a form in that tense (#1438: all seven). Never raises."""
+    None unless the pattern matches, the label maps back to a tense of
+    FORM_CARD_ALL_TENSES or IRREGULAR_CARD_TENSES (old cards must keep parsing),
+    and the verb has a form in that tense. Never raises."""
+    try:
+        split = split_form_card_word(word)
+        if split is None:
+            return None
+        lemma, tense = split
+        probe = "" if tense in _NO_PERSON_TENSES else ("2s" if tense == "imp_aff" else "1s")
+        if target_form(lemma, tense, probe, _FORM_LANG) is None:
+            return None
+        return lemma, tense
+    except Exception:
+        return None
+
+
+def split_form_card_word(word: str) -> tuple[str, str] | None:
+    """Like parse_form_card() but without the "verb has this form" check: only
+    the headword shape "lemma · Label" with a known tense label. Lets the
+    migration (#1539) recognise cards whose tense the lexicon cannot conjugate.
+    Never raises."""
     try:
         if not word or _SEP not in word:
             return None
@@ -304,29 +457,37 @@ def parse_form_card(word: str) -> tuple[str, str] | None:
         lemma, label = lemma.strip().lower(), label.strip()
         if not lemma or len(lemma.split()) != 1:
             return None
-        for tense in FORM_CARD_ALL_TENSES:
+        for tense in _PARSE_TENSES:
             if lexicon._TENSE_LABELS.get(tense) == label:
-                if target_form(lemma, tense, "1s", _FORM_LANG) is None:
-                    return None
                 return lemma, tense
         return None
     except Exception:
         return None
 
 
-def _differing_persons(lemma: str, tense: str, row: list[str]) -> list[str]:
-    out = []
-    for person, form in zip(PERSONS, row):
-        reg = regular_form(lemma, tense, person)
-        if reg is not None and form.lower() != reg.lower():
-            out.append(_PERSON_DE[person])
-    return out
+def form_card_persons(lemma: str, tense: str, lang: str) -> list[str]:
+    """The persons a form card rotates over: the irregular ones; when the tense
+    has none (old cards in a regular tense) every person with a form. part/ger:
+    [""] (one form). Never raises."""
+    try:
+        if tense in _NO_PERSON_TENSES:
+            return [""] if target_form(lemma, tense, "", lang) else []
+        irr = irregular_persons(lemma, tense, lang)
+        if irr:
+            return irr
+        persons = _IMP_PERSONS if tense == "imp_aff" else PERSONS
+        return [p for p in persons if target_form(lemma, tense, p, lang)]
+    except Exception:
+        return []
 
 
 def _unregular_note(lemma: str, tense: str, row: list[str]) -> str:
-    """Generic fallback note. Person labels already end in "." ("3. Sg."), so
-    the sentence period is only added when the last label doesn't supply one."""
-    text = "Unregelmäßig in: " + (", ".join(_differing_persons(lemma, tense, row))
+    """Generic fallback note listing the irregular persons. Person labels
+    already end in "." ("3. Sg."), so the sentence period is only added when
+    the last label doesn't supply one."""
+    persons = _row_irregular_persons(
+        lemma, tense, {p: f for p, f in zip(PERSONS, row) if f})
+    text = "Unregelmäßig in: " + (", ".join(_PERSON_DE[p] for p in persons)
                                   or "einzelnen Formen")
     return text if text.endswith(".") else text + "."
 
@@ -345,136 +506,119 @@ def _stem_change(lemma: str, row: list[str]) -> str | None:
     return None
 
 
-def _pattern(lemma: str, tense: str, row: list[str]) -> tuple[str, str]:
-    """(category key, German note) for one form card. The key groups cards that
-    share a pattern, for the "Wie: …" list. An EMPTY key means "generic note,
-    no real pattern category" — such cards get no "Wie:" (it would group
-    unrelated verbs: ser, estar, ver, saber)."""
+def _pattern_note(lemma: str, tense: str, row: list[str]) -> str:
+    """German note for one form card. `row` = the six forms in PERSONS order
+    (None/"" for a missing one); imp_aff/part/ger read the lexicon instead."""
+    if tense == "imp_aff":
+        parts = []
+        for p in irregular_persons(lemma, tense, _FORM_LANG):
+            form = lexicon.form_for(_base_verb(lemma), tense, p, _FORM_LANG)
+            parts.append(f"{form} ({_IMP_LABEL_DE[p]})")
+        return ("Unregelmäßiger Imperativ: " + ", ".join(parts) + "." if parts
+                else "Regelmäßiger Imperativ.")
+    if tense in _NO_PERSON_TENSES:
+        form = lexicon.form_for(_base_verb(lemma), tense, "", _FORM_LANG) or ""
+        irregular = bool(irregular_persons(lemma, tense, _FORM_LANG))
+        if tense == "part":
+            if not irregular:
+                return "Regelmäßiges Partizip."
+            return f"Unregelmäßiges Partizip: {form} (he {form} …)."
+        return (f"Unregelmäßiges Gerundio: {form}." if irregular
+                else "Regelmäßiges Gerundio.")
     if tense == "perf":
         part = row[0].split()[-1] if row and row[0] else ""
-        if part and not part.lower().endswith(("ado", "ido")):
-            return "perf_part", f"Unregelmäßiges Partizip: {part} (haber + Partizip)."
-        return "", "Regelmäßig in dieser Zeit (haber + Partizip)."
+        if part and _cell_regular(part, lemma, "part", "") is False:
+            return f"Unregelmäßiges Partizip: {part} (haber + Partizip)."
+        return "Regelmäßig in dieser Zeit (haber + Partizip)."
     if tense == "subj_pres":
-        return "", "Subjuntivo: Stamm von der 1. Sg. (yo) des Indikativs abgeleitet."
+        return "Subjuntivo: Stamm von der 1. Sg. (yo) des Indikativs abgeleitet."
     if tense == "subj_impf":
-        return "", "Subjuntivo Imperfecto: Stamm von der 3. Pl. Indefinido (-ron → -ra/-ras/…)."
+        return "Subjuntivo Imperfecto: Stamm von der 3. Pl. Indefinido (-ron → -ra/-ras/…)."
     if tense in ("ind_pres", "ind_pret", "ind_impf", "ind_fut"):
-        regs = [regular_form(lemma, tense, p) for p in PERSONS]
-        if all(regs) and all(f.lower() == r.lower() for f, r in zip(row, regs)):
-            return "", "Regelmäßig in dieser Zeit."
+        forms = {p: f for p, f in zip(PERSONS, row) if f}
+        if not _row_irregular_persons(lemma, tense, forms):
+            return "Regelmäßig in dieser Zeit."
+        if len(forms) < len(PERSONS):  # incomplete row: only the generic note is safe
+            return _unregular_note(lemma, tense, row)
     if tense == "ind_pret":
         reg1 = (regular_form(lemma, tense, "1s") or "").lower()
         first = row[0].lower()
         if lemma in ("ser", "ir"):
-            return "", ("ser und ir haben dasselbe Indefinido: "
-                                  "fui, fuiste, fue, fuimos, fuisteis, fueron.")
+            return ("ser und ir haben dasselbe Indefinido: "
+                    "fui, fuiste, fue, fuimos, fuisteis, fueron.")
         if len(first) < 3:
             # vi/di: monosyllables lose the accent; not a pretérito fuerte.
             note = f"Einsilbige Formen ohne Akzent ({row[0]}, {row[2]})."
             if lemma == "dar":
                 note += " dar konjugiert wie ein -er/-ir-Verb (di, diste, dio …)."
-            return "", note
+            return note
         if first.endswith("e") and first != reg1:
             note = ("Starkes Indefinido (pretérito fuerte): unbetonte Endungen -e, -iste, -o, "
                     "-imos, -isteis, -ieron.")
-            key = "pret_strong"
             if row[5].lower().endswith("eron") and not row[5].lower().endswith("ieron"):
                 note += " 3. Pl. auf -eron."
-                key = "pret_strong_eron"
-            return key, note
-        return "", _unregular_note(lemma, tense, row)
+            return note
+        return _unregular_note(lemma, tense, row)
     if tense == "ind_pres":
-        parts, keys = [], []
+        parts = []
         reg1 = regular_form(lemma, tense, "1s") or ""
         if row[0].lower().endswith("go") and not reg1.endswith("go"):
             parts.append("yo-Form auf -go.")
-            keys.append("go")
         elif row[0].lower().endswith("zco") and not reg1.endswith("zco"):
             parts.append("yo-Form auf -zco.")
-            keys.append("zco")
         change = _stem_change(lemma, row)
         if change:
             parts.append(f"Stammwechsel {change} (nicht in nosotros/vosotros).")
-            keys.append(change)
         if parts:
-            return "pres_" + "_".join(keys), " ".join(parts)
-        return "", _unregular_note(lemma, tense, row)
+            return " ".join(parts)
+        return _unregular_note(lemma, tense, row)
     if tense == "ind_fut":
         stem = row[0][:-1] if row[0].endswith("é") else row[0]
-        return "fut_stem", f"Unregelmäßiger Futurstamm: {stem}- (Endungen regelmäßig)."
+        return f"Unregelmäßiger Futurstamm: {stem}- (Endungen regelmäßig)."
     if tense == "ind_impf":
-        return "impf", "Nur ser, ir und ver haben ein unregelmäßiges Imperfecto."
+        return "Nur ser, ir und ver haben ein unregelmäßiges Imperfecto."
     if tense == "ind_cond":
         first = row[0].lower() if row and row[0] else ""
         if not first.endswith("ía"):
-            return "", _unregular_note(lemma, tense, row)
+            return _unregular_note(lemma, tense, row)
         if first == lemma.lower() + "ía":
-            return "", "Regelmäßig in dieser Zeit (Infinitiv + -ía, -ías …)."
-        return "cond_stem", (f"Unregelmäßiger Condicionalstamm: {first[:-2]}- "
-                             "(wie im Futuro, Endungen -ía, -ías, -ía, -íamos, -íais, -ían).")
-    return "", ""
+            return "Regelmäßig in dieser Zeit (Infinitiv + -ía, -ías …)."
+        return (f"Unregelmäßiger Condicionalstamm: {first[:-2]}- "
+                "(wie im Futuro, Endungen -ía, -ías, -ía, -íamos, -íais, -ían).")
+    return ""
 
 
 def pattern_note(lemma: str, tense: str, row: list[str], lang: str) -> str:
     """Short German explanation of what is irregular (heuristic). Never raises."""
     try:
-        return _pattern(lemma, tense, row)[1]
+        return _pattern_note(lemma, tense, row)
     except Exception:
         return ""
 
 
-def form_card_candidates(lang: str, max_verbs: int = 25, limit: int | None = None) -> list[dict]:
-    """The form cards worth creating: the `max_verbs` most frequent irregular
-    verbs × ALL configured tenses (also those in which the verb is regular,
-    e.g. "tener · Imperfecto"), capped at `limit` (default: max_verbs ×
-    number of configured tenses). A tense is skipped when any of its six
-    forms is unavailable.
-
-    Each item: {lemma, tense, word_zh, row (6 forms), note_de}. Deterministic.
-
-    Never raises — [] without a lexicon."""
-    items: list[dict] = []
-    keys: list[str] = []
+def irregular_card_plan(lemma: str, lang: str) -> list[dict]:
+    """The form cards a verb should have (#1539): one per tense of
+    irregular_form_tenses(), as [{lemma, tense, word_zh, persons, note_de}].
+    [] for non-verbs, reflexive verbs (no form-card support), verbs without
+    irregular forms and anything but Spanish. Never raises."""
+    out: list[dict] = []
     try:
-        cfg = config(lang)
-        tenses = list(cfg["tenses"]) if cfg else []
-        if limit is None:
-            limit = max_verbs * len(tenses)
-        verbs = 0
-        for lemma in lexicon.verb_lemmas(lang):
-            if verbs >= max_verbs or len(items) >= limit:
-                break
-            if lemma.endswith("se"):
-                continue
-            if not irregular_tenses(lemma, lang):
-                continue
-            taken = 0
-            for tense in tenses:
-                if len(items) >= limit:
-                    break
-                row = [target_form(lemma, tense, p, lang) for p in PERSONS]
-                if not all(row):
-                    continue
-                key, note = _pattern(lemma, tense, row)
-                items.append({"lemma": lemma, "tense": tense,
-                              "word_zh": form_card_word(lemma, tense),
-                              "row": row, "note_de": note})
-                keys.append(f"{tense}:{key}" if key else "")
-                taken += 1
-            if taken:
-                verbs += 1
-        for item, key in zip(items, keys):
-            if not key:
-                continue
-            like =[o["lemma"] for o, k in zip(items, keys)
-                    if k == key and o["lemma"] != item["lemma"]][:4]
-            if like:
-                item["note_de"] += " Wie: " + ", ".join(like) + "."
+        lemma = (lemma or "").strip().lower()
+        if lang != _FORM_LANG or not lemma or _base_verb(lemma) != lemma \
+                or lemma.endswith("se"):
+            return []
+        info = lexicon.lemma_info(lemma, lang)
+        if not info or info.get("pos") != "v":
+            return []
+        for tense in irregular_form_tenses(lemma, lang):
+            row = [target_form(lemma, tense, p, lang) for p in PERSONS]
+            out.append({"lemma": lemma, "tense": tense,
+                        "word_zh": form_card_word(lemma, tense),
+                        "persons": irregular_persons(lemma, tense, lang),
+                        "note_de": pattern_note(lemma, tense, row, lang)})
     except Exception as e:
-        logger.warning("form_card_candidates failed — %s", e)
-        return []
-    return items
+        logger.warning("irregular_card_plan(%r) failed — %s", lemma, e)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -712,20 +856,29 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
 
         usage = usage_by_word.get(card.get("word_id"))
         entry = None
+        # A form card only rotates over its own (irregular) persons (#1539).
+        if parsed:
+            allowed = form_card_persons(lemma, tense, lang)
+        else:
+            allowed = list(PERSONS)
         # creating + irregular verb: the irregularity type picks the person (#1440)
-        if use_patterns and card.get("category") == "creating":
+        if (use_patterns and card.get("category") == "creating"
+                and tense in conj_patterns.TENSES):
             try:
                 plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang,
                                                                usage=usage, local=local,
                                                                weights=pw)
-                        if target_form(lemma, tense, x, lang)]
+                        if x in allowed and target_form(lemma, tense, x, lang)]
             except Exception as e:
                 logger.warning("focus persons of %r failed — %s", lemma, e)
                 plan = []
             entry = make_entry(plan[0]) if plan else None
         if entry is None:
-            avail = [x for x in PERSONS if target_form(lemma, tense, x, lang)]
-            entry = make_entry(pick(avail, tense, usage)) if avail else None
+            avail = [x for x in allowed if target_form(lemma, tense, x, lang)]
+            if len(avail) == 1:  # also the person-less participle/gerund ("")
+                entry = make_entry(avail[0])
+            elif avail:
+                entry = make_entry(pick(avail, tense, usage))
         if entry:
             out[card["word_id"]] = entry
             local[entry["slot"]] = local.get(entry["slot"], 0) + 1
@@ -802,8 +955,9 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
             if parsed:
                 # Form card (#1296): the tense is fixed by the card, only the
                 # person rotates; the enabled-tenses config does not apply.
+                # Only its irregular persons (#1539).
                 lemma, tense = parsed
-                for person in PERSONS:
+                for person in form_card_persons(lemma, tense, lang):
                     form = target_form(lemma, tense, person, lang)
                     if form:
                         options.append((f"{tense}:{person}", form, w_person.get(person, 1.0)))
@@ -948,29 +1102,79 @@ def _base_verb(lemma: str) -> str:
 
 def tense_is_irregular(lemma: str, tense: str, lang: str) -> bool:
     """Is `tense` irregular for this verb? Reflexive verbs are judged by the
-    base verb. ind_pres/ind_pret/ind_impf/ind_fut come from irregular_tenses();
-    the rest is derived: ind_cond follows ind_fut (same stem), subj_pres follows
-    ind_pres (built on the yo-form), subj_impf follows ind_pret (built on the
-    ellos-form); perf is irregular iff the lexicon participle differs from the
-    regular one (-ar -> -ado, -er/-ir -> -ido; missing participle = regular).
+    base verb. Tenses of IRREGULAR_CARD_TENSES: irregular iff irregular_persons()
+    is non-empty (pronunciation, #1539). The rest is derived: ind_cond follows
+    ind_fut (same stem), subj_pres follows ind_pres (built on the yo-form),
+    subj_impf follows ind_pret (built on the ellos-form); perf is irregular iff
+    the participle is (missing participle = regular).
     Never raises (False on error)."""
     try:
         lemma = _base_verb(lemma)
+        if tense in IRREGULAR_CARD_TENSES:
+            return bool(irregular_persons(lemma, tense, lang))
         if tense == "perf":
-            part = lexicon.form_for(lemma, "part", "", lang)
-            if not part:
-                return False
-            if lemma.endswith("ar"):
-                regular = lemma[:-2] + "ado"
-            elif lemma.endswith(("er", "ir")):
-                regular = lemma[:-2] + "ido"
-            else:
-                return False
-            return part.lower() != regular
+            return bool(irregular_persons(lemma, "part", lang))
         base = _DERIVED_TENSE.get(tense, tense)
         return base in irregular_tenses(lemma, lang)
     except Exception:
         return False
+
+
+_REFLEXIVE_PRONOUNS = ("me ", "te ", "se ", "nos ", "os ")
+
+
+def _label_tense_code(label) -> str | None:
+    s = _norm_label(label)
+    if s.startswith("participio"):
+        return "part"
+    if s.startswith("gerundio"):
+        return "ger"
+    if s.startswith("imperativo"):
+        return None if "negativ" in s else "imp_aff"
+    return tense_code_for_label(label)
+
+
+def form_is_irregular(lemma: str, tense_label, person_label, form, lang: str) -> bool | None:
+    """Does this one conjugation-table cell sound different from the regular
+    formation (#1537, #1539)? True/False, or None when there is no verdict
+    (not Spanish, unknown tense such as the negative imperative, not an
+    -ar/-er/-ir verb).
+
+    Pronunciation only, like irregular_persons(): resuelvo, tengo, traiga are
+    irregular; busqué, cojo, leyó are not. Perfecto = haber + participle:
+    irregular iff the participle is. Reflexive verbs are judged by the base
+    verb with the pronoun stripped. Cells listing variants ("resolviera /
+    resolviese") are irregular if any variant is. Never raises."""
+    try:
+        if lang != _FORM_LANG:
+            return None
+        lemma = _base_verb(lemma)
+        tense = _label_tense_code(tense_label)
+        if tense is None:
+            return None
+        person = person_code_for_label(person_label) if person_label else ""
+        if tense in _NO_PERSON_TENSES:
+            person = ""
+        text = (form or "").strip().lower()
+        variants = [v.strip() for v in re.split(r"[/,]", text) if v.strip()]
+        if not variants:
+            return None
+        verdicts = []
+        for v in variants:
+            for pron in _REFLEXIVE_PRONOUNS:
+                if v.startswith(pron):
+                    v = v[len(pron):]
+                    break
+            if tense == "perf":  # haber + participle: only the participle can be irregular
+                verdict = _cell_regular(v.split()[-1], lemma, "part", "")
+            else:
+                verdict = _cell_regular(v, lemma, tense, person or "")
+            if verdict is None:
+                return None
+            verdicts.append(verdict)
+        return not all(verdicts)
+    except Exception:
+        return None
 
 
 def _slot_lemma(word_zh: str, lang: str) -> str | None:
