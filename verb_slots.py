@@ -585,7 +585,7 @@ def focus_person_weights(lang: str) -> dict | None:
 def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
     """Slots in focus mode (#1434). Every card rotates over the persons on its
     OWN (#1475): the person this word has drilled least in the tense (its story
-    history, main sentences + Folgesätze), then the person given least often to
+    history, main sentences + legacy Folgesätze rows), then the person given least often to
     the other cards of this story (so cards with the same history — e.g. form
     cards introduced together — differ), then the person least drilled over all
     words, then the oldest last use, then PERSONS order. Exception (#1440): a

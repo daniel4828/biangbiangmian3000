@@ -329,8 +329,8 @@ def init_db() -> None:
     # card's "Warum diese Zeitform?" button without another AI request.
     if "tense_reason" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN tense_reason TEXT")
-    # Folgesatz (#1401): extra sentence for the same verb after a creating card;
-    # holds the verb's entry id (the sentence itself has no story_sentence_words rows).
+    # Legacy, feature removed (#1536; was Folgesatz #1401): old rows are filtered
+    # out (followup_word_id IS NULL), nothing writes the column any more.
     if "followup_word_id" not in ss_cols:
         conn.execute("ALTER TABLE story_sentences ADD COLUMN followup_word_id INTEGER")
     # Per-sentence language for the multi-language story (#1378).

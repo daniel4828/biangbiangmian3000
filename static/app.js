@@ -4368,25 +4368,6 @@ function _esConjSettingsHtml() {
     </div>
     <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Sätze mit Verb-Slot bekommen Kontext, der die Zeit eindeutig macht (ayer, siempre, esta semana …), und die deutsche Übersetzung macht die KI statt Google, mit Signalwörtern (gestern / früher immer / heute schon …). Aus = nur Google.</div>
     <div class="keymap-row">
-      <span class="keymap-label">Muster pro Verb und Tag (Creating)</span>
-      <input type="number" min="1" max="5" step="1" value="${_escHtml(String(s.prod_per_verb))}" style="width:80px" ${dis}
-             onchange="saveEsConjSettings({prod_per_verb: Number(this.value)})">
-    </div>
-    <div class="keymap-row">
-      <span class="keymap-label">Folgesätze pro Tag (gesamt)</span>
-      <input type="number" min="0" max="100" step="1" value="${_escHtml(String(s.followups_per_day))}" style="width:80px" ${dis}
-             onchange="saveEsConjSettings({followups_per_day: Number(this.value)})">
-    </div>
-    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Creating: nach der Karte folgen bis zu (N−1) Folgesätze mit demselben Verb, nur Konjugation bewerten. Fällige Muster zuerst, dann neue. Listening/Reading: 1 Muster pro Verb. Folgesätze gesamt: 0 = aus.</div>
-    <div class="keymap-row">
-      <span class="keymap-label">Neues unregelmäßiges Verb: alle Muster beim ersten Mal</span>
-      <label class="switch-wrap">
-        <input type="checkbox" ${s.intro_series ? 'checked' : ''} ${dis}
-               onchange="saveEsConjSettings({intro_series: this.checked})" style="width:18px;height:18px;cursor:pointer">
-      </label>
-    </div>
-    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Kommt die Creating-Karte eines neuen unregelmäßigen Verbs zum ersten Mal, folgen Folgesätze für jedes unregelmäßige Muster in allen Zeiten (tener: tengo, tiene, tenemos, tuvo, tenía, ha tenido, tendrá, tenga, tuviera). Zählt nicht gegen das Tageslimit. Regelmäßige Verben: nichts.</div>
-    <div class="keymap-row">
       <span class="keymap-label">Ziel-Behaltensrate</span>
       <input type="number" min="0.80" max="0.97" step="0.01" value="${_escHtml(String(s.desired_retention))}" style="width:80px" ${dis}
              onchange="saveEsConjSettings({desired_retention: Number(this.value)})">
@@ -4988,7 +4969,7 @@ function renderSettings() {
   pages.spanish = { title: 'Spanish', icon: '🇪🇸', desc: 'Irregular verb cards, verb slot weights', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Zeit des Tages</h2>
-      <p class="keymap-hint">Pro Tag genau eine Zeit; darin laufen die Personen in fester Reihenfolge (yo, tú, él, nosotros, vosotros, ellos). Folgesätze nehmen die jeweils nächsten Personen.</p>
+      <p class="keymap-hint">Pro Tag genau eine Zeit; darin laufen die Personen in fester Reihenfolge (yo, tú, él, nosotros, vosotros, ellos).</p>
       ${_esTenseFocusHtml()}
     </div>
     <div class="keymap-panel">
@@ -15981,10 +15962,8 @@ function _derivedConjOk(c, s, rating) {
 function _renderConjRatingRow() {
   const row = document.getElementById('conj-rating-row');
   if (!row) return;
-  // Folgesätze (#1434): the conjugation rating is the only rating there.
   // Form cards: no manual row, the rating is derived in rate().
-  const show = _followupState ? !!sentence
-    : !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null && !formCardLemma(card));
+  const show = !!(sentence?.conj_rating && sentence?.conj_pattern && sentence?.id != null && !formCardLemma(card));
   row.style.display = show ? '' : 'none';
   row.classList.remove('conj-need');
   _setConjPendingRating(null);
@@ -15996,7 +15975,6 @@ function _renderConjRatingRow() {
 function setConjChoice(ok) {
   const row = document.getElementById('conj-rating-row');
   if (!row || row.style.display === 'none') return;
-  if (_followupState) { followupRate(ok); return; }   // Folgesatz: rate + advance (#1434)
   _conjChoice = (_conjChoice === ok) ? null : ok;   // clicking the active one deselects
   row.classList.remove('conj-need');
   _syncConjButtons();
@@ -16007,127 +15985,8 @@ function setConjChoice(ok) {
   }
 }
 
-// ── Folgesätze (#1401) ───────────────────────────────────────────────────────
-// After a creating card of a Spanish verb, 1-2 more sentences with the SAME verb
-// are shown one by one. Since #1434 they look exactly like a normal creating card:
-// each Folgesatz is loaded (loadCard) as a synthetic copy of the rated card whose
-// sentence is the Folgesatz. On the back only the conjugation row is offered;
-// choosing richtig/falsch posts the rating and moves on. Vocabulary scheduling is
-// untouched. While _followupState is set: rate()/undo/requeue are disabled, the
-// 1-4 row is hidden (body.followup-mode) and #followup-banner shows "Frase extra i/n".
-let _followupState = null;            // {items, idx, busy, card, resolve}
-const _followupDone = new Set();      // sentence ids already rated or skipped
-
-// #1448: Folgesätze wait a few cards so the verb is no longer fresh in mind.
-const _FOLLOWUP_GAP_MIN = 3, _FOLLOWUP_GAP_MAX = 7;
-let _followupQueue = [];   // [{card, item, dueIn}]
-
-function _enqueueFollowups(ratedCard, items, rand = Math.random) {
-  let dueIn = 0;
-  for (const item of items) {
-    dueIn += _FOLLOWUP_GAP_MIN + Math.floor(rand() * (_FOLLOWUP_GAP_MAX - _FOLLOWUP_GAP_MIN + 1));
-    _followupQueue.push({ card: ratedCard, item, dueIn });
-  }
-}
-
-// One rated card has passed. Returns the entries now due (all when flush) and
-// keeps the rest queued.
-function _takeDueFollowups(flush) {
-  for (const q of _followupQueue) q.dueIn -= 1;
-  const due = _followupQueue.filter(q => flush || q.dueIn <= 0);
-  _followupQueue = _followupQueue.filter(q => !due.includes(q));
-  return due;
-}
-
-function _pendingFollowups(ratedCard) {
-  if (!ratedCard || ratedCard.category !== 'creating') return [];
-  return (story?.followups || []).filter(f =>
-    f.id != null && f.followup_word_id === ratedCard.word_id && !_followupDone.has(f.id)
-    && !_followupQueue.some(q => q.item.id === f.id));
-}
-
-function _runFollowups(ratedCard, items) {
-  return new Promise(resolve => {
-    _followupState = { items, idx: 0, busy: false, card: ratedCard, resolve };
-    document.body.classList.add('followup-mode');
-    _showFollowup();
-  });
-}
-
-// Load the current Folgesatz through the normal card path (a creating card).
-function _showFollowup() {
-  const st = _followupState;
-  if (!st) return;
-  const f = st.items[st.idx];
-  const synthetic = {
-    ...st.card,
-    intervals: {},
-    next_note: '',
-    // The followup row is hydrated like a story sentence; it only lacks the
-    // word_ids link to the card (so the card path accepts it as its sentence).
-    again_sentence: { ...f, word_ids: [st.card.word_id], conj_rating: true },
-  };
-  const banner = document.getElementById('followup-banner');
-  if (banner) {
-    banner.textContent = `Frase extra ${st.idx + 1}/${st.items.length}`;
-    banner.style.display = '';
-  }
-  loadCard(synthetic, _lastCounts);
-}
-
-function _finishFollowups() {
-  const st = _followupState;
-  if (!st) return;
-  _followupState = null;
-  document.body.classList.remove('followup-mode');
-  const banner = document.getElementById('followup-banner');
-  if (banner) banner.style.display = 'none';
-  st.resolve();
-}
-
-async function followupRate(ok) {
-  const st = _followupState;
-  if (!st || st.busy) return;
-  st.busy = true;
-  const f = st.items[st.idx];
-  try {
-    await api('POST', '/api/conj/followup-rate',
-              { sentence_id: f.id, ok: !!ok, card_id: st.card?.id ?? null });
-  } catch (e) {
-    showError('Folgesatz-Bewertung fehlgeschlagen: ' + e.message);
-  }
-  _followupDone.add(f.id);
-  st.busy = false;
-  st.idx += 1;
-  if (st.idx >= st.items.length) _finishFollowups();
-  else _showFollowup();
-}
-
-function followupSkip() {
-  const st = _followupState;
-  if (!st) return;
-  for (const f of st.items.slice(st.idx)) _followupDone.add(f.id);
-  _finishFollowups();
-}
-
-// Actions that would touch the real card / session while a Folgesatz is shown.
-// Escape (skip) is handled in the main Escape branch, richtig/falsch via
-// setConjChoice; everything else (reveal, translation toggles, …) works as on
-// any creating card.
-const _FOLLOWUP_BLOCKED_ACTIONS = ['new-sentence', 'undo', 'suspend-reading', 'suspend-listening',
-  'suspend-creating', 'delete-card', 'delete-card-alt', 'leech', 'regen-all', 'deck-options',
-  'story-modal'];
-function _followupKeyDown(e) {
-  if (_FOLLOWUP_BLOCKED_ACTIONS.some(id => e.key === _key(id))) {
-    e.preventDefault();
-    return true;
-  }
-  return false;
-}
-
 // ── Submit rating ───────────────────────────────────────────────────────────
 async function rate(rating) {
-  if (_followupState) return;   // Folgesätze only take the conjugation rating (#1434)
   // The conjugation must be rated first: otherwise 1-4 rates the card and the
   // richtig/falsch choice is silently skipped.
   const _conjRowGate = document.getElementById('conj-rating-row');
@@ -16165,7 +16024,6 @@ async function rate(rating) {
     const _derived = _derivedConjOk(card, sentence, rating);
     if (_derived !== null) url += `&conj_ok=${_derived}&sentence_id=${sentence.id}`;
     const reviewedId = card.id;
-    const ratedCard = card;
     const result = await api('POST', url);
     _sessionReviewedCount++;
     if (reviewedId != null) _sessionReviewedIds.push(reviewedId);
@@ -16176,15 +16034,6 @@ async function rate(rating) {
       _retentionData = r;
       _updateReviewRRBadge(deckId);
     }).catch(() => {});
-    // Folgesätze (#1401): extra conjugation sentences for a verb, queued after its
-    // creating card and shown a few cards later (#1448), BEFORE the next card loads.
-    const dueFollowups = _takeDueFollowups(false);
-    _enqueueFollowups(ratedCard, _pendingFollowups(ratedCard));
-    if (!result.next_card) dueFollowups.push(..._takeDueFollowups(true));
-    if (dueFollowups.length) {
-      if (result.counts) _lastCounts = result.counts;
-      for (const entry of dueFollowups) await _runFollowups(entry.card, [entry.item]);
-    }
     if (!result.next_card) {
       _lastCounts = result.counts || _lastCounts;
       rootDeckId = null;
@@ -16207,7 +16056,6 @@ async function rate(rating) {
 // untouched. The card is soft-requeued ~1 min out while a new sentence
 // regenerates in the background, so the user reviews other cards meanwhile.
 async function requeueNewSentence() {
-  if (_followupState) return;
   const btn = document.getElementById('new-sentence-btn');
   if (btn) btn.disabled = true;
   try {
@@ -16235,7 +16083,6 @@ async function requeueNewSentence() {
 
 // ── Undo last rating ─────────────────────────────────────────────────────────
 async function undoReview() {
-  if (_followupState) return;
   try {
     const result = await api('POST', '/api/review/undo');
     showView('review');
@@ -20238,12 +20085,6 @@ function renderFsrsInspector() {
 document.addEventListener('keydown', async e => {
   const inInput = _isEditableFocusTarget(document.activeElement);
 
-  // Folgesatz (#1401/#1434): shown as a normal creating card; only the keys that
-  // would touch the real card (undo, suspend, new sentence, …) are blocked.
-  if (_followupState && !inInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    if (_followupKeyDown(e)) return;
-  }
-
   // Book reader (#836): ←/→ turn the page. Guarded on the reader actually
   // being open — the jump-to-page box is an input, so `inInput` keeps arrow
   // keys working normally inside it.
@@ -20325,12 +20166,6 @@ document.addEventListener('keydown', async e => {
         document.activeElement.blur();
         return;
       }
-    }
-    // Escape skips the remaining Folgesätze (#1434)
-    if (_followupState) {
-      e.preventDefault();
-      followupSkip();
-      return;
     }
   }
 

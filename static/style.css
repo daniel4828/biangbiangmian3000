@@ -6336,14 +6336,6 @@ table.fsrs-table td.ivl { font-weight: 700; }
 .conj-rating-row.conj-need { animation: conj-need-shake 0.45s; outline: 2px solid #f59e0b; outline-offset: 2px; border-radius: 8px; }
 @keyframes conj-need-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
 
-/* Folgesätze: extra conjugation sentences after a creating card (#1401) */
-.followup-banner { font-size: 12px; font-weight: 600; color: #f59e0b; padding: 4px 12px; }
-/* While a Folgesatz is shown only the conjugation rating exists (#1434) */
-body.followup-mode #rating-row,
-body.followup-mode #next-note-row,
-body.followup-mode .fsrs-inspect-row,
-body.followup-mode #undo-btn { display: none !important; }
-
 /* Settings: pattern table (#1395) */
 .conj-pat-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
 .conj-pat-table th, .conj-pat-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
