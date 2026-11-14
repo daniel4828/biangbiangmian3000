@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItem.target = self
         menu.addItem(loginItem)
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Fenster…", action: #selector(editPanel), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Server-Adresse…", action: #selector(editServer), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Neu laden", action: #selector(reloadPanel), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -90,6 +91,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.messageText = "Login-Start konnte nicht geändert werden"
             alert.informativeText = error.localizedDescription
             alert.runModal()
+        }
+    }
+
+    /// Position und Größe des Fensters. Leeres Feld = Standard; gilt beim nächsten Öffnen.
+    @objc private func editPanel() {
+        NSApp.activate(ignoringOtherApps: true)
+        let defaults = UserDefaults.standard
+        func number(_ key: String) -> String {
+            guard let value = defaults.object(forKey: key) as? NSNumber, value.doubleValue > 0 else { return "" }
+            return String(format: "%g", value.doubleValue.rounded())
+        }
+        func percent(_ key: String) -> String {
+            guard let value = defaults.object(forKey: key) as? NSNumber else { return "" }
+            return String(format: "%g", value.doubleValue)
+        }
+        let rows: [(String, String, String)] = [
+            ("Abstand unten (% der Bildschirmhöhe)", percent(PanelSettings.bottomKey), String(format: "%g", PanelSettings.defaultPercent)),
+            ("Abstand oben beim Wachsen (%)", percent(PanelSettings.topKey), String(format: "%g", PanelSettings.defaultPercent)),
+            ("Breite (px)", number(PanelSettings.widthKey), String(format: "%g", PanelSettings.defaultWidth)),
+            ("Höchste Höhe (px)", number(PanelSettings.heightKey), "bis zum oberen Abstand"),
+        ]
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        var fields: [NSTextField] = []
+        for (label, value, placeholder) in rows {
+            stack.addArrangedSubview(NSTextField(labelWithString: label))
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+            field.stringValue = value
+            field.placeholderString = "Standard: \(placeholder)"
+            field.widthAnchor.constraint(equalToConstant: 260).isActive = true
+            stack.addArrangedSubview(field)
+            fields.append(field)
+        }
+        stack.frame = NSRect(x: 0, y: 0, width: 260, height: 4 * 50)
+        let alert = NSAlert()
+        alert.messageText = "Fenster"
+        alert.informativeText = "Leeres Feld = Standard. Gilt beim nächsten Öffnen (⌥⇧K). Ziehen am oberen Rand ändert Breite und Höhe ebenfalls."
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Speichern")
+        alert.addButton(withTitle: "Abbrechen")
+        alert.addButton(withTitle: "Alles zurücksetzen")
+        alert.window.initialFirstResponder = fields[0]
+        let keys = [PanelSettings.bottomKey, PanelSettings.topKey, PanelSettings.widthKey, PanelSettings.heightKey]
+        switch alert.runModal() {
+        case .alertThirdButtonReturn:
+            keys.forEach { defaults.removeObject(forKey: $0) }
+        case .alertFirstButtonReturn:
+            var values: [Double?] = []
+            for field in fields {
+                let text = field.stringValue.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+                if text.isEmpty { values.append(nil); continue }
+                guard let value = Double(text), value >= 0 else {
+                    let error = NSAlert()
+                    error.messageText = "Ungültige Zahl: \(field.stringValue)"
+                    error.runModal()
+                    return
+                }
+                values.append(value)
+            }
+            if let bottom = values[0], let top = values[1], bottom + top > 90 {
+                let error = NSAlert()
+                error.messageText = "Abstand unten + oben ist zu groß"
+                error.informativeText = "Zusammen höchstens 90 %."
+                error.runModal()
+                return
+            }
+            for (key, value) in zip(keys, values) {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        default:
+            return
         }
     }
 
