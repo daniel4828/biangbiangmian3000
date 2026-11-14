@@ -74,6 +74,8 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
     private static let minHeight: CGFloat = 60
     /// Vom Nutzer gezogene Größe, gilt beim nächsten Öffnen als Höchstmaß.
     private static let heightKey = "panelMaxHeight"
+    /// Abstand zu unterem und oberem Bildschirmrand, als Anteil der Bildschirmhöhe.
+    private static let edgeFraction: CGFloat = 1.0 / 5
     private static let widthKey = "panelWidth"
 
     private let panel: KeyPanel
@@ -151,11 +153,12 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
         area = visible
-        bottom = area.minY + area.height / 3
+        // Unterkante ein Fünftel über dem unteren Rand; wachsen bis ein Fünftel unter dem oberen.
+        bottom = area.minY + area.height * Self.edgeFraction
         let defaults = UserDefaults.standard
         let storedHeight = CGFloat(defaults.double(forKey: Self.heightKey))
         let storedWidth = CGFloat(defaults.double(forKey: Self.widthKey))
-        maxHeight = clampHeight(storedHeight > 0 ? storedHeight : area.height / 3)
+        maxHeight = clampHeight(storedHeight > 0 ? storedHeight : .greatestFiniteMagnitude)
         width = clampWidth(storedWidth > 0 ? storedWidth : Self.defaultWidth)
         pinned = false
         applyFrame()
@@ -172,7 +175,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
     func windowDidResignKey(_ notification: Notification) { hide() }
 
     private func clampHeight(_ value: CGFloat) -> CGFloat {
-        min(max(value, Self.minHeight), max(Self.minHeight, area.maxY - bottom))
+        min(max(value, Self.minHeight), max(Self.minHeight, area.maxY - area.height * Self.edgeFraction - bottom))
     }
 
     private func clampWidth(_ value: CGFloat) -> CGFloat {
