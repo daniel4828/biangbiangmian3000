@@ -75,7 +75,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
     /// Vom Nutzer gezogene Größe, gilt beim nächsten Öffnen als Höchstmaß.
     private static let heightKey = "panelMaxHeight"
     /// Abstand zu unterem und oberem Bildschirmrand, als Anteil der Bildschirmhöhe.
-    private static let edgeFraction: CGFloat = 1.0 / 5
+    private static let edgeFraction: CGFloat = 1.0 / 6
     private static let widthKey = "panelWidth"
 
     private let panel: KeyPanel
@@ -153,7 +153,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
         area = visible
-        // Unterkante ein Fünftel über dem unteren Rand; wachsen bis ein Fünftel unter dem oberen.
+        // Unterkante ein Sechstel über dem unteren Rand; wachsen bis ein Sechstel unter dem oberen.
         bottom = area.minY + area.height * Self.edgeFraction
         let defaults = UserDefaults.standard
         let storedHeight = CGFloat(defaults.double(forKey: Self.heightKey))
