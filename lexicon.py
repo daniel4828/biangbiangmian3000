@@ -56,6 +56,9 @@ _TENSE_LABELS = {
 }
 _PERSON_LABELS = {"1s": "1. Sg.", "2s": "2. Sg.", "3s": "3. Sg.",
                   "1p": "1. Pl.", "2p": "2. Pl.", "3p": "3. Pl."}
+# Imperative persons are addressees (#1540): "3. Sg." would hide that it is usted.
+_IMP_PERSON_LABELS = {"2s": "tú", "3s": "usted", "1p": "nosotros",
+                      "2p": "vosotros", "3p": "ustedes"}
 _MAX_TAG_GROUPS = 3
 
 
@@ -203,7 +206,8 @@ def slot_label(tense: str, person: str) -> str:
     Same maps as grammar_label() (#1295) so the card tag and the tap panel
     never name a tense differently. Person "" (participle/gerund) -> tense only."""
     label = _TENSE_LABELS.get(tense, tense)
-    person_label = _PERSON_LABELS.get(person)
+    persons = _IMP_PERSON_LABELS if tense in ("imp_aff", "imp_neg") else _PERSON_LABELS
+    person_label = persons.get(person)
     return f"{label} · {person_label}" if person_label else label
 
 
@@ -217,14 +221,19 @@ def form_for(lemma: str, tense: str, person: str, lang: str) -> str | None:
     """The conjugated form of `lemma` for (tense, person), or None. Never raises.
 
     Reverse of verb_tags(): when several forms share a slot (voseo variants,
-    alternative spellings) the first one in file order wins."""
+    alternative spellings) the first one in file order wins. Imperatives take
+    the SHORTEST form instead (#1540): Wiktionary also tags pronoun-attached
+    variants (estate, dese, mantente) as the plain slot, and they come first."""
     try:
         index = _form_index.get(lang)
         if index is None:
             index = {}
             for form, tags in _load(lang)["verbs"].items():
                 for t in tags:
-                    index.setdefault((t[0], t[1], t[2]), form)
+                    key = (t[0], t[1], t[2])
+                    old = index.get(key)
+                    if old is None or (t[1] in ("imp_aff", "imp_neg") and len(form) < len(old)):
+                        index[key] = form
             _form_index[lang] = index
         return index.get(((lemma or "").lower(), tense, person))
     except Exception:
