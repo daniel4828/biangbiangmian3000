@@ -46,6 +46,26 @@ final class KeyPanel: NSPanel {
     }
 }
 
+/// Position und Größe des Fensters; im Menü „Fenster…“ änderbar.
+enum PanelSettings {
+    static let bottomKey = "panelBottomPercent"
+    static let topKey = "panelTopPercent"
+    static let heightKey = "panelMaxHeight"
+    static let widthKey = "panelWidth"
+    static let defaultPercent: Double = 12.5
+    static let defaultWidth: Double = 580
+
+    /// Abstand der Unterkante zum unteren Bildschirmrand, in % der Bildschirmhöhe.
+    static var bottomPercent: Double { percent(bottomKey) }
+    /// Abstand, den das Fenster beim Wachsen zum oberen Rand mindestens lässt, in %.
+    static var topPercent: Double { percent(topKey) }
+
+    private static func percent(_ key: String) -> Double {
+        guard let value = UserDefaults.standard.object(forKey: key) as? NSNumber else { return defaultPercent }
+        return min(max(value.doubleValue, 0), 45)
+    }
+}
+
 enum ServerSettings {
     static let key = "serverURL"
     static let defaultURL = "https://biangbiangmian3000.danielschreiber.eu"
@@ -69,14 +89,12 @@ enum ServerSettings {
 
 @MainActor
 final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
-    private static let defaultWidth: CGFloat = 580
+    private static let defaultWidth = CGFloat(PanelSettings.defaultWidth)
+    private static let heightKey = PanelSettings.heightKey
+    private static let widthKey = PanelSettings.widthKey
     private static let minWidth: CGFloat = 360
     private static let minHeight: CGFloat = 60
     /// Vom Nutzer gezogene Größe, gilt beim nächsten Öffnen als Höchstmaß.
-    private static let heightKey = "panelMaxHeight"
-    /// Abstand zu unterem und oberem Bildschirmrand, als Anteil der Bildschirmhöhe.
-    private static let edgeFraction: CGFloat = 1.0 / 8
-    private static let widthKey = "panelWidth"
 
     private let panel: KeyPanel
     private let webView: WKWebView
@@ -154,7 +172,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         guard let visible = screen?.visibleFrame else { return }
         area = visible
         // Unterkante ein Achtel über dem unteren Rand; wachsen bis ein Achtel unter dem oberen.
-        bottom = area.minY + area.height * Self.edgeFraction
+        bottom = area.minY + area.height * CGFloat(PanelSettings.bottomPercent / 100)
         let defaults = UserDefaults.standard
         let storedHeight = CGFloat(defaults.double(forKey: Self.heightKey))
         let storedWidth = CGFloat(defaults.double(forKey: Self.widthKey))
@@ -175,7 +193,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
     func windowDidResignKey(_ notification: Notification) { hide() }
 
     private func clampHeight(_ value: CGFloat) -> CGFloat {
-        min(max(value, Self.minHeight), max(Self.minHeight, area.maxY - area.height * Self.edgeFraction - bottom))
+        min(max(value, Self.minHeight), max(Self.minHeight, area.maxY - area.height * CGFloat(PanelSettings.topPercent / 100) - bottom))
     }
 
     private func clampWidth(_ value: CGFloat) -> CGFloat {
