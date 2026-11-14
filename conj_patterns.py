@@ -851,7 +851,7 @@ def _word_pattern_keys(word_zh: str, cfg: dict, w_tense: dict, w_person: dict,
         parsed = verb_slots.parse_form_card(word_zh)
         if parsed:
             lemma, tense = parsed
-            for person in PERSONS:
+            for person in verb_slots.form_card_persons(lemma, tense, LANG):
                 if w_person.get(person, 1.0) > 0:
                     pat = pattern_for(lemma, tense, person)
                     if pat:

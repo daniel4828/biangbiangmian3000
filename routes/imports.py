@@ -10,6 +10,7 @@ from datetime import timedelta
 import ai
 import database
 import importer
+import irregular_cards
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from languages import DEFAULT_LANG, get_lang_config, is_valid_lang
 
@@ -333,11 +334,17 @@ def _generate_and_import_word(word_zh: str, lang: str, deck_id: int,
         # Only now do the freshly created cards exist to move (#677).
         database.stage_word_in_saved(
             entry["id"], database.get_or_create_saved_deck(lang))
+    form_cards: list[str] = []
+    if lang == "es" and entry:
+        # Irregular tenses of a new verb get their form cards (#1539); they
+        # copy the verb's deck/due, so this comes after the Saved staging.
+        form_cards = irregular_cards.create_cards_for_verb(entry["id"])
     if result.get("imported") and not to_list:
         # New cards due today must reach queues built earlier (#728).
         queue_mgr.invalidate()
     return {**result, "word_zh": stored_word,
-            "word_id": entry["id"] if entry else None}
+            "word_id": entry["id"] if entry else None,
+            "form_cards": form_cards}
 
 
 @router.post("/api/add-word-ai")
@@ -583,59 +590,33 @@ def add_word_to_list(word_zh: str, lang: str = "zh") -> dict:
 
 
 def seed_es_irregular_form_cards(activate: bool = False) -> dict:
-    """Create the Spanish irregular-verb form cards (#1296) in Español ★ List.
+    """Create the Spanish irregular-verb form cards (#1296, #1539) that the
+    verbs in the collection are missing.
 
-    One entry per (irregular verb, irregular tense) — "tener · Indefinido" —
-    with a single suspended `creating` card in the Spanish Saved deck, so
-    nothing reaches the review queue until it is promoted from Browse. Never
-    calls the AI: headword, the six forms and the German pattern note all come
-    from verb_slots (lexicon + rules). Idempotent — an existing headword is
-    skipped, so a second run creates nothing.
-
-    The entry is written with database.insert_word()/insert_card() directly
-    instead of going through importer.import_yaml_content(): the importer's
-    romance path is built for AI-generated dictionary entries (examples,
-    conjugation tables, day decks) and would add nothing here except an
-    intermediate Daily deck to move the card out of again.
+    For every Spanish verb entry, one form card per tense in which it has an
+    irregular form (verb_slots.irregular_card_plan()) — "traer · Presente".
+    Each new card copies the deck and due date of the verb's earliest existing
+    form card, else of the verb's own creating card, and stays parked
+    (suspended) when that card is parked in Saved. Never calls the AI.
+    Idempotent. This runs only the `create` part of
+    irregular_cards.plan_migration(): it never deletes or renames a card (the
+    migration script scripts/migrate_irregular_form_cards.py does that).
 
     activate=True (#1438) additionally moves every form card still parked in
     the Spanish Saved deck into today's Spanish Daily `creating` deck as a
     fresh new card (database.promote_saved_word, same as Browse's promote).
 
     Returns {"created": [word_zh], "skipped": [word_zh], "errors": [str],
-    "activated": [word_zh]}.
+    "activated": [word_zh]}; "skipped" = cards that could not be created
+    (nothing to copy deck/due from).
     """
-    import lexicon
-    import verb_slots
-
-    created: list[str] = []
-    skipped: list[str] = []
-    errors: list[str] = []
     activated: list[str] = []
     saved_deck_id = database.get_or_create_saved_deck("es")
-    for cand in verb_slots.form_card_candidates("es"):
-        word_zh = cand["word_zh"]
-        try:
-            existing = database.get_word_by_zh(word_zh)
-            if existing and (existing.get("lang") or DEFAULT_LANG) == "es":
-                skipped.append(word_zh)
-                continue
-            info = lexicon.lemma_info(cand["lemma"], "es") or {}
-            entry_id = database.insert_word({
-                "word_zh": word_zh,
-                "lang": "es",
-                "note_type": "grammar",
-                "pos": "Verbform",
-                "definition": info.get("gloss_en") or "",
-                "definition_de": info.get("gloss_de") or "",
-                "notes": cand["note_de"],
-                "source": "irregular-forms",
-            })
-            database.insert_card(entry_id, "creating", saved_deck_id, state="suspended")
-            created.append(word_zh)
-        except Exception as e:
-            logger.exception("irregular form card %r failed: %s", word_zh, e)
-            errors.append(f"{word_zh}: {e}")
+    plan = irregular_cards.plan_migration(database.anki_today().isoformat())
+    applied = irregular_cards.apply_migration({"create": plan["create"]})
+    created: list[str] = applied["created_words"]
+    skipped: list[str] = [s["word_zh"] for s in plan["skipped"]]
+    errors: list[str] = list(applied["errors"])
     if activate:
         target_day = database.anki_today().isoformat()
         daily_deck_id, _ = database.get_or_create_daily_deck(target_day, "es")
@@ -952,6 +933,10 @@ def promote_saved(word_id: int, day: str = "today"):
     count = database.promote_saved_word(word_id, leaf_decks, saved_deck_id, target_day)
     if not count:
         raise HTTPException(status_code=404, detail="No saved cards found for this word")
+    if lang == "es" and entry:
+        # A Spanish verb brings the form cards still parked in Saved (#1539).
+        irregular_cards.promote_form_cards(
+            entry["word_zh"], leaf_decks["creating"], saved_deck_id, target_day)
     # Session queues are built once per Anki day and kept in memory, so a card
     # that becomes due today after the build would not be served until tomorrow
     # (#728). Landing in a future deck used to make this moot.

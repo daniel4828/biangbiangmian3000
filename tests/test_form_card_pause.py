@@ -57,9 +57,19 @@ def tmp_db(tmp_path, monkeypatch):
         AssertionError("AI must not be called")))
 
 
+def _add_verbs():
+    """tener + hacer as collection verbs parked in ★ List; their form cards (#1539):
+    tener Presente/Indefinido/Futuro, hacer Presente/Indefinido/Participio."""
+    saved = database.get_or_create_saved_deck("es")
+    for lemma in ("tener", "hacer"):
+        wid = database.insert_word({"word_zh": lemma, "lang": "es"})
+        database.insert_card(wid, "creating", saved, state="suspended", due="2026-03-01")
+
+
 @pytest.fixture
 def activated(tmp_db):
     """All form cards moved out of Saved; today's tense is Presente."""
+    _add_verbs()
     res = imports_routes.seed_es_irregular_form_cards(activate=True)
     assert res["errors"] == []
     return res
@@ -92,37 +102,34 @@ PRES = ("tener · Presente", "hacer · Presente")
 PRET = ("tener · Indefinido", "hacer · Indefinido")
 
 
-# --- candidates: every tense ------------------------------------------------------
+# --- plan: irregular tenses only (#1539) ------------------------------------------
 
-def test_one_verb_yields_seven_cards_with_composed_perfecto():
-    cands = verb_slots.form_card_candidates("es")
-    tener = {c["tense"]: c for c in cands if c["lemma"] == "tener"}
-    assert list(tener) == ["ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut",
-                           "subj_pres", "subj_impf"]
-    assert tener["perf"]["row"][0] == "he tenido" and tener["perf"]["row"][5] == "han tenido"
-    assert tener["ind_impf"]["note_de"].startswith("Regelmäßig in dieser Zeit")
-    assert "tener · Imperfecto" in {c["word_zh"] for c in cands}
-    assert "hacer · Perfecto" in {c["word_zh"] for c in cands}
+def test_plan_has_irregular_tenses_and_participle_but_no_perfecto():
+    tener = {c["tense"]: c for c in verb_slots.irregular_card_plan("tener", "es")}
+    assert list(tener) == ["ind_pres", "ind_pret", "ind_fut"]  # tenía/tenido are regular
+    hacer = {c["tense"]: c for c in verb_slots.irregular_card_plan("hacer", "es")}
+    assert hacer["part"]["word_zh"] == "hacer · Participio"
+    assert hacer["part"]["note_de"].startswith("Unregelmäßiges Partizip: hecho")
+    assert hacer["part"]["persons"] == [""]
+    assert "perf" not in hacer
 
 
-def test_condicional_form_card(monkeypatch):
+def test_condicional_form_card_still_parses(monkeypatch):
     tener = dict(TENER, ind_cond="tendría tendrías tendría tendríamos tendríais tendrían")
     monkeypatch.setitem(TABLE, "tener", (1, tener))
     lexicon.inject("es", _lexicon())
     assert verb_slots.parse_form_card("tener · Condicional") == ("tener", "ind_cond")
-    cands = {c["word_zh"]: c for c in verb_slots.form_card_candidates("es")}
-    card = cands["tener · Condicional"]
-    assert card["row"] == ["tendría", "tendrías", "tendría", "tendríamos",
-                           "tendríais", "tendrían"]
-    assert "tendr-" in card["note_de"]
+    row = ["tendría", "tendrías", "tendría", "tendríamos", "tendríais", "tendrían"]
+    assert "tendr-" in verb_slots.pattern_note("tener", "ind_cond", row, "es")
 
 
 def test_subjunctive_notes_differ():
-    cands = {c["tense"]: c for c in verb_slots.form_card_candidates("es")
-             if c["lemma"] == "tener"}
-    assert "1. Sg. (yo)" in cands["subj_pres"]["note_de"]
-    assert "3. Pl. Indefinido" in cands["subj_impf"]["note_de"]
-    assert "1. Sg. (yo)" not in cands["subj_impf"]["note_de"]
+    def note(tense):
+        row = [verb_slots.target_form("tener", tense, p, "es") for p in verb_slots.PERSONS]
+        return verb_slots.pattern_note("tener", tense, row, "es")
+    assert "1. Sg. (yo)" in note("subj_pres")
+    assert "3. Pl. Indefinido" in note("subj_impf")
+    assert "1. Sg. (yo)" not in note("subj_impf")
 
 
 def _clock(monkeypatch):
@@ -178,13 +185,14 @@ def test_surface_forms_of_perfecto_card(tmp_db):
 # --- sync_form_card_pause ----------------------------------------------------------
 
 def test_off_tense_paused_on_tense_untouched(activated):
-    assert len(activated["activated"]) == 10
-    assert tense_focus.sync_form_cards() == 8
-    for w in PRES:
+    assert len(activated["activated"]) == 6
+    # Indefinido x2 + tener Futuro; the Participio card is not part of the rotation
+    assert tense_focus.sync_form_cards() == 3
+    for w in PRES + ("hacer · Participio",):
         assert _row(w)["state"] == "new"
     r = _row("tener · Indefinido")
     assert r["state"] == "suspended" and r["pre_suspend_state"] == "new"
-    assert len(_marker()) == 8
+    assert len(_marker()) == 3
 
 
 def _released():
@@ -200,7 +208,7 @@ def test_introduction_is_a_one_way_gate(activated):
     assert _released() == {"ind_pres", "ind_pret"}
     for w in PRES + PRET:
         assert _row(w)["state"] == "new"  # unreviewed Presente cards stay in the queue
-    r = _row("tener · Imperfecto")
+    r = _row("tener · Futuro")
     assert r["state"] == "suspended" and r["pre_suspend_state"] == "new"
     tense_focus.step(-1)  # stepping back does not un-release anything
     assert tense_focus.sync_form_cards() == 0
@@ -209,18 +217,18 @@ def test_introduction_is_a_one_way_gate(activated):
 
 
 def test_started_cards_are_never_paused(activated):
-    _update("tener · Imperfecto", state="review")
+    _update("tener · Futuro", state="review")
     _update("hacer · Indefinido", state="learning")
     tense_focus.sync_form_cards()
-    assert _row("tener · Imperfecto")["state"] == "review"
+    assert _row("tener · Futuro")["state"] == "review"
     assert _row("hacer · Indefinido")["state"] == "learning"
-    assert _row("tener · Futuro")["state"] == "suspended"
+    assert _row("tener · Indefinido")["state"] == "suspended"
 
 
 def test_focus_off_restores_all_and_keeps_released(activated):
     tense_focus.sync_form_cards()
     tense_focus.save(tense_focus.validate({"enabled": False}))
-    assert tense_focus.sync_form_cards() == 8
+    assert tense_focus.sync_form_cards() == 3
     r = _row("tener · Indefinido")
     assert r["state"] == "new" and r["pre_suspend_state"] is None
     assert _marker() == set()
@@ -228,10 +236,10 @@ def test_focus_off_restores_all_and_keeps_released(activated):
 
 
 def test_second_call_is_idempotent(activated):
-    assert tense_focus.sync_form_cards() == 8
+    assert tense_focus.sync_form_cards() == 3
     assert tense_focus.sync_form_cards() == 0
     tense_focus.save(tense_focus.validate({"enabled": False}))
-    assert tense_focus.sync_form_cards() == 8
+    assert tense_focus.sync_form_cards() == 3
     assert tense_focus.sync_form_cards() == 0
 
 
@@ -276,32 +284,36 @@ def test_ensure_daily_targets_syncs_for_es_only(tmp_db, monkeypatch):
 # --- activate -------------------------------------------------------------------------
 
 def test_activate_moves_cards_out_of_saved_and_pauses_off_tense(tmp_db):
+    _add_verbs()
     res = imports_routes.create_es_irregular_form_cards({"activate": True})
-    assert len(res["activated"]) == 10 and res["errors"] == []
+    assert len(res["activated"]) == 6 and res["errors"] == []
     saved = database.get_or_create_saved_deck("es")
     assert _row("tener · Presente")["deck"] != "Saved"
     assert _row("tener · Presente")["state"] == "new"
     assert _row("tener · Indefinido")["state"] == "suspended"
     assert _row("tener · Indefinido")["deck"] != "Saved"
     conn = database.get_db()
+    # only the two verbs themselves are left in Saved
     left = conn.execute("SELECT COUNT(*) n FROM cards WHERE deck_id=?", (saved,)).fetchone()["n"]
     conn.close()
-    assert left == 0
+    assert left == 2
 
 
 def test_default_does_not_activate(tmp_db):
+    _add_verbs()
     res = imports_routes.seed_es_irregular_form_cards()
-    assert res["activated"] == [] and len(res["created"]) == 10
+    assert res["activated"] == [] and len(res["created"]) == 6
     assert _row("tener · Presente")["deck"] == "Saved"
 
 
 def test_endpoint_without_body_and_bad_activate(tmp_db):
     import main
+    _add_verbs()
     client = TestClient(main.app)
     r = client.post("/api/es/irregular-form-cards")
     assert r.status_code == 200 and r.json()["activated"] == []
     assert client.post("/api/es/irregular-form-cards", json={"activate": "yes"}).status_code == 400
     r = client.post("/api/es/irregular-form-cards", json={"activate": True})
-    assert r.status_code == 200 and len(r.json()["activated"]) == 10
+    assert r.status_code == 200 and len(r.json()["activated"]) == 6
     with pytest.raises(HTTPException):
         imports_routes.create_es_irregular_form_cards({"activate": 1})

@@ -14050,27 +14050,6 @@ function renderConjugationSection(container, wordData) {
     byTense.get(c.tense).push(c);
   });
   const bodyId = el.id + '-body';
-  // Pattern status dot (#1395): colour = Bilden (prod) status of the pattern
-  // this form belongs to; tooltip shows both modes. No pattern → no dot.
-  const stText = st => {
-    if (!st) return '–';
-    if (st.state === 'new') return 'neu';
-    const d = (st.due_in_days != null && st.due_in_days <= 0) ? 'fällig' : `in ${Number(st.due_in_days)} T`;
-    return d + (st.total ? ` · ${Number(st.correct)}/${Number(st.total)} ✓` : '');
-  };
-  const countSpan = c => {
-    const p = c.pattern;
-    if (!p) return '';
-    const prod = p.prod || {};
-    let mod = 'conj-dot-new';
-    if (prod.state !== 'new') {
-      if (prod.due_in_days != null && prod.due_in_days <= 0) mod = 'conj-dot-due';
-      else if (prod.state === 'learning') mod = 'conj-dot-learning';
-      else mod = 'conj-dot-review';
-    }
-    const tip = `${p.label}\nBilden: ${stText(p.prod)}\nErkennen: ${stText(p.recog)}`;
-    return `<span class="conj-dot ${mod}" title="${_escHtml(tip)}"></span>`;
-  };
   // #1340: one collapsible <details> per tense, only one is open.
   // #1499: in review mode that is the tense the current sentence/form card uses; else the first.
   let openT = tenses[0];
@@ -14081,9 +14060,12 @@ function renderConjugationSection(container, wordData) {
     const text = (typeof sentence !== 'undefined' && sentence?.sentence_zh) || '';
     openT = _conjOpenTense(tenses, byTense, hint, text) ?? tenses[0];
   }
+  // #1537: red dot = this form deviates from the regular formation.
+  const irrDot = c => c.irregular
+    ? '<span class="conj-irr-dot" title="unregelmäßig"></span>' : '';
   const cell = c =>
     `<div class="conj-cell"><span class="conj-person">${_escHtml(c.person)}</span>` +
-    `<span class="conj-form">${_escHtml(c.form)}${countSpan(c)}</span></div>`;
+    `<span class="conj-form">${_escHtml(c.form)}${irrDot(c)}</span></div>`;
   const cards = tenses.map((t, i) => {
     const list = byTense.get(t);
     let body;
@@ -14094,13 +14076,13 @@ function renderConjugationSection(container, wordData) {
     } else {
       body = list.map(c =>
         c.person
-          ? `<div class="conj-row"><span class="conj-person">${_escHtml(c.person)}</span><span class="conj-form">${_escHtml(c.form)}</span>${countSpan(c)}</div>`
-          : `<div class="conj-row"><span class="conj-form">${_escHtml(c.form)}</span>${countSpan(c)}</div>`
+          ? `<div class="conj-row"><span class="conj-person">${_escHtml(c.person)}</span><span class="conj-form">${_escHtml(c.form)}${irrDot(c)}</span></div>`
+          : `<div class="conj-row"><span class="conj-form">${_escHtml(c.form)}${irrDot(c)}</span></div>`
       ).join('');
     }
     const preview = list.map(c => _escHtml(c.form)).join(' · ');
     return `<details class="conj-tense"${t === openT ? ' open' : ''}>` +
-      `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}</span>` +
+      `<summary class="conj-tense-head"><span class="conj-tense-title">${_escHtml(t)}${list.some(c => c.irregular) ? '<span class="conj-irr-dot" title="unregelmäßige Formen"></span>' : ''}</span>` +
       `<span class="conj-tense-preview">${preview}</span><span class="conj-chevron">›</span></summary>` +
       `<div class="conj-tense-body">${body}</div></details>`;
   }).join('');

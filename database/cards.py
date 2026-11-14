@@ -126,6 +126,76 @@ def saved_form_cards(saved_deck_id: int) -> list[dict]:
         conn.close()
 
 
+_FORM_CARD_SELECT = """SELECT e.id AS word_id, e.word_zh, c.id AS card_id,
+              c.deck_id, d.name AS deck_name, c.due, c.state
+       FROM entries e
+       LEFT JOIN cards c ON c.word_id=e.id AND c.category='creating' AND c.deleted_at IS NULL
+       LEFT JOIN decks d ON d.id=c.deck_id"""
+
+
+def es_verb_creating_cards() -> list[dict]:
+    """Spanish verb candidates (#1539): every es entry that is not a form card
+    and whose headword is a single lowercase word ending in ar/er/ir, with its
+    live `creating` card ({word_id, word_zh, card_id, deck_id, deck_name, due,
+    state}; the card fields are None when it has none). Plain SQL only — the
+    caller decides which of them really are verbs."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            _FORM_CARD_SELECT + """
+               WHERE e.lang='es' AND COALESCE(e.source,'') != 'irregular-forms'
+                 AND e.word_zh NOT LIKE '% %'
+                 AND (e.word_zh LIKE '%ar' OR e.word_zh LIKE '%er' OR e.word_zh LIKE '%ir')
+               ORDER BY e.id""").fetchall()
+        return [dict(r) for r in rows if r["word_zh"] == r["word_zh"].lower()]
+    finally:
+        conn.close()
+
+
+def es_form_cards() -> list[dict]:
+    """Spanish irregular-verb form entries (source 'irregular-forms') with their
+    live `creating` card: {word_id, word_zh, card_id, deck_id, deck_name, due,
+    state}. Entries without a live card are left out."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            _FORM_CARD_SELECT + """
+               WHERE e.lang='es' AND e.source='irregular-forms' AND c.id IS NOT NULL
+               ORDER BY e.id""").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def live_creating_card(word_id: int) -> dict | None:
+    """The word's live `creating` card as {card_id, deck_id, deck_name, due,
+    state}, or None."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT c.id AS card_id, c.deck_id, d.name AS deck_name, c.due, c.state
+               FROM cards c JOIN decks d ON d.id=c.deck_id
+               WHERE c.word_id=? AND c.category='creating' AND c.deleted_at IS NULL""",
+            (word_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def soft_delete_card(card_id: int) -> bool:
+    """Put a card in the trash (deleted_at). review_log rows stay — never
+    hard-delete cards/entries here (review_log has ON DELETE CASCADE)."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE cards SET deleted_at=datetime('now') WHERE id=? AND deleted_at IS NULL",
+            (card_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 FORM_PAUSE_KEY = "es_tense_focus_paused"
 FORM_RELEASED_KEY = "es_form_intro_released"
 
@@ -142,10 +212,10 @@ def sync_form_card_pause(focus_tense: str | None) -> int:
     active on later days. Manual suspensions, leeches and ★ List cards are
     never touched; a marker card now in a 'Saved' deck stays parked and leaves
     the marker. focus_tense None (focus off) restores every marker card and
-    leaves the released set alone. Idempotent. Returns the number of state
-    changes."""
+    leaves the released set alone. Form cards of imp_aff/part/ger are never
+    paused (#1539). Idempotent. Returns the number of state changes."""
     import json
-    from verb_slots import parse_form_card
+    from verb_slots import parse_form_card, FORM_CARD_ALL_TENSES
 
     conn = get_db()
     try:
@@ -199,14 +269,17 @@ def sync_form_card_pause(focus_tense: str | None) -> int:
             if parsed_card is None:
                 continue
             tense = parsed_card[1]
+            # imp_aff/part/ger (#1539) are not part of the tense-of-the-day
+            # rotation, so the gate would never release them: treat as released.
+            tense_released = tense in released or tense not in FORM_CARD_ALL_TENSES
             if (cid in marker and r["state"] == "suspended"
-                    and (focus_tense is None or tense in released)):
+                    and (focus_tense is None or tense_released)):
                 conn.execute(
                     "UPDATE cards SET state=COALESCE(pre_suspend_state,'new'), "
                     "pre_suspend_state=NULL WHERE id=?", (cid,))
                 marker.discard(cid)
                 changed += 1
-            elif (cid not in marker and focus_tense is not None and tense not in released
+            elif (cid not in marker and focus_tense is not None and not tense_released
                   and r["state"] == "new"):
                 conn.execute(
                     "UPDATE cards SET pre_suspend_state=state, state='suspended' WHERE id=?",

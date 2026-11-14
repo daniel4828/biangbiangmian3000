@@ -106,8 +106,8 @@ def test_irregular_tenses():
     assert verb_slots.irregular_tenses("hablar", "es") == []
     assert verb_slots.irregular_tenses("tener", "es") == ["ind_pret", "ind_pres", "ind_fut"]
     assert verb_slots.irregular_tenses("ser", "es") == ["ind_pret", "ind_pres", "ind_impf"]  # seré is regular
-    # spelling change only counts
-    assert verb_slots.irregular_tenses("buscar", "es") == ["ind_pret"]
+    # a spelling change alone is regular (#1539): busqué sounds like buscé
+    assert verb_slots.irregular_tenses("buscar", "es") == []
     assert verb_slots.irregular_tenses("nope", "es") == []
 
 
@@ -116,9 +116,8 @@ def test_ir_two_letter_infinitive():
     assert verb_slots.regular_form("ir", "ind_pret", "3s") == "ió"
     assert verb_slots.regular_form("ir", "ind_fut", "1s") == "iré"
     assert verb_slots.irregular_tenses("ir", "es") == ["ind_pret", "ind_pres", "ind_impf"]
-    words = [c["word_zh"] for c in verb_slots.form_card_candidates("es")]
-    for w in ("ir · Indefinido", "ir · Presente", "ir · Imperfecto"):
-        assert w in words
+    words = [c["word_zh"] for c in verb_slots.irregular_card_plan("ir", "es")]
+    assert words == ["ir · Presente", "ir · Indefinido", "ir · Imperfecto"]
 
 
 def _note(lemma, tense):
@@ -129,7 +128,7 @@ def _note(lemma, tense):
 def test_pret_notes_strong_only_for_real_strong_forms():
     assert "Starkes Indefinido" not in _note("ser", "ind_pret")
     assert _note("ir", "ind_pret").startswith("ser und ir haben dasselbe Indefinido")
-    assert "Einsilbige Formen ohne Akzent (vi, vio)" in _note("ver", "ind_pret")
+    assert _note("ver", "ind_pret") == "Regelmäßig in dieser Zeit."  # only the accent differs
     dar = _note("dar", "ind_pret")
     assert "(di, dio)" in dar and "dar konjugiert wie ein -er/-ir-Verb" in dar
     assert "Starkes Indefinido" in _note("hacer", "ind_pret")
@@ -140,16 +139,13 @@ def test_zco_pattern():
     assert "yo-Form auf -zco." in _note("parecer", "ind_pres")
 
 
-def test_no_double_periods_and_wie_only_for_real_patterns():
-    cands = verb_slots.form_card_candidates("es", max_verbs=50, limit=200)
-    assert cands
-    for c in cands:
-        assert ".." not in c["note_de"], c["note_de"]
-        if c["note_de"].startswith(("Unregelmäßig in", "Einsilbige", "ser und ir")):
-            assert "Wie:" not in c["note_de"], c["note_de"]
-    by = {c["word_zh"]: c["note_de"] for c in cands}
-    assert "Wie:" in by["tener · Indefinido"]  # shares the strong pattern with hacer
-    assert "hacer" in by["tener · Indefinido"]
+def test_plan_notes_have_no_double_periods():
+    plans = [c for lemma in TABLE for c in verb_slots.irregular_card_plan(lemma, "es")]
+    assert plans
+    for c in plans:
+        assert c["note_de"] and ".." not in c["note_de"], c["note_de"]
+    by = {c["word_zh"]: c["note_de"] for c in plans}
+    assert "Starkes Indefinido" in by["tener · Indefinido"]
 
 
 def test_word_roundtrip_and_non_matching():
@@ -174,25 +170,23 @@ def test_pattern_notes():
     assert "Futurstamm: tendr-" in verb_slots.pattern_note("tener", "ind_fut", row, "es")
     row = TABLE["ser"][1]["ind_pret"].split()
     assert "ser und ir" in verb_slots.pattern_note("ser", "ind_pret", row, "es")
-    row = TABLE["buscar"][1]["ind_pret"].split()
-    assert "Unregelmäßig in: 1. Sg." in verb_slots.pattern_note("buscar", "ind_pret", row, "es")
+    row = TABLE["buscar"][1]["ind_pret"].split()  # busqué: spelling only (#1539)
+    assert verb_slots.pattern_note("buscar", "ind_pret", row, "es") == "Regelmäßig in dieser Zeit."
 
 
-def test_candidates_order_and_caps():
-    cands = verb_slots.form_card_candidates("es")
-    words = [c["word_zh"] for c in cands]
-    assert words[0] == "ser · Presente"  # order follows the configured tenses (#1438)
-    assert "hablar · Indefinido" not in words
-    assert "buscar · Indefinido" in words
-    assert all(len(c["row"]) == 6 for c in cands)
-    ser = [c for c in cands if c["lemma"] == "ser"]
-    # #1438: every tense with six forms; the fixture has no ser subjunctive
-    assert {c["tense"] for c in ser} == {"ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut"}
-    assert "tener · Imperfecto" in words  # regular in this tense, still a card
-    capped = verb_slots.form_card_candidates("es", max_verbs=1)
-    assert {c["lemma"] for c in capped} == {"ser"}
-    assert len(verb_slots.form_card_candidates("es", limit=2)) == 2
-    assert verb_slots.form_card_candidates("fr") == []
+def test_irregular_card_plan():
+    def tenses(lemma):
+        return [c["tense"] for c in verb_slots.irregular_card_plan(lemma, "es")]
+    assert tenses("ser") == ["ind_pres", "ind_pret", "ind_impf"]  # seré is regular
+    assert tenses("tener") == ["ind_pres", "ind_pret", "ind_fut"]  # tenía/tenido regular
+    assert tenses("hablar") == []
+    assert tenses("buscar") == []  # busqué: spelling only
+    assert tenses("quejarse") == [] and tenses("nope") == []
+    tener = {c["tense"]: c for c in verb_slots.irregular_card_plan("tener", "es")}
+    assert tener["ind_pres"]["word_zh"] == "tener · Presente"
+    assert tener["ind_pres"]["persons"] == ["1s", "2s", "3s", "3p"]  # not tenemos/tenéis
+    assert tener["ind_pret"]["persons"] == list(PERSONS)
+    assert verb_slots.irregular_card_plan("tener", "fr") == []
 
 
 def test_assign_slots_fixes_tense_and_rotates_persons():
@@ -214,31 +208,33 @@ def test_surface_forms_for_form_card(tmp_db):
     assert {"tuve", "tuviste", "tuvo", "tuvimos", "tuvisteis", "tuvieron"} <= set(forms)
 
 
-def test_seed_creates_suspended_creating_cards_once(tmp_db, monkeypatch):
+def test_seed_creates_form_cards_for_collection_verbs_once(tmp_db, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("AI must not be called")
     monkeypatch.setattr(ai, "_call_api", boom)
 
-    res = imports_routes.seed_es_irregular_form_cards()
-    assert res["errors"] == []
-    assert "tener · Indefinido" in res["created"]
-    assert res["skipped"] == []
-
     saved = database.get_or_create_saved_deck("es")
+    verb = database.insert_word({"word_zh": "tener", "lang": "es"})
+    database.insert_card(verb, "creating", saved, state="suspended", due="2026-03-01")
+
+    res = imports_routes.seed_es_irregular_form_cards()
+    assert res["errors"] == [] and res["skipped"] == []
+    # only the verbs in the collection, only their irregular tenses (#1539)
+    assert sorted(res["created"]) == ["tener · Futuro", "tener · Indefinido", "tener · Presente"]
+
     entry = database.get_word_by_zh("tener · Indefinido")
     assert entry["lang"] == "es" and entry["note_type"] == "grammar"
     assert entry["definition_de"] == "haben, besitzen"
     assert "Starkes Indefinido" in entry["notes"]
     conn = database.get_db()
-    cards = conn.execute("SELECT category, state, deck_id FROM cards WHERE word_id=?",
+    cards = conn.execute("SELECT category, state, deck_id, due FROM cards WHERE word_id=?",
                          (entry["id"],)).fetchall()
     conn.close()
     assert len(cards) == 1
-    assert (cards[0]["category"], cards[0]["state"], cards[0]["deck_id"]) == ("creating", "suspended", saved)
+    assert tuple(cards[0]) == ("creating", "suspended", saved, "2026-03-01")
 
     again = imports_routes.seed_es_irregular_form_cards()
-    assert again["created"] == []
-    assert len(again["skipped"]) == len(res["created"])
+    assert again["created"] == [] and again["errors"] == []
 
 
 TENER_PRET_ROW = "tuve, tuviste, tuvo, tuvimos, tuvisteis, tuvieron"
@@ -349,6 +345,7 @@ def test_verb_regularity_tag():
     assert verb_slots.verb_regularity("casa", "es") is None
     # #1352：反身动词按原形判定
     assert verb_slots.verb_regularity("hablarse", "es") == "regular"
-    assert verb_slots.verb_regularity("buscarse", "es") == "irregular"
+    assert verb_slots.verb_regularity("buscarse", "es") == "regular"  # spelling only (#1539)
+    assert verb_slots.verb_regularity("buscar", "es") == "regular"
     assert verb_slots.verb_regularity("casarse", "es") is None  # casar fehlt
     assert verb_slots.verb_regularity("hablar", "fr") is None
