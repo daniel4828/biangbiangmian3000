@@ -138,7 +138,7 @@ def _full_usage(n=1, **overrides):
 
 
 _TENSES = ("ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf",
-           "ind_cond")
+           "ind_cond", "imp_aff")
 _PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
 _UNIFORM = {"tenses": {t: 1.0 for t in _TENSES}, "persons": {p: 1.0 for p in _PERSONS}}
 
