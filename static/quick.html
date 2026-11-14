@@ -110,13 +110,34 @@
   function post(msg) { const b = bridge(); if (b) b.postMessage(msg); }
   // Natural height = everything around the scroller + the messages' own height.
   // #main is stretched to the viewport, so measuring it alone could never shrink.
+  // Measure the fixed parts one by one: #main's own height is clamped by a panel
+  // that opens too small, and would keep reporting that small size forever.
+  function outerHeight(el) {
+    const h = el.getBoundingClientRect().height;
+    if (!h) return 0;
+    const cs = getComputedStyle(el);
+    return h + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+  }
   function reportHeight() {
     const cs = getComputedStyle(document.body);
-    const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-    const chrome = mainEl.getBoundingClientRect().height - scrollerEl.clientHeight;
+    const ms = getComputedStyle(mainEl);
+    const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+              + parseFloat(ms.paddingTop) + parseFloat(ms.paddingBottom);
+    const chrome = outerHeight(mainEl.querySelector('.top')) + outerHeight(errEl) + outerHeight(inputEl);
     post({ type: 'height', value: Math.ceil(pad + chrome + msgsEl.getBoundingClientRect().height) });
   }
-  function stickToBottom() { scrollerEl.scrollTop = scrollerEl.scrollHeight; }
+  // The newest question stays at the top of the scroller while its answer grows
+  // below it, so a long answer is read from its start (not scrolled to its end).
+  // If everything fits, the clamp makes this the same as the bottom.
+  let anchorEl = null;
+  function stickToBottom() {
+    if (anchorEl && anchorEl.isConnected) {
+      scrollerEl.scrollTop += anchorEl.getBoundingClientRect().top
+                              - scrollerEl.getBoundingClientRect().top;
+    } else {
+      scrollerEl.scrollTop = scrollerEl.scrollHeight;
+    }
+  }
   new ResizeObserver(() => { reportHeight(); stickToBottom(); }).observe(msgsEl);
   window.addEventListener('resize', stickToBottom);
   if (bridge()) {
@@ -213,6 +234,7 @@
     const pending = el('div', 'msg assistant pending');
     pending.append(el('div', 'reply', '…'));
     msgsEl.append(userMsg, pending);
+    anchorEl = userMsg;
     scrollToNewest();
 
     // Streamed (#1524): the reply text and a pending entry paint as they arrive;
@@ -260,6 +282,7 @@
       autosize();
     } catch (e) {
       // Keep the input so he can resend; drop the optimistic bubbles.
+      anchorEl = null;
       userMsg.remove();
       pending.remove();
       errEl.textContent = e.message || 'Fehler';
@@ -287,6 +310,7 @@
   function newChat() {
     if (busy) return;
     history = [];
+    anchorEl = null;
     msgsEl.replaceChildren();
     errEl.textContent = '';
     inputEl.value = '';
