@@ -306,6 +306,111 @@ def sync_form_card_pause(focus_tense: str | None) -> int:
         conn.close()
 
 
+VOCAB_PAUSE_KEY = "es_irregular_vocab_paused"
+
+
+def _irregular_vocab_target_rows(conn) -> list:
+    """Live `creating` cards of Spanish vocabulary entries whose headword is the
+    lemma of at least one form-card entry with a live card (#1552):
+    rows of id, state, pre_suspend_state, deck_name."""
+    from verb_slots import split_form_card_word
+    lemmas = set()
+    for r in conn.execute(
+            """SELECT DISTINCT e.word_zh FROM entries e JOIN cards c ON c.word_id=e.id
+               WHERE e.lang='es' AND e.source='irregular-forms' AND c.deleted_at IS NULL"""):
+        parsed = split_form_card_word(r["word_zh"])
+        if parsed:
+            lemmas.add(parsed[0])
+    if not lemmas:
+        return []
+    rows = conn.execute(
+        """SELECT c.id, c.state, c.pre_suspend_state, d.name AS deck_name, e.word_zh
+           FROM cards c JOIN entries e ON e.id=c.word_id JOIN decks d ON d.id=c.deck_id
+           WHERE c.category='creating' AND c.deleted_at IS NULL AND e.lang='es'
+             AND COALESCE(e.source,'') != 'irregular-forms'""").fetchall()
+    return [r for r in rows if r["word_zh"] in lemmas]
+
+
+def irregular_vocab_creating_card_ids(conn=None) -> set[int]:
+    """Ids of the normal `creating` cards of irregular Spanish verbs that have
+    form cards (#1552)."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_db()
+    try:
+        return {r["id"] for r in _irregular_vocab_target_rows(conn)}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def sync_irregular_vocab_pause(hide: bool) -> int:
+    """Hide (suspend) or restore the normal `creating` card of irregular Spanish
+    verbs that have form cards (#1552). Same marker mechanism as
+    sync_form_card_pause: only cards in new/learning/review/relearn outside the
+    'Saved' deck are suspended (pre_suspend_state remembers the state, ids go
+    into app_settings['es_irregular_vocab_paused']); manual suspensions, leeches
+    and ★ List cards are never touched. Idempotent. Returns the number of state
+    changes."""
+    import json
+
+    conn = get_db()
+    try:
+        raw = conn.execute("SELECT value FROM app_settings WHERE key=?",
+                           (VOCAB_PAUSE_KEY,)).fetchone()
+        marker: set[int] = set()
+        if raw and raw["value"]:
+            try:
+                parsed = json.loads(raw["value"])
+                if not isinstance(parsed, list):
+                    raise ValueError("not a list")
+                marker = {int(i) for i in parsed}
+            except (ValueError, TypeError):
+                logger.warning("irregular vocab pause marker is broken, starting empty")
+        original = set(marker)
+
+        conn.execute("BEGIN IMMEDIATE")
+        targets = {r["id"]: r for r in _irregular_vocab_target_rows(conn)}
+        changed = 0
+        if marker:
+            ph = ",".join("?" * len(marker))
+            live = {r["id"]: r for r in conn.execute(
+                f"""SELECT c.id, c.state, d.name AS deck_name FROM cards c
+                    JOIN decks d ON d.id=c.deck_id
+                    WHERE c.deleted_at IS NULL AND c.id IN ({ph})""", sorted(marker))}
+            for cid in sorted(marker):
+                r = live.get(cid)
+                if r is None or r["state"] != "suspended" or r["deck_name"] == "Saved":
+                    marker.discard(cid)  # vanished or no longer ours to restore
+                elif not hide or cid not in targets:
+                    conn.execute(
+                        "UPDATE cards SET state=COALESCE(pre_suspend_state,'new'), "
+                        "pre_suspend_state=NULL WHERE id=?", (cid,))
+                    marker.discard(cid)
+                    changed += 1
+        if hide:
+            for cid, r in targets.items():
+                if (cid not in marker and r["deck_name"] != "Saved"
+                        and r["state"] in ("new", "learning", "review", "relearn")):
+                    conn.execute(
+                        "UPDATE cards SET pre_suspend_state=state, state='suspended' WHERE id=?",
+                        (cid,))
+                    marker.add(cid)
+                    changed += 1
+        if marker != original:
+            conn.execute(
+                "INSERT INTO app_settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (VOCAB_PAUSE_KEY, json.dumps(sorted(marker))))
+        conn.commit()
+        return changed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def set_card_note(card_id: int, note: str | None) -> None:
     """Store (or clear) the free-text 'note for next time' on a card.
 
