@@ -95,7 +95,8 @@ def test_is_slottable_verb():
     assert not verb_slots.is_slottable_verb("casa", "es")
     assert verb_slots.is_slottable_verb("quejarse", "es")  # reflexive (#1301)
     assert not verb_slots.is_slottable_verb("casarse", "es")  # base not a known verb
-    assert not verb_slots.is_slottable_verb("ir a casa", "es")
+    # multi-word verb expressions are slottable since #1546 ("voy a casa")
+    assert verb_slots.is_slottable_verb("ir a casa", "es")
     assert not verb_slots.is_slottable_verb("hablar", "fr")
     assert verb_slots.config("fr") is None
 

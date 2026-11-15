@@ -73,14 +73,96 @@ def config(lang: str) -> dict | None:
         return None
 
 
+def expression_parts(word: str, lang: str) -> dict | None:
+    """Split a multi-word Spanish verb expression (#1546) into its conjugated
+    head and its fixed rest: "echar de menos" -> head "echar", rest "de menos";
+    "darse cuenta de algo" -> head "darse", rest "cuenta"; "irle bien a alguien"
+    -> head "ir", clitic "le", rest "bien", persons ["3s","3p"].
+
+    Returns {"head", "clitic", "rest", "persons"} (persons None = all) or None
+    when `word` is not such an expression (single token, form card, other
+    language, first token no verb the lexicon conjugates, placeholder not at
+    the end, nothing left after the head). Agreeing adjectives in the rest
+    ("estar orgulloso", "pasarla lindo") restrict the persons to singular.
+    Never raises."""
+    try:
+        if lang != _FORM_LANG or not word or _SEP in word:
+            return None
+        import expressions
+        tokens = word.strip().lower().split()
+        if len(tokens) < 2:
+            return None
+        m = expressions._ES_HEAD.match(tokens[0])
+        if not m:
+            return None
+        inf, clitic_part = m.group(1), m.group(2)
+        clitics = expressions._ES_CLITIC.findall(clitic_part)
+        if len(clitics) > 1:
+            return None
+        clitic = clitics[0] if clitics else ""
+        candidates = [inf]
+        if inf.endswith("ír"):
+            stripped = inf[:-2].translate(expressions._ACCENTS)
+            candidates += [stripped + "ír", stripped + "ir"]
+        else:
+            candidates.append(inf.translate(expressions._ACCENTS))
+        base = None
+        for cand in dict.fromkeys(candidates):
+            info = lexicon.lemma_info(cand, lang)
+            if info and info.get("pos") == "v" \
+                    and lexicon.form_for(cand, "ind_pres", "1s", lang) is not None:
+                base = cand
+                break
+        if base is None:
+            return None
+        placeholders = expressions._PLACEHOLDERS["es"]
+        preps = expressions._PREPOSITIONS["es"]
+        rest = tokens[1:]
+        had_placeholder = False
+        while rest and rest[-1] in placeholders:
+            rest.pop()
+            had_placeholder = True
+        if any(t in placeholders for t in rest):
+            return None  # placeholder in the middle: no fixed surface form
+        if had_placeholder and rest and rest[-1] in preps:
+            rest.pop()
+        if len(rest) >= 2 and rest[-1] in preps:
+            rest.pop()
+        if not rest:
+            return None
+        persons = None
+        if clitic in ("le", "les"):
+            persons = ["3s", "3p"]
+        # only a predicative adjective right after the verb agrees with the
+        # subject; one inside a noun phrase ("el mismo significado") does not
+        if (lexicon.lemma_info(rest[0], lang) or {}).get("pos") == "adj":
+            sing = ["1s", "2s", "3s"]
+            persons = [p for p in persons if p in sing] if persons else sing
+        return {"head": base + "se" if clitic == "se" else base,
+                "clitic": "" if clitic == "se" else clitic,
+                "rest": " ".join(rest), "persons": persons}
+    except Exception:
+        return None
+
+
+def head_verb(lemma: str, lang: str = "es") -> str:
+    """The conjugated verb of a multi-word expression ("tener éxito" -> "tener",
+    "darse cuenta de" -> "darse"); any other lemma unchanged (#1546)."""
+    parts = expression_parts(lemma, lang)
+    return parts["head"] if parts else lemma
+
+
 def is_slottable_verb(word: str, lang: str) -> bool:
-    """True for a plain verb infinitive the lexicon can conjugate."""
+    """True for a plain verb infinitive the lexicon can conjugate, or a
+    multi-word verb expression whose head verb it can (#1546)."""
     try:
         if not config(lang) or not lexicon.available(lang):
             return False
         w = (word or "").strip().lower()
-        if not w or len(w.split()) != 1:
+        if not w:
             return False
+        if len(w.split()) != 1:
+            return expression_parts(w, lang) is not None
         if w.endswith("se") and len(w) > 4:  # reflexive: judge the base verb (#1301)
             w = w[:-2]
         info = lexicon.lemma_info(w, lang)
@@ -98,6 +180,17 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
     pronoun in front: "me quejé", "me he quejado" (#1301)."""
     try:
         lemma = (lemma or "").strip().lower()
+        parts = expression_parts(lemma, lang)
+        if parts:  # multi-word expression: conjugate the head, keep the rest (#1546)
+            if not person or (parts["persons"] and person not in parts["persons"]):
+                return None
+            if tense == "imp_aff" and parts["clitic"]:
+                return None
+            base_form = target_form(parts["head"], tense, person, lang)
+            if not base_form:
+                return None
+            front = parts["clitic"] + " " if parts["clitic"] else ""
+            return f"{front}{base_form} {parts['rest']}"
         if tense == "imp_aff" and lemma.endswith("se") and len(lemma) > 4:
             # The imperative attaches the pronoun: quéjate, quejémonos (#1540).
             return lexicon.form_for(lemma, tense, person, lang)
@@ -1190,7 +1283,7 @@ def _slot_lemma(word_zh: str, lang: str) -> str | None:
         if parsed:
             return _base_verb(parsed[0])
         if is_slottable_verb(word_zh, lang):
-            return _base_verb(word_zh)
+            return _base_verb(head_verb(word_zh, lang))
     except Exception:
         pass
     return None
