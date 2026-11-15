@@ -154,7 +154,7 @@ def test_put_endpoint_restores_card():
 
 def test_daily_target_skips_hidden_target_card_from_saved():
     database.set_daily_target_enabled(True, "es")
-    _card("tener · Presente", "creating", source="irregular-forms")
+    form = _card("tener · Presente", "creating", source="irregular-forms")
     saved = _card("tener", "creating", state="suspended", saved=True)
     plain = _card("caminar", "creating", state="suspended", saved=True)
     assert database.ensure_daily_target("es") == 1
@@ -162,5 +162,7 @@ def test_daily_target_skips_hidden_target_card_from_saved():
     assert database.get_card(plain)["state"] == "new"
     # setting on -> the target card is a normal candidate again
     database.set_app_setting(conj_patterns.KEY_VOCAB_VISIBLE, "1")
+    # #1553: a due form card makes tener's group active today; move it out of today
+    _set(form, due=(database.anki_today() + __import__("datetime").timedelta(days=3)).isoformat())
     assert database.ensure_daily_target("es") == 1
     assert database.get_card(saved)["state"] == "new"

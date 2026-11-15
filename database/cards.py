@@ -7,6 +7,7 @@ from .core import get_db, anki_today, get_day_cutoff_hour
 from .presets import get_preset_for_deck, effective_preset_id_sql
 from .decks import get_deck, get_locked_deck_ids
 from .entries import surface_forms
+from .siblings import sibling_group_members, sibling_group_map
 from .daily_target import limit_new_cards, daily_target_card_ids, daily_target_new_counts, ordinary_new_sql
 
 # Pseudo language code of the cross-language review session (#1378). Same value
@@ -612,18 +613,31 @@ def _get_virtually_buried_word_ids(
       state rank  : learning/relearn=0, review=1, new=2
       category rank: listening=0, reading=1, creating=2
     A card is suppressed if a sibling with a strictly lower combined rank exists and is due.
+    Siblings are the cards of the same sibling group (#1553, database/siblings.py):
+    same word_id, or - Spanish - a verb and its irregular form cards. Two cards of
+    the same state/category rank (two form cards) are ordered by card id.
     """
     if not word_ids:
         return set()
     placeholders = ",".join("?" * len(word_ids))
+    members = sibling_group_members(word_ids, conn)
+    pairs = [(w, m) for w, ms in members.items() for m in sorted(ms) if m != w]
+    if pairs:
+        cte = "WITH sibmap(word_id, sib) AS (VALUES " + ",".join("(?, ?)" for _ in pairs) + ") "
+        cte_params = [v for p in pairs for v in p]
+    else:
+        cte = "WITH sibmap(word_id, sib) AS (SELECT NULL, NULL WHERE 0) "
+        cte_params = []
     rows = conn.execute(
-        f"""SELECT DISTINCT c_mine.word_id
+        cte + f"""SELECT DISTINCT c_mine.word_id AS word_id, c_sib.word_id AS sib_word_id,
+                   c_sib.category AS sib_category
             FROM cards c_mine
-            JOIN cards c_sib ON c_sib.word_id = c_mine.word_id AND c_sib.id != c_mine.id
+            JOIN cards c_sib ON c_sib.id != c_mine.id
+                 AND (c_sib.word_id = c_mine.word_id
+                      OR c_sib.word_id IN (SELECT m.sib FROM sibmap m WHERE m.word_id = c_mine.word_id))
             WHERE c_mine.word_id IN ({placeholders})
               AND c_mine.category = ?
               AND c_mine.deleted_at IS NULL
-              AND c_sib.category != ?
               AND c_sib.deleted_at IS NULL
               AND c_sib.state != 'suspended'
               AND (c_sib.buried_until IS NULL OR c_sib.buried_until < ?)
@@ -645,26 +659,42 @@ def _get_virtually_buried_word_ids(
                   CASE c_mine.state
                     WHEN 'learning' THEN 0 WHEN 'relearn' THEN 0 WHEN 'review' THEN 1 ELSE 2
                   END
-                  AND
-                  CASE c_sib.category WHEN 'listening' THEN 0 WHEN 'reading' THEN 1 ELSE 2 END <
-                  CASE c_mine.category WHEN 'listening' THEN 0 WHEN 'reading' THEN 1 ELSE 2 END
+                  AND (
+                    CASE c_sib.category WHEN 'listening' THEN 0 WHEN 'reading' THEN 1 ELSE 2 END <
+                    CASE c_mine.category WHEN 'listening' THEN 0 WHEN 'reading' THEN 1 ELSE 2 END
+                    OR (
+                      CASE c_sib.category WHEN 'listening' THEN 0 WHEN 'reading' THEN 1 ELSE 2 END =
+                      CASE c_mine.category WHEN 'listening' THEN 0 WHEN 'reading' THEN 1 ELSE 2 END
+                      AND c_sib.id < c_mine.id
+                    )
+                  )
                 )
               )""",
-        (*word_ids, category, category, today, now, today, today),
+        (*cte_params, *word_ids, category, today, now, today, today),
     ).fetchall()
     suppressed = {r["word_id"] for r in rows}
     if suppressed and category == "creating":
-        # #1395: irregular Spanish verbs - reading/listening don't bury creating
-        suppressed -= _irregular_verb_word_ids(conn, suppressed)
+        # #1395: irregular Spanish verbs - reading/listening of the SAME entry
+        # don't bury its creating card. Form cards are never exempt (#1553).
+        exempt = _irregular_verb_word_ids(conn, suppressed)
+        if exempt:
+            by_word: dict[int, list[tuple[int, str]]] = {}
+            for r in rows:
+                by_word.setdefault(r["word_id"], []).append((r["sib_word_id"], r["sib_category"]))
+            for w in exempt:
+                if all(sw == w and sc in ("reading", "listening") for sw, sc in by_word[w]):
+                    suppressed.discard(w)
     return suppressed
 
 
 def _irregular_verb_word_ids(conn, word_ids) -> set[int]:
-    """Subset of word_ids that are irregular Spanish verbs, empty while the
-    es_conj_irregular_no_bury setting is off (#1395)."""
+    """Subset of word_ids that are irregular Spanish verbs (plain verb entries,
+    not form cards - #1553), empty while the es_conj_irregular_no_bury setting
+    is off (#1395)."""
     if not word_ids:
         return set()
     import conj_patterns
+    import verb_slots
     if not conj_patterns.irregular_no_bury_active():
         return set()
     ids = list(word_ids)
@@ -672,7 +702,9 @@ def _irregular_verb_word_ids(conn, word_ids) -> set[int]:
     rows = conn.execute(
         f"SELECT id, word_zh FROM entries WHERE lang = 'es' AND id IN ({ph})", ids
     ).fetchall()
-    return {r["id"] for r in rows if conj_patterns.is_irregular_card_word(r["word_zh"])}
+    return {r["id"] for r in rows
+            if verb_slots.split_form_card_word(r["word_zh"]) is None
+            and conj_patterns.is_irregular_card_word(r["word_zh"])}
 
 
 def resolve_bury_flags(preset: dict) -> tuple[bool, bool, bool]:
@@ -1795,7 +1827,9 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
             (deck_id, category, today, now, today, today, today),
         ).fetchall()
 
+        group_of = sibling_group_map({r["word_id"] for r in rows}, conn)  # #1553
         for r in rows:
+            gkey = group_of[r["word_id"]]
             sr = 0 if r["state"] in ("learning", "relearn") else 1 if r["state"] == "review" else 2
             cr = cat_rank_map[category]
             # A young 'review' card (interval below learned_interval) is tallied
@@ -1803,8 +1837,8 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
             # category a word is attributed to is unchanged.
             is_lrn = (r["state"] in ("learning", "relearn")
                       or (r["state"] == "review" and (r["interval"] or 0) < threshold))
-            if r["word_id"] not in best or (sr, cr) < best[r["word_id"]][:2]:
-                best[r["word_id"]] = (sr, cr, r["state"], deck_id, category, is_lrn, r["id"] in auto_ids)
+            if gkey not in best or (sr, cr) < best[gkey][:2]:
+                best[gkey] = (sr, cr, r["state"], deck_id, category, is_lrn, r["id"] in auto_ids)
 
     # Cards coming back later today (#844). Deduped by word for the same reason
     # the counts above are: one word must not inflate a parent badge three times.
@@ -2021,7 +2055,9 @@ def get_next_unfinished_card(scope: str = "unfinished", lang: str | None = None)
 def bury_siblings(word_id: int, reviewed_category: str, *,
                   bury_new: bool = False, bury_review: bool = False,
                   bury_learning: bool = False) -> None:
-    """Bury other-category cards for this word based on which states should be buried."""
+    """Bury the other cards of this word's sibling group (#1553: the other
+    categories of the word, and - Spanish - the verb's form cards, including
+    form cards of the same category) based on which states should be buried."""
     states = []
     if bury_new:
         states.append("'new'")
@@ -2033,28 +2069,33 @@ def bury_siblings(word_id: int, reviewed_category: str, *,
         return
     today = anki_today().isoformat()
     conn = get_db()
-    extra = ""
+    group = sorted(sibling_group_members({word_id}, conn)[word_id])
+    extra, extra_params = "", ()
     if reviewed_category in ("reading", "listening") and _irregular_verb_word_ids(conn, {word_id}):
-        extra = " AND category != 'creating'"  # #1395: irregular verb keeps creating
+        # #1395: irregular verb keeps its own creating card (form cards are not exempt)
+        extra, extra_params = " AND NOT (word_id = ? AND category = 'creating')", (word_id,)
     conn.execute(
-        f"UPDATE cards SET buried_until = ? WHERE word_id = ? AND category != ?"
+        f"UPDATE cards SET buried_until = ? WHERE word_id IN ({','.join('?' * len(group))})"
+        f" AND NOT (word_id = ? AND category = ?)"
         f" AND state IN ({','.join(states)}){extra}",
-        (today, word_id, reviewed_category),
+        (today, *group, word_id, reviewed_category, *extra_params),
     )
     conn.commit()
     conn.close()
 
 
 def get_sibling_cards(card_id: int) -> list[dict]:
-    """The other 2 cards for the same word."""
+    """The other cards of the same sibling group: the word's other 2 cards and,
+    for Spanish verbs, the form cards of the same verb (#1553)."""
     conn = get_db()
     card = conn.execute("SELECT word_id FROM cards WHERE id = ?", (card_id,)).fetchone()
     if not card:
         conn.close()
         return []
+    group = sorted(sibling_group_members({card["word_id"]}, conn)[card["word_id"]])
     rows = conn.execute(
-        "SELECT * FROM cards WHERE word_id = ? AND id != ?",
-        (card["word_id"], card_id),
+        f"SELECT * FROM cards WHERE word_id IN ({','.join('?' * len(group))}) AND id != ?",
+        (*group, card_id),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
