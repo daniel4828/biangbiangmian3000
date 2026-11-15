@@ -10,6 +10,7 @@ from .core import (anki_today, get_day_cutoff_hour, get_db, _ensure_default_pres
                    _ensure_lang_preset)
 from .decks import parse_daily_deck_date, _invalidate_locked_deck_cache
 from .stories import get_app_setting, set_app_setting
+from .siblings import sibling_group_key, sibling_group_map
 
 DAILY_TARGET = 50
 MIN_TARGET, MAX_TARGET = 1, 500
@@ -359,6 +360,9 @@ def ensure_daily_target(lang: str = 'zh') -> int:
         # Count the cards that remain usable after normal sibling burial.
         # This changes the target estimate, never the scheduler's bury policy.
         from .cards import resolve_bury_flags
+        # #1553: siblings are the cards of one sibling group (database/siblings.py):
+        # the same word_id, or a Spanish verb + its irregular form cards.
+        # group key -> [(word_id, category, buried states)] of the usable cards.
         suppressed_states = {}
         usable = []
         category_order = {'listening': 0, 'reading': 1, 'creating': 2}
@@ -369,8 +373,13 @@ def ensure_daily_target(lang: str = 'zh') -> int:
         irregular_words = _irregular_verb_word_ids(
             conn, {c['word_id'] for c in eligible if c['category'] == 'creating'}) if lang == 'es' else set()
         for c in sorted(eligible, key=lambda r: (state_order.get(r['state'], 3), category_order.get(r['category'], 3), r['id'])):
-            if (c['state'] in suppressed_states.get(c['word_id'], set())
-                    and not (c['category'] == 'creating' and c['word_id'] in irregular_words)):
+            gkey = sibling_group_key(c['word_id'], c['word_zh'], c['lang'])
+            blockers = [b for b in suppressed_states.get(gkey, []) if c['state'] in b[2]]
+            # #1395 exemption only against reading/listening of the SAME entry;
+            # form cards are never exempt (#1553).
+            if blockers and not (
+                    c['category'] == 'creating' and c['word_id'] in irregular_words
+                    and all(b[0] == c['word_id'] and b[1] in ('reading', 'listening') for b in blockers)):
                 continue
             usable.append(c)
             p = presets[deck_map[c['deck_id']]['preset_id']]
@@ -378,13 +387,14 @@ def ensure_daily_target(lang: str = 'zh') -> int:
             if deck_bury is not None:
                 p = {**p, 'bury_quick_mode': deck_bury}
             bury_new, bury_review, bury_learning = resolve_bury_flags(p)
-            states = suppressed_states.setdefault(c['word_id'], set())
+            states = set()
             if bury_new:
                 states.add('new')
             if bury_review:
                 states.add('review')
             if bury_learning:
                 states.update(('learning', 'relearn'))
+            suppressed_states.setdefault(gkey, []).append((c['word_id'], c['category'], states))
         creating_pct = _parse_creating(_read_setting(conn, _key(_CREATING_KEY, lang), None), lang)
         swapped = 0
         if creating_pct is not None and auto_ids:
@@ -409,8 +419,10 @@ def ensure_daily_target(lang: str = 'zh') -> int:
         row_by_id = {c['id']: c for c in rows}
         mix = {'creating': sum(1 for i in auto_ids if row_by_id.get(i, {}).get('category') == 'creating')}
         mix['other'] = len(auto_ids) - mix['creating']
-        excluded_words = {r['word_id'] for r in reviewed} | {c['word_id'] for c in active}
-        excluded_words.update(c['word_id'] for c in rows if c['id'] in auto_ids)
+        # #1553: "same word" = same sibling group (a verb and its form cards).
+        word_group = sibling_group_map({r['word_id'] for r in rows} | {r['word_id'] for r in reviewed}, conn)
+        excluded_words = {word_group[r['word_id']] for r in reviewed} | {word_group[c['word_id']] for c in active}
+        excluded_words.update(word_group[c['word_id']] for c in rows if c['id'] in auto_ids)
         for source, cs in candidates.items():
             cs.sort(key=lambda c: (frequency_rank(c['word_zh'], lang) or float('inf'), c['word_id'], c['id']))
             candidates[source] = deque(cs)
@@ -437,7 +449,7 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                 for source in (next_source, 'saved' if next_source == 'leech' else 'leech'):
                     pool = candidates[source]
                     for i, cand in enumerate(pool):
-                        if cand['word_id'] in excluded_words or cand['category'] in full_categories:
+                        if word_group[cand['word_id']] in excluded_words or cand['category'] in full_categories:
                             continue
                         if group is not None and (cand['category'] == 'creating') != (group == 'creating'):
                             continue
@@ -466,7 +478,7 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                    probation=0,buried_until=NULL,pre_suspend_state=NULL WHERE id=?""",
                 (target, today, c['id']))
             auto_ids.add(c['id'])
-            excluded_words.add(c['word_id'])
+            excluded_words.add(word_group[c['word_id']])
             mix['creating' if c['category'] == 'creating' else 'other'] += 1
             added += 1
             next_source = 'saved' if source == 'leech' else 'leech'
