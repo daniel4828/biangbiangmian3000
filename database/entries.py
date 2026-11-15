@@ -448,7 +448,13 @@ def form_card_view(entry: dict | None) -> dict | None:
         # old rows stored all six persons, whatever the card rotates over now
         six_text = ", ".join(f for f in (verb_slots.target_form(lemma, tense, p, "es")
                                          for p in verb_slots.PERSONS) if f)
-        if not stored or stored in (row_text, six_text):
+        old_rows = {row_text, six_text}
+        if tense == "part":
+            # #1550: Participio cards renamed from old Perfecto cards (#1539)
+            # still store the Perfecto row ("he hecho, has hecho, …")
+            old_rows.add(", ".join(f for f in (verb_slots.target_form(lemma, "perf", p, "es")
+                                               for p in verb_slots.PERSONS) if f))
+        if not stored or stored in old_rows:
             gloss = ""
             head = get_word_by_zh(lemma, "es")
             if head and (head.get("definition_de") or "").strip():

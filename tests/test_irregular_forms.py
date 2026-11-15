@@ -270,6 +270,16 @@ def test_form_card_view_keeps_hand_edited_gloss(tmp_db):
     assert v["conjugation_row"] == TENER_PRET_ROW
 
 
+def test_form_card_view_replaces_old_perfecto_row_on_participio(tmp_db):
+    # #1550: Perfecto cards renamed to Participio keep the old Perfecto row
+    stored = "he tenido, has tenido, ha tenido, hemos tenido, habéis tenido, han tenido"
+    v = database.form_card_view(_fc(word_zh="tener · Participio", definition_de=stored))
+    assert v["definition_de"] == "haben, besitzen"
+    assert v["conjugation_row"] == "tenido"
+    v = database.form_card_view(_fc(word_zh="tener · Participio", definition_de="mein Text"))
+    assert v["definition_de"] == "mein Text"
+
+
 def test_form_card_view_ignores_other_entries(tmp_db):
     for e in (_fc(lang="fr"), _fc(lang="zh"), _fc(note_type="vocabulary"),
               _fc(word_zh="tener")):
