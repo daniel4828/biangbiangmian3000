@@ -145,7 +145,7 @@ def es_verb_creating_cards() -> list[dict]:
             _FORM_CARD_SELECT + """
                WHERE e.lang='es' AND COALESCE(e.source,'') != 'irregular-forms'
                  AND e.word_zh NOT LIKE '% %'
-                 AND (e.word_zh LIKE '%ar' OR e.word_zh LIKE '%er' OR e.word_zh LIKE '%ir')
+                 AND (e.word_zh LIKE '%ar' OR e.word_zh LIKE '%er' OR e.word_zh LIKE '%ir' OR e.word_zh LIKE '%ír')
                ORDER BY e.id""").fetchall()
         return [dict(r) for r in rows if r["word_zh"] == r["word_zh"].lower()]
     finally:
