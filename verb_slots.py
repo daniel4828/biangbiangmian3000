@@ -446,7 +446,7 @@ def _regular_endings(end: str, tense: str, person: str) -> tuple[str, ...]:
 def _cell_regular(form: str, lemma: str, tense: str, person: str) -> bool | None:
     """True/False: does this cell sound regular? None = no verdict (not an
     -ar/-er/-ir verb, unknown tense/person)."""
-    endings = _regular_endings(lemma[-2:], tense, person)
+    endings = _regular_endings(_strip_accents(lemma[-2:]), tense, person)
     if not endings or not form:
         return None
     return any(_sounds_regular(form, lemma, e) for e in endings)
@@ -466,7 +466,7 @@ def irregular_persons(lemma: str, tense: str, lang: str) -> list[str]:
         if lang != _FORM_LANG or tense not in IRREGULAR_CARD_TENSES:
             return []
         lemma = _base_verb(lemma)
-        if lemma[-2:] not in ("ar", "er", "ir"):
+        if _strip_accents(lemma[-2:]) not in ("ar", "er", "ir"):
             return []
         if tense in _NO_PERSON_TENSES:
             form = lexicon.form_for(lemma, tense, "", lang)
