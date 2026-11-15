@@ -369,3 +369,9 @@ def test_gate_never_pauses_imperative_participle_gerund(tmp_db):
     assert states["traer · Presente"] == "suspended"
     for word in ("traer · Imperativo", "resolver · Participio", "traer · Gerundio"):
         assert states[word] == "new"
+
+
+def test_verb_candidates_include_accented_ir(tmp_db):
+    # #1554：oír/reír 以 -ír 结尾，SQL 也要把它们当作动词候选
+    wid = database.insert_word({"word_zh": "oír", "lang": "es"})
+    assert wid in {v["word_id"] for v in database.es_verb_creating_cards()}
