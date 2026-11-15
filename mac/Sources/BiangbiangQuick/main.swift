@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyFailed = false
     private let loginItem = NSMenuItem(title: "Beim Login starten", action: #selector(toggleLogin), keyEquivalent: "")
+    private let newChatItem = NSMenuItem(title: "Beim Öffnen neuer Chat", action: #selector(toggleNewChat), keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = QuickPanelController()
@@ -55,6 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Öffnen (⌥⇧K)", action: #selector(openPanel), keyEquivalent: "").target = self
         loginItem.target = self
         menu.addItem(loginItem)
+        newChatItem.target = self
+        menu.addItem(newChatItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Fenster…", action: #selector(editPanel), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Server-Adresse…", action: #selector(editServer), keyEquivalent: "").target = self
@@ -67,7 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        newChatItem.state = ChatSettings.newChatOnOpen ? .on : .off
     }
+
+    @objc private func toggleNewChat() { ChatSettings.newChatOnOpen.toggle() }
 
     @objc private func openPanel() {
         // Das Menü schließt sich erst nach der Aktion; danach Fokus an das Fenster geben.
