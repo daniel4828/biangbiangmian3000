@@ -161,7 +161,8 @@ def test_settings_defaults_and_validation(tmp_db):
     assert conj_patterns.settings() == {"enabled": True,
                                         "desired_retention": 0.90, "pull_per_day": 10,
                                         "irregular_creating_unburied": True,
-                                        "tense_cues": True}
+                                        "tense_cues": True,
+                                        "irregular_vocab_creating_visible": False}
     clean = conj_patterns.validate_settings({"pull_per_day": 5})
     assert clean == {"pull_per_day": 5}
     conj_patterns.save_settings({"enabled": False, "pull_per_day": 2,
@@ -169,7 +170,8 @@ def test_settings_defaults_and_validation(tmp_db):
     assert conj_patterns.settings() == {"enabled": False,
                                         "desired_retention": 0.85, "pull_per_day": 2,
                                         "irregular_creating_unburied": True,
-                                        "tense_cues": True}
+                                        "tense_cues": True,
+                                        "irregular_vocab_creating_visible": False}
     for bad in ({"new_per_day": 5},  # removed in #1401: now an unknown key
                 # removed with #1536: unknown keys like any other
                 {"prod_per_verb": 3}, {"followups_per_day": 30}, {"intro_series": True},
@@ -500,14 +502,16 @@ def test_conj_settings_endpoints(client):
     assert client.get("/api/es/conj-settings").json() == {
         "enabled": True, "desired_retention": 0.9,
         "pull_per_day": 10, "irregular_creating_unburied": True,
-        "tense_cues": True}
+        "tense_cues": True,
+                                        "irregular_vocab_creating_visible": False}
     r = client.put("/api/es/conj-settings", json={"pull_per_day": 4})
     assert r.status_code == 200 and r.json()["pull_per_day"] == 4
     assert r.json()["enabled"] is True
     r = client.put("/api/es/conj-settings", json={"enabled": False, "desired_retention": 0.85})
     assert r.json() == {"enabled": False, "desired_retention": 0.85,
                         "pull_per_day": 4, "irregular_creating_unburied": True,
-                        "tense_cues": True}
+                        "tense_cues": True,
+                                        "irregular_vocab_creating_visible": False}
     r = client.put("/api/es/conj-settings", json={"tense_cues": False})
     assert r.status_code == 200 and r.json()["tense_cues"] is False
     assert client.put("/api/es/conj-settings", json={"tense_cues": "no"}).status_code == 400

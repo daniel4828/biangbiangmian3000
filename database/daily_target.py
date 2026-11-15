@@ -198,6 +198,7 @@ def ensure_daily_targets(lang: str | None) -> int:
     if es_involved:
         # Pause off-tense form cards first so the fill sees the final queue (#1438).
         total += _sync_form_pause()
+        total += _sync_irregular_vocab_pause()
     if languages.is_valid_lang(lang):
         total += ensure_daily_target(lang)
     else:
@@ -215,6 +216,18 @@ def _sync_form_pause() -> int:
         return tense_focus.sync_form_cards()
     except Exception as e:
         logging.getLogger(__name__).warning('form card pause sync failed - %s', e)
+        return 0
+
+
+def _sync_irregular_vocab_pause() -> int:
+    """#1552: hide/restore the normal creating card of irregular verbs that have
+    form cards. Must never break the daily-target fill."""
+    try:
+        import conj_patterns
+        from .cards import sync_irregular_vocab_pause
+        return sync_irregular_vocab_pause(not conj_patterns.vocab_creating_visible())
+    except Exception as e:
+        logging.getLogger(__name__).warning('irregular vocab pause sync failed - %s', e)
         return 0
 
 
@@ -247,6 +260,14 @@ def ensure_daily_target(lang: str = 'zh') -> int:
     enabled_key = _key('daily_target_enabled', lang)
     enabled_default = '1' if lang == 'zh' else '0'
     lang_preset = None
+    hide_irregular_vocab = False
+    if lang == 'es':
+        # #1552: read before the write transaction opens (separate connection).
+        try:
+            import conj_patterns
+            hide_irregular_vocab = not conj_patterns.vocab_creating_visible()
+        except Exception as e:
+            logging.getLogger(__name__).warning('irregular vocab setting read failed - %s', e)
     try:
         if lang != 'zh':
             # _ensure_lang_preset commits, so resolve it before the write
@@ -269,6 +290,12 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                WHERE c.deleted_at IS NULL AND e.lang=?""", (lang,))]
         active = []
         candidates = {'leech': [], 'saved': []}
+        # #1552: hidden creating cards of irregular verbs must not be refilled
+        # (the next sync would suspend them again).
+        hidden_vocab_ids = set()
+        if hide_irregular_vocab:
+            from .cards import irregular_vocab_creating_card_ids
+            hidden_vocab_ids = irregular_vocab_creating_card_ids(conn)
         for c in rows:
             d = deck_map.get(c['deck_id'])
             if not d or d['id'] in blocked or d['lang'] != lang:
@@ -278,7 +305,9 @@ def ensure_daily_target(lang: str = 'zh') -> int:
                 continue
             if c['buried_until'] and c['buried_until'] >= today:
                 continue
-            if c['is_leech']:
+            if c['id'] in hidden_vocab_ids:
+                pass
+            elif c['is_leech']:
                 candidates['leech'].append(c)
             elif d['name'] == 'Saved':
                 candidates['saved'].append(c)
@@ -401,7 +430,8 @@ def ensure_daily_target(lang: str = 'zh') -> int:
             swapped = _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets,
                                        blocked, creating_pct, lang, today,
                                        has_room=_has_room, release=_release,
-                                       visible_ids={c['id'] for c in usable})
+                                       visible_ids={c['id'] for c in usable},
+                                       exclude_ids=hidden_vocab_ids)
             if swapped:
                 rows = [dict(r) for r in conn.execute(
                     """SELECT c.*, e.word_zh, e.lang FROM cards c
@@ -500,7 +530,7 @@ def _save_batch(conn, lang, today, auto_ids):
 
 def _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets, blocked,
                      creating_pct, lang, today, has_room=None, release=None,
-                     visible_ids=None) -> int:
+                     visible_ids=None, exclude_ids=()) -> int:
     """Swap today's untouched auto cards to the other category (#1390).
 
     Applies a changed creating share to a batch already added today. Only an
@@ -532,7 +562,8 @@ def _rebalance_batch(conn, rows, auto_ids, done_ids, deck_map, presets, blocked,
         siblings = sorted(
             (s for s in rows if s['word_id'] == c['word_id'] and s['id'] != c['id']
              and (s['category'] == 'creating') == to_creating
-             and s['id'] not in auto_ids and s['state'] == 'suspended'
+             and s['id'] not in auto_ids and s['id'] not in exclude_ids
+             and s['state'] == 'suspended'
              and deck_map.get(s['deck_id'], {}).get('name') == 'Saved'
              and presets[deck_map[c['deck_id']]['preset_id']].get(s['category'] + '_enabled', 1)),
             key=lambda s: (order.get(s['category'], 2), s['id']))
