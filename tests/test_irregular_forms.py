@@ -43,6 +43,10 @@ TABLE = {
         "ind_fut": "hablaré hablarás hablará hablaremos hablaréis hablarán",
         "ind_impf": "hablaba hablabas hablaba hablábamos hablabais hablaban",
     }),
+    "oír": (12, {
+        "ind_pres": "oigo oyes oye oímos oís oyen",
+        "ind_pret": "oí oíste oyó oímos oísteis oyeron",
+    }),
     "buscar": (5, {
         "ind_pret": "busqué buscaste buscó buscamos buscasteis buscaron",
         "ind_pres": "busco buscas busca buscamos buscáis buscan",
@@ -345,6 +349,14 @@ def test_endpoint_requires_lexicon(tmp_db):
     with pytest.raises(HTTPException) as exc:
         imports_routes.create_es_irregular_form_cards()
     assert exc.value.status_code == 400
+
+
+def test_accented_ir_infinitive_oir_reir():
+    # #1554：oír/reír（带重音的 -ír）不能被当成规则动词
+    # oyó/oyeron 只是拼写变化 → 规则
+    assert verb_slots.irregular_form_tenses("oír", "es") == ["ind_pres"]
+    assert verb_slots.irregular_persons("oír", "ind_pres", "es") == ["1s", "2s", "3s", "3p"]
+    assert verb_slots.verb_regularity("oír", "es") == "irregular"
 
 
 def test_verb_regularity_tag():
