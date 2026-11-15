@@ -4384,7 +4384,15 @@ function _esConjSettingsHtml() {
         <input type="checkbox" ${s.irregular_creating_unburied ? 'checked' : ''} ${dis}
                onchange="saveEsConjSettings({irregular_creating_unburied: this.checked})" style="width:18px;height:18px;cursor:pointer">
       </label>
-    </div>`;
+    </div>
+    <div class="keymap-row">
+      <span class="keymap-label">Normale Creating-Karte bei unregelmäßigen Verben zeigen</span>
+      <label class="switch-wrap">
+        <input type="checkbox" ${s.irregular_vocab_creating_visible ? 'checked' : ''} ${dis}
+               onchange="saveEsConjSettings({irregular_vocab_creating_visible: this.checked})" style="width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>
+    <div class="keymap-label" style="margin:-4px 0 8px 0;opacity:.7">Aus: Die Formkarten ersetzen sie. Lesen und Hören bleiben. Gilt nur für Verben mit Formkarten.</div>`;
 }
 
 function _esConjPatternsHtml() {

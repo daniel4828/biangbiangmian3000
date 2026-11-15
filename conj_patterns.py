@@ -49,6 +49,7 @@ DEFAULT_RETENTION = 0.90
 MIN_RETENTION, MAX_RETENTION = 0.80, 0.97
 KEY_PULL_PER_DAY = "es_conj_pull_per_day"
 KEY_NO_BURY = "es_conj_irregular_no_bury"
+KEY_VOCAB_VISIBLE = "es_irregular_vocab_creating_visible"  # #1552, default off
 KEY_PULL_BATCH = "es_conj_pull_batch"
 # Tense signal words (#1481): story sentences carry a context that fixes the
 # tense, and their German translation (LLM instead of Google) keeps it visible.
@@ -647,7 +648,9 @@ def settings() -> dict:
     return {"tense_cues": tense_cues,
             "enabled": enabled,
             "desired_retention": retention, "pull_per_day": pull,
-            "irregular_creating_unburied": no_bury}
+            "irregular_creating_unburied": no_bury,
+            "irregular_vocab_creating_visible":
+                database.get_app_setting(KEY_VOCAB_VISIBLE) == "1"}
 
 
 def validate_settings(body) -> dict:
@@ -656,7 +659,8 @@ def validate_settings(body) -> dict:
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
     known = {"enabled", "desired_retention", "pull_per_day",
-             "irregular_creating_unburied", "tense_cues"}
+             "irregular_creating_unburied", "tense_cues",
+             "irregular_vocab_creating_visible"}
     unknown = sorted(set(body) - known)
     if unknown:
         raise ValueError(f"unknown setting(s): {', '.join(map(str, unknown))}")
@@ -697,6 +701,14 @@ def validate_settings(body) -> dict:
             out["irregular_creating_unburied"] = bool(v)
         else:
             raise ValueError("'irregular_creating_unburied' must be true or false")
+    if "irregular_vocab_creating_visible" in body:
+        v = body["irregular_vocab_creating_visible"]
+        if isinstance(v, bool):
+            out["irregular_vocab_creating_visible"] = v
+        elif isinstance(v, int) and v in (0, 1):
+            out["irregular_vocab_creating_visible"] = bool(v)
+        else:
+            raise ValueError("'irregular_vocab_creating_visible' must be true or false")
     return out
 
 
@@ -712,6 +724,18 @@ def save_settings(clean: dict) -> None:
         database.set_app_setting(KEY_TENSE_CUES, "1" if clean["tense_cues"] else "0")
     if "irregular_creating_unburied" in clean:
         database.set_app_setting(KEY_NO_BURY, "1" if clean["irregular_creating_unburied"] else "0")
+    if "irregular_vocab_creating_visible" in clean:
+        database.set_app_setting(
+            KEY_VOCAB_VISIBLE, "1" if clean["irregular_vocab_creating_visible"] else "0")
+
+
+def vocab_creating_visible() -> bool:
+    """Setting on -> the normal creating card of irregular verbs with form cards
+    stays in the queue (#1552). Default off (hidden). Never raises."""
+    try:
+        return database.get_app_setting(KEY_VOCAB_VISIBLE) == "1"
+    except Exception:
+        return False
 
 
 def tense_cues_active() -> bool:

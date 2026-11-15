@@ -637,8 +637,21 @@ def _sync_form_pause_and_invalidate() -> None:
     """Pause/restore off-tense form cards (#1438) and drop the cached queues if
     anything changed."""
     import tense_focus
-    if tense_focus.sync_form_cards():
+    changed = tense_focus.sync_form_cards()
+    if _sync_irregular_vocab_and_invalidate(invalidate=False):
+        changed = True
+    if changed:
         queue_mgr.invalidate()
+
+
+def _sync_irregular_vocab_and_invalidate(invalidate: bool = True) -> int:
+    """Hide/restore the normal creating card of irregular verbs with form cards
+    (#1552) per the setting; drops the cached queues if anything changed."""
+    import conj_patterns
+    changed = database.sync_irregular_vocab_pause(not conj_patterns.vocab_creating_visible())
+    if changed and invalidate:
+        queue_mgr.invalidate()
+    return changed
 
 
 @router.post("/api/es/irregular-form-cards")
@@ -756,6 +769,8 @@ def put_es_conj_settings(body: dict):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     conj_patterns.save_settings(clean)
+    if "irregular_vocab_creating_visible" in clean:
+        _sync_irregular_vocab_and_invalidate()
     return conj_patterns.settings()
 
 
