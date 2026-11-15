@@ -238,7 +238,7 @@ Daniel 的含中文的消息，连同 Haiku 生成的纠正，由**全局** hook
 
 ## 生产环境（2026-07-07 上线）
 
-系统运行在一台 Linux VPS 上，Daniel 通过手机/电脑浏览器访问 `https://powerdaniel3000.duckdns.org`（登录保护；凭据不入库——仓库是公开的）。
+系统运行在一台 Linux VPS 上，Daniel 通过手机/电脑浏览器访问 `https://biangbiangmian3000.danielschreiber.eu`（登录保护；凭据不入库——仓库是公开的）。
 
 ### 登录与认证
 
@@ -341,7 +341,7 @@ python main.py status [--deck X]     # 显示每个牌组/类别的到期数量
 | `AUTH_USERNAME` / `AUTH_PASSWORD` | 可选 | 两者都设置时启用登录保护（保护所有路径，`/login` 除外）。主流程是 HTML 表单登录 + 一年期签名 Cookie（#666），Basic Auth 保留作 curl/脚本的回退 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 可选 | 播客爬虫（#479）邮件通知用；`SMTP_PORT` 默认 587（STARTTLS）；未配置时跳过发信，记日志，不算失败 |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | 可选 | 播客爬虫用 Spotify Web API 搜索单集链接；未配置时退化为 Spotify 搜索链接 |
-| `PUBLIC_BASE_URL` | `https://powerdaniel3000.duckdns.org` | 播客邮件/Signal 通知里转录页链接的域名前缀 |
+| `PUBLIC_BASE_URL` | `https://biangbiangmian3000.danielschreiber.eu` | 播客邮件/Signal 通知里转录页链接的域名前缀 |
 | `SIGNAL_ACCOUNT` / `SIGNAL_CLI_PATH` | 可选 | 播客爬虫（#521）Signal 通知用，**以及**知识库 Signal 分享入口（#749）的收件用；`SIGNAL_ACCOUNT` 是 Daniel 关联设备所属号码（如 `+49…`），`SIGNAL_CLI_PATH` 默认 `signal-cli`；`SIGNAL_ACCOUNT` 未配置时发送/收件都跳过，记日志，不算失败。一次性 signal-cli 安装/扫码关联步骤见 `scripts/README.md`（两个用途共用同一次关联，不用配两遍） |
 | `ALIBABA_CLOUD_ACCESS_KEY_ID` / `ALIBABA_CLOUD_ACCESS_KEY_SECRET` | 可选 | 播客爬虫（#498）通义听悟（转录主力）用的阿里云 AccessKey；未配置时自动跳过，落到 Whisper/NotebookLM |
 | `TINGWU_APP_KEY` | 可选 | 播客爬虫（#498）通义听悟控制台创建的应用 AppKey；与上面两个 AccessKey 变量任一缺失都会跳过听悟。一次性开通步骤见 `scripts/README.md` |
@@ -978,6 +978,7 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 - 面板位置（#1528/#1532）：下边缘默认在屏幕高度 1/8（12.5%）处，向上生长，最高到距顶部 12.5%；新问题锚定在消息区顶部，回答从头可读；页面逐个测固定部分上报自然高度（#1526）
 - **位置和大小由 Daniel 在菜单「Fenster…」里自己改（#1534）**：`PanelSettings`（`QuickPanel.swift`）读 `UserDefaults` 的 `panelBottomPercent`/`panelTopPercent`/`panelWidth`/`panelMaxHeight`，空 = 默认，下次打开生效。拖动上边缘同样写 `panelWidth`/`panelMaxHeight`。**他要换数值时提醒他用这个菜单，不必改代码**
 - `/quick`（`static/quick.html`，不加载 `app.js`）是小型多轮聊天：输入框固定在底部、回答在上方、面板向上生长；语言 zh/es/fr 存 `localStorage.quickLang`；「Neu」清空对话
+- **每次打开都是新对话（#1543）**：`show()` 先调 `window.quickNewChat()` 清空、回调里再显示（避免旧对话闪一下）；菜单勾选项「Beim Öffnen neuer Chat」（`UserDefaults` `newChatOnOpen`，默认开）可关掉
 - 历史只存在前端；`POST /api/dict/chat` 无状态，客户端每轮发整段历史（服务端只取最后 20 条），助手那一轮的 content 用返回的 `history_text`
 - `ai.dictionary_chat()` 不用 system 角色：规则 + 转写全放在唯一一条 user 消息里；输出 JSON `{reply, entry|null, add[]}`，`entry` 与 /lookup 的词典契约完全一致，复用同一个校验函数
 - `add` 只在 Daniel 明确说「添加/speicher」时才填；页面对每个词自动走 `addWordViaAi(word,'list')`（仍是唯一加词入口，#643）

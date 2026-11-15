@@ -66,6 +66,15 @@ enum PanelSettings {
     }
 }
 
+/// Jedes Öffnen startet einen neuen Chat (#1543); im Menü abschaltbar. Standard: an.
+enum ChatSettings {
+    static let newChatKey = "newChatOnOpen"
+    static var newChatOnOpen: Bool {
+        get { UserDefaults.standard.object(forKey: newChatKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: newChatKey) }
+    }
+}
+
 enum ServerSettings {
     static let key = "serverURL"
     static let defaultURL = "https://biangbiangmian3000.danielschreiber.eu"
@@ -179,6 +188,14 @@ final class QuickPanelController: NSObject, NSWindowDelegate, WKScriptMessageHan
         maxHeight = clampHeight(storedHeight > 0 ? storedHeight : .greatestFiniteMagnitude)
         width = clampWidth(storedWidth > 0 ? storedWidth : Self.defaultWidth)
         pinned = false
+        guard ChatSettings.newChatOnOpen else { present(); return }
+        // Erst leeren, dann zeigen – sonst blitzt der alte Chat kurz auf.
+        webView.evaluateJavaScript("window.quickNewChat && window.quickNewChat()") { [weak self] _, _ in
+            self?.present()
+        }
+    }
+
+    private func present() {
         applyFrame()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(webView)

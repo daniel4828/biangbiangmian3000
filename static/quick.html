@@ -318,6 +318,8 @@
     inputEl.focus();
   }
   document.getElementById('new').onclick = newChat;
+  // Mac app: fresh chat on every open (#1543, menu „Beim Öffnen neuer Chat“).
+  window.quickNewChat = newChat;
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') post({ type: 'close' });
