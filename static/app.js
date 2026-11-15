@@ -14063,15 +14063,18 @@ function renderConjugationSection(container, wordData) {
   // #1537: red dot = this form deviates from the regular formation.
   const irrDot = c => c.irregular
     ? '<span class="conj-irr-dot" title="unregelmäßig"></span>' : '';
-  const cell = c =>
+  const cell = c => !c ? '<div class="conj-cell"></div>' :
     `<div class="conj-cell"><span class="conj-person">${_escHtml(c.person)}</span>` +
     `<span class="conj-form">${_escHtml(c.form)}${irrDot(c)}</span></div>`;
   const cards = tenses.map((t, i) => {
     const list = byTense.get(t);
     let body;
-    if (list.length === 6 && list.every(c => c.person)) {
+    // #1547: the imperative has no yo — pad it so it uses the same two columns.
+    const grid = (list.length === 5 && list.every(c => c.person) && /^imperativ/i.test(t))
+      ? [null, ...list] : list;
+    if (grid.length === 6 && grid.every(c => !c || c.person)) {
       // Row i: singular person i on the left, plural person i+3 on the right.
-      const pairs = [0, 1, 2].map(k => cell(list[k]) + cell(list[k + 3])).join('');
+      const pairs = [0, 1, 2].map(k => cell(grid[k]) + cell(grid[k + 3])).join('');
       body = `<div class="conj-pairs">${pairs}</div>`;
     } else {
       body = list.map(c =>

@@ -1241,6 +1241,7 @@ def form_is_irregular(lemma: str, tense_label, person_label, form, lang: str) ->
     try:
         if lang != _FORM_LANG:
             return None
+        reflexive = _base_verb(lemma) != (lemma or "").strip().lower()
         lemma = _base_verb(lemma)
         tense = _label_tense_code(tense_label)
         if tense is None:
@@ -1250,6 +1251,10 @@ def form_is_irregular(lemma: str, tense_label, person_label, form, lang: str) ->
             person = ""
         text = (form or "").strip().lower()
         variants = [v.strip() for v in re.split(r"[/,]", text) if v.strip()]
+        if tense == "imp_aff" and reflexive and person:
+            # quéjate carries the pronoun at the end: judge the bare imperative
+            bare = lexicon.form_for(lemma, tense, person, lang)
+            variants = [bare] if bare else []
         if not variants:
             return None
         verdicts = []
