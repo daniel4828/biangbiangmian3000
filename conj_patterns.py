@@ -402,6 +402,7 @@ def pattern_for(lemma: str, tense: str, person: str, lang: str = LANG) -> dict |
     try:
         if lang != LANG or tense not in TENSES:
             return None
+        lemma = verb_slots.head_verb(lemma, lang)  # expressions: head verb (#1546)
         base = verb_slots._base_verb(lemma)
         if len(base) < 2 or base[-2:] not in ("ar", "er", "ir"):
             return None
@@ -484,6 +485,7 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
       (creer ind_pret: [["3s","3p"],["1s","2s","1p","2p"]]);
     Never raises ([] on any failure)."""
     try:
+        lemma = verb_slots.head_verb(lemma, lang)  # expressions: head verb (#1546)
         pats = []
         for person in PERSONS:
             pat = pattern_for(lemma, tense, person, lang)
