@@ -136,7 +136,7 @@ def get_word_full(word_id: int) -> dict | None:
     word["measure_words"] = get_word_measure_words(word_id)
     word["relations"] = get_word_relations(word_id)
     word["components"] = get_note_components(word_id)
-    word["conjugations"] = get_word_conjugations(word_id)
+    word["conjugations"] = _completed_conjugations(word["word_zh"], word_id, word.get("lang"))
     word["inflections"] = get_word_inflections(word_id)
     word["frequency_rank"] = frequency_rank(word["word_zh"], word.get("lang") or "zh")
     return word
@@ -287,6 +287,17 @@ def get_word_conjugations(word_id: int) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def _completed_conjugations(lemma: str, word_id: int, lang: str | None) -> list[dict]:
+    """Stored conjugation rows plus the Spanish tenses the AI never generated
+    (Imperativo, Imperfecto de subjuntivo; #1547), built from the lexicon at
+    read time — nothing is written."""
+    rows = get_word_conjugations(word_id)
+    if rows and lang == "es":
+        import conj_table
+        rows = conj_table.complete_conjugations(lemma, rows, lang)
+    return rows
 
 
 def get_word_inflections(word_id: int) -> list[dict]:
@@ -473,7 +484,7 @@ def form_card_detail(word: dict | None) -> dict | None:
         if not word.get("examples"):
             word["examples"] = get_word_examples(head["id"])
         if not word.get("conjugations"):
-            word["conjugations"] = get_word_conjugations(head["id"])
+            word["conjugations"] = _completed_conjugations(parsed[0], head["id"], "es")
         word["lemma_word_id"] = head["id"]
     except Exception as e:
         logger.warning("form_card_detail failed for %s — %s", word.get("word_zh"), e)

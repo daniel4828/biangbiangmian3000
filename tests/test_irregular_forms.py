@@ -294,7 +294,7 @@ def test_form_card_detail_borrows_from_headword(tmp_db):
     w = database.form_card_detail(_fc(etymology=None, examples=[], conjugations=[]))
     assert w["etymology"] == "von lat. tenere"
     assert [e["example_zh"] for e in w["examples"]] == ["Tengo un perro."]
-    assert [c["form"] for c in w["conjugations"]] == ["tengo"]
+    assert [c["form"] for c in w["conjugations"]][0] == "tengo"  # + #1547 tenses
     assert w["lemma_word_id"] == wid
 
 
@@ -305,7 +305,7 @@ def test_form_card_detail_keeps_own_values(tmp_db):
                                       examples=own_ex, conjugations=[]))
     assert w["etymology"] == "eigene Etymologie"
     assert w["examples"] == own_ex
-    assert [c["form"] for c in w["conjugations"]] == ["tengo"]
+    assert [c["form"] for c in w["conjugations"]][0] == "tengo"  # + #1547 tenses
 
 
 def test_form_card_detail_without_headword(tmp_db):

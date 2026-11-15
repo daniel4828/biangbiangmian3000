@@ -598,6 +598,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **区块初始状态可设**：`static/app.js` 的 `SECTION_DEFAULTS`（examples closed / notes peek / analysis open / **conjugation open（本议题起）** / inflection closed；`analysis` = Word Analysis 与 Etymology 共用）。用户覆盖存 `localStorage.sectionDefaults`（合并到默认值上，未知键/非法值忽略）；设置页 Review 标签「Section defaults」。五个区块都用 `_sectionInit()` 渲染，全部支持 open/peek/closed 三态
 - **#1395 起变位表不再显示生成次数**（原来数的是**生成过的句子**，重新生成一次就再算一次、规则时态还把所有动词混在一起，Daniel 觉得「不可能对」）。每个人称格改为一个小圆点：该形式所属**模式卡**在「产出（Bilden）」下的状态，tooltip 里两种 mode 都有。`practice_counts` / `conjugation_stats` / `practice_count` 已删除
 - **规则性推导**（`verb_slots.tense_is_irregular`）：ind_pres/pret/impf/fut 用 `irregular_tenses()`；`ind_cond` 跟 `ind_fut`，`subj_pres` 跟 `ind_pres`，`subj_impf` 跟 `ind_pret`；`perf` 看词汇表过去分词是否异于规则 -ado/-ido；反身动词按原形
+- **Imperativo 与 Imperfecto de subjuntivo 读时补全（#1547）**：生产库的西语动词表（AI 生成）只有 9 个时态。`conj_table.complete_conjugations()` 在 `database.get_word_full()` / `form_card_detail()` 里从词汇表补上缺的这两个时态（不写库，已有的时态不重复）：Imperfecto de subjuntivo 只给 -ra 形，插在 Presente de subjuntivo 之后；Imperativo（tú/usted/nosotros/vosotros/ustedes）紧随其后。反身动词与 `-lo` 等宾语代词按重音规则后附（despiértate、vámonos、idos、divertíos、hágalo），多词短语只变第一个词（ten éxito、date cuenta de），ser/estar + 形容词复数一致（estemos orgullosos）。前端把 5 行的命令式放进两栏网格，yo 格留空。测试 `tests/test_conj_table.py`
 - **AI 写的时态/人称标签映射**：`tense_code_for_label()` / `person_code_for_label()`（归一化去重音；Participio/Gerundio/Imperativo/复合时态返回 None）
 
 ## 西语变位模式卡：第二个评分 + 独立调度器（#1395）
