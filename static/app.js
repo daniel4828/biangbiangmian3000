@@ -15918,6 +15918,7 @@ function _renderMultiRatingIfNeeded() {
 
 // ── Conjugation rating (Spanish verb slots → Musterkarten) ───────────────────
 // null = no choice (nothing is sent), true = richtig, false = falsch.
+// When the row is shown it starts at true (richtig), see _renderConjRatingRow.
 let _conjChoice = null;
 // A 1-4 rating pressed before richtig/falsch is remembered here and submitted
 // as soon as the conjugation is rated, so the rating needs only one press.
@@ -15960,6 +15961,8 @@ function _renderConjRatingRow() {
   row.style.display = show ? '' : 'none';
   row.classList.remove('conj-need');
   _setConjPendingRating(null);
+  // Default = richtig: only a wrong conjugation needs an active click (✗ / i).
+  _conjChoice = show ? true : null;
   const lbl = document.getElementById('conj-rating-pattern');
   if (lbl) lbl.textContent = show ? (sentence.conj_pattern_label || '') : '';
   _syncConjButtons();
@@ -15968,7 +15971,8 @@ function _renderConjRatingRow() {
 function setConjChoice(ok) {
   const row = document.getElementById('conj-rating-row');
   if (!row || row.style.display === 'none') return;
-  _conjChoice = (_conjChoice === ok) ? null : ok;   // clicking the active one deselects
+  // richtig is the default: clicking the active ✗ goes back to ✓, never to "no choice".
+  _conjChoice = (_conjChoice === ok && !ok) ? true : ok;
   row.classList.remove('conj-need');
   _syncConjButtons();
   if (_conjChoice !== null && _conjPendingRating != null) {

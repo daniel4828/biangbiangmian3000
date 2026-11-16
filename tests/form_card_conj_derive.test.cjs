@@ -39,3 +39,28 @@ test('_renderConjRatingRow hides the row for form cards', () => {
   const body = source.slice(s, source.indexOf('function setConjChoice'));
   assert.ok(body.includes('formCardLemma'));
 });
+
+// Normal verb cards: richtig is preselected, only ✗ needs a click
+test('conj rating row defaults to richtig', () => {
+  const ctx = {formCardLemma: () => null, _conjChoice: null, _conjPendingRating: null, rated: []};
+  const row = {style: {display: 'none'}, classList: {remove() {}, add() {}}};
+  const lbl = {textContent: ''};
+  ctx.document = {
+    getElementById: id => (id === 'conj-rating-row' ? row : id === 'conj-rating-pattern' ? lbl : null),
+    querySelectorAll: () => [],
+  };
+  vm.createContext(ctx);
+  const s = source.indexOf('function _setConjPendingRating');
+  const e = source.indexOf('// ── Submit rating');
+  vm.runInContext(source.slice(s, e).replace(/\blet _conj/g, 'var _conj'), ctx);
+  ctx.rate = r => ctx.rated.push(r);
+  vm.runInContext('var card = {}; var sentence = {id: 3, conj_rating: true, conj_pattern: "reg:ind_pret:ar"};', ctx);
+  ctx._renderConjRatingRow();
+  assert.equal(vm.runInContext('_conjChoice', ctx), true);
+  ctx.setConjChoice(false);
+  assert.equal(vm.runInContext('_conjChoice', ctx), false);
+  ctx.setConjChoice(false);   // clicking the active ✗ again returns to ✓
+  assert.equal(vm.runInContext('_conjChoice', ctx), true);
+  ctx.setConjChoice(true);    // ✓ stays ✓
+  assert.equal(vm.runInContext('_conjChoice', ctx), true);
+});

@@ -605,7 +605,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 
 ## 西语变位模式卡：第二个评分 + 独立调度器（#1395）
 
-Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**——词义（Again/Hard/Good/Easy，照旧）+ 变位（✓/✗，可选，不选不记录）。变位分数进一个**独立调度器**，调度的是**变位模式**不是动词：错了，同一模式过几天**换一个动词**再来。
+Daniel 2026-11-02 定的：有变位槽位的动词卡复习时打**两个分**——词义（Again/Hard/Good/Easy，照旧）+ 变位（✓/✗；#1566 起**默认已选 ✓**，只有错了才需要按 ✗——再按一次 ✗ 回到 ✓）。变位分数进一个**独立调度器**，调度的是**变位模式**不是动词：错了，同一模式过几天**换一个动词**再来。
 
 - **模式卡不在 `cards` 表里**（`conj_patterns` + `conj_review_log`，`database/conj.py`）：它们从不单独复习，只作为动词卡的附属评分出现；放进 `cards` 会污染队列、角标、统计
 - **每个具体变位形唯一归属一张模式卡**（`conj_patterns.pattern_for(lemma, tense, person)`）：规则形 → `reg:{时态}:{词尾类}`（词尾相同的类合并）；不规则组 → `irr:{时态}:{组}`（yo_go、yo_zco、e_ie/o_ue/e_i/u_ue、strong_u/i/j、stem_3rd、y_3rd、ortho、stem、yo_stem、participle…）；ser/ir/estar/haber/dar/ver 和分不进组的形 → `verb:{动词}:{时态}`（ser/ir 的 Indefinido 与虚拟式过去时共用 `verb:ser_ir:…`）。**同一动词同一时态可以属于不同卡**：tengo（yo_go）/ tienes（e_ie）/ tenemos（规则 -er）
