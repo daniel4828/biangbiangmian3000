@@ -372,3 +372,14 @@ def test_verb_regularity_tag():
     assert verb_slots.verb_regularity("casarse", "es") is None  # casar fehlt
     assert verb_slots.verb_regularity("hablar", "fr") is None
 
+
+
+def test_form_card_borrowed_table_has_irregular_dots(tmp_path):
+    """Formkarten übernehmen die Verbtabelle — die roten Punkte müssen mit."""
+    import database
+    from database import entries
+    rows = [{"tense": "Presente", "person": "yo", "form": "tengo"},
+            {"tense": "Presente", "person": "nosotros", "form": "tenemos"}]
+    entries._mark_irregular("tener", rows, "es")
+    assert rows[0].get("irregular") is True
+    assert not rows[1].get("irregular")

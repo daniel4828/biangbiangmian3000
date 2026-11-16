@@ -297,7 +297,24 @@ def _completed_conjugations(lemma: str, word_id: int, lang: str | None) -> list[
     if rows and lang == "es":
         import conj_table
         rows = conj_table.complete_conjugations(lemma, rows, lang)
+        _mark_irregular(lemma, rows, lang)
     return rows
+
+
+def _mark_irregular(lemma: str, rows: list[dict], lang: str) -> None:
+    """Red dot (#1537) on every irregular cell. Done here, where the table is
+    loaded, so every reader gets it — also form cards that borrow the verb's
+    table (form_card_detail), which the old /api/word-only marking missed."""
+    try:
+        import verb_slots
+        if not verb_slots.verb_regularity(lemma, lang):
+            return
+        for row in rows:
+            if verb_slots.form_is_irregular(lemma, row.get("tense"),
+                                            row.get("person"), row.get("form"), lang):
+                row["irregular"] = True
+    except Exception as e:
+        logger.warning("irregular marking failed for %s — %s", lemma, e)
 
 
 def get_word_inflections(word_id: int) -> list[dict]:
