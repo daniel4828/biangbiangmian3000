@@ -40,12 +40,7 @@ def get_word_detail(word_id: int):
                 word["verb_regularity"] = regularity
                 if word.get("conjugations"):
                     _add_conjugation_patterns(word)
-                    # Rote Punkte für unregelmäßige Formen (#1537)
-                    for row in word["conjugations"]:
-                        if verb_slots.form_is_irregular(
-                                word.get("word_zh"), row.get("tense"),
-                                row.get("person"), row.get("form"), word.get("lang")):
-                            row["irregular"] = True
+                    # Rote Punkte (#1537) setzt database._completed_conjugations
     return word
 
 
