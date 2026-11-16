@@ -486,6 +486,8 @@ def focus_groups(lemma: str, tense: str, lang: str = LANG) -> list[list[str]]:
       (creer ind_pret: [["3s","3p"],["1s","2s","1p","2p"]]);
     Never raises ([] on any failure)."""
     try:
+        if verb_slots.is_verb_expression(lemma, lang):
+            return []  # Verbausdrücke zählen als regelmäßig: normale Rotation
         lemma = verb_slots.head_verb(lemma, lang)  # expressions: head verb (#1546)
         pats = []
         for person in PERSONS:
