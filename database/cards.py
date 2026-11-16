@@ -1023,6 +1023,22 @@ def _get_presets_bulk(deck_ids: list[int], category: str | None = None) -> dict[
     return result
 
 
+def _one_new_per_group(rows, group_of: dict) -> list:
+    """New rows, counting each sibling group once (#1553: a Spanish verb and
+    its form cards are one group, so the badge shows one new card per verb,
+    like the queue)."""
+    seen, out = set(), []
+    for r in rows:
+        if r["state"] != "new":
+            continue
+        key = group_of.get(r["word_id"], r["word_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     """Batched equivalent of calling count_due(did, category) for each deck_id.
 
@@ -1067,7 +1083,7 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     new_today = {r["deck_id"]: r["cnt"] for r in new_today_rows}
 
     due_rows = conn.execute(
-        f"""SELECT c.id, c.deck_id, c.state, c.due, c.interval FROM cards c
+        f"""SELECT c.id, c.word_id, c.deck_id, c.state, c.due, c.interval FROM cards c
             WHERE c.deck_id IN ({ph}) AND c.category = ?
               AND c.state != 'suspended'
               AND c.deleted_at IS NULL
@@ -1107,6 +1123,7 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     ).fetchall()
     learning_soon = {r["deck_id"]: r["cnt"] for r in learning_soon_rows}
     learning_soon_due = {r["deck_id"]: (r["first_due"], r["last_due"]) for r in learning_soon_rows}
+    group_of = sibling_group_map({r["word_id"] for r in due_rows if r["state"] == "new"}, conn)
     conn.close()
 
     for did in active_ids:
@@ -1123,7 +1140,7 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
 
         learning = sum(1 for r in rows if _is_learning(r))
         review = sum(1 for r in rows if r["state"] == "review" and not _is_learning(r))
-        new_avail = len(limit_new_cards([r for r in rows if r["state"] == "new"], new_remaining))
+        new_avail = len(limit_new_cards(_one_new_per_group(rows, group_of), new_remaining))
 
         first_due, last_due = learning_soon_due.get(did, (None, None))
         result[did] = {
@@ -1176,7 +1193,8 @@ def count_due(deck_id: int, category: str) -> dict:
 
     learning = sum(1 for r in rows if _is_learning(r))
     review   = sum(1 for r in rows if r["state"] == "review" and not _is_learning(r))
-    new_avail = len(limit_new_cards([r for r in rows if r["state"] == "new"], new_remaining))
+    group_of = sibling_group_map({r["word_id"] for r in rows if r["state"] == "new"}, conn)
+    new_avail = len(limit_new_cards(_one_new_per_group(rows, group_of), new_remaining))
 
     learning_future = conn.execute(
         f"""SELECT COUNT(*) FROM cards
