@@ -145,6 +145,18 @@ def expression_parts(word: str, lang: str) -> dict | None:
         return None
 
 
+def is_verb_expression(word: str, lang: str = "es") -> bool:
+    """True for a multi-word verb expression ("tener éxito", "estar orgulloso",
+    "darse cuenta de"). Such expressions always count as regular verbs: no form
+    cards, label "reg.", no red dots, plain person rotation — whatever their
+    head verb is. Never raises."""
+    try:
+        w = (word or "").strip().lower()
+        return len(w.split()) > 1 and expression_parts(w, lang) is not None
+    except Exception:
+        return False
+
+
 def head_verb(lemma: str, lang: str = "es") -> str:
     """The conjugated verb of a multi-word expression ("tener éxito" -> "tener",
     "darse cuenta de" -> "darse"); any other lemma unchanged (#1546)."""
@@ -505,6 +517,8 @@ def verb_regularity(lemma: str, lang: str) -> str | None:
     try:
         if lang != _FORM_LANG:
             return None
+        if is_verb_expression(lemma, lang):  # Verbausdruck zählt als regelmäßig
+            return "regular"
         lemma = _base_verb(lemma)  # Reflexiv (rendirse): Grundverb gilt (#1352)
         if not any(f for t in FORM_CARD_TENSES for f in _lexicon_row(lemma, t)):
             return None
@@ -698,7 +712,7 @@ def irregular_card_plan(lemma: str, lang: str) -> list[dict]:
     try:
         lemma = (lemma or "").strip().lower()
         if lang != _FORM_LANG or not lemma or _base_verb(lemma) != lemma \
-                or lemma.endswith("se"):
+                or lemma.endswith("se") or len(lemma.split()) > 1:
             return []
         info = lexicon.lemma_info(lemma, lang)
         if not info or info.get("pos") != "v":
@@ -1239,6 +1253,8 @@ def form_is_irregular(lemma: str, tense_label, person_label, form, lang: str) ->
     verb with the pronoun stripped. Cells listing variants ("resolviera /
     resolviese") are irregular if any variant is. Never raises."""
     try:
+        if is_verb_expression(lemma, lang):  # Verbausdrücke: regelmäßig
+            return False
         if lang != _FORM_LANG:
             return None
         reflexive = _base_verb(lemma) != (lemma or "").strip().lower()

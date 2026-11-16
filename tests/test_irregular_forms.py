@@ -371,3 +371,4 @@ def test_verb_regularity_tag():
     assert verb_slots.verb_regularity("buscar", "es") == "regular"
     assert verb_slots.verb_regularity("casarse", "es") is None  # casar fehlt
     assert verb_slots.verb_regularity("hablar", "fr") is None
+
