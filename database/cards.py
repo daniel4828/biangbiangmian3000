@@ -2399,6 +2399,20 @@ def count_due_all_decks() -> dict:
         (today, now, today, today, today),
     ).fetchall()
 
+    # 1b. Due new cards one per sibling group (#1560): a Spanish verb and its
+    #     form cards count once, like the queue shows them (#1553).
+    new_word_rows = conn.execute(
+        """SELECT c.deck_id, c.category, c.word_id FROM cards c
+           WHERE c.state = 'new' AND c.deleted_at IS NULL
+             AND (c.buried_until IS NULL OR c.buried_until < ?)
+             AND c.due <= ?""",
+        (today, today),
+    ).fetchall()
+    _group_of = sibling_group_map({r["word_id"] for r in new_word_rows}, conn)
+    new_groups: dict[tuple, set] = {}
+    for r in new_word_rows:
+        new_groups.setdefault((r["deck_id"], r["category"]), set()).add(_group_of[r["word_id"]])
+
     # 2. Future learning cards grouped by (deck_id, category)
     #    Mirror of _learning_due_now_sql() — a card that is not due now must
     #    land here, or the 1d/3d steps would vanish from both counts overnight.
@@ -2488,7 +2502,7 @@ def count_due_all_decks() -> dict:
         elif s == "review":
             counts[key]["review"] += row["cnt"]
         elif s == "new":
-            counts[key]["new_raw"] += row["cnt"]
+            counts[key]["new_raw"] = len(new_groups.get(key, ()))
 
     for row in future_rows:
         key = (row["deck_id"], row["category"])

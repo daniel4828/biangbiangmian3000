@@ -192,3 +192,10 @@ def test_leaf_badge_counts_verb_once(world):
     leaf = world["leaves"]["creating"]
     assert database.count_due(leaf, "creating")["new"] == 2
     assert database.cards._count_due_bulk([leaf], "creating")[leaf]["new"] == 2
+
+
+def test_main_page_badge_counts_verb_once(world):
+    """Deck list (count_due_all_decks, #1560): one new card per verb."""
+    leaf = world["leaves"]["creating"]
+    counts, _ = database.count_due_all_decks()
+    assert counts[(leaf, "creating")]["new"] == 2
