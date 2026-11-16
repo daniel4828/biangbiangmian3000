@@ -185,3 +185,10 @@ def test_chinese_siblings_stay_per_word(tmp_db):
     kept = {c["id"] for c in database.get_due_cards(leaves["listening"], "listening",
                                                     sibling_suppression=True)}
     assert kept == {a_l, b_l}
+
+
+def test_leaf_badge_counts_verb_once(world):
+    """Creating leaf: caer + 2 caer form cards + tener form card -> 2 new (one per verb)."""
+    leaf = world["leaves"]["creating"]
+    assert database.count_due(leaf, "creating")["new"] == 2
+    assert database.cards._count_due_bulk([leaf], "creating")[leaf]["new"] == 2
