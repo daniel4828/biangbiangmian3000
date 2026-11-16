@@ -17219,16 +17219,15 @@ function _renderGrammarHint(s) {
     if (id !== 'grammar-hint-back' && text && _tenseBlurEnabled()) {
       _setBlurredTenseHint(el, text);
     } else {
-      el.textContent = text;
+      // Back: tense and pattern in ONE tag (two boxes took too much room).
+      el.textContent = (id === 'grammar-hint-back' && patternText)
+        ? text + ' · ' + patternText : text;
       el.onclick = null;
     }
     el.style.display = (text && show[id]) ? '' : 'none';
   }
   const pat = document.getElementById('grammar-pattern-back');
-  if (pat) {
-    pat.textContent = patternText;
-    pat.style.display = patternText ? '' : 'none';
-  }
+  if (pat) { pat.textContent = ''; pat.style.display = 'none'; }
 }
 
 // Blurred tense on the front of the verb slot tag. Stored per device
@@ -17259,7 +17258,9 @@ function _setBlurredTenseHint(el, text) {
 // "Presente · -er (regelmäßig)" → "-er (regelmäßig)": the tense is in the other box (#1448).
 function _patternOnly(label) {
   const parts = String(label || '').split(' · ');
-  return (parts.length > 1 ? parts.slice(1).join(' · ') : parts[0]).trim();
+  // "(regelmäßig)" repeats the reg./irreg. already in the tense tag.
+  return (parts.length > 1 ? parts.slice(1).join(' · ') : '')
+    .replace(/\s*\((?:un)?regelmäßig\)/g, '').trim();
 }
 
 // Front side: context (above the Chinese sentence) + source line (below it).
