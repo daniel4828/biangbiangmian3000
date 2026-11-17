@@ -229,16 +229,43 @@ def _insert_after(rows: list[dict], code: str) -> int:
     return len(rows)
 
 
+_BASE_TENSES = (("ind_pres", "presente"), ("ind_pret", "indefinido"),
+                ("ind_impf", "imperfecto"), ("ind_fut", "futuro"),
+                ("ind_cond", "condicional"), ("subj_pres", "presente de subjuntivo"))
+
+
+def lexicon_table(lemma: str) -> list[dict]:
+    """Ganze Tabelle aus dem Wortschatz, wenn der Eintrag keine gespeicherte
+    Konjugation hat (z. B. Formkarte zu »ir« ohne AI-Tabelle). Nie Ausnahme."""
+    try:
+        out = []
+        for code, label in _BASE_TENSES:
+            for p in _PERSONS:
+                f = lexicon.form_for(lemma, code, p, LANG)
+                if f:
+                    out.append({"tense": label, "person": _PERSON_LABELS[p], "form": f, "position": None})
+        for code, label in (("part", "participio"), ("ger", "gerundio")):
+            f = lexicon.form_for(lemma, code, "", LANG)
+            if f:
+                out.append({"tense": label, "person": "", "form": f, "position": None})
+        return out
+    except Exception as e:
+        logger.warning("lexicon table failed for %r — %s", lemma, e)
+        return []
+
+
 def complete_conjugations(lemma: str, rows: list[dict], lang: str) -> list[dict]:
     """Return `rows` plus the missing Imperfecto de subjuntivo (after the
     Presente de subjuntivo) and Imperativo (right after it). Rows look like
     get_word_conjugations(): {tense, person, form, position}. Only for Spanish
     tables that already exist; the input is never mutated. Never raises."""
     try:
-        if lang != LANG or not rows or not lexicon.available(LANG):
+        if lang != LANG or not lexicon.available(LANG):
             return rows
-        out = list(rows)
-        added = False
+        out = list(rows) if rows else lexicon_table(lemma)
+        if not out:
+            return rows
+        added = not rows
         if not _has_tense(out, "subj_impf"):
             new = [{"tense": SUBJ_IMPF_LABEL, "person": pl, "form": f, "position": None}
                    for pl, f in subj_impf_row(lemma)]

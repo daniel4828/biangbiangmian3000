@@ -293,8 +293,8 @@ def _completed_conjugations(lemma: str, word_id: int, lang: str | None) -> list[
     """Stored conjugation rows plus the Spanish tenses the AI never generated
     (Imperativo, Imperfecto de subjuntivo; #1547), built from the lexicon at
     read time — nothing is written."""
-    rows = get_word_conjugations(word_id)
-    if rows and lang == "es":
+    rows = get_word_conjugations(word_id) if word_id else []
+    if lang == "es":
         import conj_table
         rows = conj_table.complete_conjugations(lemma, rows, lang)
         _mark_irregular(lemma, rows, lang)
@@ -508,6 +508,8 @@ def form_card_detail(word: dict | None) -> dict | None:
             return word
         head = get_word_by_zh(parsed[0], "es")
         if not head:
+            if not word.get("conjugations"):
+                word["conjugations"] = _completed_conjugations(parsed[0], None, "es")
             return word
         if not (word.get("etymology") or "").strip():
             word["etymology"] = head.get("etymology")
