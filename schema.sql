@@ -358,6 +358,9 @@ CREATE TABLE IF NOT EXISTS cards (
     -- due: ISO datetime for learning/relearn, ISO date for new/review
     due         TEXT NOT NULL DEFAULT (date('now')),
 
+    -- when the card was (re)queued as a new card; new cards are shown FIFO by this
+    queued_at   TEXT,
+
     step_index  INTEGER NOT NULL DEFAULT 0,
     interval    INTEGER NOT NULL DEFAULT 0,     -- days
     ease        REAL    NOT NULL DEFAULT 2.5,   -- SM-2 legacy; unused under FSRS scheduling

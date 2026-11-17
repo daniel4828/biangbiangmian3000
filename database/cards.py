@@ -26,14 +26,14 @@ def insert_card(word_id: int, category: str, deck_id: int,
     conn = get_db()
     if due is not None:
         conn.execute(
-            """INSERT OR IGNORE INTO cards (word_id, deck_id, category, state, due)
-               VALUES (?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO cards (word_id, deck_id, category, state, due, queued_at)
+               VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f','now'))""",
             (word_id, deck_id, category, state, due),
         )
     else:
         conn.execute(
-            """INSERT OR IGNORE INTO cards (word_id, deck_id, category, state)
-               VALUES (?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO cards (word_id, deck_id, category, state, queued_at)
+               VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f','now'))""",
             (word_id, deck_id, category, state),
         )
     conn.commit()
@@ -69,7 +69,8 @@ def reset_word_to_new(word_id: int, target_deck_ids: dict, due: str,
                  SET deck_id=?, state='new', due=?, step_index=0, interval=0,
                      ease=2.5, repetitions=0, lapses=0, stability=NULL, difficulty=NULL,
                      last_review=NULL, learning_again_count=0, is_leech=0, leeched_at=NULL,
-                     probation=0, buried_until=NULL, pre_suspend_state=NULL
+                     probation=0, buried_until=NULL, pre_suspend_state=NULL,
+                     queued_at=strftime('%Y-%m-%d %H:%M:%f','now')
                  WHERE word_id=? AND category=? AND deleted_at IS NULL"""
         params = [target_deck_id, due, word_id, category]
         if from_deck_id is not None:
@@ -750,6 +751,16 @@ def learning_rank(card: dict) -> int:
     return 0 if card["state"] in ("learning", "relearn") else 1
 
 
+def new_card_fifo_key(card: dict) -> tuple[str, int]:
+    """FIFO-Reihenfolge neuer Karten: zuerst eingereiht → zuerst gezeigt.
+
+    queued_at wird beim Anlegen und beim Zurücksetzen auf 'new' gesetzt
+    (reset_word_to_new / ★ List befördern); ältere Karten ohne Wert fallen
+    auf die id zurück und kommen vor allen datierten.
+    """
+    return (card.get("queued_at") or "", card.get("id") or 0)
+
+
 def story_sort_key(card: dict, story_pos: dict) -> tuple[int, int]:
     """Where a due card sits relative to today's story (issue #732).
 
@@ -857,11 +868,11 @@ def get_due_cards(deck_id: int, category: str, *, sibling_suppression: bool = Fa
     # ── 1. Gather & sort new cards ────────────────────────────────────────────
     gather = preset.get("new_gather_order", "ascending_position")
     if gather == "ascending_position":
-        new_cards_raw.sort(key=lambda c: c["id"])
+        new_cards_raw.sort(key=new_card_fifo_key)
     elif gather == "descending_position":
-        new_cards_raw.sort(key=lambda c: c["id"], reverse=True)
+        new_cards_raw.sort(key=new_card_fifo_key, reverse=True)
     elif gather == "deck":
-        new_cards_raw.sort(key=lambda c: (c["deck_id"], c["id"]))
+        new_cards_raw.sort(key=lambda c: (c["deck_id"], new_card_fifo_key(c)))
     elif gather == "deck_random_notes":
         by_deck: dict = {}
         for c in new_cards_raw:
@@ -1602,6 +1613,7 @@ def get_due_cards_any_cat(root_deck_id: int, lang: str | None = None) -> list[di
             _rank(c),
             cat_order.get(c["category"], 99),
             c["due"],
+            new_card_fifo_key(c) if c["state"] == "new" else ("", 0),
         ))
     return all_cards
 
@@ -1734,7 +1746,13 @@ def get_due_cards_multi(deck_ids: list[int], category: str, *, root_deck_id: int
 
     learning_cards.sort(key=lambda c: (learning_rank(c), c["due"]))
     review_cards.sort(key=lambda c: c["due"])
-    # new_cards keep the per-deck gather/sort order from get_due_cards
+    # Über mehrere Tagesdecks hinweg FIFO: sonst hängen die Decks nur hintereinander
+    # und die Reihenfolge des Hinzufügens geht verloren. Bei Zufalls-/absteigender
+    # Sammelreihenfolge bleibt die Reihenfolge aus get_due_cards erhalten.
+    _base = presets_base.get(deck_ids[0], {}) if deck_ids else {}
+    if _base.get("new_gather_order", "ascending_position") == "ascending_position" and \
+            _base.get("new_sort_order", "card_type_gathered") in ("card_type_gathered", "gathered"):
+        new_cards.sort(key=new_card_fifo_key)
 
     preset = presets_base.get(deck_ids[0], {}) if deck_ids else {}
     nr_o = preset.get("new_review_order_override") or preset.get("new_review_order", "mixed")

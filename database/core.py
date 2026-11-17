@@ -406,6 +406,11 @@ def init_db() -> None:
     # Absence of the column signals a fresh install of this feature → run the
     # one-time backfill below that pulls existing "young review" cards
     # (interval below learned_interval) back into probation.
+    # #FIFO: Zeitpunkt, zu dem die Karte (wieder) als neue Karte eingereiht wurde.
+    # Neue Karten kommen danach in Reihenfolge des Hinzufügens (Queue, nicht Stack);
+    # zurückgesetzte / aus der ★ List beförderte Karten behalten ihre alte id.
+    if "queued_at" not in card_cols:
+        conn.execute("ALTER TABLE cards ADD COLUMN queued_at TEXT")
     need_probation_backfill = "probation" not in card_cols
     if "probation" not in card_cols:
         conn.execute("ALTER TABLE cards ADD COLUMN probation INTEGER NOT NULL DEFAULT 0")
