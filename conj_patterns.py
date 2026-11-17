@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 LANG = "es"
 MODES = ("recog", "prod")
 TENSES = ("ind_pres", "ind_pret", "ind_impf", "ind_fut", "ind_cond",
-          "perf", "subj_pres", "subj_impf", "imp_aff")
+          "perf", "subj_pres", "subj_impf", "imp_aff", "imp_neg")
 PERSONS = verb_slots.PERSONS
 SPECIAL = ("ser", "ir", "estar", "haber", "dar", "ver")
 _SER_IR_TENSES = ("ind_pret", "subj_impf")
@@ -403,6 +403,10 @@ def pattern_for(lemma: str, tense: str, person: str, lang: str = LANG) -> dict |
     try:
         if lang != LANG or tense not in TENSES:
             return None
+        if tense == "imp_neg":  # #1580: the form IS the Subjuntivo presente
+            if person == "1s":
+                return None
+            tense = "subj_pres"
         lemma = verb_slots.head_verb(lemma, lang)  # expressions: head verb (#1546)
         base = verb_slots._base_verb(lemma)
         if len(base) < 2 or base[-2:] not in ("ar", "er", "ir"):
@@ -593,7 +597,9 @@ def catalog(lang: str = LANG) -> list[dict]:
         return []
     try:
         cfg = verb_slots.config(lang)
-        tenses = [t for t in (cfg["tenses"] if cfg else TENSES) if t in TENSES]
+        # imp_neg (#1580) shares the Subjuntivo presente patterns: none of its own
+        tenses = [t for t in (cfg["tenses"] if cfg else TENSES)
+                  if t in TENSES and t != "imp_neg"]
         out = []
         for tense in tenses:
             for cls in _REG_CLASSES[tense]:

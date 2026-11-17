@@ -593,6 +593,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **形态卡主句不显示 `¿Conjugación correcta?`**：该行在形态卡上是重复的；结果由评分推出（Again = 错，其余 = 对），前端 `_derivedConjOk()` 照常带 `conj_ok` + `sentence_id` 上报，所以仍进入 Muster 排程。普通词卡不变
 - **Condicional（#1504）**：`ind_cond` 是今日时态轮换的第 8 个时态（`languages.py` 的 `tenses` 末尾）（#1539 起形态卡不再含 Condicional）
 - **Imperativo（#1540）**：`imp_aff` 是 `es.verb_slots.tenses` 的第 9 个时态，权重 8（OpenSubtitles：明确的命令式形式约占限定式 5%，歧义形式平分进去约 15%）。**规则动词也按权重轮到**；没有 yo，3s/3p 是 usted/ustedes（标签 `Imperativo · usted`）。反身动词用词汇表的后附形（`quéjate`，不是 `te quéjate`）。`lexicon.form_for` 对命令式取**最短**形式：Wiktionary 把带后附代词的变体（`estate`/`dese`/`mantente`）也标成同一槽位且排在前面。模式卡：`reg:imp_aff:ar|er_ir` + `irr:imp_aff:short_tu`（ten/haz/di）/ `stem`（piensa）/ `subj`（tenga/busque）。不在 `FORM_CARD_ALL_TENSES`（今日时态闸门不管它），但 #1539 起是形态卡时态（`IRREGULAR_CARD_TENSES`）；已存的今日时态设置不会自动加入它，要在设置页勾选
+- **Imperativo negativo（#1580）**：`imp_neg` 是 `es.verb_slots.tenses` 的第 10 个时态，权重 2。目标形 = `no` + 词汇表的 imp_neg 形（即 Subjuntivo presente，`no hables`），反身代词放在 no 与动词之间（`no te quejes`），没有 yo；带宾语代词的多词短语跳过。模式卡与 Subjuntivo presente 共用（`pattern_for` 把 imp_neg 映射为 subj_pres，`catalog` 不列它）；不建形态卡。已存的今日时态设置不会自动加入它，要在设置页勾选
 - 测试见 `tests/test_irregular_forms.py`、`tests/form_card_conj_derive.test.cjs`
 
 ## 西语变位表与区块初始状态（#1356）

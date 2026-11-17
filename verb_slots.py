@@ -51,6 +51,8 @@ _TENSE_EN = {
                  "trigger such as 'si', 'quería que', 'como si')",
     "imp_aff": "Imperativo (affirmative command addressed to someone — use the form "
                "exactly as given, without attaching object pronouns)",
+    "imp_neg": "Imperativo negativo (negative command: 'no' + the form exactly as "
+               "given, e.g. ¡No hables!, without attaching object pronouns)",
     "part": "Participio (past participle)",
     "ger": "Gerundio (gerund)",
 }
@@ -213,7 +215,7 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
         if parts:  # multi-word expression: conjugate the head, keep the rest (#1546)
             if not person or (parts["persons"] and person not in parts["persons"]):
                 return None
-            if tense == "imp_aff" and parts["clitic"]:
+            if tense in ("imp_aff", "imp_neg") and parts["clitic"]:
                 return None
             base_form = target_form(parts["head"], tense, person, lang)
             if not base_form:
@@ -236,7 +238,9 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
             form = lexicon.form_for(lemma, tense, person, lang)
         if not form:
             return None
-        return f"{pronoun} {form}" if pronoun else form
+        form = f"{pronoun} {form}" if pronoun else form
+        # Negative imperative (#1580): "no hables", "no te quejes"
+        return f"no {form}" if tense == "imp_neg" else form
     except Exception:
         return None
 
@@ -263,6 +267,8 @@ _TENSE_CONTEXT_ES = {
                  "como si, ojalá (unreal)",
     "imp_aff": "a direct request or instruction in dialogue, e.g. ¡…, por favor!; "
                "usted/ustedes = polite address, nosotros = let's …",
+    "imp_neg": "a direct prohibition or warning in dialogue, e.g. ¡No …!, no …, por favor; "
+               "usted/ustedes = polite address, nosotros = let's not …",
     "part": "the past participle, e.g. in a perfect tense (he/ha/hemos …) or as an adjective",
     "ger": "an ongoing action: estar/seguir + gerund, or a simultaneous action",
 }
@@ -285,6 +291,8 @@ _TENSE_CUE_DE = {
     "subj_impf": "keep the trigger clearly visible (wollte, dass …; wenn … wäre/hätte; als ob …)",
     "imp_aff": "German imperative matching the addressee: du-form (Komm!), Sie-form for "
                "usted/ustedes (Kommen Sie!), 'Lass uns …' for nosotros, ihr-form for vosotros",
+    "imp_neg": "negated German imperative matching the addressee: Komm nicht! / Kommen "
+               "Sie nicht! / Lass uns nicht … / Kommt nicht!",
     "part": "Perfekt oder Partizip als Adjektiv",
     "ger": "Verlaufsform: gerade dabei …, oder gleichzeitige Handlung",
 }
@@ -307,7 +315,7 @@ def describe(slot: str) -> str:
     tense, _, person = (slot or "").partition(":")
     if not person:  # participle / gerund: no person
         return _TENSE_EN.get(tense, tense)
-    persons = _IMP_PERSON_EN if tense == "imp_aff" else _PERSON_EN
+    persons = _IMP_PERSON_EN if tense in ("imp_aff", "imp_neg") else _PERSON_EN
     return f"{_TENSE_EN.get(tense, tense)}, {persons.get(person, person)}"
 
 
