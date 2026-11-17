@@ -3638,7 +3638,8 @@ function renderWordDetail(word) {
   document.getElementById('wd-edit-btn').onclick = () => openWordEditModal(word);
   const regenAllBtn = document.getElementById('wd-regen-all-btn');
   if (regenAllBtn) regenAllBtn.onclick = () => word.id && regenAllFields(word.id);
-  document.getElementById('wd-hanzi').textContent = _withArticle(word.word_zh || '', word.article);
+  _setHeadword(document.getElementById('wd-hanzi'), document.getElementById('wd-form-tag'),
+    word, word.article);
   document.getElementById('wd-pinyin').textContent = word.pinyin || '';
   document.getElementById('wd-def').textContent = word.definition ? `🇬🇧 ${word.definition}` : '';
   const posEl = document.getElementById('wd-pos');
@@ -12884,7 +12885,7 @@ function loadCard(c, counts) {
         if (isMultiWord && wordDetails?.components?.length) {
           wzEl.innerHTML = renderInteractiveZh(card.word_zh, wordDetails.components);
         } else if (!isMultiWord && wordDetails.id === card.word_id) {
-          wzEl.textContent = _withArticle(card.word_zh, wordDetails.article);
+          _setHeadword(wzEl, document.getElementById('word-form-tag'), card, wordDetails.article);
         }
         renderVocabDetail();
         renderNotesSection();
@@ -13337,13 +13338,15 @@ function revealAnswer() {
   const noteType = wordDetails?.note_type || card.note_type;
   const wordZhEl = document.getElementById('word-zh');
   const isMultiWord = noteType === 'sentence' || noteType === 'chengyu' || noteType === 'expression';
+  const formTagEl = document.getElementById('word-form-tag');
   if (isMultiWord && wordDetails?.components?.length) {
     wordZhEl.innerHTML = renderInteractiveZh(card.word_zh, wordDetails.components);
+    _setHeadword(null, formTagEl, card);
   } else {
     // wordDetails belongs to this card only if the ids match (a slow fetch for
     // the previous card must not leak its article here, #1294).
-    wordZhEl.textContent = _withArticle(
-      card.word_zh, wordDetails?.id === card.word_id ? wordDetails.article : null);
+    _setHeadword(wordZhEl, formTagEl, card,
+      wordDetails?.id === card.word_id ? wordDetails.article : null);
   }
   const wordPinEl = document.getElementById('word-pin');
   wordPinEl.textContent = isSentenceNote ? '' : (card.pinyin || '');
@@ -15782,6 +15785,29 @@ function wordBankAddToken(num) {
   inp.focus();
 }
 
+// #1569: a form card's headword "comprobar · Presente" shown as two fields:
+// the infinitive as the word, the tense as a tag. The server sends
+// form_lemma/form_tense (database.form_card_view); the regex is the fallback
+// for objects that skipped that read path. Chinese grammar notes never split.
+function formCardParts(c) {
+  if (!c) return null;
+  if (c.form_lemma && c.form_tense) return { word: c.form_lemma, tense: c.form_tense };
+  if (c.note_type !== 'grammar') return null;
+  if ((c.lang || c.word_lang || currentCardLang()) === 'zh') return null;
+  const m = /^(.+?) · (\S.*)$/.exec(c.word_zh || '');
+  return m ? { word: m[1], tense: m[2] } : null;
+}
+
+// #1569: write a headword into `el` and the tense tag into `tagEl` (if any).
+function _setHeadword(el, tagEl, c, article) {
+  const parts = formCardParts(c);
+  if (el) el.textContent = parts ? parts.word : _withArticle(c?.word_zh || '', article);
+  if (tagEl) {
+    tagEl.hidden = !parts;
+    tagEl.textContent = parts ? parts.tense : '';
+  }
+}
+
 // #1442: form cards (#1296) keep the whole conjugation row in definition_de,
 // so it must never be used as a front-side hint: it is the answer. Returns
 // the infinitive for a form card ("estar · Presente" → "estar"), else ''.
@@ -18171,10 +18197,31 @@ function closeStoryModal() {
 let _editWordId   = null;   // word ID being edited
 let _editFromWord = false;  // true when opened from word-detail view
 let _editHasEtymology = false;  // #906: only then does saving touch entries.etymology
+let _editFormTense = null;      // #1569: tense label of a form card being edited, else null
 
 function _openEditModal(wordObj) {
   _editWordId = wordObj.word_id || wordObj.id;
-  document.getElementById('edit-word-zh').value       = wordObj.word_zh       || '';
+  // #1569: field labels follow the entry's language; a form card's tense gets
+  // its own field instead of sitting inside the headword.
+  const editLang = _entryLang(wordObj);
+  const parts = formCardParts(wordObj);
+  _editFormTense = parts ? parts.tense : null;
+  const wordInput = document.getElementById('edit-word-zh');
+  wordInput.value = parts ? parts.word : (wordObj.word_zh || '');
+  wordInput.lang = editLang;
+  document.getElementById('edit-word-zh-title').textContent =
+    editLang === 'zh' ? 'Hanzi' : ({ es: 'Spanish', fr: 'French' }[editLang] || 'Word');
+  document.querySelectorAll('#edit-modal [data-zh-only]')
+    .forEach(el => { el.style.display = editLang === 'zh' ? '' : 'none'; });
+  document.getElementById('edit-definition-fr-label').style.display = editLang === 'fr' ? 'none' : '';
+  const tenseSel = document.getElementById('edit-form-tense');
+  tenseSel.replaceChildren();
+  if (parts) {
+    const opts = [...(wordObj.form_tense_options || [])];
+    if (!opts.includes(parts.tense)) opts.unshift(parts.tense);
+    for (const t of opts) tenseSel.add(new Option(t, t, false, t === parts.tense));
+  }
+  document.getElementById('edit-form-tense-label').style.display = parts ? '' : 'none';
   document.getElementById('edit-pinyin').value        = wordObj.pinyin        || '';
   document.getElementById('edit-definition').value    = wordObj.definition    || '';
   document.getElementById('edit-pos').value           = wordObj.pos           || '';
@@ -18308,8 +18355,11 @@ async function editModalCardAction(action) {
 }
 
 async function saveEditCard() {
+  // #1569: a form card's headword is stored as "lemma · Tense" — rejoin the two fields
+  const wordVal = document.getElementById('edit-word-zh').value.trim();
   const body = {
-    word_zh:       document.getElementById('edit-word-zh').value.trim(),
+    word_zh:       _editFormTense !== null
+      ? `${wordVal} · ${document.getElementById('edit-form-tense').value}` : wordVal,
     pinyin:        document.getElementById('edit-pinyin').value.trim(),
     definition:    document.getElementById('edit-definition').value.trim(),
     pos:           document.getElementById('edit-pos').value.trim(),
@@ -18337,8 +18387,11 @@ async function saveEditCard() {
         definition_fr: updated.definition_fr,
         notes: updated.notes,
         etymology: updated.etymology,
+        form_lemma: updated.form_lemma, form_tense: updated.form_tense,
+        form_tense_options: updated.form_tense_options,
       });
-      document.getElementById('word-zh').textContent  = updated.word_zh || '';
+      _setHeadword(document.getElementById('word-zh'), document.getElementById('word-form-tag'),
+        card, wordDetails?.id === card.word_id ? wordDetails.article : null);
       document.getElementById('word-pin').textContent = updated.pinyin  || '';
       document.getElementById('word-def').textContent = updated.definition ? `🇬🇧 ${updated.definition}` : '';
       const wordDefDeEl2 = document.getElementById('word-def-de');

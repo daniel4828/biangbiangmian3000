@@ -582,6 +582,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **Imperativo/Participio/Gerundio 不受「今日时态」引入闸门管**（`sync_form_card_pause` 只管 `FORM_CARD_ALL_TENSES`）：它们不在时态轮换里，被闸门挡住就永远放不出来
 
 - **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=动词德语释义（#1444）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
+- **显示时词头和时态分开（#1569）**：`form_card_view()` 额外给出 `form_lemma` / `form_tense` / `form_tense_options`；卡背和词条页词头只显示原形，时态作为左上角小标签（`#word-form-tag`）；编辑框里时态是单独的下拉框，保存时前端重新拼成 `lemma · 时态`。**存储的 `word_zh` 不变**（`UNIQUE(word_zh, lang)` 下原形词条与各时态卡必须是不同的键）。编辑框字段名按语言：非中文时第一栏叫 Spanish/French，Pinyin/Traditional/Chinese definition 隐藏
 - **不规则性由数据推出，不手写清单**：词汇表形式 vs. 规则构词（见上面 #1539 的发音规则）；旧卡（规则时态、Subjuntivo、Condicional）`parse_form_card` 仍认得，只是迁移后已软删除
 - **人称轮换复用 `assign_slots()`**：词头能被 `parse_form_card()` 解析成形态卡时，时态固定、只在六个人称里按"全局最少用、并列取最久没用"挑；`es["verb_slots"]` 启用的时态配置对形态卡不起作用。规则动词完全不变
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用

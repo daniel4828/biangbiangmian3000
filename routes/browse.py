@@ -94,7 +94,8 @@ def delete_word_endpoint(word_id: int):
 @router.put("/api/word/{word_id}")
 def update_word(word_id: int, body: dict):
     database.update_word(word_id, body)
-    return database.get_word_full(word_id)
+    # Same read path as GET: form cards (#1296) get form_lemma/form_tense (#1569)
+    return database.form_card_view(database.get_word_full(word_id))
 
 
 def _apply_enrich_result(word: dict, characters: list, result: dict) -> None:
