@@ -4943,6 +4943,10 @@ function renderSettings() {
             `<option value="${v}" ${v === cur[k] ? 'selected' : ''}>${vl}</option>`).join('')}
         </select>
       </div>`).join(''); })()}
+      <div class="keymap-row">
+        <span class="keymap-label">Peek on phone</span>
+        <input type="checkbox" aria-label="Peek on phone" ${(() => { try { return localStorage.getItem('sectionPeekMobile') === '1' ? 'checked' : ''; } catch (e) { return ''; } })()} onchange="_setSectionPeekMobile(this.checked)">
+      </div>
       <button class="keymap-reset-all" onclick="resetSectionDefaults()">Reset</button>
     </div>
     <div class="keymap-panel">
@@ -13437,9 +13441,20 @@ function resetSectionDefaults() {
 // Three-state cycle (data-peek) only where peek makes sense: notes/analysis
 // always had it, others only when the user picked "peek" — otherwise a
 // shortcut press would land on peek instead of open (#1356).
+// Auf dem Handy kein halb geöffneter Zustand (Daniel 2026-11-17): Peek wird
+// dort zu Open und der Zyklus überspringt Peek. Schalter: sectionPeekMobile.
+function _noPeekHere() {
+  let on = false;
+  try { on = localStorage.getItem('sectionPeekMobile') === '1'; } catch (e) {}
+  return !on && window.matchMedia && window.matchMedia('(max-width: 600px)').matches;
+}
+function _setSectionPeekMobile(on) {
+  try { localStorage.setItem('sectionPeekMobile', on ? '1' : '0'); } catch (e) {}
+}
 function _sectionInit(key, extraClass = '') {
-  const state = _loadSectionDefaults()[key];
-  const peekable = state === 'peek' || key === 'notes' || key === 'analysis';
+  let state = _loadSectionDefaults()[key];
+  if (state === 'peek' && _noPeekHere()) state = 'open';
+  const peekable = !_noPeekHere() && (state === 'peek' || key === 'notes' || key === 'analysis');
   const cls = [extraClass, state === 'peek' ? 'section-peek' : state === 'open' ? 'section-open' : '']
     .filter(Boolean).join(' ');
   const attrs = (cls ? `class="${cls}" ` : '') + (peekable ? `data-peek="1" data-state="${state}"` : '') +
