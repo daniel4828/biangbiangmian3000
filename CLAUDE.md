@@ -582,12 +582,13 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **Imperativo/Participio/Gerundio 不受「今日时态」引入闸门管**（`sync_form_card_pause` 只管 `FORM_CARD_ALL_TENSES`）：它们不在时态轮换里，被闸门挡住就永远放不出来
 
 - **表示法，无 schema 变更**：普通 `entries` 行，`lang='es'`、`note_type='grammar'`、`word_zh='lemma · 时态标签'`（标签取 `lexicon._TENSE_LABELS`）、`definition_de`=动词德语释义（#1444）、`notes`=德语规律说明、`pos='Verbform'`；只有一张 `creating` 卡
+- **显示时词头和时态分开（#1569）**：`form_card_view()` 额外给出 `form_lemma` / `form_tense` / `form_tense_options`；卡背和词条页词头只显示原形，时态作为左上角小标签（`#word-form-tag`）；编辑框里时态是单独的下拉框，保存时前端重新拼成 `lemma · 时态`。**存储的 `word_zh` 不变**（`UNIQUE(word_zh, lang)` 下原形词条与各时态卡必须是不同的键）。编辑框字段名按语言：非中文时第一栏叫 Spanish/French，Pinyin/Traditional/Chinese definition 隐藏
 - **不规则性由数据推出，不手写清单**：词汇表形式 vs. 规则构词（见上面 #1539 的发音规则）；旧卡（规则时态、Subjuntivo、Condicional）`parse_form_card` 仍认得，只是迁移后已软删除
 - **人称轮换复用 `assign_slots()`**：词头能被 `parse_form_card()` 解析成形态卡时，时态固定、只在六个人称里按"全局最少用、并列取最久没用"挑；`es["verb_slots"]` 启用的时态配置对形态卡不起作用。规则动词完全不变
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
 - **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选
 - **设置页按钮** → `POST /api/es/irregular-form-cards` → `seed_es_irregular_form_cards()`：#1539 起只跑迁移计划里的 **create** 部分（给收藏里所有动词补缺的形态卡，从不删除/改名），零 AI、幂等；body `{"activate": true}`（#1438）仍会把 Saved 里的形态卡提升到今天
-- 🔴 形态卡 `definition_de` 存真释义（#1444）；生产库的旧行仍存变位表，所以读路径 `database.form_card_view()` 负责替换（存的值等于变位表或为空时，取同语言原形词条的释义，否则词汇表 `gloss_de`；手改过的不动）并给出 `conjugation_row`，背面和详情页单独一行显示；正面提示走 `formCardHint()`（第一个义项，空格里显示德语词），新增读路径要显示释义时同样要过这个函数
+- 🔴 形态卡 `definition_de` 存真释义（#1444）；生产库的旧行仍存变位表，所以读路径 `database.form_card_view()` 负责替换（存的值等于变位表或为空时，取同语言原形词条的释义，否则词汇表 `gloss_de`；手改过的不动）并给出 `conjugation_row`，背面和详情页单独一行显示；正面提示走 `formCardHint()`（#1569 起是完整德语释义，不再只取第一个义项；空格里显示德语），新增读路径要显示释义时同样要过这个函数
 - 形态卡详情由 `database.form_card_detail()` 沿用同语言动词词条的词源、例句、变位表（#1446），只填形态卡自己为空的字段，不写库；动词没有词条时要先走加词管线建词条
 - **形态卡主句不显示 `¿Conjugación correcta?`**：该行在形态卡上是重复的；结果由评分推出（Again = 错，其余 = 对），前端 `_derivedConjOk()` 照常带 `conj_ok` + `sentence_id` 上报，所以仍进入 Muster 排程。普通词卡不变
 - **Condicional（#1504）**：`ind_cond` 是今日时态轮换的第 8 个时态（`languages.py` 的 `tenses` 末尾）（#1539 起形态卡不再含 Condicional）

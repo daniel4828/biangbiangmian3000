@@ -414,6 +414,8 @@
             <div class="vocab-detail">
               <!-- Top-right corner: HSK level + frequency rank side by side (#1285) -->
               <div class="vocab-corner">
+                <!-- #1569: tense of a Spanish form card, as a tag in the top-left corner -->
+                <span class="word-form-tag" id="word-form-tag" hidden></span>
                 <button id="card-hsk-badge" class="card-hsk-badge" onclick="enrichCard()" title="Ask AI to fill HSK level &amp; character data" style="display:none"></button>
                 <span class="card-hsk-badge verb-reg-badge" id="card-verb-badge" hidden></span>
                 <span class="word-freq" id="word-freq" hidden title="SUBTLEX-CH whole-word frequency rank (film subtitles): lower = more common"></span>
@@ -600,6 +602,7 @@
   <!-- Word Detail -->
   <div id="view-word-detail">
     <div class="wd-header">
+      <span class="word-form-tag wd-form-tag" id="wd-form-tag" hidden></span>
       <div class="wd-hanzi" id="wd-hanzi"></div>
       <div class="wd-pinyin" id="wd-pinyin"></div>
       <div id="wd-def-block">
@@ -940,14 +943,17 @@
     </div>
   </div>
   <div class="edit-card-fields">
-    <label class="edit-label">Hanzi<input class="edit-input" id="edit-word-zh" type="text" lang="zh"></label>
-    <label class="edit-label">Pinyin<input class="edit-input" id="edit-pinyin" type="text"></label>
+    <!-- #1569: labels follow the entry's language; Chinese-only fields hide for other languages -->
+    <label class="edit-label"><span id="edit-word-zh-title">Hanzi</span><input class="edit-input" id="edit-word-zh" type="text" lang="zh"></label>
+    <!-- #1569: tense of a Spanish form card, kept out of the headword field -->
+    <label class="edit-label" id="edit-form-tense-label" style="display:none">Tense<select class="edit-input" id="edit-form-tense"></select></label>
+    <label class="edit-label" data-zh-only>Pinyin<input class="edit-input" id="edit-pinyin" type="text"></label>
     <label class="edit-label">Definition<input class="edit-input" id="edit-definition" type="text"></label>
     <label class="edit-label">Part of speech<input class="edit-input" id="edit-pos" type="text"></label>
-    <label class="edit-label">Traditional<input class="edit-input" id="edit-traditional" type="text" lang="zh"></label>
-    <label class="edit-label">Chinese definition<input class="edit-input" id="edit-definition-zh" type="text" lang="zh"></label>
+    <label class="edit-label" data-zh-only>Traditional<input class="edit-input" id="edit-traditional" type="text" lang="zh"></label>
+    <label class="edit-label" data-zh-only>Chinese definition<input class="edit-input" id="edit-definition-zh" type="text" lang="zh"></label>
     <label class="edit-label">German definition<input class="edit-input" id="edit-definition-de" type="text"></label>
-    <label class="edit-label">French definition<input class="edit-input" id="edit-definition-fr" type="text"></label>
+    <label class="edit-label" id="edit-definition-fr-label">French definition<input class="edit-input" id="edit-definition-fr" type="text"></label>
     <label class="edit-label">Notes<textarea class="edit-input edit-notes" id="edit-notes" rows="3"></textarea></label>
     <!-- Etymology (#906): entry-level word origin, Romance languages only —
          hidden for Chinese entries, whose etymology is per character. -->

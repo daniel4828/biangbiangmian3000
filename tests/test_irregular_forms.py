@@ -383,3 +383,14 @@ def test_form_card_borrowed_table_has_irregular_dots(tmp_path):
     entries._mark_irregular("tener", rows, "es")
     assert rows[0].get("irregular") is True
     assert not rows[1].get("irregular")
+
+
+def test_form_card_view_splits_headword_and_tense(tmp_db):
+    # #1569: the UI shows the tense as a tag and edits it in its own field
+    v = database.form_card_view(_fc())
+    assert v["form_lemma"] == "tener"
+    assert v["form_tense"] == "Indefinido"
+    assert "Presente" in v["form_tense_options"] and "Indefinido" in v["form_tense_options"]
+    assert v["word_zh"] == "tener · Indefinido"  # stored key unchanged
+    plain = database.form_card_view({"word_zh": "tener", "lang": "es", "note_type": "vocabulary"})
+    assert "form_lemma" not in plain

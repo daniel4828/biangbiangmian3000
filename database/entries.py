@@ -457,6 +457,13 @@ def form_card_view(entry: dict | None) -> dict | None:
         if not parsed:
             return entry
         lemma, tense = parsed
+        # #1569: headword and tense as separate fields — the UI shows the tense
+        # as a tag and edits it in its own field; word_zh stays the stored key.
+        import lexicon
+        entry["form_lemma"] = lemma
+        entry["form_tense"] = lexicon._TENSE_LABELS.get(tense, tense)
+        entry["form_tense_options"] = [lexicon._TENSE_LABELS.get(t, t)
+                                       for t in verb_slots.IRREGULAR_CARD_TENSES]
         row = [verb_slots.target_form(lemma, tense, p, "es")
                for p in verb_slots.form_card_persons(lemma, tense, "es")]
         row_text = ", ".join(f for f in row if f)

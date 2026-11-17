@@ -1087,6 +1087,18 @@ body.ra-fullscreen-open #error-banner {
 
 /* Top-right of the vocab box: HSK badge + SUBTLEX-CH rank (#1283, #1285) */
 .vocab-corner { position: absolute; top: 8px; right: 12px; display: flex; align-items: center; gap: 8px; }
+/* #1569: form-card tense tag sits at the left edge of the corner row */
+.vocab-corner:has(.word-form-tag:not([hidden])) { left: 12px; pointer-events: none; }
+.vocab-corner > * { pointer-events: auto; }
+.word-form-tag {
+  margin-right: auto;
+  font-size: 11px; font-weight: 600;
+  color: var(--primary); background: var(--primary-soft);
+  border-radius: 999px;
+  padding: 1px 8px; white-space: nowrap;
+}
+.word-form-tag[hidden] { display: none; }
+.wd-form-tag { display: inline-block; margin: 0 0 6px; }
 .word-freq { font-size: 11px; color: var(--muted); font-weight: 600; }
 /* Phones: the centred word + pinyin reach the corner, so the badges take a
    line of their own at the top instead of floating over them (#1289). */
