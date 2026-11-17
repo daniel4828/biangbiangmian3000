@@ -545,7 +545,7 @@ def test_tense_reason_is_stored_and_read_back(tmp_db):
 
 
 def test_negative_imperative_target_forms():
-    """#1577: Imperativo negativo = "no" + Subjuntivo presente, no yo."""
+    """#1580: Imperativo negativo = "no" + Subjuntivo presente, no yo."""
     import copy
     lex = copy.deepcopy(LEXICON)
     lex["verbs"]["hables"] = [["hablar", "subj_pres", "2s"], ["hablar", "imp_neg", "2s"]]

@@ -239,7 +239,7 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
         if not form:
             return None
         form = f"{pronoun} {form}" if pronoun else form
-        # Negative imperative (#1577): "no hables", "no te quejes"
+        # Negative imperative (#1580): "no hables", "no te quejes"
         return f"no {form}" if tense == "imp_neg" else form
     except Exception:
         return None

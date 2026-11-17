@@ -164,7 +164,7 @@ LANGUAGES = {
                               # (ten, dime, ...) are ~5% of finite verb tokens,
                               # splitting ambiguous ones (mira, vamos) ~15%.
                               "imp_aff": 8,
-                              # Imperativo negativo (#1577): no + Subjuntivo
+                              # Imperativo negativo (#1580): no + Subjuntivo
                               # presente; much rarer than the affirmative.
                               "imp_neg": 2},
             "person_weights": {"3s": 47, "1s": 22.5, "2s": 12, "3p": 11,

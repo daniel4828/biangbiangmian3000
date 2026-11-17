@@ -403,7 +403,7 @@ def pattern_for(lemma: str, tense: str, person: str, lang: str = LANG) -> dict |
     try:
         if lang != LANG or tense not in TENSES:
             return None
-        if tense == "imp_neg":  # #1577: the form IS the Subjuntivo presente
+        if tense == "imp_neg":  # #1580: the form IS the Subjuntivo presente
             if person == "1s":
                 return None
             tense = "subj_pres"
@@ -597,7 +597,7 @@ def catalog(lang: str = LANG) -> list[dict]:
         return []
     try:
         cfg = verb_slots.config(lang)
-        # imp_neg (#1577) shares the Subjuntivo presente patterns: none of its own
+        # imp_neg (#1580) shares the Subjuntivo presente patterns: none of its own
         tenses = [t for t in (cfg["tenses"] if cfg else TENSES)
                   if t in TENSES and t != "imp_neg"]
         out = []
