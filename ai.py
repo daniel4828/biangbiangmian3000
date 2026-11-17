@@ -554,7 +554,7 @@ def _multi_story_prompt(cards: list[dict], word_list: str, *, mode: str, topic: 
         else:
             lang_rules.append(
                 f"- {name}: target word in exactly the given form (you may adapt or drop its leading "
-                f"article); use only simple CEFR A1-{cefr_cap} vocabulary for non-target words; "
+                f"article; adjectives MUST agree in gender and number with their noun, e.g. 'Ana estaba cansada'); use only simple CEFR A1-{cefr_cap} vocabulary for non-target words; "
                 f"max {cfg['sentence_limit']} per sentence; natural {name} punctuation")
     lang_rules_block = "\n".join(lang_rules)
 
@@ -974,7 +974,7 @@ Rules:
 - Use only simple {background_vocab} level vocabulary for non-target words; each sentence must contain exactly ONE target word from the list — do not use other target words from the list in that sentence
 - Keep each sentence short and simple (max {cfg["sentence_limit"]})
 {style_rule}
-- Each target word must appear in exactly the given form; you may adapt or drop its leading article (le/la/les/un/une) to fit the sentence{slot_rule}{expr_rule}
+- Each target word must appear in exactly the given form; you may adapt or drop its leading article (le/la/les/un/une) to fit the sentence. Exception: adjectives and participles used as adjectives MUST agree in gender and number with the noun they describe (e.g. "Ana estaba cansada", not "cansado") — never write an agreement error just to keep the given form{slot_rule}{expr_rule}
 - NEVER highlight, quote, or mark target words in any way — no "quotes", no 「brackets」, no （parentheses）, no bold, no underline; write them as plain text embedded naturally in the sentence
 - NEVER use markdown formatting (**bold**, _italic_, etc.) anywhere in the output — write plain text only
 
