@@ -13646,8 +13646,12 @@ function regenAllFieldsFromReview() {
 
 async function regenFields(wordId, fields, containerId) {
   const el = document.getElementById(containerId);
-  const btn = el?.querySelector('.field-regen-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  // Die beiden „↺ All“-Knöpfe liegen nicht im Container (#regen-all): ohne
+  // eigene Zuordnung bekamen sie keinerlei Rückmeldung, während die KI läuft.
+  const allBtnId = { 'wd-all': 'wd-regen-all-btn', 'review-regen-all': 'review-regen-all-btn' }[containerId];
+  const btn = el?.querySelector('.field-regen-btn') || (allBtnId && document.getElementById(allBtnId));
+  const oldLabel = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = allBtnId ? '⏳ Generating…' : '…'; btn.classList.add('regen-busy'); }
   try {
     const preview = await api('POST', `/api/word/${wordId}/regenerate-fields`, { fields, preview: true });
     _regenState = { wordId, fields, containerId };
@@ -13655,7 +13659,7 @@ async function regenFields(wordId, fields, containerId) {
   } catch (e) {
     showError('Regeneration failed: ' + e.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '↺'; }
+    if (btn) { btn.disabled = false; btn.textContent = oldLabel || '↺'; btn.classList.remove('regen-busy'); }
   }
 }
 

@@ -8401,3 +8401,7 @@ body.hs-hidden #mini-player { bottom: max(8px, env(safe-area-inset-bottom)); }
 #sentence-trans-row:has(+ #grammar-hint-row) { margin-bottom: -14px; }
 #sentence-trans-row:has(+ #grammar-hint-row) + #grammar-hint-row:not(:has(> :not([style*="display:none"]))) { display: none; }
 .wd-cards-head-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+
+/* „↺ All“ läuft gerade: pulsierender Knopf als Lebenszeichen */
+.regen-busy { animation: regen-busy-pulse 1.2s ease-in-out infinite; cursor: progress; }
+@keyframes regen-busy-pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
