@@ -151,7 +151,8 @@ LANGUAGES = {
         # verb_slots -> feature off.
         "verb_slots": {
             "tenses": ["ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut",
-                       "subj_pres", "subj_impf", "ind_cond", "imp_aff"],
+                       "subj_pres", "subj_impf", "ind_cond", "imp_aff",
+                       "imp_neg"],
             "persons": ["1s", "2s", "3s", "1p", "2p", "3p"],
             # Relative weights (percent) for the slot rotation (#1306). Source:
             # doozan/spanish_data frequency.csv (OpenSubtitles) aggregated by
@@ -162,7 +163,10 @@ LANGUAGES = {
                               # Imperativo (#1540): unambiguous imperative forms
                               # (ten, dime, ...) are ~5% of finite verb tokens,
                               # splitting ambiguous ones (mira, vamos) ~15%.
-                              "imp_aff": 8},
+                              "imp_aff": 8,
+                              # Imperativo negativo (#1577): no + Subjuntivo
+                              # presente; much rarer than the affirmative.
+                              "imp_neg": 2},
             "person_weights": {"3s": 47, "1s": 22.5, "2s": 12, "3p": 11,
                                "1p": 7, "2p": 0.4},
         },

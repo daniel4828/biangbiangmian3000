@@ -138,7 +138,7 @@ def _full_usage(n=1, **overrides):
 
 
 _TENSES = ("ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf",
-           "ind_cond", "imp_aff")
+           "ind_cond", "imp_aff", "imp_neg")
 _PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
 _UNIFORM = {"tenses": {t: 1.0 for t in _TENSES}, "persons": {p: 1.0 for p in _PERSONS}}
 
@@ -542,3 +542,16 @@ def test_tense_reason_is_stored_and_read_back(tmp_db):
          "verb_slot": "ind_pret:1s", "tense_reason": "**ayer** → Indefinido"}])
     rows = database.get_story_sentences(sid)
     assert rows[0]["tense_reason"] == "**ayer** → Indefinido"
+
+
+def test_negative_imperative_target_forms():
+    """#1577: Imperativo negativo = "no" + Subjuntivo presente, no yo."""
+    import copy
+    lex = copy.deepcopy(LEXICON)
+    lex["verbs"]["hables"] = [["hablar", "subj_pres", "2s"], ["hablar", "imp_neg", "2s"]]
+    lex["verbs"]["quejes"] = [["quejar", "subj_pres", "2s"], ["quejar", "imp_neg", "2s"]]
+    lexicon.inject("es", lex)
+    assert verb_slots.target_form("hablar", "imp_neg", "1s", "es") is None
+    assert verb_slots.target_form("hablar", "imp_neg", "2s", "es") == "no hables"
+    assert verb_slots.target_form("quejarse", "imp_neg", "2s", "es") == "no te quejes"
+    assert "Imperativo negativo" in verb_slots.describe("imp_neg:3s")
