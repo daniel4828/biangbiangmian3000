@@ -13631,7 +13631,7 @@ function _allRegenFields(wordData) {
                 'notes', 'examples'];
   return _entryLang(wordData) === 'zh'
     ? [...base, 'etymology', 'compounds', 'other_meanings']
-    : [...base, 'entry_etymology'];
+    : [...base, 'entry_etymology', 'conjugations'];
 }
 
 function regenAllFields(wordId) {
@@ -13702,6 +13702,16 @@ function _showRegenPreviewModal(previewData) {
       <div class="regen-section-label">Etymology</div>
       <textarea id="regen-entry-etym-text" class="regen-notes-textarea">${result.entry_etymology || ''}</textarea>
     </div>`;
+  }
+
+  if (fields.includes('conjugations') && (result.conjugations || []).length) {
+    // Read-only preview: the table is applied as generated (#conj-regen).
+    _regenState = { ...(_regenState || {}), conjugations: result.conjugations, gender: result.gender };
+    const byParadigm = {};
+    for (const f of result.conjugations) (byParadigm[f.paradigm] ||= []).push(f.slot ? `${f.slot}: ${f.form}` : f.form);
+    const rows = Object.entries(byParadigm).map(([p, cells]) =>
+      `<div><b>${_escHtml(p)}</b> — ${_escHtml(cells.join(' · '))}</div>`).join('');
+    bodyHtml += `<div><div class="regen-section-label">Conjugation / Forms</div><div style="font-size:13px;line-height:1.5">${rows}</div></div>`;
   }
 
   if (fields.includes('examples')) {
@@ -13815,6 +13825,11 @@ function _getRegenResultFromModal() {
 
   if (fields.includes('entry_etymology')) {
     result.entry_etymology = document.getElementById('regen-entry-etym-text')?.value?.trim() || '';
+  }
+
+  if (fields.includes('conjugations') && _regenState?.conjugations) {
+    result.conjugations = _regenState.conjugations;
+    if (_regenState.gender) result.gender = _regenState.gender;
   }
 
   if (fields.includes('examples')) {

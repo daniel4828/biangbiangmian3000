@@ -6,6 +6,8 @@ import database
 import importer
 import languages
 import verb_slots
+import yaml
+from yaml_fixer import fix_yaml_content
 from fastapi import APIRouter, HTTPException
 from pypinyin import pinyin as _pinyin, Style
 from .utils import queue_mgr as _queue_mgr
@@ -149,6 +151,65 @@ _CHAR_FIELDS = {"etymology", "compounds", "other_meanings"}
 # (entries.etymology vs characters.etymology) filled by different prompts, and
 # one name for both would make every branch below ambiguous.
 _ENTRY_ETYM_FIELD = "entry_etymology"
+# Romance only: the conjugation table / inflected forms (entry_forms) + gender.
+_FORMS_FIELD = "conjugations"
+
+
+def _regen_target(word_id: int, word: dict) -> tuple[int, dict]:
+    """A Spanish form card ("venir · Imperativo") has no content of its own —
+    its details come from the verb's entry (form_card_detail). Regenerating it
+    therefore regenerates the verb entry. 400 when the verb has no entry."""
+    split = verb_slots.split_form_card_word(word.get("word_zh") or "")
+    if not split or (word.get("lang") or "zh") == "zh":
+        return word_id, word
+    base = database.get_word_by_zh(split[0], word.get("lang"))
+    if not base:
+        raise HTTPException(status_code=400,
+                            detail=f"Verb '{split[0]}' has no entry yet — add it first")
+    return base["id"], base
+
+
+def _run_romance_regen(word: dict, fields: list) -> dict:
+    """fr/es: one call of the add-word prompt for this language (the same
+    pipeline that created the entry), so definitions, Spanish examples, notes,
+    etymology AND the full conjugation table come back. The Chinese
+    regenerate_entry_fields prompt knows nothing about conjugations and writes
+    Chinese examples. Raises ValueError on an unparsable answer (nothing saved)."""
+    lang = word.get("lang") or "es"
+    text = ai.generate_word_entry_yaml(word["word_zh"], lang=lang)
+    data = yaml.safe_load(fix_yaml_content(text))
+    entries = importer._get_entries(data)
+    if not entries or not isinstance(entries[0], dict):
+        raise ValueError("AI answer has no entry")
+    entry = importer._normalize_romance_entry(entries[0], lang)
+    out: dict = {
+        "definition": entry.get("english"),
+        "definition_de": entry.get("german"),
+        "definition_fr": entry.get("french"),
+        "pos": entry.get("pos"),
+        "notes": entry.get("note") or entry.get("explanations"),
+        "examples": [ex for ex in entry.get("examples") or [] if ex.get("zh")],
+        _ENTRY_ETYM_FIELD: entry.get("etymology"),
+    }
+    forms: list[dict] = []
+    pos = 0
+    for kind, key in (("conjugation", "conjugations"), ("inflection", "forms")):
+        table = entry.get(key)
+        if not isinstance(table, dict):
+            continue
+        for paradigm, cells in table.items():
+            pairs = cells.items() if isinstance(cells, dict) else [("", cells)]
+            for slot, form in pairs:
+                form = str(form or "").strip()
+                if str(paradigm).strip() and form:
+                    forms.append({"kind": kind, "paradigm": str(paradigm).strip(),
+                                  "slot": str(slot).strip(), "form": form, "position": pos})
+                    pos += 1
+    if _FORMS_FIELD in fields:
+        out[_FORMS_FIELD] = forms
+        out["gender"] = entry.get("gender")
+    return {k: v for k, v in out.items()
+            if v and (k in fields or k in (_FORMS_FIELD, "gender"))}
 
 
 def _run_regen_ai(word_id: int, word: dict, fields: list) -> tuple[dict, list]:
@@ -157,6 +218,8 @@ def _run_regen_ai(word_id: int, word: dict, fields: list) -> tuple[dict, list]:
     top_result  — notes/examples/definition/pos for the top-level entry.
     all_characters — list of {char, char_id, etymology?, compounds?} across all components.
     """
+    if (word.get("lang") or "zh") != "zh" and set(fields) - {_ENTRY_ETYM_FIELD}:
+        return _run_romance_regen(word, fields), []
     # Entry-level etymology (#906) is its own prompt and its own column, so it
     # is handled separately and merged back in at the end — never passed down
     # to the Chinese-dictionary prompt below.
@@ -247,6 +310,11 @@ def _save_regen_result(word_id: int, fields: list, top_result: dict, all_charact
     if "notes" in fields and top_result.get("notes"):
         database.update_word(word_id, {"notes": top_result["notes"]})
 
+    if _FORMS_FIELD in fields and top_result.get(_FORMS_FIELD):
+        database.set_entry_forms(word_id, top_result[_FORMS_FIELD])
+        if top_result.get("gender"):
+            database.update_word(word_id, {"gender": top_result["gender"]})
+
     if "examples" in fields and top_result.get("examples"):
         database.delete_word_examples(word_id)
         for i, ex in enumerate(top_result["examples"]):
@@ -314,7 +382,7 @@ def regenerate_word_fields(word_id: int, body: dict):
     """
     fields = body.get("fields", [])
     preview = body.get("preview", False)
-    valid = _TOP_FIELDS | _CHAR_FIELDS | {_ENTRY_ETYM_FIELD}
+    valid = _TOP_FIELDS | _CHAR_FIELDS | {_ENTRY_ETYM_FIELD, _FORMS_FIELD}
     fields = [f for f in fields if f in valid]
     if not fields:
         raise HTTPException(status_code=400, detail=f"fields must be a non-empty subset of {sorted(valid)}")
@@ -322,13 +390,18 @@ def regenerate_word_fields(word_id: int, body: dict):
     word = database.get_word(word_id)
     if not word:
         raise HTTPException(status_code=404, detail="Word not found")
+    shown_id = word_id
+    word_id, word = _regen_target(word_id, word)
 
-    top_result, all_characters = _run_regen_ai(word_id, word, fields)
+    try:
+        top_result, all_characters = _run_regen_ai(word_id, word, fields)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=f"AI answer unusable: {e}")
 
     if preview:
         aggregated: dict = {}
         for f in ("pos", "definition", "definition_zh", "definition_de", "definition_fr", "notes",
-                  "examples", _ENTRY_ETYM_FIELD):
+                  "examples", _ENTRY_ETYM_FIELD, _FORMS_FIELD, "gender"):
             if top_result.get(f):
                 aggregated[f] = top_result[f]
         if all_characters:
@@ -336,7 +409,7 @@ def regenerate_word_fields(word_id: int, body: dict):
         return {"fields": fields, "result": aggregated}
 
     _save_regen_result(word_id, fields, top_result, all_characters)
-    return database.get_word_full(word_id)
+    return database.get_word_full(shown_id)
 
 
 @router.post("/api/word/{word_id}/apply-regen-result")
@@ -344,7 +417,7 @@ def apply_regen_result(word_id: int, body: dict):
     """Apply a (possibly user-edited) AI regen result returned by preview mode."""
     fields = body.get("fields", [])
     result = body.get("result", {})
-    valid = _TOP_FIELDS | _CHAR_FIELDS | {_ENTRY_ETYM_FIELD}
+    valid = _TOP_FIELDS | _CHAR_FIELDS | {_ENTRY_ETYM_FIELD, _FORMS_FIELD}
     fields = [f for f in fields if f in valid]
     if not fields:
         raise HTTPException(status_code=400, detail="fields required")
@@ -352,13 +425,15 @@ def apply_regen_result(word_id: int, body: dict):
     word = database.get_word(word_id)
     if not word:
         raise HTTPException(status_code=404, detail="Word not found")
+    shown_id = word_id
+    word_id, word = _regen_target(word_id, word)
 
     top_keys = ("pos", "definition", "definition_zh", "definition_de", "definition_fr", "notes",
-                "examples", _ENTRY_ETYM_FIELD)
+                "examples", _ENTRY_ETYM_FIELD, _FORMS_FIELD, "gender")
     top_result = {k: result[k] for k in top_keys if k in result}
     all_characters = result.get("characters", [])
     _save_regen_result(word_id, fields, top_result, all_characters)
-    return database.get_word_full(word_id)
+    return database.get_word_full(shown_id)
 
 
 @router.post("/api/word/{word_id}/ai-enrich")

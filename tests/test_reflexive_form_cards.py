@@ -4,6 +4,13 @@ import pytest
 import lexicon
 import verb_slots
 
+@pytest.fixture(autouse=True)
+def _real_lexicon():
+    lexicon.clear_cache()  # other modules swap in a fixture lexicon
+    yield
+    lexicon.clear_cache()
+
+
 pytestmark = pytest.mark.skipif(not lexicon.available("es"), reason="no es lexicon")
 
 
