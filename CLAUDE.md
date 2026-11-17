@@ -588,7 +588,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - `database.surface_forms()` 对形态卡返回该时态的六个形式，复习里的高亮/填空因此可用
 - **规律说明是启发式的**（`verb_slots.pattern_note()`）：强 Indefinido、yo-go、e→ie/o→ue/e→i、不规则 Futuro 词干、否则列出不同的人称；末尾 "Wie: …" 列同类动词。`verb_slots.form_card_candidates()` 确定性地给出全部候选
 - **设置页按钮** → `POST /api/es/irregular-form-cards` → `seed_es_irregular_form_cards()`：#1539 起只跑迁移计划里的 **create** 部分（给收藏里所有动词补缺的形态卡，从不删除/改名），零 AI、幂等；body `{"activate": true}`（#1438）仍会把 Saved 里的形态卡提升到今天
-- 🔴 形态卡 `definition_de` 存真释义（#1444）；生产库的旧行仍存变位表，所以读路径 `database.form_card_view()` 负责替换（存的值等于变位表或为空时，取同语言原形词条的释义，否则词汇表 `gloss_de`；手改过的不动）并给出 `conjugation_row`，背面和详情页单独一行显示；正面提示走 `formCardHint()`（第一个义项，空格里显示德语词），新增读路径要显示释义时同样要过这个函数
+- 🔴 形态卡 `definition_de` 存真释义（#1444）；生产库的旧行仍存变位表，所以读路径 `database.form_card_view()` 负责替换（存的值等于变位表或为空时，取同语言原形词条的释义，否则词汇表 `gloss_de`；手改过的不动）并给出 `conjugation_row`，背面和详情页单独一行显示；正面提示走 `formCardHint()`（#1569 起是完整德语释义，不再只取第一个义项；空格里显示德语），新增读路径要显示释义时同样要过这个函数
 - 形态卡详情由 `database.form_card_detail()` 沿用同语言动词词条的词源、例句、变位表（#1446），只填形态卡自己为空的字段，不写库；动词没有词条时要先走加词管线建词条
 - **形态卡主句不显示 `¿Conjugación correcta?`**：该行在形态卡上是重复的；结果由评分推出（Again = 错，其余 = 对），前端 `_derivedConjOk()` 照常带 `conj_ok` + `sentence_id` 上报，所以仍进入 Muster 排程。普通词卡不变
 - **Condicional（#1504）**：`ind_cond` 是今日时态轮换的第 8 个时态（`languages.py` 的 `tenses` 末尾）（#1539 起形态卡不再含 Condicional）

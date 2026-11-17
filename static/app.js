@@ -15818,14 +15818,15 @@ function formCardLemma(c) {
 }
 
 // #1444: German word for a form card's front hints. definition_de is the verb's
-// meaning (the server swaps out the stored conjugation row), so use its first
-// sense only; the infinitive is the fallback. Returns '' for other cards.
+// meaning (the server swaps out the stored conjugation row); since #1569 the
+// whole gloss ("probieren, kosten, schmecken"), not just the first sense —
+// the first one alone often did not fit the sentence. The infinitive is the
+// fallback. Returns '' for other cards.
 function formCardHint(c) {
   const lemma = formCardLemma(c);
   if (!lemma) return '';
   if (c.conjugation_row === undefined) return lemma;
-  const first = String(c.definition_de || '').split(/[,;\/]/)[0].trim();
-  return first || lemma;
+  return String(c.definition_de || '').trim() || lemma;
 }
 
 async function renderWordBankUI() {
