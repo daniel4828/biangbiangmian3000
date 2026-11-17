@@ -224,3 +224,46 @@ def test_romance_prompt_requires_german_note_and_etymology(lang):
     rules = prompt.split("LANGUAGE RULES")[1].split("CONTENT:")[0]
     assert "etymology" in rules
     assert "note" in rules
+
+
+class TestRomanceFullRegen:
+    """↺ All on a Spanish entry uses the Spanish add-word prompt and also
+    replaces the conjugation table; a form card regenerates its verb entry."""
+
+    _YAML = """lang: es
+entries:
+- type: word
+  word: venir
+  english: to come
+  german: kommen
+  level: A1
+  note: Neue Notiz.
+  etymology: Vom lateinischen venire.
+  examples:
+    - es: Vengo mañana.
+      german: Ich komme morgen.
+  conjugations:
+    presente:
+      yo: vengo
+      tú: vienes
+"""
+
+    def test_all_fields_and_conjugation_via_form_card(self, tmp_db, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+        import main
+        _import(tmp_path, [{"type": "word", "word": "venir", "english": "x", "level": "A1"},
+                           {"type": "word", "word": "venir · Imperativo", "english": "x"}],
+                "es", "Espanol")
+        verb = database.get_word_by_zh("venir", "es")["id"]
+        card = database.get_word_by_zh("venir · Imperativo", "es")["id"]
+        monkeypatch.setattr(ai, "generate_word_entry_yaml", lambda w, lang="zh", **k: self._YAML)
+        monkeypatch.setattr(ai, "regenerate_entry_fields",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("zh prompt")))
+        r = TestClient(main.app).post(f"/api/word/{card}/regenerate-fields", json={
+            "fields": ["definition_de", "notes", "examples", "entry_etymology", "conjugations"]})
+        assert r.status_code == 200, r.text
+        full = database.get_word_full(verb)
+        assert full["definition_de"] == "kommen"
+        assert full["etymology"] == "Vom lateinischen venire."
+        forms = set(database.get_entry_forms(verb)["conjugation"]["presente"].values())
+        assert {"vengo", "vienes"} <= forms
