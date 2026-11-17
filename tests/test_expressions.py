@@ -75,3 +75,19 @@ def test_generate_story_matches_conjugated_expression(tmp_db, monkeypatch):
     assert sentences[0]["word_ids"] == [1]
     assert sentences[0]["sentence_zh"] == "Tengo prisa hoy."
     assert "multi-word expressions" in prompt
+
+
+def test_trailing_preposition_contracts_or_drops():
+    """Creating card without blank: "darse cuenta de" vs. "...se diera cuenta del peligro"."""
+    forms = expressions.expression_forms("darse cuenta de", "es")
+    assert _matches(forms, "Luis quería que Ana se diera cuenta del peligro.")
+    assert "se diera cuenta del" in forms
+    assert _matches(forms, "Ana se dio cuenta de que llovía.")
+    assert _matches(forms, "Por fin me di cuenta.")
+    # longest form wins: the full one with the preposition comes before the bare one
+    assert forms.index("se dio cuenta de") < forms.index("se dio cuenta")
+
+
+def test_trailing_a_contracts_to_al():
+    forms = expressions.expression_forms("ir a", "es")
+    assert _matches(forms, "Ayer fuimos al cine.")

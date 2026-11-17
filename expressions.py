@@ -26,6 +26,12 @@ _PREPOSITIONS = {
     "es": {"a", "de", "con", "en", "por", "para", "sobre"},
     "fr": {"à", "de", "avec", "en", "sur", "pour", "contre"},
 }
+# Article contractions a trailing preposition takes in a real sentence:
+# "darse cuenta de" -> "se dio cuenta del peligro", "ir a" -> "fue al cine".
+_CONTRACTIONS = {
+    "es": {"de": ["del"], "a": ["al"]},
+    "fr": {"de": ["du", "des"], "à": ["au", "aux"]},
+}
 _ES_HEAD = re.compile(r"^(.*?[aeií]r)((?:me|te|se|nos|os|le|les|lo|la|los|las){0,2})$")
 _ES_CLITIC = re.compile(r"nos|los|las|les|me|te|se|os|le|lo|la")
 _ES_REFLEXIVE = ["me", "te", "se", "nos", "os"]
@@ -120,12 +126,26 @@ def expression_forms(word: str, lang: str) -> list[str]:
         if not rest and not clitic:
             return []  # just a verb, not an expression
 
+        # A headword ending in a bare preposition ("darse cuenta de") never
+        # appears like that: the sentence contracts it with the article
+        # ("del peligro") or drops it ("se dio cuenta."). Without these
+        # variants nothing matched and the creating card showed the whole
+        # sentence with no blank.
+        rests = [rest]
+        if rest_tokens and rest_tokens[-1] in _PREPOSITIONS.get(lang, set()):
+            head_rest = rest_tokens[:-1]
+            for contracted in _CONTRACTIONS.get(lang, {}).get(rest_tokens[-1], []):
+                rests.append(" ".join(head_rest + [contracted]))
+            if head_rest or clitic:
+                rests.append(" ".join(head_rest))
+
         out: set[str] = set()
         for f in verb_forms:
-            out.add(f"{f} {rest}" if rest else f)
-            for p in prefixes:
-                sep = "" if p.endswith("'") else " "
-                out.add(f"{p}{sep}{f}" + (f" {rest}" if rest else ""))
+            for r in rests:
+                out.add(f"{f} {r}" if r else f)
+                for p in prefixes:
+                    sep = "" if p.endswith("'") else " "
+                    out.add(f"{p}{sep}{f}" + (f" {r}" if r else ""))
         out.add(" ".join(tokens))
         out.add(word.casefold().strip())
         return sorted((f for f in out if f), key=len, reverse=True)
