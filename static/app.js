@@ -5009,6 +5009,12 @@ function renderSettings() {
       <h2 class="keymap-heading">Ask AI prompt</h2>
       ${_sentencePromptHtml()}
     </div>` };
+  pages.ai = { title: 'AI', icon: '🤖', desc: 'GPT via API or Codex subscription', html: `
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">GPT models</h2>
+      <p class="keymap-hint">Where GPT models (gpt-6-luna …) run. <b>API</b> = OpenAI API, paid per token (default). <b>Codex subscription</b> = your ChatGPT/Codex plan on the server, no API cost; uses the same model, never the expensive Codex default. If the subscription call fails, it falls back to the API. DeepSeek, GLM, Qwen and Claude are not affected.</p>
+      <div id="ai-backend-body">Loading…</div>
+    </div>` };
   pages.advanced = { title: 'Advanced', icon: '🛠', desc: 'Server logs', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Server logs</h2>
@@ -5045,6 +5051,45 @@ function renderSettings() {
     </div>
     ${page.html}`;
   if (_settingsPage === 'stories') _loadPregenSettings();
+  if (_settingsPage === 'ai') _loadAiBackend();
+}
+
+// ── GPT backend: API or Codex subscription (#1582) ──────────────────────────
+function _renderAiBackend(data, errMsg) {
+  const el = document.getElementById('ai-backend-body');
+  if (!el) return;
+  const codex = data.codex || {};
+  let status;
+  if (!codex.installed) status = 'Codex CLI not installed on the server';
+  else if (codex.logged_in) status = '✓ Codex logged in';
+  else status = '✗ Codex not logged in — subscription calls will fall back to the API'
+    + (codex.detail ? ' (' + _escHtml(codex.detail) + ')' : '');
+  const opts = [['api', 'API (pay per token)'], ['subscription', 'Codex subscription']]
+    .map(([v, l]) => `<option value="${v}" ${data.gpt_backend === v ? 'selected' : ''}>${l}</option>`).join('');
+  el.innerHTML = `
+    <div class="keymap-row"><span>GPT via</span>
+      <select class="opt-input" id="ai-backend-select" onchange="saveAiBackend(this.value)">${opts}</select></div>
+    <div class="keymap-row"><span id="ai-backend-status">${status}</span></div>
+    <div class="keymap-row"><span id="ai-backend-error"></span></div>`;
+  if (errMsg) document.getElementById('ai-backend-error').textContent = errMsg;
+}
+
+async function _loadAiBackend() {
+  try {
+    _renderAiBackend(await api('GET', '/api/ai-backend'));
+  } catch (e) {
+    const el = document.getElementById('ai-backend-body');
+    if (el) el.textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+async function saveAiBackend(v) {
+  try {
+    _renderAiBackend(await api('PUT', '/api/ai-backend', { gpt_backend: v }));
+  } catch (e) {
+    const err = document.getElementById('ai-backend-error');
+    if (err) err.textContent = 'Failed to save: ' + e.message;
+  }
 }
 
 // ── Morning pre-generation config (issue #473) ──────────────────────────────

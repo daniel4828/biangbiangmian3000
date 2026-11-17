@@ -20,6 +20,7 @@ import time
 import anthropic
 import openai
 
+import codex_sub
 import database
 import lang_detect
 import languages
@@ -28,6 +29,18 @@ import zh_annotate
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-6-luna"
+
+# #1582: GPT-Modelle optional über das ChatGPT/Codex-Abo statt der bezahlten API.
+GPT_BACKENDS = ("api", "subscription")
+
+
+def gpt_backend() -> str:
+    """'api' (Standard) oder 'subscription'; alles andere/Fehler -> 'api'."""
+    try:
+        value = database.get_app_setting("gpt_backend", "api")
+    except Exception:
+        return "api"
+    return "subscription" if value == "subscription" else "api"
 
 # briefing mode (issue #444) — env var BRIEFING_MODEL, default gpt-6-luna,
 # verified against the OpenAI models API with a fallback chain, cached for
@@ -208,6 +221,34 @@ def _extract_prompt(messages: list) -> str:
     return "\n\n".join(parts)
 
 
+def _call_codex(model: str, messages: list, max_tokens: int, purpose: str,
+                thinking: bool = False) -> "str | None":
+    """GPT über das Codex-Abo (#1582). None = nicht zuständig oder fehlgeschlagen
+    -> der Aufrufer nimmt den normalen API-Weg."""
+    if not (model.startswith("gpt-") and gpt_backend() == "subscription"):
+        return None
+    t0 = time.time()
+    try:
+        text, usage = codex_sub.complete(model, messages, thinking)
+    except (codex_sub.CodexError, ValueError) as e:
+        logger.warning("[codex:%s] subscription call failed (%s) — falling back to API (purpose=%s)",
+                       model, e, purpose)
+        return None
+    logger.info("[codex:%s] subscription call done in %.1fs — in=%d out=%d purpose=%s",
+                model, time.time() - t0, usage.get("input_tokens", 0),
+                usage.get("output_tokens", 0), purpose)
+    database.log_api_call(
+        model=f"codex:{model}",
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        purpose=purpose,
+        cached_input_tokens=usage.get("cached_input_tokens", 0),
+        prompt=_extract_prompt(messages),
+        response=text,
+    )
+    return text
+
+
 def _call_api(model: str, messages: list, max_tokens: int, purpose: str,
               thinking: bool = False) -> str:
     """Call the appropriate provider, log usage, and return the raw text response.
@@ -220,6 +261,9 @@ def _call_api(model: str, messages: list, max_tokens: int, purpose: str,
     """
     t0 = time.time()
     prompt_text = _extract_prompt(messages)
+    codex_text = _call_codex(model, messages, max_tokens, purpose, thinking)
+    if codex_text is not None:
+        return codex_text
     if model.startswith("claude-"):
         client = anthropic.Anthropic()
         msg = client.messages.create(model=model, max_tokens=max_tokens, messages=messages)
@@ -343,6 +387,10 @@ def _stream_api(model: str, messages: list, max_tokens: int, purpose: str,
     If the consumer stops early (or the provider raises) nothing is logged —
     only complete answers are accounted. Caller concatenates the deltas.
     """
+    codex_text = _call_codex(model, messages, max_tokens, purpose, thinking)
+    if codex_text is not None:
+        yield codex_text  # kein Streaming über Codex: ganze Antwort in einem Delta
+        return
     t0 = time.time()
     prompt_text = _extract_prompt(messages)
     parts: list[str] = []

@@ -144,6 +144,8 @@ def _lookup_pricing(model: str) -> dict | None:
     a prefix of the model id (so "gpt-5.1-2026-04-14" matches "gpt-5.1" before
     the shorter "gpt-5"). Returns None if nothing matches.
     """
+    if model.startswith("codex:"):  # #1582: Abo-Aufrufe kosten kein API-Geld
+        return {"input": 0.0, "cached": 0.0, "output": 0.0}
     if model in _MODEL_PRICING:
         return _MODEL_PRICING[model]
 
