@@ -87,7 +87,11 @@ def test_existing_tense_is_not_duplicated():
 def test_non_spanish_and_empty_untouched():
     rows = [{"tense": "présent", "person": "je", "form": "parle", "position": 0}]
     assert conj_table.complete_conjugations("parler", rows, "fr") is rows
-    assert conj_table.complete_conjugations("tener", [], "es") == []
+    # Ohne gespeicherte Tabelle: ganze Tabelle aus dem Wortschatz
+    full = conj_table.complete_conjugations("ir", [], "es")
+    assert ("presente", "yo", "voy") in [(r["tense"], r["person"], r["form"]) for r in full]
+    assert any(r["tense"] == "imperativo" for r in full)
+    assert conj_table.complete_conjugations("xyzzar", [], "es") == []
 
 
 def test_reflexive_imperative_not_marked_irregular():
