@@ -185,6 +185,23 @@ def is_slottable_verb(word: str, lang: str) -> bool:
         return False
 
 
+def _reflexive_nonfinite(lemma: str, tense: str, person: str, lang: str) -> str | None:
+    """Reflexive imperative/gerund attach the pronoun (ríndete, rindiéndose);
+    the participle has none (rendido). Lexicon form first, else built."""
+    base = lemma[:-2]
+    if tense == "part":
+        return lexicon.form_for(base, "part", "", lang)
+    form = lexicon.form_for(lemma, tense, person, lang)
+    if form:
+        return form
+    pron = "se" if tense == "ger" else _REFLEXIVE_PRONOUN.get(person, "")
+    plain = lexicon.form_for(base, tense, person, lang)
+    if not plain or not pron:
+        return None
+    import conj_table  # lazy: conj_table imports this module
+    return conj_table._attach(plain, pron)
+
+
 def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
     """The exact string a sentence must contain for this slot, or None.
 
@@ -203,9 +220,8 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
                 return None
             front = parts["clitic"] + " " if parts["clitic"] else ""
             return f"{front}{base_form} {parts['rest']}"
-        if tense == "imp_aff" and lemma.endswith("se") and len(lemma) > 4:
-            # The imperative attaches the pronoun: quéjate, quejémonos (#1540).
-            return lexicon.form_for(lemma, tense, person, lang)
+        if lemma.endswith("se") and len(lemma) > 4 and tense in ("imp_aff", "ger", "part"):
+            return _reflexive_nonfinite(lemma, tense, person, lang)
         pronoun = ""
         if lemma.endswith("se") and len(lemma) > 4:
             pronoun = _REFLEXIVE_PRONOUN.get(person, "")
@@ -706,15 +722,15 @@ def pattern_note(lemma: str, tense: str, row: list[str], lang: str) -> str:
 def irregular_card_plan(lemma: str, lang: str) -> list[dict]:
     """The form cards a verb should have (#1539): one per tense of
     irregular_form_tenses(), as [{lemma, tense, word_zh, persons, note_de}].
-    [] for non-verbs, reflexive verbs (no form-card support), verbs without
+    [] for non-verbs, verbs without
     irregular forms and anything but Spanish. Never raises."""
     out: list[dict] = []
     try:
         lemma = (lemma or "").strip().lower()
-        if lang != _FORM_LANG or not lemma or _base_verb(lemma) != lemma \
-                or lemma.endswith("se") or len(lemma.split()) > 1:
+        if lang != _FORM_LANG or not lemma or len(lemma.split()) > 1:
             return []
-        info = lexicon.lemma_info(lemma, lang)
+        # Reflexive verbs (rendirse) are judged by the base verb (#1301).
+        info = lexicon.lemma_info(_base_verb(lemma), lang)
         if not info or info.get("pos") != "v":
             return []
         for tense in irregular_form_tenses(lemma, lang):
