@@ -7,10 +7,13 @@ das Modell ab, ist das ein Fehler — kein Wiederholen ohne `-m`.
 import json
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +148,162 @@ def complete(model: str, messages: list, thinking: bool = False,
         if not text:
             raise CodexError(f"codex returned no text: {(proc.stderr or '')[-400:]}")
         return text, parse_usage(proc.stdout)
+
+
+def build_app_server_args(bin_path: str) -> list:
+    """`codex app-server` (stdio JSON-RPC). Das Modell wird in `thread/start`
+    übergeben (🔴 immer explizit). app-server kennt kein --ignore-user-config,
+    darum werden MCP-Server des Nutzers per -c geleert."""
+    args = [bin_path, "app-server"]
+    for f in CODEX_DISABLED_FEATURES:
+        args += ["--disable", f]
+    args += ["-c", "mcp_servers={}"]
+    return args
+
+
+_EOF = object()
+
+
+def _send(proc, obj: dict) -> None:
+    try:
+        proc.stdin.write(json.dumps(obj) + "\n")
+        proc.stdin.flush()
+    except (OSError, ValueError) as e:
+        raise CodexError(f"codex stdin write failed: {e}")
+
+
+def stream(model: str, messages: list, thinking: bool = False, timeout: float = 300,
+           usage_out: dict | None = None):
+    """Echtes Streaming über `codex app-server`: yieldet Text-Deltas.
+
+    Wirft CodexError bei jedem Fehler (auch leere Antwort). Beim Abbruch durch
+    den Konsumenten wird der Prozess aufgeräumt."""
+    if not model or not _SAFE_RE.match(model):
+        raise ValueError(f"invalid codex model: {model!r}")
+    effort = "medium" if thinking else "low"
+    if not _SAFE_RE.match(effort):
+        raise ValueError(f"invalid codex effort: {effort!r}")
+    bin_path = codex_bin()
+    if not bin_path:
+        raise CodexError("codex CLI not found")
+    prompt = _build_prompt(messages)
+    args = build_app_server_args(bin_path)
+    deadline = time.monotonic() + timeout
+    tmp = tempfile.TemporaryDirectory(prefix="bbm-codex-")
+    proc = None
+    try:
+        try:
+            proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                                    cwd=tmp.name, env=_env(bin_path))
+        except OSError as e:
+            raise CodexError(f"codex could not start: {e}")
+        q: queue.Queue = queue.Queue()
+
+        def _reader(stdout=proc.stdout):
+            try:
+                for line in stdout:
+                    q.put(line)
+            except (OSError, ValueError):
+                pass
+            q.put(_EOF)
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+        _send(proc, {"id": 1, "method": "initialize",
+                     "params": {"clientInfo": {"name": "biangbiangmian3000", "version": "1"}}})
+        tid = None
+        deltas = 0
+        last_usage: dict = {}
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CodexError(f"codex timed out after {timeout:.0f}s")
+            try:
+                line = q.get(timeout=remaining)
+            except queue.Empty:
+                raise CodexError(f"codex timed out after {timeout:.0f}s")
+            if line is _EOF:
+                raise CodexError("codex exited before the turn completed")
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if "id" in msg and "method" in msg:
+                raise CodexError(f"codex server request refused: {msg.get('method')}")
+            if "error" in msg and "method" not in msg:
+                err = msg["error"]
+                detail = err.get("message") if isinstance(err, dict) else err
+                raise CodexError(f"codex JSON-RPC error: {detail}")
+            method = msg.get("method")
+            params = msg.get("params") or {}
+            if method is None:
+                rid = msg.get("id")
+                result = msg.get("result") or {}
+                if rid == 1:
+                    _send(proc, {"method": "initialized"})
+                    _send(proc, {"id": 2, "method": "thread/start", "params": {
+                        "model": model, "ephemeral": True, "sandbox": "read-only",
+                        "approvalPolicy": "never", "cwd": tmp.name}})
+                elif rid == 2:
+                    tid = (result.get("thread") or {}).get("id")
+                    if not tid:
+                        raise CodexError("codex thread/start returned no thread id")
+                    _send(proc, {"id": 3, "method": "turn/start", "params": {
+                        "threadId": tid, "input": [{"type": "text", "text": prompt}],
+                        "effort": effort}})
+                continue
+            if method == "item/agentMessage/delta":
+                d = params.get("delta")
+                if isinstance(d, str) and d:
+                    deltas += 1
+                    yield d
+            elif method == "thread/tokenUsage/updated":
+                last = (params.get("tokenUsage") or {}).get("last")
+                if isinstance(last, dict):
+                    last_usage = last
+            elif method == "error":
+                err = params.get("error") or {}
+                if not params.get("willRetry"):
+                    raise CodexError(f"codex error: {err.get('message') if isinstance(err, dict) else err}")
+            elif method == "turn/completed":
+                turn = params.get("turn") or {}
+                if turn.get("status") != "completed":
+                    e = turn.get("error")
+                    detail = e.get("message") if isinstance(e, dict) else e
+                    raise CodexError(f"codex turn {turn.get('status')}: {detail}")
+                break
+        if deltas == 0:
+            raise CodexError("codex returned no text")
+        if usage_out is not None:
+            usage_out.update({
+                "input_tokens": int(last_usage.get("inputTokens") or 0),
+                "cached_input_tokens": int(last_usage.get("cachedInputTokens") or 0),
+                "output_tokens": int(last_usage.get("outputTokens") or 0),
+            })
+    finally:
+        if proc is not None:
+            try:
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        try:
+            tmp.cleanup()
+        except OSError:
+            pass
 
 
 def login_status() -> dict:

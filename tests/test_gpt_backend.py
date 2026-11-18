@@ -99,9 +99,10 @@ def test_subscription_ignores_non_gpt(monkeypatch):
 
 def test_stream_subscription(monkeypatch):
     database.set_app_setting("gpt_backend", "subscription")
-    monkeypatch.setattr(codex_sub, "complete",
-                        lambda *a, **k: ("from codex", {"input_tokens": 1, "cached_input_tokens": 0,
-                                                        "output_tokens": 1}))
+    def fake_stream(model, messages, thinking=False, timeout=300, usage_out=None):
+        yield "from codex"
+
+    monkeypatch.setattr(codex_sub, "stream", fake_stream)
     assert list(ai._stream_api("gpt-6-luna", MSGS, 100, "test")) == ["from codex"]
 
 
