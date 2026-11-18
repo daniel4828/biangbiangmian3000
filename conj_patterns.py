@@ -906,7 +906,7 @@ def pattern_status(lang: str, key: str, mode: str, states: dict, stats: dict,
 # ---------------------------------------------------------------------------
 
 def _word_pattern_keys(word_zh: str, cfg: dict, w_tense: dict, w_person: dict,
-                       cache: dict) -> frozenset:
+                       cache: dict, w_imp: dict | None = None) -> frozenset:
     """Pattern keys the verb card `word_zh` can produce in a story: the same
     option set as verb_slots.assign_slots (enabled slots with weight > 0; form
     cards only their fixed tense). Empty for any non-verb. Cached per word."""
@@ -918,15 +918,17 @@ def _word_pattern_keys(word_zh: str, cfg: dict, w_tense: dict, w_person: dict,
         if parsed:
             lemma, tense = parsed
             for person in verb_slots.form_card_persons(lemma, tense, LANG):
-                if w_person.get(person, 1.0) > 0:
+                wp = w_imp if (w_imp and tense in verb_slots.IMPERATIVE_TENSES) else w_person
+                if wp.get(person, 1.0) > 0:
                     pat = pattern_for(lemma, tense, person)
                     if pat:
                         keys.add(pat["key"])
         elif verb_slots.is_slottable_verb(word_zh, LANG):
             lemma = word_zh.strip().lower()
             for tense in cfg["tenses"]:
+                wp = w_imp if (w_imp and tense in verb_slots.IMPERATIVE_TENSES) else w_person
                 for person in cfg["persons"]:
-                    if w_tense.get(tense, 1.0) * w_person.get(person, 1.0) <= 0:
+                    if w_tense.get(tense, 1.0) * wp.get(person, 1.0) <= 0:
                         continue
                     if verb_slots.target_form(lemma, tense, person, LANG) is None:
                         continue
@@ -973,7 +975,8 @@ def ensure_pullforward(lang: str = LANG) -> int:
     cache: dict = {}
 
     def keys_of(word_zh):
-        return _word_pattern_keys(word_zh, cfg, w_tense, w_person, cache)
+        return _word_pattern_keys(word_zh, cfg, w_tense, w_person, cache,
+                                  wts.get("imp_persons"))
 
     cards = ctx["cards"]
     by_id = {c["id"]: c for c in cards}
