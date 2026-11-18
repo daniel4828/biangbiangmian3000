@@ -932,6 +932,18 @@ CREATE TABLE IF NOT EXISTS dict_queries (
 );
 CREATE INDEX IF NOT EXISTS idx_dict_queries_created ON dict_queries(created_at DESC);
 
+-- Mac quick panel chat history (#1584): the client owns the turns and PUTs the
+-- whole conversation after every successful send; the server only stores it.
+CREATE TABLE IF NOT EXISTS quick_chats (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    lang       TEXT NOT NULL DEFAULT 'zh',
+    title      TEXT NOT NULL DEFAULT '',
+    turns_json TEXT NOT NULL,                -- JSON array of turns
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_quick_chats_updated ON quick_chats(updated_at DESC);
+
 -- ---------------------------------------------------------------------------
 -- Sentence-block translation cache (#1177): the read-along full-screen "译"
 -- toggle asks routes/knowledge.py's translate_sentences() to gloss every

@@ -12,6 +12,7 @@ from .knowledge import *
 from .search import *
 from .prompts import *
 from .dictionary import *
+from .quick_chats import *
 from .books import *
 from .knowledge_chat import *
 from .mailbox import *
