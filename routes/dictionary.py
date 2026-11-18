@@ -213,6 +213,51 @@ def _store(query: str, lang: str, replace_id: int | None, result: dict, model_us
     return _row_to_result(database.get_dict_query(row_id))
 
 
+class QuickChatSave(BaseModel):
+    id: int | None = None
+    lang: str = "zh"
+    title: str = ""
+    turns: list
+
+
+@router.get("/api/quick-chats")
+def quick_chats_list(limit: int = 50):
+    return {"items": database.list_quick_chats(limit=limit)}
+
+
+@router.get("/api/quick-chats/{chat_id}")
+def quick_chat_get(chat_id: int):
+    chat = database.get_quick_chat(chat_id)
+    if chat is None:
+        raise HTTPException(404, "not found")
+    return chat
+
+
+@router.put("/api/quick-chats")
+def quick_chat_save(body: QuickChatSave):
+    """Whole-conversation upsert for the /quick history (#1584)."""
+    if not body.turns:
+        raise HTTPException(400, "turns must be a non-empty list")
+    if body.lang not in ("zh", "fr", "es"):
+        raise HTTPException(400, f"language {body.lang!r} is not supported (zh/fr/es only)")
+    turns = body.turns[-200:]
+    title = (body.title or "").strip()
+    if not title:
+        first = turns[0].get("user") if isinstance(turns[0], dict) else None
+        title = (first or "").strip()[:80]
+    saved = database.save_quick_chat(body.id, body.lang, title, turns)
+    if saved is None:
+        raise HTTPException(404, "not found")
+    return saved
+
+
+@router.delete("/api/quick-chats/{chat_id}")
+def quick_chat_delete(chat_id: int):
+    if not database.delete_quick_chat(chat_id):
+        raise HTTPException(404, "not found")
+    return {"ok": True}
+
+
 @router.get("/api/dict/history")
 def history(q: str | None = None, limit: int = 50):
     return {"items": database.list_dict_queries(q=q, limit=limit)}

@@ -984,7 +984,8 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 - **位置和大小由 Daniel 在菜单「Fenster…」里自己改（#1534）**：`PanelSettings`（`QuickPanel.swift`）读 `UserDefaults` 的 `panelBottomPercent`/`panelTopPercent`/`panelWidth`/`panelMaxHeight`，空 = 默认，下次打开生效。拖动上边缘同样写 `panelWidth`/`panelMaxHeight`。**他要换数值时提醒他用这个菜单，不必改代码**
 - `/quick`（`static/quick.html`，不加载 `app.js`）是小型多轮聊天：输入框固定在底部、回答在上方、面板向上生长；语言 zh/es/fr 存 `localStorage.quickLang`；「Neu」清空对话
 - **每次打开都是新对话（#1543）**：`show()` 先调 `window.quickNewChat()` 清空、回调里再显示（避免旧对话闪一下）；菜单勾选项「Beim Öffnen neuer Chat」（`UserDefaults` `newChatOnOpen`，默认开）可关掉
-- 历史只存在前端；`POST /api/dict/chat` 无状态，客户端每轮发整段历史（服务端只取最后 20 条），助手那一轮的 content 用返回的 `history_text`
+- **聊天历史（#1584）**：每轮成功后前端把整段对话 PUT 到 `quick_chats` 表（前端持有 turns、服务器只存）；顶栏「Verlauf」/⌘Y 打开列表，点开恢复并可继续聊；恢复时不重跑加词（只显示 `★ 词`）；保存失败只在 `#err` 提示，不打断聊天
+- `POST /api/dict/chat` 本身仍无状态，客户端每轮发整段历史（服务端只取最后 20 条），助手那一轮的 content 用返回的 `history_text`
 - `ai.dictionary_chat()` 不用 system 角色：规则 + 转写全放在唯一一条 user 消息里；输出 JSON `{reply, entry|null, add[]}`，`entry` 与 /lookup 的词典契约完全一致，复用同一个校验函数
 - `add` 只在 Daniel 明确说「添加/speicher」时才填；页面对每个词自动走 `addWordViaAi(word,'list')`（仍是唯一加词入口，#643）
 - **一词一条目**：一个词不许在结果里变成两个可加入的选项。提示词要求只给一个 group/option，`de` 紧凑列全部义项，可选数组 `senses[]`（每义项 de + 例句）；前端 `_dictOption` 渲染编号义项列表
@@ -1278,6 +1279,9 @@ GET    /api/dict/history[?q=&limit=]                 → 历史列表（不含 r
 GET    /api/dict/history/{id} ；DELETE /api/dict/history/{id}  → 单条 / 删除；不存在均 404（不假装成功）
 POST   /api/dict/chat                                → 无状态词典聊天（#1510）：body {messages:[{role,content}], lang, model?}（只保留最后 20 条，最后一条必须是非空 user，否则 400）
                                                        → {reply, entry|null, add[], model, id|null, history_text}；entry 非空时按 /lookup 同样入 dict_queries；解析失败 500 且不写库
+GET    /api/quick-chats[?limit=] ；GET /api/quick-chats/{id}  → 快捷窗口聊天历史（#1584）：列表（无 turns，带 turn_count）/ 单个完整对话；不存在 404
+PUT    /api/quick-chats                              → body {id?, lang, title?, turns[]}：整段对话 upsert，返回 {id, updated_at}；turns 空 / lang 非 zh|fr|es → 400；id 不存在 → 404；title 留空取首轮 user 前 80 字；只留最后 200 轮
+DELETE /api/quick-chats/{id}                         → {ok:true}；不存在 404
 GET    /quick                                        → Mac 快捷窗口页（#1510，不加载 app.js）
 POST /api/words/{id}/to-day                          → 词条详情页 → Today / → Tomorrow：body {day, confirm?}；只在 ★ List → 直接提升；已在学 → 先返回 needs_confirmation，confirm=true 才重置为新卡（同 #675/#888）
 POST /api/add-word-ai                                → 界面内添加生词（#627）；body {word_zh, day?:today|tomorrow|list, lang?:zh|fr}（#636、#677；#715 起界面一律传 list，接口三值仍有效；lang 见 #726，已存在的词按 entries.lang 落点、不听该参数）；新词返回 {job_id}，已有词直接返回 {status}。**全应用唯一的加词入口**（#643）：顶栏 ＋、播客生词表格、复习界面长按菜单都走它

@@ -29,13 +29,27 @@
   }
   .top { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; flex: none; }
   .langs { display: flex; gap: .3rem; }
-  .langs button, button#new {
+  .langs button, button#new, button#hist {
     padding: .25rem .7rem; font: inherit; font-size: .82rem; font-weight: 600;
     color: var(--muted); background: var(--bg); border: 1px solid var(--line);
     border-radius: 8px; cursor: pointer;
   }
   .langs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button#new { margin-left: auto; }
+  button#hist { margin-left: auto; }
+  #history { display: none; }
+  #history .empty { color: var(--muted); padding: .6rem .2rem; }
+  #history .row {
+    display: flex; align-items: center; gap: .5rem; padding: .4rem .3rem;
+    border-bottom: 1px solid var(--line); cursor: pointer;
+  }
+  #history .row:hover { background: var(--bubble); }
+  #history .row .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #history .row .m { flex: none; font-size: .75rem; color: var(--muted); }
+  #history .row button.del {
+    flex: none; border: none; background: none; color: var(--muted); cursor: pointer;
+    font: inherit; font-size: .85rem; padding: 0 .3rem;
+  }
+  #history .row button.del:hover { color: var(--err); }
   .kbd-hint { font-size: .72rem; color: var(--muted); }
   textarea#input {
     display: block; width: 100%; padding: .55rem .7rem; font: inherit; font-size: 1rem;
@@ -76,10 +90,11 @@
 <div id="main">
   <div class="top">
     <div class="langs" id="langs"></div>
+    <button type="button" id="hist">Verlauf</button>
     <button type="button" id="new">Neu</button>
-    <span class="kbd-hint" title="Tab: Sprache wechseln · Shift+Tab: neuer Chat">⇥ Sprache · ⇧⇥ Neu · ⌥⇧K</span>
+    <span class="kbd-hint" title="Tab: Sprache wechseln · Shift+Tab: neuer Chat">⇥ Sprache · ⇧⇥ Neu · ⌘Y Verlauf · ⌥⇧K</span>
   </div>
-  <div id="messages"><div id="log"></div></div>
+  <div id="messages"><div id="log"></div><div id="history"></div></div>
   <div id="err"></div>
   <textarea id="input" rows="1" placeholder="Wort, Satz oder Frage…" autofocus
             autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
@@ -96,6 +111,7 @@
   const errEl = document.getElementById('err');
   const scrollerEl = document.getElementById('messages');
   const msgsEl = document.getElementById('log');
+  const histEl = document.getElementById('history');
   const mainEl = document.getElementById('main');
   const langsEl = document.getElementById('langs');
   const LANG_LABELS = { zh: '中文', es: 'Español', fr: 'Français' };
@@ -103,7 +119,10 @@
   let lang = 'zh';
   try { lang = localStorage.getItem('quickLang') || 'zh'; } catch (e) { /* storage unavailable */ }
   let history = [];  // [{role, content}]
+  let turns = [];    // finished turns, stored server-side as the chat history (#1584)
+  let chatId = null; // quick_chats id of this conversation (null = not saved yet)
   let busy = false;
+  let historyOpen = false;
 
   const bridge = () => (window.webkit && window.webkit.messageHandlers
                         && window.webkit.messageHandlers.quick) || null;
@@ -124,7 +143,8 @@
     const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
               + parseFloat(ms.paddingTop) + parseFloat(ms.paddingBottom);
     const chrome = outerHeight(mainEl.querySelector('.top')) + outerHeight(errEl) + outerHeight(inputEl);
-    post({ type: 'height', value: Math.ceil(pad + chrome + msgsEl.getBoundingClientRect().height) });
+    const body = historyOpen ? histEl : msgsEl;
+    post({ type: 'height', value: Math.ceil(pad + chrome + body.getBoundingClientRect().height) });
   }
   // The newest question stays at the top of the scroller while its answer grows
   // below it, so a long answer is read from its start (not scrolled to its end).
@@ -138,7 +158,9 @@
       scrollerEl.scrollTop = scrollerEl.scrollHeight;
     }
   }
-  new ResizeObserver(() => { reportHeight(); stickToBottom(); }).observe(msgsEl);
+  const resizeObs = new ResizeObserver(() => { reportHeight(); if (!historyOpen) stickToBottom(); });
+  resizeObs.observe(msgsEl);
+  resizeObs.observe(histEl);
   window.addEventListener('resize', stickToBottom);
   if (bridge()) {
     document.body.classList.add('native');
@@ -221,9 +243,125 @@
     }, wlang);
   }
 
+  // One finished turn -> [user bubble, assistant block]. `live` = a fresh turn:
+  // start the add-word jobs; restored turns (live=false) only list what was added.
+  function renderTurn(turn, live) {
+    const userMsg = el('div', 'msg user');
+    userMsg.append(el('div', 'bubble', turn.user));
+    const done = el('div', 'msg assistant');
+    done.append(el('div', 'reply', turn.reply || ''));
+    if (turn.entry) {
+      const box = el('div', 'entry');
+      renderDictResult(box, { id: turn.entry_id, query: turn.user, lang: turn.lang, result: turn.entry },
+                       { addLang: turn.lang });
+      done.append(box);
+    }
+    if (Array.isArray(turn.add) && turn.add.length) {
+      const adds = el('div', 'adds');
+      done.append(adds);
+      for (const w of turn.add) {
+        if (live) addWordStatus(adds, w, turn.lang);
+        else adds.append(el('div', 'ok', `★ ${w}`));
+      }
+    }
+    return [userMsg, done];
+  }
+
+  // Persist the whole conversation; a failure must never interrupt the chat.
+  async function saveChat() {
+    try {
+      const res = await api('PUT', '/api/quick-chats', { id: chatId, lang, turns });
+      chatId = res.id;
+    } catch (e) {
+      errEl.textContent = 'Verlauf nicht gespeichert: ' + (e.message || e);
+    }
+  }
+
+  function closeHistory() {
+    historyOpen = false;
+    histEl.style.display = 'none';
+    msgsEl.style.display = '';
+    histEl.replaceChildren();
+    reportHeight();
+    stickToBottom();
+  }
+  async function openHistory() {
+    if (busy) return;
+    historyOpen = true;
+    msgsEl.style.display = 'none';
+    histEl.style.display = 'block';
+    histEl.replaceChildren(el('div', 'empty', '…'));
+    reportHeight();
+    try {
+      const res = await api('GET', '/api/quick-chats');
+      if (!historyOpen) return;
+      const items = res.items || [];
+      if (!items.length) {
+        histEl.replaceChildren(el('div', 'empty', 'Noch keine Chats'));
+      } else {
+        histEl.replaceChildren(...items.map(it => {
+          const row = el('div', 'row');
+          row.append(el('span', 't', it.title || '(ohne Titel)'),
+                     el('span', 'm', `${LANG_LABELS[it.lang] || it.lang} · ${(it.updated_at || '').slice(5, 16)}`));
+          const del = el('button', 'del', '✕');
+          del.type = 'button';
+          del.onclick = async e => {
+            e.stopPropagation();
+            try {
+              await api('DELETE', `/api/quick-chats/${it.id}`);
+              row.remove();
+              if (it.id === chatId) chatId = null;
+              if (!histEl.children.length) histEl.replaceChildren(el('div', 'empty', 'Noch keine Chats'));
+              reportHeight();
+            } catch (err) {
+              errEl.textContent = err.message || 'Fehler';
+            }
+          };
+          row.append(del);
+          row.onclick = () => restoreChat(it.id);
+          return row;
+        }));
+      }
+    } catch (e) {
+      histEl.replaceChildren(el('div', 'empty', 'Fehler: ' + (e.message || e)));
+    }
+    reportHeight();
+  }
+  async function restoreChat(id) {
+    if (busy) return;
+    try {
+      const chat = await api('GET', `/api/quick-chats/${id}`);
+      chatId = chat.id;
+      turns = Array.isArray(chat.turns) ? chat.turns : [];
+      history = turns.flatMap(t => [
+        { role: 'user', content: t.user },
+        { role: 'assistant', content: t.history_text || t.reply || '' },
+      ]);
+      if ([...langsEl.children].some(b => b.dataset.lang === chat.lang)) setLang(chat.lang);
+      msgsEl.replaceChildren();
+      anchorEl = null;
+      for (const t of turns) {
+        const [u, a] = renderTurn(t, false);
+        msgsEl.append(u, a);
+        anchorEl = u;
+      }
+      errEl.textContent = '';
+      closeHistory();
+      inputEl.focus();
+    } catch (e) {
+      errEl.textContent = e.message || 'Fehler';
+    }
+  }
+  function toggleHistory() {
+    if (historyOpen) closeHistory();
+    else openHistory();
+  }
+  document.getElementById('hist').onclick = toggleHistory;
+
   async function send() {
     const text = inputEl.value.trim();
     if (!text || busy) return;
+    if (historyOpen) closeHistory();
     busy = true;
     inputEl.disabled = true;
     errEl.textContent = '';
@@ -261,25 +399,19 @@
         messages: [...history, { role: 'user', content: text }],
         lang: turnLang,
       }, onPartial);
+      const turn = {
+        user: text, reply: data.reply || '', entry: data.entry || null,
+        entry_id: data.id || null, add: data.add || [],
+        history_text: data.history_text || data.reply || '', lang: turnLang,
+      };
       history.push({ role: 'user', content: text });
-      history.push({ role: 'assistant', content: data.history_text || data.reply || '' });
+      history.push({ role: 'assistant', content: turn.history_text });
+      turns.push(turn);
 
-      const done = el('div', 'msg assistant');
-      done.append(el('div', 'reply', data.reply || ''));
-      if (data.entry) {
-        const box = el('div', 'entry');
-        renderDictResult(box, { id: data.id, query: text, lang: turnLang, result: data.entry },
-                         { addLang: turnLang });
-        done.append(box);
-      }
-      if (Array.isArray(data.add) && data.add.length) {
-        const adds = el('div', 'adds');
-        done.append(adds);
-        for (const w of data.add) addWordStatus(adds, w, turnLang);
-      }
-      pending.replaceWith(done);
+      pending.replaceWith(renderTurn(turn, true)[1]);
       inputEl.value = '';
       autosize();
+      saveChat();
     } catch (e) {
       // Keep the input so he can resend; drop the optimistic bubbles.
       anchorEl = null;
@@ -310,6 +442,9 @@
   function newChat() {
     if (busy) return;
     history = [];
+    turns = [];
+    chatId = null;
+    if (historyOpen) closeHistory();
     anchorEl = null;
     msgsEl.replaceChildren();
     errEl.textContent = '';
@@ -322,7 +457,13 @@
   window.quickNewChat = newChat;
 
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') post({ type: 'close' });
+    if (e.key === 'Escape') {
+      if (historyOpen) closeHistory();
+      else post({ type: 'close' });
+    } else if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'y') {
+      e.preventDefault();
+      toggleHistory();
+    }
   });
 
   function focusInput() {
