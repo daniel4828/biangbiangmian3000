@@ -374,6 +374,8 @@
     msgsEl.append(userMsg, pending);
     anchorEl = userMsg;
     scrollToNewest();
+    inputEl.value = '';
+    autosize();
 
     // Streamed (#1524): the reply text and a pending entry paint as they arrive;
     // the final render below replaces them with the validated, stored answer.
@@ -409,11 +411,11 @@
       turns.push(turn);
 
       pending.replaceWith(renderTurn(turn, true)[1]);
-      inputEl.value = '';
-      autosize();
       saveChat();
     } catch (e) {
-      // Keep the input so he can resend; drop the optimistic bubbles.
+      // Put the text back so he can resend; drop the optimistic bubbles.
+      inputEl.value = text;
+      autosize();
       anchorEl = null;
       userMsg.remove();
       pending.remove();

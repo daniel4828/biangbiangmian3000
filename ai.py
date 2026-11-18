@@ -234,6 +234,12 @@ def _call_codex(model: str, messages: list, max_tokens: int, purpose: str,
         logger.warning("[codex:%s] subscription call failed (%s) — falling back to API (purpose=%s)",
                        model, e, purpose)
         return None
+    _log_codex_call(model, messages, purpose, usage, text, t0)
+    return text
+
+
+def _log_codex_call(model: str, messages: list, purpose: str, usage: dict,
+                    text: str, t0: float) -> None:
     logger.info("[codex:%s] subscription call done in %.1fs — in=%d out=%d purpose=%s",
                 model, time.time() - t0, usage.get("input_tokens", 0),
                 usage.get("output_tokens", 0), purpose)
@@ -246,7 +252,6 @@ def _call_codex(model: str, messages: list, max_tokens: int, purpose: str,
         prompt=_extract_prompt(messages),
         response=text,
     )
-    return text
 
 
 def _call_api(model: str, messages: list, max_tokens: int, purpose: str,
@@ -387,10 +392,22 @@ def _stream_api(model: str, messages: list, max_tokens: int, purpose: str,
     If the consumer stops early (or the provider raises) nothing is logged —
     only complete answers are accounted. Caller concatenates the deltas.
     """
-    codex_text = _call_codex(model, messages, max_tokens, purpose, thinking)
-    if codex_text is not None:
-        yield codex_text  # kein Streaming über Codex: ganze Antwort in einem Delta
-        return
+    if model.startswith("gpt-") and gpt_backend() == "subscription":
+        t_codex = time.time()
+        usage: dict = {}
+        codex_parts: list[str] = []
+        try:
+            for delta in codex_sub.stream(model, messages, thinking, usage_out=usage):
+                codex_parts.append(delta)
+                yield delta
+        except (codex_sub.CodexError, ValueError) as e:
+            if codex_parts:
+                raise  # Antwort schon halb ausgeliefert: nicht mit der API zusammenflicken
+            logger.warning("[codex:%s] subscription stream failed (%s) — falling back to API (purpose=%s)",
+                           model, e, purpose)
+        else:
+            _log_codex_call(model, messages, purpose, usage, "".join(codex_parts), t_codex)
+            return
     t0 = time.time()
     prompt_text = _extract_prompt(messages)
     parts: list[str] = []
