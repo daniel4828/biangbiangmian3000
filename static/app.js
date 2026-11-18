@@ -5055,7 +5055,33 @@ function renderSettings() {
 }
 
 // ── GPT backend: API or Codex subscription (#1582) ──────────────────────────
+// #1586: with the subscription backend, gpt-* options must not show API prices.
+let _gptBackend = 'api';
+function _applyGptBackendLabels(root) {
+  (root || document).querySelectorAll('option').forEach(opt => {
+    if (!String(opt.value).startsWith('gpt-')) return;
+    if (!opt.dataset.apiLabel) opt.dataset.apiLabel = opt.textContent;
+    if (_gptBackend === 'subscription') {
+      opt.textContent = opt.dataset.apiLabel.split(' — ')[0] + ' — Codex subscription';
+    } else {
+      opt.textContent = opt.dataset.apiLabel;
+    }
+  });
+}
+// Dynamically rendered dropdowns: relabel right before they open.
+['focusin', 'mousedown'].forEach(ev => document.addEventListener(ev, e => {
+  const sel = e.target && e.target.closest ? e.target.closest('select') : null;
+  if (sel) _applyGptBackendLabels(sel);
+}, true));
+// Startup: fetch the current backend once (fire-and-forget).
+api('GET', '/api/ai-backend').then(d => {
+  _gptBackend = (d && d.gpt_backend) || 'api';
+  _applyGptBackendLabels();
+}).catch(e => console.warn('ai-backend load failed', e));
+
 function _renderAiBackend(data, errMsg) {
+  _gptBackend = data.gpt_backend || 'api';
+  _applyGptBackendLabels();
   const el = document.getElementById('ai-backend-body');
   if (!el) return;
   const codex = data.codex || {};
