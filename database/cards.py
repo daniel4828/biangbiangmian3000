@@ -586,6 +586,28 @@ def _count_new_introduced_today_multi(conn, deck_ids: list[int], category: str, 
     return row[0]
 
 
+def parent_new_remaining(parent_id: int, deck_ids: list[int], category: str) -> int | None:
+    """New cards a parent deck still allows today for one category (#1595).
+
+    Same cap the review queue applies (count_due_multi / count_due_by_category
+    with root_deck_id): the parent's new_per_day minus new cards introduced
+    today across its leaves. Without it the home-page pill of a language root
+    summed every dated leaf's own limit (3 dates x 50 = 150) although the
+    queue only ever hands out 50. None = no cap (single leaf / no preset).
+    """
+    if len(deck_ids) <= 1:
+        return None
+    preset = get_preset_for_deck(parent_id, category)
+    if not preset:
+        return None
+    conn = get_db()
+    try:
+        done = _count_new_introduced_today_multi(conn, deck_ids, category, anki_today().isoformat())
+    finally:
+        conn.close()
+    return max(0, preset["new_per_day"] - done)
+
+
 def _count_new_introduced_today(conn, deck_id: int, category: str, today: str) -> int:
     """Cards whose very first review log entry is today (introduced as new today)."""
     return conn.execute(

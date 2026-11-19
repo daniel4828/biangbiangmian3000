@@ -2009,6 +2009,9 @@ function _findDeckInTree(nodes, id) {
 
 // Aggregate counts for one category from all deep leaves
 function aggregateCounts(deck, category) {
+  // Server-side per-category counts already apply the parent's new/day cap (#1595).
+  const sc = deck.cat_counts && deck.cat_counts[category];
+  if (sc) return { new: sc.new || 0, learning: sc.learning || 0, review: sc.review || 0, learning_soon: sc.learning_soon || 0 };
   const leaves = getDeepCategoryLeaves(deck).filter(l => l.category === category);
   const agg = { new: 0, learning: 0, review: 0, learning_soon: 0 };
   for (const l of leaves) for (const k of ['new', 'learning', 'review', 'learning_soon']) agg[k] += (l.counts || {})[k] || 0;
