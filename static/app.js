@@ -11810,6 +11810,7 @@ document.addEventListener('click', (e) => {
 
 function loadPresetFields(preset) {
   currentPresetId = preset.id;
+  _optLoadedPreset = preset;
   document.getElementById('opt-new-per-day').value     = preset.new_per_day;
   document.getElementById('opt-reviews-per-day').value = preset.reviews_per_day;
   document.getElementById('opt-learn-steps').value     = preset.learning_steps;
@@ -11918,12 +11919,56 @@ function renderPresetSelect(selectedId) {
 }
 
 // Category mode shows only the one category's override block (#1372).
+// Category dialog (#1597): one field per setting. The preset fields at the
+// top show the value that actually applies to this category (preset value
+// with this category's override on top) and the override block is hidden.
+// Before, both were on screen and the lower "Category Overrides → New / day"
+// silently beat the upper one: Daniel set 50 at the top and still got 150+.
+// On save, a value that differs from the preset's own goes into this
+// category's override, so other categories sharing the preset are untouched.
+const _CAT_TOP_INPUTS = {
+  new_per_day: 'opt-new-per-day',
+  reviews_per_day: 'opt-reviews-per-day',
+  learning_steps: 'opt-learn-steps',
+  graduating_interval: 'opt-grad-int',
+  easy_interval: 'opt-easy-int',
+  relearning_steps: 'opt-relearn-steps',
+};
+let _optLoadedPreset = null;
+let _optCatBase = null;
+
 function _showOnlyCategoryOverride(cat) {
+  _optCatBase = null;
   for (const details of document.querySelectorAll('.cat-override-details')) {
     const show = !cat || details.dataset.cat === cat;
-    details.style.display = show ? '' : 'none';
-    if (cat && show) details.open = true;
+    details.style.display = (show && !cat) ? '' : 'none';
   }
+  const group = document.getElementById('cat-overrides-container')?.closest('.opt-group');
+  if (group) group.style.display = cat ? 'none' : '';
+  if (!cat || !_optLoadedPreset) return;
+  const ov = (_optLoadedPreset.category_overrides || {})[cat] || {};
+  _optCatBase = {};
+  for (const [field, id] of Object.entries(_CAT_TOP_INPUTS)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    _optCatBase[field] = _optLoadedPreset[field];
+    if (ov[field] != null) el.value = ov[field];
+  }
+}
+
+// Split the top fields into preset values (unchanged) + this category's override.
+function _splitCategoryFields(schedFields) {
+  const override = {};
+  if (!_optCatBase) return override;
+  for (const field of Object.keys(_CAT_TOP_INPUTS)) {
+    if (!(field in schedFields)) continue;
+    const val = schedFields[field];
+    const base = _optCatBase[field];
+    // null clears the field: the override endpoint merges, it does not replace.
+    override[field] = String(val ?? '').trim() !== String(base ?? '').trim() ? val : null;
+    schedFields[field] = base;
+  }
+  return override;
 }
 
 function _applyOptionsMode() {
@@ -12117,11 +12162,10 @@ async function saveOptions() {
   try {
     if (optCategory) {
       const presetId = currentPresetId;
+      const catOverride = _splitCategoryFields(schedFields);
       await api('PUT', `/api/presets/${presetId}`, schedFields);
-      // Only this category's override block is on screen
-      const catOverrides = _collectCategoryOverrides();
-      if (catOverrides[optCategory]) {
-        await api('PUT', `/api/presets/${presetId}/categories/${optCategory}`, catOverrides[optCategory]);
+      if (Object.values(catOverride).some(v => v != null)) {
+        await api('PUT', `/api/presets/${presetId}/categories/${optCategory}`, catOverride);
       } else {
         await api('DELETE', `/api/presets/${presetId}/categories/${optCategory}`);
       }
