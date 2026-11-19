@@ -56,7 +56,7 @@ def test_gpt_56_models_whitelisted():
 
 def test_gpt_6_models_whitelisted_and_priced():
     from database.stats import _lookup_pricing
-    for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6-astra"):
+    for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra"):
         assert model in ALLOWED_MODELS
         assert _lookup_pricing(model) is not None
 
