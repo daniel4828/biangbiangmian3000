@@ -137,6 +137,27 @@ def get_category_binding(lang: str, category: str) -> int | None:
     return row["preset_id"] if row else None
 
 
+def get_bound_new_per_day(lang: str, category: str) -> int | None:
+    """Effective new_per_day of the preset bound to (lang, category), including
+    that preset's category override (#1599). None = no binding."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT p.new_per_day AS base, o.new_per_day AS ov
+               FROM category_presets cp
+               JOIN deck_presets p ON p.id = cp.preset_id
+               LEFT JOIN preset_category_overrides o
+                      ON o.preset_id = p.id AND o.category = cp.category
+               WHERE cp.lang = ? AND cp.category = ?""",
+            (lang, category),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return row["ov"] if row["ov"] is not None else row["base"]
+
+
 def set_category_preset(lang: str, category: str, preset_id: int | None) -> None:
     """Bind (lang, category) to a preset; preset_id=None removes the binding."""
     if category not in _VALID_BINDING_CATEGORIES:

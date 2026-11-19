@@ -2371,13 +2371,20 @@ function _homeLanguageRows(allDeck, regularDecks) {
 
   // ── One deck per language, expandable to that language's decks ──
   for (const g of groups) {
+    // Server numbers for this language with the new/day caps applied (#1599).
+    const langCats = (allDeck.lang_cat_counts || {})[g.lang] || null;
     const c = _sumCounts(g.decks);
+    if (langCats) {
+      for (const k of ['new', 'learning', 'review', 'learning_future', 'learning_soon'])
+        c[k] = Object.values(langCats).reduce((s, cc) => s + (cc[k] || 0), 0);
+    }
     const open = expanded.has(g.lang);
     const label = _HOME_LANG_LABELS[g.lang] || _LANG_TAB_LABELS[g.lang] || g.lang;
     const enabled = {};
     for (const cat of ['reading', 'listening', 'creating'])
       enabled[`${cat}_enabled`] = flatten(g.decks).some(d => d[`${cat}_enabled`]) ? 1 : 0;
-    const pseudo = { ...allDeck, ...enabled, name: label.replace(/^\S+\s/, ''), children: g.decks };
+    const pseudo = { ...allDeck, ...enabled, name: label.replace(/^\S+\s/, ''), children: g.decks,
+                     cat_counts: langCats };
     // Pills act on the All root scoped to this language, exactly what
     // the All row under this language's tab did before #1390.
     const setLang = s => s.replaceAll('event.stopPropagation();', `event.stopPropagation();_setLangQuiet('${g.lang}');`);
