@@ -4883,7 +4883,7 @@ function renderSettings() {
   pages.shortcuts = { title: 'Shortcuts', icon: '⌨️', desc: 'All keyboard shortcuts', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Keyboard shortcuts</h2>
-      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed, as is ⌥⇧D (delete card during review).</p>
+      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed, as are ⌥⇧D (delete card) and ⌘S (suspend card) during review.</p>
       ${msg}
       ${groups}
       <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
@@ -12992,7 +12992,7 @@ function loadCard(c, counts) {
   closeStoryModal();
   document.getElementById('review-card-menu').style.display = 'none';
   const reviewSuspendBtn = document.getElementById('review-suspend-btn');
-  if (reviewSuspendBtn) reviewSuspendBtn.textContent = (c.state === 'suspended') ? 'Unsuspend' : 'Suspend';
+  if (reviewSuspendBtn) reviewSuspendBtn.textContent = (c.state === 'suspended') ? 'Unsuspend (⌘S)' : 'Suspend (⌘S)';
 
   // Preload full word details for the back side (local DB — near-instant)
   fetch(`/api/word/${c.word_id}`)
@@ -20491,6 +20491,18 @@ document.addEventListener('keydown', async e => {
       reviewCardAction('delete');
     }
     return;
+  }
+
+  // Cmd+S (Ctrl+S) suspends the current review card (#1603), same as the
+  // card menu's "Suspend". Only in review, so ⌘S elsewhere (e.g. the prompt
+  // editor's save, which handles it on its own overlay) is untouched.
+  if (e.code === 'KeyS' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+    const _rv = document.getElementById('view-review');
+    if (!inInput && _rv && _rv.style.display !== 'none' && !_hasOpenModal()) {
+      e.preventDefault();
+      reviewCardAction('suspend');
+      return;
+    }
   }
 
   // Enter in word-detail → back to review (if opened from review)
