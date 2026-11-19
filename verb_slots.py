@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 # Fallback for the auxiliary of the perfect tenses if the lexicon lacks haber.
 _HABER_PRES = {"1s": "he", "2s": "has", "3s": "ha", "1p": "hemos", "2p": "habéis", "3p": "han"}
+# Fallback for the auxiliary of the Presente progresivo (#1606).
+_ESTAR_PRES = {"1s": "estoy", "2s": "estás", "3s": "está", "1p": "estamos", "2p": "estáis", "3p": "están"}
 
 _TENSE_EN = {
     "ind_pres": "Presente (present)",
@@ -45,6 +47,7 @@ _TENSE_EN = {
     "ind_fut": "Futuro (future)",
     "ind_cond": "Condicional (conditional)",
     "perf": "Pretérito perfecto (present perfect)",
+    "prog": "Presente progresivo (estar + gerund, an action in progress right now)",
     "subj_pres": "Presente de subjuntivo (present subjunctive — the sentence needs a "
                  "trigger such as 'que', 'ojalá', 'para que')",
     "subj_impf": "Imperfecto de subjuntivo (imperfect subjunctive, -ra form — needs a "
@@ -234,6 +237,10 @@ def target_form(lemma: str, tense: str, person: str, lang: str) -> str | None:
             aux = lexicon.form_for("haber", "ind_pres", person, lang) or _HABER_PRES.get(person)
             part = lexicon.form_for(lemma, "part", "", lang)
             form = f"{aux} {part}" if aux and part else None
+        elif tense == "prog":
+            aux = lexicon.form_for("estar", "ind_pres", person, lang) or _ESTAR_PRES.get(person)
+            ger = lexicon.form_for(lemma, "ger", "", lang)
+            form = f"{aux} {ger}" if aux and ger else None
         else:
             form = lexicon.form_for(lemma, tense, person, lang)
         if not form:
@@ -260,6 +267,8 @@ _TENSE_CONTEXT_ES = {
     "perf": "a past action within a time frame that still includes now, or life "
             "experience — include a marker such as hoy, esta mañana, esta semana, "
             "este año, ya, todavía no, nunca, alguna vez",
+    "prog": "an action in progress at this very moment — include a marker such as "
+            "ahora mismo, en este momento, ahora, ¿qué estás haciendo?",
     "ind_fut": "a future event — include a marker such as mañana, el año que viene, pronto",
     "ind_cond": "a hypothetical or polite wish — e.g. with si…, me gustaría, en tu lugar",
     "subj_pres": "a subjunctive trigger such as quiero que, ojalá, para que, es importante que",
@@ -285,6 +294,8 @@ _TENSE_CUE_DE = {
             "use German Perfekt and keep/add a present-related marker (heute, heute "
             "Morgen, diese Woche, dieses Jahr, schon, noch nie, noch nicht, schon "
             "einmal …) so it never reads as a finished past point like 'gestern'",
+    "prog": "an action in progress right now: the German must contain gerade / im Moment / "
+            "gerade dabei … so it never reads as a habit",
     "ind_fut": "Futur with werden plus a future marker (morgen, nächstes Jahr, bald …)",
     "ind_cond": "Konjunktiv II with würde / hätte / wäre",
     "subj_pres": "keep the trigger clearly visible (dass, damit, hoffentlich, es ist wichtig, dass …)",
@@ -1186,6 +1197,8 @@ def tense_code_for_label(label) -> str | None:
         s = _norm_label(label)
         if not s or "pluscuamperfecto" in s or "anterior" in s or "compuesto" in s:
             return None
+        if "progresivo" in s or "continuo" in s:
+            return "prog"
         perfecto = re.search(r"\bperfecto\b", s) is not None  # not "imperfecto"
         if "subjuntivo" in s:
             if perfecto or "futuro" in s:
@@ -1245,6 +1258,8 @@ def tense_is_irregular(lemma: str, tense: str, lang: str) -> bool:
             return bool(irregular_persons(lemma, tense, lang))
         if tense == "perf":
             return bool(irregular_persons(lemma, "part", lang))
+        if tense == "prog":  # estar + gerund: only the gerund can be irregular
+            return bool(irregular_persons(lemma, "ger", lang))
         base = _DERIVED_TENSE.get(tense, tense)
         return base in irregular_tenses(lemma, lang)
     except Exception:
@@ -1305,6 +1320,8 @@ def form_is_irregular(lemma: str, tense_label, person_label, form, lang: str) ->
                     break
             if tense == "perf":  # haber + participle: only the participle can be irregular
                 verdict = _cell_regular(v.split()[-1], lemma, "part", "")
+            elif tense == "prog":  # estar + gerund: only the gerund can be irregular
+                verdict = _cell_regular(v.split()[-1], lemma, "ger", "")
             else:
                 verdict = _cell_regular(v, lemma, tense, person or "")
             if verdict is None:

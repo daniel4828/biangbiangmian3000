@@ -53,6 +53,7 @@ _TENSE_LABELS = {
     # Composed tense (haber + participle), not a lexicon code: only used by the
     # story verb-slot rotation (#1295, verb_slots.py).
     "perf": "Perfecto",
+    "prog": "Presente progresivo",
 }
 _PERSON_LABELS = {"1s": "1. Sg.", "2s": "2. Sg.", "3s": "3. Sg.",
                   "1p": "1. Pl.", "2p": "2. Pl.", "3p": "3. Pl."}

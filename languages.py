@@ -147,12 +147,12 @@ LANGUAGES = {
         # Verb slot rotation (#1295): story sentences for verb cards must use a
         # specific (tense, person) form. Order: Presente -> Indefinido ->
         # Imperfecto -> Perfecto -> Futuro -> Subjuntivo presente/imperfecto
-        # (#1301). "perf" is composed (haber + participle). French has no
-        # verb_slots -> feature off.
+        # (#1301). "perf" is composed (haber + participle), "prog" too
+        # (estar + gerund, #1606). French has no verb_slots -> feature off.
         "verb_slots": {
             "tenses": ["ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut",
                        "subj_pres", "subj_impf", "ind_cond", "imp_aff",
-                       "imp_neg"],
+                       "imp_neg", "prog"],
             "persons": ["1s", "2s", "3s", "1p", "2p", "3p"],
             # Relative weights (percent) for the slot rotation (#1306). Source:
             # doozan/spanish_data frequency.csv (OpenSubtitles) aggregated by
@@ -166,7 +166,10 @@ LANGUAGES = {
                               "imp_aff": 8,
                               # Imperativo negativo (#1580): no + Subjuntivo
                               # presente; much rarer than the affirmative.
-                              "imp_neg": 2},
+                              "imp_neg": 2,
+                              # Presente progresivo (#1606): estar + gerundio,
+                              # common in speech.
+                              "prog": 4},
             "person_weights": {"3s": 47, "1s": 22.5, "2s": 12, "3p": 11,
                                "1p": 7, "2p": 0.4},
         },
