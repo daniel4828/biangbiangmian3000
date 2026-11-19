@@ -2240,10 +2240,15 @@ Behavior rules:
   appears in at most one group and one option.
 - Chinese input (a single word / chengyu / set phrase) -> give the FULL
   dictionary entry directly as exactly ONE group with ONE option for that
-  word. Its "de" lists ALL meanings compactly ("1. ...; 2. ...; 3. ..."), and
-  the optional array "senses" holds one entry per meaning, each with its own
-  example: {{"de": "...", "example_zh": "...", "example_pinyin": "...",
-  "example_de": "..."}}. Do NOT create one group per sense. Do not ask him to
+  word. Its "de" lists ALL meanings compactly ("1. ...; 2. ...; 3. ..."). Give
+  "senses" ONLY when the word has 2+ distinct meanings: one entry per meaning,
+  each with its own example: {{"de": "...", "example_zh": "...",
+  "example_pinyin": "...", "example_de": "..."}}. When "senses" is present the
+  option itself carries NO example_zh/example_pinyin/example_de — every example
+  lives inside its sense; never repeat the option's "de" or example as a
+  sense. With only one meaning, omit "senses" and put the example on the
+  option. Different meanings of the same word are senses of ONE option, never
+  separate groups or options. Do not ask him to
   choose anything and do not present alternative translations to pick from
   — there is nothing to choose, he already has the Chinese word.
 - German or English input (word, phrase, or a full sentence) -> always give an
@@ -2274,16 +2279,18 @@ Quality rules (these decide whether the entry is useful at all):
   different register, connotation, or part of speech. Do not pad a group with
   near-synonyms; two options that a learner would use interchangeably are one
   option.
-- EVERY option must carry example_zh + example_pinyin + example_de. An option
-  without an example is unusable: register claims are only believable when the
-  sentence shows them.
+- EVERY option must carry example_zh + example_pinyin + example_de — or, if it
+  has "senses", one such example per sense (then the option itself carries
+  none). An option without an example is unusable: register claims are only
+  believable when the sentence shows them.
 - "usage" must say WHEN to use it (register, context, connotation), not repeat
   the translation.
 - Pinyin always with tone marks (pài, not pai4 or pai).
 - "register" must be one of: spoken_colloquial, spoken_neutral, neutral,
   formal_written, literary, slang.
-- For Chinese input, "headline" is the input word itself and each group's
-  "label" names one sense in German (e.g. "1. Ökologie (Biologie)").
+- For Chinese word input, "headline" is the word itself and the ONE group's
+  "label" is the word + its part of speech in German (e.g. "生态 (Nomen)") —
+  NOT one sense.
 - "kind" is exactly one of: "chinese" (a Chinese word / chengyu / set
   phrase), "word", "phrase", "sentence" (German/English input by length, or a
   Chinese sentence / longer expression). Only "sentence" makes the
@@ -2321,13 +2328,47 @@ a/b/c... never digits):
           "recommended": true,
           "example_zh": "老师又给我派任务了。",
           "example_pinyin": "Lǎoshī yòu gěi wǒ pài rènwu le.",
-          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben.",
+          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+        }}
+      ]
+    }}
+  ]
+}}
+
+For a Chinese single word with several meanings the result looks like this
+(input "打"; the option has NO example of its own, every example lives in its
+sense):
+
+{{
+  "input_lang": "zh",
+  "kind": "chinese",
+  "headline": "打",
+  "headline_pinyin": "dǎ",
+  "headline_de": "schlagen, anrufen",
+  "groups": [
+    {{
+      "label": "打 (Verb)",
+      "options": [
+        {{
+          "key": "a",
+          "zh": "打",
+          "pinyin": "dǎ",
+          "de": "1. schlagen; 2. anrufen (telefonisch)",
+          "usage": "sehr vielseitiges Verb, im Alltag allgegenwärtig.",
+          "register": "spoken_colloquial",
+          "recommended": true,
           "senses": [
             {{
-              "de": "beauftragen, jdm. eine Aufgabe geben",
-              "example_zh": "老师又给我派任务了。",
-              "example_pinyin": "Lǎoshī yòu gěi wǒ pài rènwu le.",
-              "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+              "de": "schlagen",
+              "example_zh": "不要打人。",
+              "example_pinyin": "Búyào dǎ rén.",
+              "example_de": "Schlag keine Leute."
+            }},
+            {{
+              "de": "anrufen (telefonisch)",
+              "example_zh": "我晚上给你打电话。",
+              "example_pinyin": "Wǒ wǎnshang gěi nǐ dǎ diànhuà.",
+              "example_de": "Ich rufe dich heute Abend an."
             }}
           ]
         }}
@@ -2362,9 +2403,14 @@ Behavior rules:
 - {lang_name} input (a single word or fixed idiom) -> give the FULL dictionary
   entry directly as exactly ONE group with ONE option for that word (its
   lemma). Its "de" lists ALL meanings compactly ("1. rufen; 2. nennen;
-  3. anrufen"), and the optional array "senses" holds one entry per meaning,
-  each with its own example: {{"de": "...", "example_zh": "...",
-  "example_de": "..."}}. Do NOT create one group per sense. Do not ask him to
+  3. anrufen"). Give "senses" ONLY when the word has 2+ distinct meanings: one
+  entry per meaning, each with its own example: {{"de": "...",
+  "example_zh": "...", "example_de": "..."}}. When "senses" is present the
+  option itself carries NO example_zh/example_de — every example lives inside
+  its sense; never repeat the option's "de" or example as a sense. With only
+  one meaning, omit "senses" and put the example on the option. Different
+  meanings of the same word (partir = losfahren / teilen) are senses of ONE
+  option, never separate groups or options. Do not ask him to
   choose anything and do not present alternative translations to pick from
   — there is nothing to choose, he already has the {lang_name} word.
 - German or English input (word, phrase, or a full sentence) -> always give an
@@ -2397,16 +2443,18 @@ Quality rules (these decide whether the entry is useful at all):
   near-synonyms; two options that a learner would use interchangeably are one
   option.
 - EVERY option must carry example_zh (the {lang_name} example sentence) +
-  example_de. An option without an example is unusable: register claims are
-  only believable when the sentence shows them. Omit example_pinyin entirely
+  example_de — or, if it has "senses", one such example per sense (then the
+  option itself carries none). An option without an example is unusable:
+  register claims are only believable when the sentence shows them. Omit example_pinyin entirely
   — {lang_name} uses the Latin alphabet, there is no separate transcription.
 - "usage" must say WHEN to use it (register, context, connotation), not repeat
   the translation.
 - Do not fill in "pinyin" or "headline_pinyin" for {lang_name} — leave them out.
 - "register" must be one of: spoken_colloquial, spoken_neutral, neutral,
   formal_written, literary, slang.
-- For {lang_name} input, "headline" is the input word itself and each group's
-  "label" names one sense in German (e.g. "1. Ökologie (Biologie)").
+- For {lang_name} word input, "headline" is the word itself (its lemma, see
+  DICTIONARY FORM) and the ONE group's "label" is the word + its part of speech
+  in German (e.g. "partir (Verb)") — NOT one sense.
 - DICTIONARY FORM: every "zh" value that names a word (option "zh", and
   "headline" for {lang_name} input) must be the LEMMA — verbs as the
   infinitive, nouns in the singular, adjectives in the masculine singular —
@@ -2452,12 +2500,44 @@ Chinese dictionary) — put the {lang_name} word/sentence there:
           "register": "spoken_neutral",
           "recommended": true,
           "example_zh": "Le prof m'a encore confié une tâche.",
-          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben.",
+          "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+        }}
+      ]
+    }}
+  ]
+}}
+
+For a {lang_name} single word with several meanings the result looks like this
+(input "partimos"; the option has NO example of its own, every example lives
+in its sense):
+
+{{
+  "input_lang": "es",
+  "kind": "chinese",
+  "headline": "partir",
+  "headline_de": "losfahren, teilen",
+  "notes": "Eingegeben war *partimos*, 1. Person Plural von *partir*.",
+  "groups": [
+    {{
+      "label": "partir (Verb)",
+      "options": [
+        {{
+          "key": "a",
+          "zh": "partir",
+          "de": "1. losfahren, aufbrechen; 2. teilen",
+          "usage": "neutral; die Bedeutung 'aufbrechen' ist im Alltag häufiger.",
+          "register": "neutral",
+          "recommended": true,
           "senses": [
             {{
-              "de": "jdm. eine Aufgabe anvertrauen",
-              "example_zh": "Le prof m'a encore confié une tâche.",
-              "example_de": "Der Lehrer hat mir schon wieder eine Aufgabe gegeben."
+              "de": "losfahren, aufbrechen",
+              "example_zh": "Partimos mañana por la mañana.",
+              "example_de": "Wir fahren morgen früh los."
+            }},
+            {{
+              "de": "teilen",
+              "example_zh": "Partió el pan en dos.",
+              "example_de": "Er teilte das Brot in zwei Teile."
             }}
           ]
         }}
@@ -2551,6 +2631,7 @@ def _merge_duplicate_options(result: dict) -> dict:
     if not isinstance(groups, list):
         return result
     seen: dict[str, dict] = {}
+    merged_into: list[dict] = []
     new_groups = []
     for group in groups:
         kept = []
@@ -2575,9 +2656,24 @@ def _merge_duplicate_options(result: dict) -> dict:
                      if opt.get(k)}
             if extra:
                 senses.append(extra)
+            merged_into.append(first)
         if kept:
             group["options"] = kept
             new_groups.append(group)
+    # Options that received merged duplicates now carry their examples inside
+    # "senses": the option's own "de" becomes the compact numbered join and the
+    # option-level example is dropped (it is already sense #1).
+    done: set[int] = set()
+    for first in merged_into:
+        if id(first) in done:
+            continue
+        done.add(id(first))
+        des = [str(s.get("de", "")).strip() for s in first.get("senses", [])
+               if isinstance(s, dict) and s.get("de")]
+        if des:
+            first["de"] = "; ".join(f"{i}. {d}" for i, d in enumerate(des, 1))
+        for k in ("example_zh", "example_pinyin", "example_de"):
+            first.pop(k, None)
     result["groups"] = new_groups
     return result
 
