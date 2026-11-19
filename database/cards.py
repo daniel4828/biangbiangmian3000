@@ -1,7 +1,7 @@
 import logging
 import math
 import sqlite3
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from languages import DEFAULT_LANG
 from .core import get_db, anki_today, get_day_cutoff_hour
 from .presets import get_preset_for_deck, effective_preset_id_sql, get_bound_new_per_day
@@ -564,6 +564,30 @@ def _attach_word_forms(card: dict) -> None:
     card["word_forms"] = surface_forms(card.get("word_id"), card.get("word_zh") or "", card["word_lang"])
 
 
+
+def _anki_day_utc_bounds(today: str) -> tuple[str, str]:
+    """UTC [start, end) of the Anki day `today` (#1608).
+
+    review_log.reviewed_at is UTC (SQLite datetime('now')), the Anki day runs
+    from the cutoff hour in the process timezone (Europe/Berlin). Comparing
+    date(reviewed_at) with anki_today() dropped every review made between
+    local midnight+offset and the cutoff (Berlin 01:00-04:00), so the daily
+    new-card cap stopped counting during late sessions.
+    """
+    day = date.fromisoformat(today)
+    hour = get_day_cutoff_hour()
+    start_local = datetime.combine(day, time(hour)).astimezone()
+    end_local = datetime.combine(day + timedelta(days=1), time(hour)).astimezone()
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (start_local.astimezone(timezone.utc).strftime(fmt),
+            end_local.astimezone(timezone.utc).strftime(fmt))
+
+
+def _intro_window(today: str) -> tuple[str, str, str]:
+    """Params for 'first review falls in the Anki day': (start, end, start)."""
+    start, end = _anki_day_utc_bounds(today)
+    return start, end, start
+
 def _count_new_introduced_today_multi(conn, deck_ids: list[int], category: str, today: str) -> int:
     """Batched: one grouped query instead of one query per deck (issue #513)."""
     if not deck_ids:
@@ -575,13 +599,13 @@ def _count_new_introduced_today_multi(conn, deck_ids: list[int], category: str, 
               {ordinary_new_sql(conn)}
               AND EXISTS (
                 SELECT 1 FROM review_log rl
-                WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
+                WHERE rl.card_id = c.id AND rl.reviewed_at >= ? AND rl.reviewed_at < ?
               )
               AND NOT EXISTS (
                 SELECT 1 FROM review_log rl
-                WHERE rl.card_id = c.id AND date(rl.reviewed_at) < ?
+                WHERE rl.card_id = c.id AND rl.reviewed_at < ?
               )""",
-        deck_ids + [category, today, today],
+        deck_ids + [category, *_intro_window(today)],
     ).fetchone()
     return row[0]
 
@@ -707,13 +731,13 @@ def _count_new_introduced_today(conn, deck_id: int, category: str, today: str) -
              {ordinary_new_sql(conn)}
              AND EXISTS (
                SELECT 1 FROM review_log rl
-               WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
+               WHERE rl.card_id = c.id AND rl.reviewed_at >= ? AND rl.reviewed_at < ?
              )
              AND NOT EXISTS (
                SELECT 1 FROM review_log rl
-               WHERE rl.card_id = c.id AND date(rl.reviewed_at) < ?
+               WHERE rl.card_id = c.id AND rl.reviewed_at < ?
              )""",
-        (deck_id, category, today, today),
+        (deck_id, category, *_intro_window(today)),
     ).fetchone()[0]
 
 
@@ -1191,14 +1215,14 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
               {ordinary_new_sql(conn)}
               AND EXISTS (
                 SELECT 1 FROM review_log rl
-                WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
+                WHERE rl.card_id = c.id AND rl.reviewed_at >= ? AND rl.reviewed_at < ?
               )
               AND NOT EXISTS (
                 SELECT 1 FROM review_log rl
-                WHERE rl.card_id = c.id AND date(rl.reviewed_at) < ?
+                WHERE rl.card_id = c.id AND rl.reviewed_at < ?
               )
             GROUP BY c.deck_id""",
-        active_ids + [category, today, today],
+        active_ids + [category, *_intro_window(today)],
     ).fetchall()
     new_today = {r["deck_id"]: r["cnt"] for r in new_today_rows}
 
@@ -1760,7 +1784,14 @@ def count_due_any_cat(root_deck_id: int, lang: str | None = None) -> dict:
     the deduplication logic used for parent-deck badges on the main page.
     """
     leaf_pairs = _leaf_decks_with_category(root_deck_id, lang=lang)
-    return count_due_deduped(leaf_pairs)
+    counts = count_due_deduped(leaf_pairs)
+    # New cards: the queue (get_due_cards_any_cat) caps each category on its
+    # own, so the header must too (#1608). Word-dedup first and caps second
+    # dropped a creating card whenever its word's listening card was over the
+    # listening cap — the queue still served it and the number never moved.
+    by_cat = count_due_by_category(root_deck_id, lang=lang)
+    counts["new"] = sum(c.get("new", 0) for c in by_cat.values())
+    return counts
 
 
 def _lang_capped_pair_total(new_by_pair: dict) -> int:
@@ -1856,14 +1887,14 @@ def get_due_cards_multi(deck_ids: list[int], category: str, *, root_deck_id: int
                   {ordinary_new_sql(conn)}
                   AND EXISTS (
                     SELECT 1 FROM review_log rl
-                    WHERE rl.card_id = c.id AND date(rl.reviewed_at) = ?
+                    WHERE rl.card_id = c.id AND rl.reviewed_at >= ? AND rl.reviewed_at < ?
                   )
                   AND NOT EXISTS (
                     SELECT 1 FROM review_log rl
-                    WHERE rl.card_id = c.id AND date(rl.reviewed_at) < ?
+                    WHERE rl.card_id = c.id AND rl.reviewed_at < ?
                   )
                 GROUP BY c.deck_id""",
-            deck_ids + [category, today, today],
+            deck_ids + [category, *_intro_window(today)],
         ).fetchall()
         new_today_map = {r["deck_id"]: r["cnt"] for r in rows}
         conn.close()
@@ -2557,7 +2588,6 @@ def count_due_all_decks() -> dict:
     today = anki_today().isoformat()
     now_dt = datetime.now()
     now = now_dt.isoformat(timespec="seconds")
-    today_end = (anki_today() + timedelta(days=1)).isoformat()
 
     conn = get_db()
 
@@ -2634,7 +2664,7 @@ def count_due_all_decks() -> dict:
                  AND rl.reviewed_at < ?
            )
            GROUP BY c.deck_id, c.category""",
-        (today, today_end, today),
+        _intro_window(today),
     ).fetchall()
 
     # 4. new_per_day limit per (deck_id, category) with category overrides
