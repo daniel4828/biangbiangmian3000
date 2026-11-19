@@ -4,7 +4,7 @@ import sqlite3
 from datetime import date, datetime, time, timedelta
 from languages import DEFAULT_LANG
 from .core import get_db, anki_today, get_day_cutoff_hour
-from .presets import get_preset_for_deck, effective_preset_id_sql
+from .presets import get_preset_for_deck, effective_preset_id_sql, get_bound_new_per_day
 from .decks import get_deck, get_locked_deck_ids
 from .entries import surface_forms
 from .siblings import sibling_group_members, sibling_group_map
@@ -608,6 +608,97 @@ def parent_new_remaining(parent_id: int, deck_ids: list[int], category: str) -> 
     return max(0, preset["new_per_day"] - done)
 
 
+def deck_langs(deck_ids, conn=None) -> dict[int, str]:
+    """{deck_id: lang} (NULL lang counts as 'zh')."""
+    deck_ids = list(deck_ids)
+    if not deck_ids:
+        return {}
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        ph = ",".join("?" * len(deck_ids))
+        rows = conn.execute(
+            f"SELECT id, COALESCE(lang, 'zh') AS lang FROM decks WHERE id IN ({ph})",
+            deck_ids,
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+    return {r["id"]: r["lang"] for r in rows}
+
+
+def lang_new_remaining(category: str, langs=None, conn=None) -> dict[str, int]:
+    """New cards still allowed today per language for one category (#1599).
+
+    Only languages with a (lang, category) binding appear: the bound preset's
+    effective new_per_day (incl. category override) is a TOTAL daily cap over
+    all dated leaf decks of that language and category, not a per-leaf limit.
+    Languages without a binding are absent = unchanged per-leaf behaviour.
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        bound = [r["lang"] for r in conn.execute(
+            "SELECT lang FROM category_presets WHERE category = ?", (category,)
+        ).fetchall()]
+        if langs is not None:
+            wanted = set(langs)
+            bound = [lg for lg in bound if lg in wanted]
+        today = anki_today().isoformat()
+        result: dict[str, int] = {}
+        for lg in bound:
+            limit = get_bound_new_per_day(lg, category)
+            if limit is None:
+                continue
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM decks WHERE COALESCE(lang, 'zh') = ? AND category = ? "
+                "AND deleted_at IS NULL", (lg, category),
+            ).fetchall()]
+            done = _count_new_introduced_today_multi(conn, ids, category, today)
+            result[lg] = max(0, limit - done)
+        return result
+    finally:
+        if own:
+            conn.close()
+
+
+def cap_new_cards_by_lang(cards: list, remaining: dict, langs_of: dict) -> list:
+    """Keep new cards in order while their language's remaining budget lasts.
+    Cards carry deck_id; langs_of maps deck_id -> lang. Non-new / unbound
+    languages pass through untouched."""
+    if not remaining:
+        return cards
+    used: dict[str, int] = {}
+    out = []
+    for c in cards:
+        lg = langs_of.get(c["deck_id"])
+        if c["state"] == "new" and lg in remaining:
+            if used.get(lg, 0) >= remaining[lg]:
+                continue
+            used[lg] = used.get(lg, 0) + 1
+        out.append(c)
+    return out
+
+
+def clamp_new_by_lang(per_key_new: dict, remaining: dict, langs_of: dict) -> dict:
+    """per_key_new: {(deck_id, category): n}; remaining: {lang: n} for ONE
+    category. Returns a new dict with each bound language's total clamped to
+    its remaining budget (reduced in iteration order)."""
+    out = dict(per_key_new)
+    if not remaining:
+        return out
+    left = dict(remaining)
+    for key, n in per_key_new.items():
+        lg = langs_of.get(key[0])
+        if lg in left:
+            take = min(n, left[lg])
+            left[lg] -= take
+            out[key] = take
+    return out
+
+
 def _count_new_introduced_today(conn, deck_id: int, category: str, today: str) -> int:
     """Cards whose very first review log entry is today (introduced as new today)."""
     return conn.execute(
@@ -847,6 +938,13 @@ def get_due_cards(deck_id: int, category: str, *, sibling_suppression: bool = Fa
     new_done_today = (_new_done_today if _new_done_today is not None
                        else _count_new_introduced_today(conn, deck_id, category, today))
     new_remaining = max(0, new_limit - new_done_today)
+    if _preset is None:
+        # Direct call (single leaf): the language-wide cap applies too (#1599).
+        # Batched callers (get_due_cards_multi) apply it across leaves instead.
+        lg = deck_langs([deck_id], conn).get(deck_id)
+        lang_rem = lang_new_remaining(category, [lg], conn) if lg else {}
+        if lg in lang_rem:
+            new_remaining = min(new_remaining, lang_rem[lg])
 
     rows = conn.execute(
         f"""SELECT c.*, w.word_zh, w.pinyin, w.definition, w.pos,
@@ -1146,6 +1244,9 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
     learning_soon = {r["deck_id"]: r["cnt"] for r in learning_soon_rows}
     learning_soon_due = {r["deck_id"]: (r["first_due"], r["last_due"]) for r in learning_soon_rows}
     group_of = sibling_group_map({r["word_id"] for r in due_rows if r["state"] == "new"}, conn)
+    # Language-wide total cap (#1599): no single leaf may show more than that.
+    langs_of = deck_langs(active_ids, conn)
+    lang_rem = lang_new_remaining(category, set(langs_of.values()), conn)
     conn.close()
 
     for did in active_ids:
@@ -1154,6 +1255,8 @@ def _count_due_bulk(deck_ids: list[int], category: str) -> dict[int, dict]:
         threshold = preset.get("learned_interval", 4)
         new_done_today = new_today.get(did, 0)
         new_remaining = max(0, new_limit - new_done_today)
+        if langs_of.get(did) in lang_rem:
+            new_remaining = min(new_remaining, lang_rem[langs_of[did]])
         rows = by_deck_rows.get(did, [])
 
         def _is_learning(r) -> bool:
@@ -1191,6 +1294,10 @@ def count_due(deck_id: int, category: str) -> dict:
     conn = get_db()
     new_done_today = _count_new_introduced_today(conn, deck_id, category, today)
     new_remaining = max(0, new_limit - new_done_today)
+    lg = deck_langs([deck_id], conn).get(deck_id)
+    lang_rem = lang_new_remaining(category, [lg], conn) if lg else {}
+    if lg in lang_rem:  # language-wide total cap (#1599)
+        new_remaining = min(new_remaining, lang_rem[lg])
 
     rows = conn.execute(
         f"""SELECT c.id, c.word_id, c.state, c.due, c.interval FROM cards c
@@ -1548,6 +1655,18 @@ def get_due_cards_any_cat(root_deck_id: int, lang: str | None = None) -> list[di
     if not all_cards:
         return []
 
+    # Language-wide total cap per category (#1599)
+    langs_of = deck_langs({did for did, _ in leaf_pairs})
+    for cat in {cat for _, cat in leaf_pairs}:
+        lang_rem = lang_new_remaining(cat, set(langs_of.values()))
+        if not lang_rem:
+            continue
+        cat_cards = [c for c in all_cards if c["category"] == cat]
+        kept = {c["id"] for c in cap_new_cards_by_lang(cat_cards, lang_rem, langs_of)}
+        all_cards = [c for c in all_cards if c["category"] != cat or c["id"] in kept]
+    if not all_cards:
+        return []
+
     # Apply root deck's per-category new cap across all leaf decks combined
     today = anki_today().isoformat()
     conn = get_db()
@@ -1644,6 +1763,32 @@ def count_due_any_cat(root_deck_id: int, lang: str | None = None) -> dict:
     return count_due_deduped(leaf_pairs)
 
 
+def _lang_capped_pair_total(new_by_pair: dict) -> int:
+    """Sum of {(deck_id, category): n} with each bound (lang, category)
+    clamped to its total daily budget (#1599)."""
+    if not new_by_pair:
+        return 0
+    langs_of = deck_langs({d for d, _ in new_by_pair})
+    total = 0
+    for cat in {c for _, c in new_by_pair}:
+        sub = {k: n for k, n in new_by_pair.items() if k[1] == cat}
+        rem = lang_new_remaining(cat, set(langs_of.values()))
+        total += sum(clamp_new_by_lang(sub, rem, langs_of).values())
+    return total
+
+
+def _lang_capped_new_total(per_deck: dict, category: str) -> int:
+    """Sum of per-leaf new counts, each bound language clamped to its total
+    daily budget (#1599)."""
+    langs_of = deck_langs(per_deck.keys())
+    rem = lang_new_remaining(category, set(langs_of.values()))
+    sums: dict[str, int] = {}
+    for did, c in per_deck.items():
+        lg = langs_of.get(did, "zh")
+        sums[lg] = sums.get(lg, 0) + c.get("new", 0)
+    return sum(min(n, rem[lg]) if lg in rem else n for lg, n in sums.items())
+
+
 def count_due_by_category(root_deck_id: int, lang: str | None = None) -> dict:
     """Per-category {new, learning, review} counts for mixed review display."""
     leaf_pairs = _leaf_decks_with_category(root_deck_id, lang=lang)
@@ -1661,6 +1806,7 @@ def count_due_by_category(root_deck_id: int, lang: str | None = None) -> dict:
                 agg[k] += c.get(k, 0)
             soon_pairs.append((c.get("learning_soon_first_min"), c.get("learning_soon_last_min")))
         agg["learning_soon_first_min"], agg["learning_soon_last_min"] = _combine_soon_minutes(soon_pairs)
+        agg["new"] = _lang_capped_new_total(per_deck, category)
         result[category] = agg
 
     # Apply root deck's per-category new cap (Anki parent-deck behaviour)
@@ -1742,6 +1888,12 @@ def get_due_cards_multi(deck_ids: list[int], category: str, *, root_deck_id: int
     review_cards   = [c for c in all_cards if c["state"] == "review" and not _lrn(c)]
     new_cards      = [c for c in all_cards if c["state"] == "new"]
 
+    # Language-wide total cap for bound (lang, category) pairs (#1599)
+    if deck_ids:
+        langs_of = deck_langs(deck_ids)
+        lang_rem = lang_new_remaining(category, set(langs_of.values()))
+        new_cards = cap_new_cards_by_lang(new_cards, lang_rem, langs_of)
+
     # Apply parent deck's combined new-card cap (Anki-style)
     if root_deck_id is not None and len(deck_ids) > 1:
         root_preset = get_preset_for_deck(root_deck_id, category)
@@ -1788,6 +1940,7 @@ def count_due_multi(deck_ids: list[int], category: str, *, root_deck_id: int | N
             total[k] += c.get(k, 0)
         soon_pairs.append((c.get("learning_soon_first_min"), c.get("learning_soon_last_min")))
     total["learning_soon_first_min"], total["learning_soon_last_min"] = _combine_soon_minutes(soon_pairs)
+    total["new"] = _lang_capped_new_total(per_deck, category)  # #1599
 
     if root_deck_id is not None and len(deck_ids) > 1:
         root_preset = get_preset_for_deck(root_deck_id, category)
@@ -1830,11 +1983,14 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
         conn.close()
         total = {"new": 0, "learning": 0, "review": 0, "learning_soon": 0}
         soon_pairs = []
+        new_by_pair: dict[tuple, int] = {}
         for deck_id, cat in leaf_pairs:
             c = count_due(deck_id, cat)
             for k in total:
                 total[k] += c.get(k, 0)
+            new_by_pair[(deck_id, cat)] = new_by_pair.get((deck_id, cat), 0) + c.get("new", 0)
             soon_pairs.append((c.get("learning_soon_first_min"), c.get("learning_soon_last_min")))
+        total["new"] = _lang_capped_pair_total(new_by_pair)  # #1599
         total["learning_soon_first_min"], total["learning_soon_last_min"] = _combine_soon_minutes(soon_pairs)
         return total
 
@@ -1922,10 +2078,10 @@ def count_due_deduped(leaf_pairs: list[tuple[int, str]]) -> dict:
         else:
             review_count += 1
 
-    new_count = auto_new_count + sum(
-        min(count, new_remaining_map.get(key, 0))
+    new_count = auto_new_count + _lang_capped_pair_total({
+        key: min(count, new_remaining_map.get(key, 0))
         for key, count in new_by_deck.items()
-    )
+    })
     return {
         "new": new_count,
         "learning": learning_count,
@@ -2571,6 +2727,18 @@ def count_due_all_decks() -> dict:
         raw = c.pop("new_raw", 0)
         auto_new = min(raw, auto_new_counts.get(key, 0))
         c["new"] = auto_new + min(raw - auto_new, max(0, limit - done))
+
+    # Language-wide total cap (#1599): no leaf may show more than what is left
+    # of its (lang, category) budget. Remaining computed once per category.
+    langs_of = deck_langs({k[0] for k in counts})
+    rem_by_cat: dict[str, dict[str, int]] = {}
+    for key, c in counts.items():
+        cat = key[1]
+        if cat not in rem_by_cat:
+            rem_by_cat[cat] = lang_new_remaining(cat)
+        rem = rem_by_cat[cat].get(langs_of.get(key[0], "zh"))
+        if rem is not None:
+            c["new"] = min(c["new"], rem)
 
     # Build suspension flags dict
     susp_flags: dict[tuple, bool] = {}

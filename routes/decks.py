@@ -97,6 +97,39 @@ def _attach_counts(flat_decks: list) -> None:
     # meaningless, they get combined separately (min of firsts, max of lasts).
     sum_keys = ("new", "learning", "review", "learning_future", "learning_soon")
 
+    # Language-wide new budget per category (#1599), computed once per request.
+    langs_of = database.deck_langs({k[0] for k in all_counts})
+    lang_rem_cache: dict = {}
+
+    def _lang_rem(cat: str) -> dict:
+        if cat not in lang_rem_cache:
+            lang_rem_cache[cat] = database.lang_new_remaining(cat)
+        return lang_rem_cache[cat]
+
+    def _capped_cat_counts(deck_id: int, pairs_: list) -> dict:
+        """{category: counts} for the given leaf pairs with the language cap
+        and then the parent deck's cap applied to `new`."""
+        cat_counts: dict = {}
+        cat_ids: dict = {}
+        new_by_lang: dict = {}
+        for did, cat in pairs_:
+            cc = cat_counts.setdefault(cat, {k: 0 for k in sum_keys})
+            c = all_counts.get((did, cat), empty)
+            for k in sum_keys:
+                cc[k] += c.get(k, 0)
+            cat_ids.setdefault(cat, []).append(did)
+            lg = langs_of.get(did, "zh")
+            d = new_by_lang.setdefault(cat, {})
+            d[lg] = d.get(lg, 0) + c.get("new", 0)
+        for cat, cc in cat_counts.items():
+            rem = _lang_rem(cat)
+            cc["new"] = sum(min(n, rem[lg]) if lg in rem else n
+                            for lg, n in new_by_lang[cat].items())
+            remaining = database.parent_new_remaining(deck_id, cat_ids[cat], cat)
+            if remaining is not None and cc["new"] > remaining:
+                cc["new"] = remaining
+        return cat_counts
+
     for deck in flat_decks:
         if not deck.get("children"):
             cat = deck.get("category")
@@ -122,22 +155,19 @@ def _attach_counts(flat_decks: list) -> None:
                 lasts = [l for _, l in soon_pairs if l is not None]
                 merged["learning_soon_first_min"] = min(firsts) if firsts else None
                 merged["learning_soon_last_min"] = max(lasts) if lasts else None
-                # Parent cap per category, like the queue (#1595): the pills of
-                # an aggregating deck read cat_counts instead of summing leaves.
-                cat_counts: dict = {}
-                cat_ids: dict = {}
-                for did, cat in pairs:
-                    cc = cat_counts.setdefault(cat, {k: 0 for k in sum_keys})
-                    c = all_counts.get((did, cat), empty)
-                    for k in sum_keys:
-                        cc[k] += c.get(k, 0)
-                    cat_ids.setdefault(cat, []).append(did)
-                for cat, cc in cat_counts.items():
-                    remaining = database.parent_new_remaining(deck["id"], cat_ids[cat], cat)
-                    if remaining is not None and cc["new"] > remaining:
-                        merged["new"] -= cc["new"] - remaining
-                        cc["new"] = remaining
+                # Caps per category, like the queue: language-wide total cap
+                # (#1599), then the parent cap (#1595). The pills of an
+                # aggregating deck read cat_counts instead of summing leaves.
+                cat_counts = _capped_cat_counts(deck["id"], pairs)
+                merged["new"] = sum(cc["new"] for cc in cat_counts.values())
                 deck["cat_counts"] = cat_counts
+                # Same numbers restricted to one language's leaves: the home
+                # language rows start a review scoped to that language.
+                lang_cat_counts: dict = {}
+                for lg in sorted({langs_of.get(did, "zh") for did, _ in pairs}):
+                    lg_pairs = [(d, c) for d, c in pairs if langs_of.get(d, "zh") == lg]
+                    lang_cat_counts[lg] = _capped_cat_counts(deck["id"], lg_pairs)
+                deck["lang_cat_counts"] = lang_cat_counts
                 deck["counts"] = merged
                 # all_suspended = every leaf's category is fully suspended
                 deck["deck_all_suspended"] = all(
