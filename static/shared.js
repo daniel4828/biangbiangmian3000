@@ -502,22 +502,29 @@ function _dictOption(opt, wordLang, pending) {
   }
   if (opt.usage) body.append(_dictTextEl('div', 'dr-usage', opt.usage));
 
-  if (opt.example_zh) {
+  const senses = Array.isArray(opt.senses)
+    ? opt.senses.filter(s => s && typeof s === 'object')  // partial stream
+    : [];
+  // Examples live in the senses list when there are 2+ meanings; with exactly
+  // one sense (old stored records duplicated the option's own meaning there)
+  // show it once, as the option-level example.
+  let exSrc = null;
+  if (senses.length < 2) exSrc = opt.example_zh ? opt : (senses[0] && senses[0].example_zh ? senses[0] : null);
+  if (exSrc) {
     const ex = document.createElement('div');
     ex.className = 'dr-example';
-    ex.append(_dictTextEl('div', 'dr-ex-zh', opt.example_zh));
-    if (opt.example_pinyin) ex.append(_dictTextEl('div', 'dr-ex-pinyin', opt.example_pinyin));
-    if (opt.example_de) ex.append(_dictTextEl('div', 'dr-ex-de', opt.example_de));
+    ex.append(_dictTextEl('div', 'dr-ex-zh', exSrc.example_zh));
+    if (exSrc.example_pinyin) ex.append(_dictTextEl('div', 'dr-ex-pinyin', exSrc.example_pinyin));
+    if (exSrc.example_de) ex.append(_dictTextEl('div', 'dr-ex-de', exSrc.example_de));
     body.append(ex);
   }
 
   // One word = one entry (#1510): all meanings of a word live in one option as
   // a numbered senses list, each with its own example.
-  if (Array.isArray(opt.senses) && opt.senses.length) {
+  if (senses.length >= 2) {
     const list = document.createElement('ol');
     list.className = 'dr-senses';
-    for (const s of opt.senses) {
-      if (!s || typeof s !== 'object') continue;  // partial stream
+    for (const s of senses) {
       const li = document.createElement('li');
       li.className = 'dr-sense';
       if (s.de) li.append(_dictTextEl('div', 'dr-sense-de', s.de));

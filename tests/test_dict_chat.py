@@ -110,6 +110,25 @@ def test_merge_duplicate_options():
     assert senses[1]["example_zh"] == "Lo llaman Juan."
 
 
+def test_merge_makes_option_consistent_with_senses():
+    merged = ai._merge_duplicate_options(copy.deepcopy(LLAMAR))
+    opt = merged["groups"][0]["options"][0]
+    assert opt["de"] == "1. rufen; 2. nennen; 3. anrufen"
+    for k in ("example_zh", "example_pinyin", "example_de"):
+        assert k not in opt
+
+
+def test_rules_no_longer_contradict_one_entry():
+    assert "names one sense" not in ai.DICTIONARY_RULES
+    assert "names one sense" not in ai.DICTIONARY_RULES_ROMANCE
+    # Formatting must not raise (doubled braces intact) and examples stay valid JSON.
+    assert "Input to look up: x" in ai.DICTIONARY_PROMPT.format(query="x")
+    assert "Input to look up: x" in ai.DICTIONARY_PROMPT_ROMANCE.format(
+        lang_name="Spanish", level="A2", query="x")
+    assert ai.DICTIONARY_RULES.format()
+    assert ai.DICTIONARY_RULES_ROMANCE.format(lang_name="Spanish", level="A2")
+
+
 def test_merge_leaves_sentence_alone():
     data = copy.deepcopy(LLAMAR)
     data["sentence"] = {"zh": "Llamar llamar", "de": "x"}
