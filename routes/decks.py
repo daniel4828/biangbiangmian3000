@@ -122,6 +122,22 @@ def _attach_counts(flat_decks: list) -> None:
                 lasts = [l for _, l in soon_pairs if l is not None]
                 merged["learning_soon_first_min"] = min(firsts) if firsts else None
                 merged["learning_soon_last_min"] = max(lasts) if lasts else None
+                # Parent cap per category, like the queue (#1595): the pills of
+                # an aggregating deck read cat_counts instead of summing leaves.
+                cat_counts: dict = {}
+                cat_ids: dict = {}
+                for did, cat in pairs:
+                    cc = cat_counts.setdefault(cat, {k: 0 for k in sum_keys})
+                    c = all_counts.get((did, cat), empty)
+                    for k in sum_keys:
+                        cc[k] += c.get(k, 0)
+                    cat_ids.setdefault(cat, []).append(did)
+                for cat, cc in cat_counts.items():
+                    remaining = database.parent_new_remaining(deck["id"], cat_ids[cat], cat)
+                    if remaining is not None and cc["new"] > remaining:
+                        merged["new"] -= cc["new"] - remaining
+                        cc["new"] = remaining
+                deck["cat_counts"] = cat_counts
                 deck["counts"] = merged
                 # all_suspended = every leaf's category is fully suspended
                 deck["deck_all_suspended"] = all(
