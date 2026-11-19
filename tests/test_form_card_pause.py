@@ -151,8 +151,8 @@ def _walk(state, days_total):
 
 
 def test_focus_ends_itself_after_the_round(tmp_db, monkeypatch):
-    enabled = _walk(_clock(monkeypatch), 10)
-    assert enabled == [True] * 9 + [False]  # day 10 would wrap to Presente: off instead
+    enabled = _walk(_clock(monkeypatch), 12)
+    assert enabled == [True] * 11 + [False]  # day 12 would wrap to Presente: off instead
     assert tense_focus.settings()["enabled"] is False
     assert _released_list() == tense_focus.canonical_tenses()
 
@@ -160,8 +160,8 @@ def test_focus_ends_itself_after_the_round(tmp_db, monkeypatch):
 def test_focus_with_two_day_period_stays_on_for_both_days_of_last_tense(tmp_db, monkeypatch):
     state = _clock(monkeypatch)
     tense_focus.save(tense_focus.validate({"days": 2}))
-    enabled = _walk(state, 19)
-    assert enabled == [True] * 18 + [False]
+    enabled = _walk(state, 23)
+    assert enabled == [True] * 22 + [False]
     assert _released_list() == tense_focus.canonical_tenses()
 
 

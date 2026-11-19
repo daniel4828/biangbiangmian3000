@@ -138,7 +138,7 @@ def _full_usage(n=1, **overrides):
 
 
 _TENSES = ("ind_pres", "ind_pret", "ind_impf", "perf", "ind_fut", "subj_pres", "subj_impf",
-           "ind_cond", "imp_aff", "imp_neg")
+           "ind_cond", "imp_aff", "imp_neg", "prog")
 _PERSONS = ("1s", "2s", "3s", "1p", "2p", "3p")
 _UNIFORM = {"tenses": {t: 1.0 for t in _TENSES}, "persons": {p: 1.0 for p in _PERSONS}}
 
@@ -588,6 +588,23 @@ def test_tense_reason_is_stored_and_read_back(tmp_db):
          "verb_slot": "ind_pret:1s", "tense_reason": "**ayer** → Indefinido"}])
     rows = database.get_story_sentences(sid)
     assert rows[0]["tense_reason"] == "**ayer** → Indefinido"
+
+
+def test_presente_progresivo_target_forms():
+    """#1606: prog = estar (present) + gerund; composed like perf."""
+    import copy
+    lex = copy.deepcopy(LEXICON)
+    lex["lemmas"]["decir"] = _verb("to say")
+    lex["verbs"]["hablando"] = [["hablar", "ger", ""]]
+    lex["verbs"]["diciendo"] = [["decir", "ger", ""]]
+    lex["verbs"]["quejando"] = [["quejar", "ger", ""]]
+    lexicon.inject("es", lex)
+    assert verb_slots.target_form("hablar", "prog", "1s", "es") == "estoy hablando"
+    assert verb_slots.target_form("decir", "prog", "3s", "es") == "está diciendo"
+    assert verb_slots.target_form("quejarse", "prog", "1s", "es") == "me estoy quejando"
+    assert lexicon.slot_label("prog", "2s") == "Presente progresivo · 2. Sg."
+    assert verb_slots.tense_code_for_label("Presente progresivo") == "prog"
+    assert "prog" in verb_slots.config("es")["tenses"]
 
 
 def test_negative_imperative_target_forms():
