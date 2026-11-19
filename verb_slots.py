@@ -773,10 +773,28 @@ def default_weights(lang: str) -> dict:
     if not cfg:
         return {}
     tw, pw = cfg.get("tense_weights") or {}, cfg.get("person_weights") or {}
-    return {
+    out = {
         "tenses": {t: float(tw.get(t, _FALLBACK_TENSE_WEIGHTS.get(t, 1.0))) for t in cfg["tenses"]},
         "persons": {p: float(pw.get(p, 1.0)) for p in cfg["persons"]},
     }
+    iw = cfg.get("imp_person_weights")
+    if iw and any(t in IMPERATIVE_TENSES for t in cfg["tenses"]):
+        out["imp_persons"] = {p: float(iw.get(p, 1.0)) for p in cfg["persons"] if p != "1s"}
+    return out
+
+
+# Tenses whose person weights come from "imp_persons" (the imperative has no
+# yo, and 3s/3p mean usted/ustedes — the general table would favour usted).
+IMPERATIVE_TENSES = ("imp_aff", "imp_neg")
+
+
+def person_weights_for(wts: dict | None, tense: str) -> dict:
+    """Person weights for one tense: "imp_persons" for the imperative when
+    configured, else "persons". {} when nothing is available."""
+    wts = wts or {}
+    if tense in IMPERATIVE_TENSES and wts.get("imp_persons"):
+        return wts["imp_persons"]
+    return wts.get("persons") or {}
 
 
 def _valid_weight(v) -> bool:
@@ -802,8 +820,10 @@ def weights(lang: str) -> dict:
         if not isinstance(stored, dict):
             logger.warning("verb slot weights: stored value is not an object, using defaults")
             return out
-        for part in ("tenses", "persons"):
+        for part in [k for k in ("tenses", "persons", "imp_persons") if k in out]:
             sub = stored.get(part)
+            if part == "imp_persons" and sub is None:
+                continue  # stored before the imperative had its own weights
             if not isinstance(sub, dict):
                 logger.warning("verb slot weights: %r missing or broken, using defaults", part)
                 continue
@@ -828,8 +848,10 @@ def validate_weights(lang: str, data) -> dict:
     if not isinstance(data, dict):
         raise ValueError("body must be an object with 'tenses' and 'persons'")
     out = {}
-    for part in ("tenses", "persons"):
+    for part in [k for k in ("tenses", "persons", "imp_persons") if k in defaults]:
         sub = data.get(part)
+        if part == "imp_persons" and sub is None:
+            sub = {}  # optional: older clients only send tenses + persons
         if not isinstance(sub, dict):
             raise ValueError(f"'{part}' must be an object")
         merged = dict(defaults[part])
@@ -870,6 +892,17 @@ def focus_person_weights(lang: str) -> dict | None:
         return None
 
 
+def focus_person_weights_for(lang: str, tense: str) -> dict | None:
+    """Like focus_person_weights(), but the imperative uses its own table."""
+    if focus_person_weights(lang) is None:
+        return None
+    try:
+        return dict(person_weights_for(weights(lang), tense)) or None
+    except Exception as e:
+        logger.warning("person weights unavailable, rotating evenly — %s", e)
+        return None
+
+
 def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, dict]:
     """Slots in focus mode (#1434). Every card rotates over the persons on its
     OWN (#1475): the person this word has drilled least in the tense (its story
@@ -903,7 +936,13 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
     # Slots already handed to other cards of this story.
     local: dict[str, int] = {}
 
-    pw = focus_person_weights(lang)
+    _pw_cache: dict = {}
+
+    def pw_for(tense: str):
+        if tense not in _pw_cache:
+            _pw_cache[tense] = focus_person_weights_for(lang, tense)
+        return _pw_cache[tense]
+
     verb_mix = None
     try:
         import tense_focus
@@ -931,6 +970,7 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
 
     def pick(avail: list[str], tense: str, usage: dict | None) -> str:
         usage = usage or {}
+        pw = pw_for(tense)
         if pw:
             def w(person: str) -> float:
                 try:
@@ -998,7 +1038,7 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
             try:
                 plan = [x for x in conj_patterns.focus_persons(lemma, tense, lang,
                                                                usage=usage, local=local,
-                                                               weights=pw)
+                                                               weights=pw_for(tense))
                         if x in allowed and target_form(lemma, tense, x, lang)]
             except Exception as e:
                 logger.warning("focus persons of %r failed — %s", lemma, e)
@@ -1072,7 +1112,7 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
         if weights is None:
             weights = globals()["weights"](lang)  # the parameter shadows the function
         w_tense = (weights or {}).get("tenses") or {}
-        w_person = (weights or {}).get("persons") or {}
+        wts_all = weights or {}
         rng = rng or random.Random()
         counts = {k: v[0] for k, v in usage.items()}
         last = {k: (v[1] or "") for k, v in usage.items()}
@@ -1091,7 +1131,8 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                 for person in form_card_persons(lemma, tense, lang):
                     form = target_form(lemma, tense, person, lang)
                     if form:
-                        options.append((f"{tense}:{person}", form, w_person.get(person, 1.0)))
+                        options.append((f"{tense}:{person}", form,
+                                        person_weights_for(wts_all, tense).get(person, 1.0)))
             elif is_slottable_verb(word, lang):
                 lemma = word.strip().lower()
                 for slot in slots:
@@ -1099,7 +1140,8 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                     form = target_form(lemma, tense, person, lang)
                     if form:
                         options.append((slot, form,
-                                        w_tense.get(tense, 1.0) * w_person.get(person, 1.0)))
+                                        w_tense.get(tense, 1.0)
+                                        * person_weights_for(wts_all, tense).get(person, 1.0)))
             else:
                 continue
             options = [o for o in options if o[2] > 0]  # weight 0 = never

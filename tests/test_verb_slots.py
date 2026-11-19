@@ -555,3 +555,17 @@ def test_negative_imperative_target_forms():
     assert verb_slots.target_form("hablar", "imp_neg", "2s", "es") == "no hables"
     assert verb_slots.target_form("quejarse", "imp_neg", "2s", "es") == "no te quejes"
     assert "Imperativo negativo" in verb_slots.describe("imp_neg:3s")
+
+
+def test_imperative_has_own_person_weights():
+    """Imperativo: 3s = usted, so it must not use the general 3s weight (él)."""
+    import verb_slots
+    d = verb_slots.default_weights("es")
+    assert "1s" not in d["imp_persons"]
+    assert d["imp_persons"]["2s"] > d["imp_persons"]["3s"]
+    assert verb_slots.person_weights_for(d, "imp_aff") is d["imp_persons"]
+    assert verb_slots.person_weights_for(d, "imp_neg") is d["imp_persons"]
+    assert verb_slots.person_weights_for(d, "ind_pres") is d["persons"]
+    # older payloads without imp_persons stay valid
+    clean = verb_slots.validate_weights("es", {"tenses": {}, "persons": {}})
+    assert clean["imp_persons"] == d["imp_persons"]

@@ -4466,7 +4466,8 @@ function _esSlotWeightsHtml() {
     }).join('');
     return `<div class="keymap-label"><b>${title}</b></div>${rows}`;
   };
-  return `${group('tenses', 'Tenses')}${group('persons', 'Persons')}
+  const imp = _esSlotWeights.labels.imp_persons ? group('imp_persons', 'Persons (Imperativo)') : '';
+  return `${group('tenses', 'Tenses')}${group('persons', 'Persons')}${imp}
     <div class="keymap-row">
       <button class="keymap-reset-all" onclick="saveEsSlotWeights()" ${_esSlotWeightsBusy ? 'disabled' : ''}>Save</button>
       <button class="keymap-reset-all" onclick="resetEsSlotWeights()" ${_esSlotWeightsBusy ? 'disabled' : ''}>Reset to defaults</button>
@@ -4474,18 +4475,19 @@ function _esSlotWeightsHtml() {
 }
 
 function _esSlotWeightInput(el) {
-  if (!_esSlotDraft) _esSlotDraft = { tenses: {}, persons: {} };
+  if (!_esSlotDraft) _esSlotDraft = { tenses: {}, persons: {}, imp_persons: {} };
   _esSlotDraft[el.dataset.slotPart][el.dataset.slotCode] = el.value;
 }
 
 async function saveEsSlotWeights() {
   if (!_esSlotWeights || _esSlotWeightsBusy) return;
-  const body = { tenses: {}, persons: {} };
+  const body = { tenses: {}, persons: {}, imp_persons: {} };
   document.querySelectorAll('input[data-slot-part]').forEach(el => {
     const raw = el.value.trim();
     body[el.dataset.slotPart][el.dataset.slotCode] = raw === '' ? NaN : Number(raw);
   });
-  for (const part of ['tenses', 'persons']) {
+  if (!_esSlotWeights.labels.imp_persons) delete body.imp_persons;
+  for (const part of Object.keys(body)) {
     for (const [code, v] of Object.entries(body[part])) {
       if (!Number.isFinite(v)) {
         showError(`Weight for ${_esSlotWeights.labels[part][code]} must be a number`);

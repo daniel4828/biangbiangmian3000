@@ -169,6 +169,11 @@ LANGUAGES = {
                               "imp_neg": 2},
             "person_weights": {"3s": 47, "1s": 22.5, "2s": 12, "3p": 11,
                                "1p": 7, "2p": 0.4},
+            # Own person weights for the imperative (imp_aff/imp_neg): there
+            # "3s" is usted, and in real usage commands go mostly to tú. The
+            # general table (3s = él, 47 %) would make usted dominate.
+            "imp_person_weights": {"2s": 60, "3s": 20, "1p": 10, "3p": 8,
+                                   "2p": 2},
         },
         "features": {**_ROMANCE_BASE["features"]},
     },

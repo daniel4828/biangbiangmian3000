@@ -681,8 +681,11 @@ def _verb_slot_weights_payload() -> dict:
     tense_labels = {t: lexicon._TENSE_LABELS.get(t) or ("Perfecto" if t == "perf" else t)
                     for t in defaults["tenses"]}
     person_labels = {p: verb_slots._PERSON_DE.get(p, p) for p in defaults["persons"]}
-    return {"weights": verb_slots.weights("es"), "defaults": defaults,
-            "labels": {"tenses": tense_labels, "persons": person_labels}}
+    labels = {"tenses": tense_labels, "persons": person_labels}
+    if "imp_persons" in defaults:
+        imp_de = {"2s": "tú", "3s": "usted", "1p": "nosotros", "2p": "vosotros", "3p": "ustedes"}
+        labels["imp_persons"] = {p: imp_de.get(p, p) for p in defaults["imp_persons"]}
+    return {"weights": verb_slots.weights("es"), "defaults": defaults, "labels": labels}
 
 
 @router.get("/api/es/verb-slot-weights")
