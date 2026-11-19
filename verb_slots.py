@@ -779,6 +779,34 @@ def default_weights(lang: str) -> dict:
     }
 
 
+IMPERATIVE_TENSES = ("imp_aff", "imp_neg")
+
+
+def person_weight(person_weights: dict, tense: str, person: str, lang: str = "es") -> float:
+    """Weight of `person` inside `tense` (#1605). Normally person_weights[person]
+    (default 1.0). In the imperative there is no yo and 3s/3p mean usted/ustedes,
+    so the configured `imperative_person_weights` apply instead, rescaled so
+    their sum over the imperative persons equals the sum of the general weights
+    over the same persons: the imperative's overall share (tense weight x person
+    weight) stays unchanged. Never raises (falls back to the general weight)."""
+    pw = person_weights or {}
+    plain = float(pw.get(person, 1.0))
+    if tense not in IMPERATIVE_TENSES:
+        return plain
+    try:
+        imp = (config(lang) or {}).get("imperative_person_weights")
+        if not imp:
+            return plain
+        imp_sum = sum(float(imp.get(p, 1.0)) for p in _IMP_PERSONS)
+        if imp_sum <= 0 or person not in _IMP_PERSONS:
+            return plain
+        general_sum = sum(float(pw.get(p, 1.0)) for p in _IMP_PERSONS)
+        return float(imp.get(person, 1.0)) / imp_sum * general_sum
+    except Exception as e:
+        logger.warning("imperative person weight failed, using general weight — %s", e)
+        return plain
+
+
 def _valid_weight(v) -> bool:
     return (isinstance(v, (int, float)) and not isinstance(v, bool)
             and math.isfinite(v) and 0 <= v <= MAX_WEIGHT)
@@ -934,7 +962,7 @@ def _assign_focus(cards: list[dict], focus_tense: str, lang: str) -> dict[int, d
         if pw:
             def w(person: str) -> float:
                 try:
-                    return max(float(pw.get(person, 1.0)), 0.0)
+                    return max(person_weight(pw, tense, person, lang), 0.0)
                 except (TypeError, ValueError):
                     return 1.0
             pool = [x for x in avail if w(x) > 0] or list(avail)
@@ -1091,7 +1119,8 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                 for person in form_card_persons(lemma, tense, lang):
                     form = target_form(lemma, tense, person, lang)
                     if form:
-                        options.append((f"{tense}:{person}", form, w_person.get(person, 1.0)))
+                        options.append((f"{tense}:{person}", form,
+                                        person_weight(w_person, tense, person, lang)))
             elif is_slottable_verb(word, lang):
                 lemma = word.strip().lower()
                 for slot in slots:
@@ -1099,7 +1128,8 @@ def assign_slots(cards: list[dict], lang: str, usage: dict | None = None,
                     form = target_form(lemma, tense, person, lang)
                     if form:
                         options.append((slot, form,
-                                        w_tense.get(tense, 1.0) * w_person.get(person, 1.0)))
+                                        w_tense.get(tense, 1.0)
+                                        * person_weight(w_person, tense, person, lang)))
             else:
                 continue
             options = [o for o in options if o[2] > 0]  # weight 0 = never

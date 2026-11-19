@@ -169,6 +169,12 @@ LANGUAGES = {
                               "imp_neg": 2},
             "person_weights": {"3s": 47, "1s": 22.5, "2s": 12, "3p": 11,
                                "1p": 7, "2p": 0.4},
+            # Imperative persons (#1605): there is no yo, and 3s/3p mean
+            # usted/ustedes, so the general weights (3s = él, 47) would give
+            # usted 61%. Used for imp_aff/imp_neg, rescaled so the imperative's
+            # overall share stays unchanged (see verb_slots.person_weight).
+            "imperative_person_weights": {"2s": 55, "3s": 20, "1p": 15,
+                                          "3p": 10, "2p": 0},
         },
         "features": {**_ROMANCE_BASE["features"]},
     },

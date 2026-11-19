@@ -170,7 +170,9 @@ def test_assign_slots_form_card_uses_only_irregular_persons():
     assert {v["slot"] for v in res.values()} == {"ind_pres:1s"}
     assert {v["form"] for v in res.values()} == {"traigo"}
 
-    imp = [{"word_id": i, "word_zh": "traer · Imperativo"} for i in range(1, 4)]
+    # 10 cards: the imperative person weights (#1605) are not uniform, but
+    # every irregular person still shows up and tú (regular "trae") never does
+    imp = [{"word_id": i, "word_zh": "traer · Imperativo"} for i in range(1, 11)]
     res = verb_slots.assign_slots(imp, "es", usage={}, weights=UNIFORM)
     assert {v["slot"] for v in res.values()} == {"imp_aff:3s", "imp_aff:1p", "imp_aff:3p"}
 

@@ -225,6 +225,52 @@ def test_assign_slots_form_card_uses_person_weights_only():
     assert slots.count("ind_pret:3s") == 3 and slots.count("ind_pret:1s") == 1
 
 
+# --- imperative person weights (#1605) -----------------------------------------
+
+def test_person_weight_non_imperative_unchanged():
+    pw = verb_slots.default_weights("es")["persons"]
+    for p in pw:
+        assert verb_slots.person_weight(pw, "ind_pres", p) == pw[p]
+    assert verb_slots.person_weight({}, "ind_pret", "3s") == 1.0
+
+
+@pytest.mark.parametrize("tense", ["imp_aff", "imp_neg"])
+def test_person_weight_imperative_rescaled(tense):
+    pw = verb_slots.default_weights("es")["persons"]
+    w = {p: verb_slots.person_weight(pw, tense, p) for p in verb_slots._IMP_PERSONS}
+    assert w["2s"] > w["3s"]
+    assert w["2p"] == 0
+    assert sum(w.values()) == pytest.approx(sum(pw[p] for p in verb_slots._IMP_PERSONS))
+
+
+def _persons_share(tense, n=200):
+    forms = {"imp_aff": verb_slots._IMP_PERSONS}.get(tense, verb_slots.PERSONS)
+
+    def fake_form(lemma, t, person, lang="es"):
+        return f"{lemma}-{t}-{person}" if t == tense and person in forms else None
+
+    w = {"tenses": {t: (1.0 if t == tense else 0.0) for t in _TENSES},
+         "persons": verb_slots.default_weights("es")["persons"]}
+    cards = [_card(i, "hablar") for i in range(1, n + 1)]
+    with patch.object(verb_slots, "target_form", fake_form):
+        out = verb_slots.assign_slots(cards, "es", usage={}, rng=random.Random(3), weights=w)
+    slots = [v["slot"].partition(":")[2] for v in out.values()]
+    assert len(slots) == n
+    return {p: 100.0 * slots.count(p) / n for p in verb_slots.PERSONS}
+
+
+def test_imperative_rotation_uses_imperative_person_weights():
+    share = _persons_share("imp_aff")
+    assert abs(share["2s"] - 55) <= 5
+    assert abs(share["3s"] - 20) <= 5
+    assert share["2p"] == 0 and share["1s"] == 0
+
+
+def test_indicative_rotation_keeps_general_person_weights():
+    share = _persons_share("ind_pres")
+    assert max(share, key=share.get) == "3s"
+
+
 def test_default_weights_follow_config():
     d = verb_slots.default_weights("es")
     assert list(d["tenses"]) == verb_slots.config("es")["tenses"]

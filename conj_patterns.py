@@ -548,7 +548,7 @@ def pick_person(group: list[str], tense: str, usage: dict | None = None,
     if weights:
         def w(person: str) -> float:
             try:
-                return max(float(weights.get(person, 1.0)), 0.0)
+                return max(verb_slots.person_weight(weights, tense, person, LANG), 0.0)
             except (TypeError, ValueError):
                 return 1.0
         pool = [p for p in group if w(p) > 0] or list(group)
@@ -918,7 +918,7 @@ def _word_pattern_keys(word_zh: str, cfg: dict, w_tense: dict, w_person: dict,
         if parsed:
             lemma, tense = parsed
             for person in verb_slots.form_card_persons(lemma, tense, LANG):
-                if w_person.get(person, 1.0) > 0:
+                if verb_slots.person_weight(w_person, tense, person, LANG) > 0:
                     pat = pattern_for(lemma, tense, person)
                     if pat:
                         keys.add(pat["key"])
@@ -926,7 +926,8 @@ def _word_pattern_keys(word_zh: str, cfg: dict, w_tense: dict, w_person: dict,
             lemma = word_zh.strip().lower()
             for tense in cfg["tenses"]:
                 for person in cfg["persons"]:
-                    if w_tense.get(tense, 1.0) * w_person.get(person, 1.0) <= 0:
+                    if (w_tense.get(tense, 1.0)
+                            * verb_slots.person_weight(w_person, tense, person, LANG)) <= 0:
                         continue
                     if verb_slots.target_form(lemma, tense, person, LANG) is None:
                         continue
