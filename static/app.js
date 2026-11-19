@@ -4883,7 +4883,7 @@ function renderSettings() {
   pages.shortcuts = { title: 'Shortcuts', icon: '⌨️', desc: 'All keyboard shortcuts', html: `
     <div class="keymap-panel">
       <h2 class="keymap-heading">Keyboard shortcuts</h2>
-      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed.</p>
+      <p class="keymap-hint">Click a key, then press the new key — Shift is allowed (e.g. Shift+F), Ctrl/Cmd/Alt combos are not. Press Backspace or ✕ to remove a shortcut. Rating keys 1–4 and Esc are fixed, as is ⌥⇧D (delete card during review).</p>
       ${msg}
       ${groups}
       <button class="keymap-reset-all" onclick="resetKeymapAll()">Reset all to defaults</button>
@@ -20477,6 +20477,18 @@ document.addEventListener('keydown', async e => {
       const overlay = document.getElementById('logs-modal-overlay');
       if (overlay && overlay.style.display !== 'none') closeLogsViewer();
       else openLogsViewer();
+    }
+    return;
+  }
+
+  // Option+Shift+D deletes the current review card (#1601). Fixed combo, next
+  // to the rebindable D / 7 keys. e.code again: on macOS Option+Shift+D
+  // produces 'Î', so e.key wouldn't be 'D'.
+  if (e.code === 'KeyD' && e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    const _rv = document.getElementById('view-review');
+    if (!inInput && _rv && _rv.style.display !== 'none' && !_hasOpenModal()) {
+      e.preventDefault();
+      reviewCardAction('delete');
     }
     return;
   }
