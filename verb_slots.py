@@ -1269,7 +1269,8 @@ def _base_verb(lemma: str) -> str:
     """Lower-cased infinitive; reflexive -arse/-erse/-irse loses the "se"
     (same rule as verb_regularity)."""
     lemma = (lemma or "").strip().lower()
-    if len(lemma) > 4 and lemma.endswith(("arse", "erse", "irse")):
+    # irse (4 letters) and reírse/oírse (accented) are reflexive too
+    if len(lemma) >= 4 and _strip_accents(lemma).endswith(("arse", "erse", "irse")):
         lemma = lemma[:-2]
     return lemma
 

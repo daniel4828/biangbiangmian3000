@@ -218,6 +218,22 @@ _form_index: dict[str, dict] = {}
 _forms_of_index: dict[str, dict] = {}
 
 
+_PERSON_TENSES = ("ind_pres", "ind_pret", "ind_impf", "ind_fut")
+
+
+def _prefer_irregular(form: str, old: str, tag) -> bool:
+    """Two forms for one slot (acostar: acosto/acuesto, errar: erro/yerro):
+    the irregular one wins, so the verb gets its irregular tag and is drilled
+    in its common irregular form. Never raises."""
+    try:
+        import verb_slots  # lazy: verb_slots imports lexicon
+        lemma, tense, person = tag[0], tag[1], tag[2]
+        return (verb_slots._cell_regular(form, lemma, tense, person) is False
+                and verb_slots._cell_regular(old, lemma, tense, person) is True)
+    except Exception:
+        return False
+
+
 def form_for(lemma: str, tense: str, person: str, lang: str) -> str | None:
     """The conjugated form of `lemma` for (tense, person), or None. Never raises.
 
@@ -234,6 +250,8 @@ def form_for(lemma: str, tense: str, person: str, lang: str) -> str | None:
                     key = (t[0], t[1], t[2])
                     old = index.get(key)
                     if old is None or (t[1] in ("imp_aff", "imp_neg") and len(form) < len(old)):
+                        index[key] = form
+                    elif t[1] in _PERSON_TENSES and _prefer_irregular(form, old, t):
                         index[key] = form
             _form_index[lang] = index
         return index.get(((lemma or "").lower(), tense, person))
