@@ -30,7 +30,7 @@
   }
   .top { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; flex: none; }
   .langs { display: flex; gap: .3rem; }
-  .langs button, button#new, button#hist {
+  .langs button, button#new, button#hist, button#addw {
     padding: .25rem .7rem; font: inherit; font-size: .82rem; font-weight: 600;
     color: var(--muted); background: var(--bg); border: 1px solid var(--line);
     border-radius: 8px; cursor: pointer;
@@ -92,8 +92,9 @@
   <div class="top">
     <div class="langs" id="langs"></div>
     <button type="button" id="hist">Verlauf</button>
+    <button type="button" id="addw" title="Direkt als Karte in die ★ List (⌘↵)">★ Karte</button>
     <button type="button" id="new">Neu</button>
-    <span class="kbd-hint" title="Tab: Sprache wechseln · Shift+Tab: neuer Chat">⇥ Sprache · ⇧⇥ Neu · ⌘Y Verlauf · ⌥⇧K</span>
+    <span class="kbd-hint" title="Tab: Sprache wechseln · Shift+Tab: neuer Chat">⌘↵ Karte · ⇥ Sprache · ⇧⇥ Neu · ⌘Y Verlauf · ⌥⇧K</span>
   </div>
   <div id="messages"><div id="log"></div><div id="history"></div></div>
   <div id="err"></div>
@@ -429,11 +430,38 @@
     }
   }
 
+  // Direkt hinzufügen ohne Nachschlagen: geht durch dieselbe Pipeline (#643).
+  function addDirect() {
+    const text = inputEl.value.trim();
+    if (!text || busy) return;
+    if (historyOpen) closeHistory();
+    errEl.textContent = '';
+    const words = text.split(/[\n,，、]+/).map(w => w.trim()).filter(Boolean).slice(0, 20);
+    const userMsg = el('div', 'msg user');
+    userMsg.append(el('div', 'bubble', '★ ' + words.join(', ')));
+    const box = el('div', 'msg assistant');
+    const adds = el('div', 'adds');
+    box.append(adds);
+    msgsEl.append(userMsg, box);
+    anchorEl = userMsg;
+    for (const w of words) addWordStatus(adds, w, lang);
+    inputEl.value = '';
+    autosize();
+    inputEl.focus();
+    scrollToNewest();
+  }
+  document.getElementById('addw').onclick = addDirect;
+
   inputEl.addEventListener('keydown', e => {
     if (e.key === 'Tab' && !e.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       if (e.shiftKey) newChat();
       else cycleLang(1);
+      return;
+    }
+    if (e.key === 'Enter' && e.metaKey && !e.isComposing) {
+      e.preventDefault();
+      addDirect();
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
