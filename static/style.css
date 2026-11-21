@@ -56,6 +56,9 @@
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: rgba(100,116,139,.35); border-radius: 999px; }
 
+/* iOS: Schrift nach Drehen ins Querformat und zurück nicht vergrößern */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
 html, body {
   height: 100%;
 }
