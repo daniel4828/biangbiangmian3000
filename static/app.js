@@ -4472,6 +4472,26 @@ function _ttsVoiceHtml(lang) {
     </div>`;
 }
 
+// Stimme direkt im Story-Setup wählen: speichert dieselbe Einstellung wie
+// Einstellungen → Voices, also gilt die zuletzt gewählte auch beim nächsten Mal.
+async function _renderSetupVoice() {
+  const box = document.getElementById('setup-voice-section');
+  if (!box) return;
+  if (!_ttsVoices) {
+    try { _ttsVoices = await api('GET', '/api/tts-voices'); } catch (_) { box.innerHTML = ''; return; }
+  }
+  const lang = setupLang();
+  const langs = lang === 'multi' ? Object.keys(_ttsVoices.langs) : [lang];
+  const names = { zh: 'Chinesisch', es: 'Spanisch' };
+  box.innerHTML = langs.filter(l => _ttsVoices.langs[l]).map(l => {
+    const cfg = _ttsVoices.langs[l];
+    const opts = cfg.options.map(o =>
+      `<option value="${_escHtml(o.voice)}"${o.voice === cfg.current ? ' selected' : ''}>${_escHtml(o.label)}</option>`).join('');
+    return `<label class="edit-label">Stimme${langs.length > 1 ? ' ' + names[l] : ''}
+      <select class="edit-input" onchange="setTtsVoice('${l}', this.value)">${opts}</select></label>`;
+  }).join('');
+}
+
 async function setTtsVoice(lang, voice) {
   try {
     _ttsVoices = await api('PUT', '/api/tts-voices', { lang, voice });
@@ -16941,6 +16961,7 @@ function openStorySetup(sentenceCount, { isMixed = false, isUnfinished = false, 
     }
   }
   document.getElementById('setup-topic').value = '';
+  _renderSetupVoice();
   document.getElementById('setup-grammar').value = '';
   document.getElementById('setup-grammar-pct').value = 50;
   // Knowledge-item multi-select (issue #752): each fresh open of the modal starts
@@ -18959,6 +18980,7 @@ async function regenerateStoryFromList(deckId, category = 'unified') {
   const tokenWarn = document.getElementById('setup-token-warning');
   if (tokenWarn) tokenWarn.style.display = 'none';
   document.getElementById('setup-topic').value = '';
+  _renderSetupVoice();
   document.getElementById('setup-grammar').value = '';
   document.getElementById('setup-grammar-pct').value = 50;
   document.getElementById('setup-hsk-slider').value = 3;
