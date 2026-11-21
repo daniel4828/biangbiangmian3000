@@ -29,14 +29,17 @@
     display: flex; flex-direction: column;
   }
   .top { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; flex: none; }
-  .langs { display: flex; gap: .3rem; }
+  .langs { display: flex; gap: .3rem; flex: none; }
+  /* #1622: buttons never shrink or wrap (narrow panel squeezed 中文 into two
+     lines); the shortcut hint takes the leftover space and truncates. */
   .langs button, button#new, button#hist, button#addw {
-    padding: .25rem .7rem; font: inherit; font-size: .82rem; font-weight: 600;
+    flex: none; height: 1.9rem; padding: 0 .7rem; font: inherit; font-size: .82rem;
+    font-weight: 600; line-height: 1; white-space: nowrap;
     color: var(--muted); background: var(--bg); border: 1px solid var(--line);
     border-radius: 8px; cursor: pointer;
   }
   .langs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button#hist { margin-left: auto; }
+  button#hist { margin-left: .4rem; }
   #history { display: none; }
   #history .empty { color: var(--muted); padding: .6rem .2rem; }
   #history .row {
@@ -51,7 +54,10 @@
     font: inherit; font-size: .85rem; padding: 0 .3rem;
   }
   #history .row button.del:hover { color: var(--err); }
-  .kbd-hint { font-size: .72rem; color: var(--muted); }
+  .kbd-hint {
+    flex: 1 1 0; min-width: 0; text-align: right; font-size: .72rem; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   textarea#input {
     display: block; width: 100%; padding: .55rem .7rem; font: inherit; font-size: 1rem;
     color: inherit; resize: none; overflow-y: auto; line-height: 1.4;
@@ -94,7 +100,7 @@
     <button type="button" id="hist">Verlauf</button>
     <button type="button" id="addw" title="Direkt als Karte in die ★ List (⌘↵)">★ Karte</button>
     <button type="button" id="new">Neu</button>
-    <span class="kbd-hint" title="Tab: Sprache wechseln · Shift+Tab: neuer Chat">⌘↵ Karte · ⇥ Sprache · ⇧⇥ Neu · ⌘Y Verlauf · ⌥⇧K</span>
+    <span class="kbd-hint" title="⌘↵ Karte · Tab: Sprache wechseln · Shift+Tab: neuer Chat · ⌘Y Verlauf · ⌥⇧K">⌘↵ Karte · ⇥ Sprache · ⇧⇥ Neu · ⌘Y Verlauf · ⌥⇧K</span>
   </div>
   <div id="messages"><div id="log"></div><div id="history"></div></div>
   <div id="err"></div>
