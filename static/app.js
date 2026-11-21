@@ -11223,6 +11223,7 @@ function _prettyModel(model) {
     .replace('claude-', '')
     .replace('-20251001', '')
     .replace('gpt-6-luna', 'GPT-6 Luna')
+    .replace('gpt-6.2-sol', 'GPT-6.2 Sol')
     .replace('gpt-6.1-sol', 'GPT-6.1 Sol')
     .replace('gpt-6-sol', 'GPT-6 Sol')
     .replace('gpt-6-astra', 'GPT-6 Astra')
@@ -22372,7 +22373,8 @@ async function openBookChapterSummary(bookId, number) {
 const KNOWLEDGE_CHAT_MODELS = [
   ['gpt-6-luna', 'GPT-6 Luna — OpenAI, default'],
   ['gpt-6-sol', 'GPT-6 Sol — OpenAI, balanced'],
-  ['gpt-6.1-sol', 'GPT-6.1 Sol — OpenAI, balanced + newest'],
+  ['gpt-6.2-sol', 'GPT-6.2 Sol — OpenAI, balanced + newest'],
+  ['gpt-6.1-sol', 'GPT-6.1 Sol — OpenAI, balanced'],
   ['gpt-6-astra', 'GPT-6 Astra — OpenAI flagship'],
   ['deepseek-v4-flash', 'DeepSeek V4 Flash — cheap, reliable'],
   ['deepseek-v4-pro', 'DeepSeek V4 Pro — higher quality'],
