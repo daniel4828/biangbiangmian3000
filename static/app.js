@@ -2363,6 +2363,7 @@ function _homeLanguageRows(allDeck, regularDecks) {
         <span class="tree-toggle"></span>
         <span class="tree-name-wrap">
           <span class="tree-name" onclick="${allClick}" style="cursor:pointer" title="Every due card of every language, one story">All</span>
+          ${!_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();${multi ? `regenerateStoryMulti(${allDeck.id})` : `regenerateStoryLang('${groups[0]?.lang || 'zh'}')`}" title="Regenerate story">↺</button>` : ''}
         </span>
         <span class="deck-counts"><span class="n-new">${allCounts.new}</span>${lrnHtml(allCounts)}<span class="n-rev">${allCounts.review}</span></span>
         ${allRRBadge}
@@ -2393,6 +2394,7 @@ function _homeLanguageRows(allDeck, regularDecks) {
         <span class="tree-toggle" onclick="toggleHomeLang('${g.lang}')">${open ? '▼' : '▶'}</span>
         <span class="tree-name-wrap">
           <span class="tree-name" onclick="startReviewLang('${g.lang}')" style="cursor:pointer;font-weight:600">${label}</span>
+          ${!_offlineMode ? `<button class="deck-regen-btn" onclick="event.stopPropagation();regenerateStoryLang('${g.lang}')" title="Regenerate ${label} story">↺</button>` : ''}
         </span>
         <span class="deck-counts"><span class="n-new">${c.new}</span>${lrnHtml(c)}<span class="n-rev">${c.review}</span></span>
         <div class="cat-pills-row">${setLang(buildCategoryButtons(pseudo))}</div>
@@ -12659,6 +12661,18 @@ function _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chap
 function startReviewMulti(id) {
   _multiLangSession = true;
   return startReviewMixed(id, 'Languages');
+}
+
+// ↺ on the home language rows / All row: regenerate the mixed story of the
+// All root scoped to one language, or to all languages (🌐, #1378).
+function regenerateStoryLang(lang) {
+  _multiLangSession = false;
+  _setLangQuiet(lang);
+  return regenerateStoryFromList(_homeAllId);
+}
+function regenerateStoryMulti(id) {
+  _multiLangSession = true;
+  return regenerateStoryFromList(id);
 }
 
 // Home-list entry for the normal "All"/deck rows: always a single-language session.
