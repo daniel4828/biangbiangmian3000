@@ -21,8 +21,19 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 cp .build/biangbiang-quick "$app/Contents/MacOS/biangbiang-quick"
 cp Support/Info.plist "$app/Contents/Info.plist"
+mkdir -p "$app/Contents/Resources"
+iconset="$(mktemp -d)/AppIcon.iconset"
+mkdir -p "$iconset"
+[ -d /Applications/Xcode.app/Contents/Developer ] && export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+swift Support/make_icon.swift "$iconset/icon_512x512@2x.png" >/dev/null
+for s in 16 32 128 256 512; do
+  sips -z $s $s "$iconset/icon_512x512@2x.png" --out "$iconset/icon_${s}x${s}.png" >/dev/null
+  sips -z $((s*2)) $((s*2)) "$iconset/icon_512x512@2x.png" --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 codesign --force --deep -s - "$app"
 
+touch "$app"
 echo "== 步骤 4/4：启动 =="
 open "$app"
 
