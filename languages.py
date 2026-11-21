@@ -130,7 +130,7 @@ LANGUAGES = {
         "code": "es",
         "name_en": "Spanish",
         "name_native": "Español",
-        "tts_voice": "es-ES-ElviraNeural",
+        "tts_voice": "es-DO-RamonaNeural",
         "say_voice": "Mónica",
         "translator_source": "es",
         "deck_root": "Español",

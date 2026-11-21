@@ -21,6 +21,7 @@ import re
 import edge_tts
 
 import languages
+import tts
 from offline import is_offline
 
 from . import AudioTrackError, Cue, Track, strip_annotations
@@ -130,7 +131,7 @@ def build(text: str, lang: str = "zh", voice: str | None = None) -> Track:
         # way tts.py does: a track for this exact (owner, lang, variant) is,
         # by construction, new content that has never been generated before.
         raise AudioTrackError("offline mode: cannot synthesize new audio")
-    voice = voice or languages.get_lang_config(lang)["tts_voice"]
+    voice = voice or tts.voice_for(lang)
 
     orig_text = text or ""
     clean_text, offset_map = strip_annotations(orig_text)
