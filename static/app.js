@@ -4176,6 +4176,7 @@ function openSettings() {
   _loadLangSettings();
   _loadDailyTarget();
   _loadEsSlotWeights();
+  _loadTtsVoices();
   _loadEsConj();
   _loadEsTenseFocus();
   _loadSentencePrompt();
@@ -4441,6 +4442,43 @@ async function saveEsConjSettings(partial) {
     _esConjBusy = false;
     renderSettings();
   }
+}
+
+// ── TTS-Stimmen je Sprache ──────────────────────────────────────────────────
+let _ttsVoices = null;
+let _ttsVoicesFailed = false;
+
+async function _loadTtsVoices() {
+  try {
+    _ttsVoices = await api('GET', '/api/tts-voices');
+    _ttsVoicesFailed = false;
+  } catch (e) {
+    _ttsVoices = null;
+    _ttsVoicesFailed = true;
+  }
+  renderSettings();
+}
+
+function _ttsVoiceHtml(lang) {
+  if (_ttsVoicesFailed) return '<div class="keymap-label">Could not load</div>';
+  if (!_ttsVoices) return '<div class="keymap-label">Loading…</div>';
+  const cfg = _ttsVoices.langs[lang];
+  if (!cfg) return '';
+  const opts = cfg.options.map(o =>
+    `<option value="${_escHtml(o.voice)}"${o.voice === cfg.current ? ' selected' : ''}>${_escHtml(o.label)}${o.voice === cfg.default ? ' (Standard)' : ''}</option>`).join('');
+  return `<div class="keymap-row">
+      <span class="keymap-label">Stimme</span>
+      <select onchange="setTtsVoice('${lang}', this.value)">${opts}</select>
+    </div>`;
+}
+
+async function setTtsVoice(lang, voice) {
+  try {
+    _ttsVoices = await api('PUT', '/api/tts-voices', { lang, voice });
+  } catch (e) {
+    showError('Voice could not be saved: ' + e.message);
+  }
+  renderSettings();
 }
 
 // ── Spanish verb slot weights (issue #1306) ─────────────────────────────────
@@ -4989,7 +5027,19 @@ function renderSettings() {
         </label>
       </div>
     </div>` };
+  pages.voices = { title: 'Voices', icon: '🔊', desc: 'Stimme für Chinesisch und Spanisch', html: `
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Chinesisch</h2>
+      ${_ttsVoiceHtml('zh')}
+      <h2 class="keymap-heading">Spanisch</h2>
+      ${_ttsVoiceHtml('es')}
+      <p class="keymap-hint">Gilt für neu erzeugtes Audio; schon erzeugte Audios behalten ihre Stimme.</p>
+    </div>` };
   pages.spanish = { title: 'Spanish', icon: '🇪🇸', desc: 'Irregular verb cards, verb slot weights', html: `
+    <div class="keymap-panel">
+      <h2 class="keymap-heading">Stimme</h2>
+      ${_ttsVoiceHtml('es')}
+    </div>
     <div class="keymap-panel">
       <h2 class="keymap-heading">Zeit des Tages</h2>
       <p class="keymap-hint">Pro Tag genau eine Zeit; darin laufen die Personen in fester Reihenfolge (yo, tú, él, nosotros, vosotros, ellos).</p>

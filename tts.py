@@ -50,6 +50,65 @@ _hot: set[str] = set()
 _preload_progress: dict[str, dict] = {}
 
 
+# Wählbare Stimmen pro Lernsprache (Einstellungen → Voices). Die gewählte
+# Stimme steht in app_settings `tts_voice_<lang>`; leer/unbekannt = Standard
+# aus languages.py. Andere Stimme = anderer Cache-Pfad (Präfix), alte Dateien
+# bleiben, neue Audios werden mit der neuen Stimme erzeugt.
+VOICE_OPTIONS: dict[str, list[tuple[str, str]]] = {
+    "zh": [
+        ("zh-CN-XiaoxiaoNeural", "Xiaoxiao – Festland, Frau"),
+        ("zh-CN-XiaoyiNeural", "Xiaoyi – Festland, Frau"),
+        ("zh-CN-YunxiNeural", "Yunxi – Festland, Mann"),
+        ("zh-CN-YunjianNeural", "Yunjian – Festland, Mann"),
+        ("zh-CN-YunyangNeural", "Yunyang – Festland, Mann (Nachrichten)"),
+        ("zh-CN-YunxiaNeural", "Yunxia – Festland, Junge"),
+        ("zh-CN-liaoning-XiaobeiNeural", "Xiaobei – Liaoning (Nordosten), Frau"),
+        ("zh-CN-shaanxi-XiaoniNeural", "Xiaoni – Shaanxi, Frau"),
+        ("zh-TW-HsiaoChenNeural", "HsiaoChen – Taiwan, Frau"),
+        ("zh-TW-HsiaoYuNeural", "HsiaoYu – Taiwan, Frau"),
+        ("zh-TW-YunJheNeural", "YunJhe – Taiwan, Mann"),
+    ],
+    "es": [
+        ("es-DO-RamonaNeural", "Ramona – Dominikanische Republik, Frau"),
+        ("es-DO-EmilioNeural", "Emilio – Dominikanische Republik, Mann"),
+        ("es-ES-ElviraNeural", "Elvira – Spanien, Frau"),
+        ("es-ES-AlvaroNeural", "Álvaro – Spanien, Mann"),
+        ("es-MX-DaliaNeural", "Dalia – Mexiko, Frau"),
+        ("es-MX-JorgeNeural", "Jorge – Mexiko, Mann"),
+        ("es-CU-BelkysNeural", "Belkys – Kuba, Frau"),
+        ("es-CU-ManuelNeural", "Manuel – Kuba, Mann"),
+        ("es-PR-KarinaNeural", "Karina – Puerto Rico, Frau"),
+        ("es-PR-VictorNeural", "Víctor – Puerto Rico, Mann"),
+        ("es-CO-SalomeNeural", "Salomé – Kolumbien, Frau"),
+        ("es-CO-GonzaloNeural", "Gonzalo – Kolumbien, Mann"),
+        ("es-VE-PaolaNeural", "Paola – Venezuela, Frau"),
+        ("es-AR-ElenaNeural", "Elena – Argentinien, Frau"),
+        ("es-AR-TomasNeural", "Tomás – Argentinien, Mann"),
+        ("es-CL-CatalinaNeural", "Catalina – Chile, Frau"),
+        ("es-PE-CamilaNeural", "Camila – Peru, Frau"),
+        ("es-US-PalomaNeural", "Paloma – USA, Frau"),
+    ],
+}
+
+
+def voice_setting_key(lang: str) -> str:
+    return f"tts_voice_{lang}"
+
+
+def voice_for(lang: str = "zh") -> str:
+    """Effektive edge-tts-Stimme einer Lernsprache; wirft nie."""
+    default = languages.get_lang_config(lang)["tts_voice"]
+    allowed = {v for v, _ in VOICE_OPTIONS.get(lang, [])}
+    if not allowed:
+        return default
+    try:
+        import database
+        chosen = database.get_app_setting(voice_setting_key(lang)) or ""
+    except Exception:
+        return default
+    return chosen if chosen in allowed else default
+
+
 def _cache_path(text: str, voice: str = VOICE) -> str:
     # Keep the existing key formula for the zh default voice so the pre-existing
     # cache stays valid; other voices get a voice-prefixed key to avoid collisions.
@@ -148,7 +207,7 @@ async def preload_all_async(texts: list[str], progress_key: str | None = None,
     If progress_key is given, updates _preload_progress[progress_key] as each
     sentence finishes so callers can poll for live progress.
     """
-    voice = languages.get_lang_config(lang)["tts_voice"]
+    voice = voice_for(lang)
     total = len(texts)
     missing = [t for t in texts if _cache_path(t, voice) not in _hot
                and not os.path.exists(_cache_path(t, voice))]
@@ -213,7 +272,7 @@ def preload(text: str, lang: str = "zh") -> None:
     """Fire-and-forget single-item preload (background thread)."""
     if is_offline():
         return
-    voice = languages.get_lang_config(lang)["tts_voice"]
+    voice = voice_for(lang)
     threading.Thread(target=lambda: asyncio.run(_ensure_cached(text, voice)),
                      daemon=True).start()
 
@@ -235,7 +294,7 @@ GLOSS_VOICES = {"de": "de-DE-KatjaNeural"}
 
 async def get_cached_path(text: str, lang: str = "zh") -> str:
     """Return local mp3 path for text, generating via edge-tts if not cached."""
-    voice = GLOSS_VOICES.get(lang) or languages.get_lang_config(lang)["tts_voice"]
+    voice = GLOSS_VOICES.get(lang) or voice_for(lang)
     return await _ensure_cached(text, voice)
 
 
@@ -301,7 +360,7 @@ async def _play(text: str, lang: str = "zh") -> None:
     global _current_playback
     cfg = languages.get_lang_config(lang)
     try:
-        path = await asyncio.wait_for(_ensure_cached(text, cfg["tts_voice"]), timeout=5.0)
+        path = await asyncio.wait_for(_ensure_cached(text, voice_for(lang)), timeout=5.0)
         cmd = ["afplay", path]
     except Exception:
         logger.warning("tts  edge-tts failed, falling back to macOS say")

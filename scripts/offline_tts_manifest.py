@@ -37,7 +37,7 @@ STORY_LOOKBACK_DAYS = 3
 def _filename(text: str, lang: str) -> str | None:
     if not text or not text.strip():
         return None
-    voice = languages.get_lang_config(lang)["tts_voice"]
+    voice = tts.voice_for(lang)
     return os.path.basename(tts._cache_path(text, voice))
 
 

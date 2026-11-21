@@ -671,6 +671,37 @@ def create_es_irregular_form_cards(body: dict | None = None):
     return result
 
 
+def _tts_voices_payload() -> dict:
+    """Wählbare + aktuelle TTS-Stimmen je Sprache (Einstellungen → Voices)."""
+    import languages
+    import tts
+    out = {}
+    for lang, opts in tts.VOICE_OPTIONS.items():
+        out[lang] = {"current": tts.voice_for(lang),
+                     "default": languages.get_lang_config(lang)["tts_voice"],
+                     "options": [{"voice": v, "label": l} for v, l in opts]}
+    return {"langs": out}
+
+
+@router.get("/api/tts-voices")
+def get_tts_voices():
+    return _tts_voices_payload()
+
+
+@router.put("/api/tts-voices")
+def put_tts_voice(body: dict):
+    """body {lang, voice}; voice leer = Standard."""
+    import tts
+    lang = (body or {}).get("lang")
+    voice = (body or {}).get("voice") or ""
+    if lang not in tts.VOICE_OPTIONS:
+        raise HTTPException(status_code=400, detail="unknown lang")
+    if voice and voice not in {v for v, _ in tts.VOICE_OPTIONS[lang]}:
+        raise HTTPException(status_code=400, detail="unknown voice")
+    database.set_app_setting(tts.voice_setting_key(lang), voice)
+    return _tts_voices_payload()
+
+
 def _verb_slot_weights_payload() -> dict:
     """Shared response of the verb-slot-weights endpoints (#1306)."""
     import lexicon
