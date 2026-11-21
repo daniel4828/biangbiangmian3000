@@ -54,16 +54,6 @@
     font: inherit; font-size: .85rem; padding: 0 .3rem;
   }
   #history .row button.del:hover { color: var(--err); }
-  /* #1624: last chats below the empty input (fresh chat on every open). */
-  #recent { flex: none; margin-top: .45rem; }
-  #recent:empty { display: none; }
-  #recent .row {
-    display: flex; align-items: baseline; gap: .5rem; padding: .25rem .4rem;
-    border-radius: 6px; cursor: pointer; font-size: .85rem;
-  }
-  #recent .row:hover { background: var(--bubble); }
-  #recent .row .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #recent .row .m { flex: none; font-size: .72rem; color: var(--muted); }
   .kbd-hint {
     flex: 1 1 0; min-width: 0; text-align: right; font-size: .72rem; color: var(--muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -116,7 +106,6 @@
   <div id="err"></div>
   <textarea id="input" rows="1" placeholder="Wort, Satz oder Frage…" autofocus
             autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
-  <div id="recent"></div>
 </div>
 <div class="grip top" data-edge="top"></div>
 <div class="grip topleft" data-edge="topleft"></div>
@@ -131,7 +120,6 @@
   const scrollerEl = document.getElementById('messages');
   const msgsEl = document.getElementById('log');
   const histEl = document.getElementById('history');
-  const recentEl = document.getElementById('recent');
   const mainEl = document.getElementById('main');
   const langsEl = document.getElementById('langs');
   const LANG_LABELS = { zh: '中文', es: 'Español', fr: 'Français' };
@@ -162,8 +150,7 @@
     const ms = getComputedStyle(mainEl);
     const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
               + parseFloat(ms.paddingTop) + parseFloat(ms.paddingBottom);
-    const chrome = outerHeight(mainEl.querySelector('.top')) + outerHeight(errEl) + outerHeight(inputEl)
-                 + outerHeight(recentEl);
+    const chrome = outerHeight(mainEl.querySelector('.top')) + outerHeight(errEl) + outerHeight(inputEl);
     const body = historyOpen ? histEl : msgsEl;
     post({ type: 'height', value: Math.ceil(pad + chrome + body.getBoundingClientRect().height) });
   }
@@ -367,41 +354,12 @@
         anchorEl = u;
       }
       errEl.textContent = '';
-      hideRecent();
       closeHistory();
       inputEl.focus();
     } catch (e) {
       errEl.textContent = e.message || 'Fehler';
     }
   }
-  // #1624: with an empty chat, the last few chats sit below the input.
-  const RECENT_LIMIT = 5;
-  let recentSeq = 0;
-  function hideRecent() {
-    recentSeq++;
-    recentEl.replaceChildren();
-    reportHeight();
-  }
-  async function showRecent() {
-    const seq = ++recentSeq;
-    try {
-      const res = await api('GET', `/api/quick-chats?limit=${RECENT_LIMIT}`);
-      if (seq !== recentSeq || turns.length) return;
-      recentEl.replaceChildren(...(res.items || []).slice(0, RECENT_LIMIT).map(it => {
-        const row = el('div', 'row');
-        row.append(el('span', 't', it.title || '(ohne Titel)'),
-                   el('span', 'm', `${LANG_LABELS[it.lang] || it.lang} · ${(it.updated_at || '').slice(5, 16)}`));
-        row.onclick = () => restoreChat(it.id);
-        return row;
-      }));
-    } catch (e) {
-      // Only a convenience: the full list is still under „Verlauf“.
-      console.warn('recent chats:', e);
-      if (seq === recentSeq) recentEl.replaceChildren();
-    }
-    reportHeight();
-  }
-
   function toggleHistory() {
     if (historyOpen) closeHistory();
     else openHistory();
@@ -412,7 +370,6 @@
     const text = inputEl.value.trim();
     if (!text || busy) return;
     if (historyOpen) closeHistory();
-    hideRecent();
     busy = true;
     inputEl.disabled = true;
     errEl.textContent = '';
@@ -531,10 +488,8 @@
     inputEl.value = '';
     autosize();
     inputEl.focus();
-    showRecent();
   }
   document.getElementById('new').onclick = newChat;
-  showRecent();
   // Mac app: fresh chat on every open (#1543, menu „Beim Öffnen neuer Chat“).
   window.quickNewChat = newChat;
 
