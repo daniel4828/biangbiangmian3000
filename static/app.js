@@ -12993,26 +12993,30 @@ function loadCard(c, counts) {
           sentence = story.sentences.find(s => s.word_ids?.includes(card.word_id)) || null;
           _prefetchStoryAudio(story.sentences);
         }
+        // Listening front: hint + auto-play only once the sentence is known —
+        // otherwise the front stays blank and only the bare word is spoken.
+        const startListening = () => {
+          if (card !== snap || snap.category !== 'listening' ||
+              document.getElementById('side-back').style.display !== 'none') return;
+          _initListenHint();
+          playSentence();
+        };
         if (sentence) {
           applySentenceToUI();
+          startListening();
         } else {
           // Word not in this story (e.g. cross-day card in mixed review): fall back to
           // the word's own most recent sentence, which carries the German translation.
           fetch(`/api/sentence-for-word/${card.word_id}`)
             .then(r => r.ok ? r.json() : null)
             .then(d => {
-              if (card !== snap || !d?.sentence) return;
-              sentence = d.sentence;
-              applySentenceToUI();
-            }).catch(() => {});
-        }
-        // Update listening hint now that sentence is loaded
-        if (snap.category === 'listening' && document.getElementById('side-back').style.display === 'none') {
-          _initListenHint();
-        }
-        // Auto-play deferred from loadCard: play now that story is loaded
-        if (snap.category === 'listening' && document.getElementById('side-back').style.display === 'none') {
-          if (card === snap) playSentence();
+              if (card !== snap) return;
+              if (d?.sentence) {
+                sentence = d.sentence;
+                applySentenceToUI();
+              }
+              startListening();
+            }).catch(() => startListening());
         }
       }).catch(() => {
         // On fetch error, still play audio (falls back to word_zh)
