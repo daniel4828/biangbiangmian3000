@@ -43,14 +43,22 @@ def _attach_again_sentence(card: dict | None) -> dict | None:
     return card
 
 
-def again_regen_enabled() -> bool:
+def again_regen_enabled(lang: str | None = None) -> bool:
     """User switch for the Again → regenerate behaviour (issue #714). Default on,
     so an untouched install keeps the behaviour it always had.
 
+    Per language: `again_regen_enabled_<lang>` overrides the global
+    `again_regen_enabled`, which stays as the starting value for every language
+    that has no value of its own (so an existing install changes nothing).
+
     Only the *automatic* trigger on a rating is gated. The "New sentence" button
     (`/api/review/requeue`) asks for a regeneration explicitly and must keep
-    working regardless — a button silently swallowed by a global switch is a
+    working regardless — a button silently swallowed by a switch is a
     broken button."""
+    if lang:
+        own = database.get_app_setting(f"again_regen_enabled_{lang}")
+        if own is not None:
+            return own == "1"
     return database.get_app_setting("again_regen_enabled", "1") == "1"
 
 
@@ -312,7 +320,8 @@ def submit_review(card_id: int, rating: int, user_response: str | None = None,
     # Switchable (issue #714): off means the card keeps its original sentence,
     # which is what you want when the sentence was fine and only the recall failed.
     if rating == 1:
-        if again_regen_enabled():
+        card_lang = (card_before or {}).get("word_lang") or "zh"
+        if again_regen_enabled(card_lang):
             _spawn_again_regen(card_before)
         else:
             logger.debug("again-regen  word=%s — skipped, switch off",
@@ -527,19 +536,33 @@ def _record_conjugation(card_before: dict, ok: bool, sentence_id: int) -> dict |
 
 @router.get("/api/again-regen-enabled")
 def get_again_regen_enabled():
-    """Whether rating Again auto-regenerates the card's sentence (issue #714)."""
-    return {"enabled": again_regen_enabled()}
+    """Whether rating Again auto-regenerates the card's sentence (issue #714).
+    `enabled` is the global starting value; `langs` is the effective value per
+    registered language."""
+    from languages import LANGUAGES
+    return {"enabled": again_regen_enabled(),
+            "langs": {code: again_regen_enabled(code) for code in LANGUAGES}}
 
 
 @router.put("/api/again-regen-enabled")
 def put_again_regen_enabled(body: dict):
-    """Set the Again → regenerate switch (issue #714). body: {"enabled": bool}.
+    """Set the Again → regenerate switch (issue #714).
+    body: {"enabled": bool, "lang"?: "zh"|"es"|"fr"}. With `lang` only that
+    language changes; without it the global starting value changes (old behaviour).
     Stored server-side because the regeneration itself runs there — a browser-only
     preference would leave the other devices (and the phone) doing something else."""
+    from languages import LANGUAGES
     enabled = bool(body.get("enabled"))
-    database.set_app_setting("again_regen_enabled", "1" if enabled else "0")
-    logger.info("again-regen-enabled  set to %s", enabled)
-    return {"ok": True, "enabled": enabled}
+    lang = body.get("lang")
+    if lang:
+        if lang not in LANGUAGES:
+            raise HTTPException(status_code=400, detail=f"unknown lang: {lang}")
+        database.set_app_setting(f"again_regen_enabled_{lang}", "1" if enabled else "0")
+    else:
+        database.set_app_setting("again_regen_enabled", "1" if enabled else "0")
+    logger.info("again-regen-enabled  lang=%s set to %s", lang or "(global)", enabled)
+    return {"ok": True, "enabled": enabled, "lang": lang or None,
+            "langs": {code: again_regen_enabled(code) for code in LANGUAGES}}
 
 
 @router.post("/api/review/requeue")

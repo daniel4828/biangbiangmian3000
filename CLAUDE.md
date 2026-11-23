@@ -1162,6 +1162,7 @@ GET  /api/today-mixed/{deck_id}                      → 混合复习模式
 GET  /api/today-unfinished ；/api/today-unfinished-decks
 POST /api/review                                     → {card_id, rating, user_response?} → {next_card, counts}
 POST /api/review/undo ；POST /api/review/requeue
+GET/PUT /api/again-regen-enabled                       → Again 后是否自动重生成句子（#714），按语言分开：PUT body {enabled, lang?}，有 lang 只改该语言（zh|es|fr，非法 400），无 lang 改全局起始值；语言无自己的值就跟全局；GET 返回 {enabled, langs{}}；「New sentence」按钮（requeue）不受影响。设置页 Settings →「Again → new sentence」每种语言一个开关，默认全开
 POST /api/cards/{card_id}/bury | unbury | leech
 POST /api/review/due-notify-check[?force=true]       → 复习收尾提醒检查（#701）；条件不满足时不发信也不算失败，返回判定明细
 
