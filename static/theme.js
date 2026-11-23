@@ -11,6 +11,14 @@
     const resolved = choice === 'system' ? (media.matches ? 'dark' : 'light') : choice;
     root.dataset.theme = resolved;
     root.style.colorScheme = resolved;
+    // Fensterleiste (PWA/Browser) an die Seitenfarbe anpassen.
+    let meta = document.querySelector('meta[name="theme-color"]:not([media])');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.name = 'theme-color';
+      document.head.appendChild(meta);
+    }
+    meta.content = resolved === 'dark' ? '#141b24' : '#f1f5f9';
   };
   apply();
   const onSystemChange = () => { if (choice === 'system') apply(); };
