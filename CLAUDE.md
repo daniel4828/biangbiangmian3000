@@ -987,6 +987,7 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 - `/quick`（`static/quick.html`，不加载 `app.js`）是小型多轮聊天：输入框固定在底部、回答在上方、面板向上生长；语言 zh/es/fr 存 `localStorage.quickLang`；「Neu」清空对话
 - **每次打开都是新对话（#1543）**：`show()` 先调 `window.quickNewChat()` 清空、回调里再显示（避免旧对话闪一下）；菜单勾选项「Beim Öffnen neuer Chat」（`UserDefaults` `newChatOnOpen`，默认开）可关掉
 - **聊天历史（#1584）**：每轮成功后前端把整段对话 PUT 到 `quick_chats` 表（前端持有 turns、服务器只存）；顶栏「Verlauf」/⌘Y 打开列表，点开恢复并可继续聊；恢复时不重跑加词（只显示 `★ 词`）；保存失败只在 `#err` 提示，不打断聊天
+- **恢复上个聊天与回复时输入（#1631）**：输入框内 Shift+Tab 恢复刚离开的对话及草稿；页面重载后从服务器历史恢复最近的一条其他对话。「Neu」仍开启新聊天。回复生成期间可编辑下一问，上一轮结束后再发送；请求失败保留下一问的草稿。
 - `POST /api/dict/chat` 本身仍无状态，客户端每轮发整段历史（服务端只取最后 20 条），助手那一轮的 content 用返回的 `history_text`
 - `ai.dictionary_chat()` 不用 system 角色：规则 + 转写全放在唯一一条 user 消息里；输出 JSON `{reply, entry|null, add[]}`，`entry` 与 /lookup 的词典契约完全一致，复用同一个校验函数
 - `add` 只在 Daniel 明确说「添加/speicher」时才填；页面对每个词自动走 `addWordViaAi(word,'list')`（仍是唯一加词入口，#643）
