@@ -100,7 +100,7 @@
     <button type="button" id="hist">Verlauf</button>
     <button type="button" id="addw" title="Direkt als Karte in die ★ List (⌘↵)">★ Karte</button>
     <button type="button" id="new">Neu</button>
-    <span class="kbd-hint" title="⌘↵ Karte · Tab: Sprache wechseln · Shift+Tab: neuer Chat · ⌘Y Verlauf · ⌥⇧K">⌘↵ Karte · ⇥ Sprache · ⇧⇥ Neu · ⌘Y Verlauf · ⌥⇧K</span>
+    <span class="kbd-hint" title="⌘↵ Karte · Tab: Sprache wechseln · Shift+Tab: letzter Chat · ⌘Y Verlauf · ⌥⇧K">⌘↵ Karte · ⇥ Sprache · ⇧⇥ Letzter Chat · ⌘Y Verlauf · ⌥⇧K</span>
   </div>
   <div id="messages"><div id="log"></div><div id="history"></div></div>
   <div id="err"></div>
@@ -129,6 +129,7 @@
   let history = [];  // [{role, content}]
   let turns = [];    // finished turns, stored server-side as the chat history (#1584)
   let chatId = null; // quick_chats id of this conversation (null = not saved yet)
+  let previousChat = null; // most recently left conversation, including its draft
   let busy = false;
   let historyOpen = false;
 
@@ -203,7 +204,7 @@
     if ([...langsEl.children].some(b => b.dataset.lang === l)) setLang(l);
     else lang = l;  // buttons from /api/langs not there yet; renderLangButtons applies it
   };
-  // Tab: next language (Shift+Tab starts a new chat, #1522).
+  // Tab: next language.
   function cycleLang(step) {
     const codes = [...langsEl.children].map(b => b.dataset.lang);
     if (!codes.length) return;
@@ -319,6 +320,7 @@
               await api('DELETE', `/api/quick-chats/${it.id}`);
               row.remove();
               if (it.id === chatId) chatId = null;
+              if (it.id === previousChat?.id) previousChat = null;
               if (!histEl.children.length) histEl.replaceChildren(el('div', 'empty', 'Noch keine Chats'));
               reportHeight();
             } catch (err) {
@@ -335,10 +337,29 @@
     }
     reportHeight();
   }
+  function rememberChat() {
+    if (turns.length) previousChat = { id: chatId, lang, turns, draft: inputEl.value };
+  }
+
   async function restoreChat(id) {
     if (busy) return;
+    busy = true;
     try {
-      const chat = await api('GET', `/api/quick-chats/${id}`);
+      let chat;
+      if (id == null && previousChat) {
+        chat = previousChat;
+      } else {
+        if (id == null) {
+          const { items } = await api('GET', '/api/quick-chats');
+          id = items?.find(item => item.id !== chatId)?.id;
+          if (id == null) return;
+        }
+        chat = await api('GET', `/api/quick-chats/${id}`);
+      }
+      const sameChat = chat.id != null && chat.id === chatId;
+      const draft = sameChat || !turns.length ? inputEl.value : '';
+      if (chat === previousChat) previousChat = null;
+      if (!sameChat) rememberChat();
       chatId = chat.id;
       turns = Array.isArray(chat.turns) ? chat.turns : [];
       history = turns.flatMap(t => [
@@ -355,9 +376,13 @@
       }
       errEl.textContent = '';
       closeHistory();
+      inputEl.value = draft || chat.draft || '';
+      autosize();
       inputEl.focus();
     } catch (e) {
       errEl.textContent = e.message || 'Fehler';
+    } finally {
+      busy = false;
     }
   }
   function toggleHistory() {
@@ -371,7 +396,6 @@
     if (!text || busy) return;
     if (historyOpen) closeHistory();
     busy = true;
-    inputEl.disabled = true;
     errEl.textContent = '';
     const turnLang = lang;
 
@@ -419,19 +443,19 @@
       turns.push(turn);
 
       pending.replaceWith(renderTurn(turn, true)[1]);
-      saveChat();
+      await saveChat();
     } catch (e) {
-      // Put the text back so he can resend; drop the optimistic bubbles.
-      inputEl.value = text;
+      // Keep any follow-up draft, and show which question failed.
+      const hasDraft = inputEl.value.length > 0;
+      if (!hasDraft) inputEl.value = text;
       autosize();
       anchorEl = null;
       userMsg.remove();
       pending.remove();
-      errEl.textContent = e.message || 'Fehler';
+      const error = e.message || 'Fehler';
+      errEl.textContent = hasDraft ? `${error}\nNicht gesendet: ${text}` : error;
     } finally {
       busy = false;
-      inputEl.disabled = false;
-      inputEl.focus();
       scrollToNewest();
     }
   }
@@ -461,8 +485,9 @@
   inputEl.addEventListener('keydown', e => {
     if (e.key === 'Tab' && !e.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
-      if (e.shiftKey) newChat();
-      else cycleLang(1);
+      if (e.shiftKey) {
+        if (!e.repeat) restoreChat();
+      } else cycleLang(1);
       return;
     }
     if (e.key === 'Enter' && e.metaKey && !e.isComposing) {
@@ -478,6 +503,7 @@
   // A reply still in flight would land in the new chat, so wait for it.
   function newChat() {
     if (busy) return;
+    rememberChat();
     history = [];
     turns = [];
     chatId = null;
