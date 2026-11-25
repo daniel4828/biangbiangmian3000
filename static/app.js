@@ -12394,10 +12394,26 @@ async function _cancelStoryGeneration() {
 
 // Poll the background story endpoint until it returns a story (or an error dict),
 // or the user clicks "Continue in background" (→ resolves to _BG_LEFT).
+//
+// Network failures (a TypeError from fetch) are NOT fatal here: when the phone
+// puts the web app to sleep, the request in flight dies with "Load failed" —
+// but the server keeps generating, so we just ask again. The `background=true`
+// GET is idempotent (a running generation answers {generating:true}, a finished
+// one answers with the story), so retrying can never start a second run. Real
+// server answers (HTTP errors) still escape to the caller.
 async function _pollBackgroundStory(bgUrl) {
+  let netFails = 0;
   while (true) {
     if (_bgLeaveRequested) return _BG_LEFT;
-    const r = await api('GET', bgUrl);
+    let r;
+    try {
+      r = await api('GET', bgUrl);
+      netFails = 0;
+    } catch (e) {
+      if (!(e instanceof TypeError) || ++netFails > 40) throw e;
+      await new Promise(res => setTimeout(res, 2000));
+      continue;
+    }
     if (_bgLeaveRequested) return _BG_LEFT;
     if (r && r.generating) { await new Promise(res => setTimeout(res, 1500)); continue; }
     return r;  // story | null | { error }
@@ -12460,24 +12476,34 @@ function _hideRegenBgBanner() {
 }
 
 // Poll every in-flight background story for readiness; banner the user when ready.
+async function _checkBgStories() {
+  for (const key of Object.keys(_bgStories)) {
+    const ctx = _bgStories[key];
+    let s = null;
+    try {
+      // The language the run was STARTED with (ctx.langQ), not the current tab:
+      // the user may have switched language while it generated.
+      const lq = ctx.langQ !== undefined ? (ctx.langQ ? `&${ctx.langQ}` : '') : _langQP('&');
+      s = await api('GET', `/api/story/${ctx.storyDeckId}/${ctx.storyCategory}?no_generate=true${lq}`);
+    } catch (_) { continue; }
+    if (s && s.sentences) {            // ready
+      delete _bgStories[key];
+      _showStoryReadyBanner(ctx);
+    }
+  }
+}
 function _ensureBgStoryPoller() {
   if (_bgStoryPoller) return;
   _bgStoryPoller = setInterval(async () => {
-    const keys = Object.keys(_bgStories);
-    if (keys.length === 0) { clearInterval(_bgStoryPoller); _bgStoryPoller = null; return; }
-    for (const key of keys) {
-      const ctx = _bgStories[key];
-      let s = null;
-      try {
-        s = await api('GET', `/api/story/${ctx.storyDeckId}/${ctx.storyCategory}?no_generate=true${_langQP('&')}`);
-      } catch (_) { continue; }
-      if (s && s.sentences) {            // ready
-        delete _bgStories[key];
-        _showStoryReadyBanner(ctx);
-      }
-    }
+    if (Object.keys(_bgStories).length === 0) { clearInterval(_bgStoryPoller); _bgStoryPoller = null; return; }
+    await _checkBgStories();
   }, 3000);
 }
+// Timers sleep while the phone has the app in the background; check right away
+// when the user comes back instead of waiting for the next tick.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Object.keys(_bgStories).length) _checkBgStories();
+});
 
 function _showStoryReadyBanner(ctx) {
   const el = document.getElementById('bg-story-banner');
@@ -12490,6 +12516,19 @@ function _showStoryReadyBanner(ctx) {
 // Resume a session whose background story is now cached → starts instantly.
 function _resumeBackgroundReview(ctx) {
   _storyLoadingSources = ctx.sources || [];   // #929
+  // A language / All story (several categories in one): restart it through the
+  // mixed path, in the same language it was started in.
+  if (ctx.mixed) {
+    _multiLangSession = !!ctx.multi;
+    if (!ctx.multi && ctx.lang) _setLangQuiet(ctx.lang);
+    rootDeckId = ctx.rootDeckId;
+    deckId     = ctx.rootDeckId;
+    deckName   = ctx.deckName;
+    story      = null;
+    quickMode  = false;
+    _doStartReviewMixed(ctx.topic, ctx.maxHsk, ctx.model, ctx.grammarFocus, ctx.grammarPct, ctx.mode, false, ctx.chapterIds, null, ctx.episodeIds, ctx.bookChapterId);
+    return;
+  }
   deckId     = ctx.deckId;
   category   = ctx.category;
   deckName   = ctx.deckName;
@@ -12682,6 +12721,11 @@ function startReviewMixedSingle(id, name, noStory = false) {
   return startReviewMixed(id, name, noStory);
 }
 
+// Key of a background run of the mixed story. The language is part of it: the
+// "All" root is shared by every language, so without it Spanish and Chinese
+// runs would be taken for the same one.
+function _mixedBgKey(id) { return `mixed:${id}:${_langQ()}`; }
+
 // ── Start mixed (all-category) review session ────────────────────────────────
 async function startReviewMixed(id, name, noStory = false, quick = false) {
   navPush('review');
@@ -12696,6 +12740,16 @@ async function startReviewMixed(id, name, noStory = false, quick = false) {
   _sessionRatedCount = 0;
   _updateAvgTimeBadge();
   _updateReviewRRBadge(id);
+  // A story for this language is already generating in the background: re-open
+  // its loading screen (or the finished story) — never start a second run.
+  if (!noStory && !quick) {
+    const bgCtx = _bgStories[_mixedBgKey(id)];
+    if (bgCtx) {
+      delete _bgStories[bgCtx.key];
+      _resumeBackgroundReview(bgCtx);
+      return;
+    }
+  }
   try {
     const todayData = await api('GET', `/api/today-mixed/${id}${_langQP('?')}`);
     if (!todayData.card) {
@@ -12740,16 +12794,37 @@ async function _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPc
     category = todayData.card.category;
 
     if (!noStory) {
-      // Load a single unified story covering all categories (1 AI call instead of 3)
+      // Load a single unified story covering all categories (1 AI call instead of 3).
+      // Same background machinery as a single deck: the server generates in its
+      // own thread, we only poll — so "Continue in background" works, and a phone
+      // that puts the app to sleep does not lose the run (see _pollBackgroundStory).
+      const storyDeckId = rootDeckId;
+      const resumeCtx = {
+        key: _mixedBgKey(storyDeckId), mixed: true, multi: _multiLangSession,
+        lang: activeLang(), langQ: _langQ(),
+        deckId, category, deckName, rootDeckId, storyDeckId, storyCategory: 'unified',
+        topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId,
+        sources: _storyLoadingSources,
+      };
+      _bgLeaveRequested = false;
+      _bgActiveResume = resumeCtx;
+      _showLoadingBgButton();
+      const storyUrl = `/api/story/${storyDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId);
+      const bgUrl = storyUrl + (storyUrl.includes('?') ? '&' : '?') + 'background=true';
+      let storyData;
       try {
-        story = (mode === 'paste' && articles && articles.length)
-          ? await api('POST', `/api/story/${rootDeckId}/unified/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles })
-          : await api('GET', `/api/story/${rootDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId));
+        storyData = await _fetchStoryOrNewsRegen(storyDeckId, 'unified', topic, maxHsk, model,
+          grammarFocus, grammarPct, mode, chapterIds, articles, bgUrl, episodeIds, bookChapterId);
       } catch (e) {
         await _startQuickFallback(e.message);
         return;
       }
+      // "Continue in background" / Cancel: we are already back on the deck list.
+      if (storyData === _BG_LEFT) return;
+      _hideLoadingBgButton();
+      _bgActiveResume = null;
       _stopFakeProgress(); _stopStoryProgressPoll();
+      story = await _resolveStory(storyData, storyDeckId, 'unified', topic, maxHsk, grammarFocus, grammarPct, mode);
       fetch(`/api/preload-session/${rootDeckId}/unified${_langQP('?')}`, { method: 'POST' }).catch(() => {});
     }
 
@@ -12771,7 +12846,8 @@ async function _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPc
     showView('review');
     loadCard(todayData.card, todayData.counts);
   } catch (e) {
-    _stopFakeProgress(); _stopStoryProgressPoll();
+    _stopFakeProgress(); _stopStoryProgressPoll(); _hideLoadingBgButton();
+    _bgLeaveRequested = false; _bgActiveResume = null;
     _showLoadingError('Failed to load session', e.message);
     await new Promise(r => setTimeout(r, 2500));
     showError('Failed to start session: ' + e.message);
@@ -19015,6 +19091,26 @@ async function regenerateStoryFromList(deckId, category = 'unified') {
   document.getElementById('setup-topic').focus();
 }
 
+// After a dropped connection: poll the server until the story run for this
+// deck is over, then check that a story exists. Throws if it does not.
+async function _waitForServerStoryRun(deckId, category, langQ) {
+  const lq = langQ ? `?${langQ}` : '';
+  let idle = 0, fails = 0;
+  for (let i = 0; i < 400 && idle < 2; i++) {          // up to ~20 min
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const p = await api('GET', `/api/story-progress/${deckId}/${category}${lq}`);
+      fails = 0;
+      idle = (!p || p.phase === 'idle') ? idle + 1 : 0;
+      if (p && p.phase === 'error') throw new Error(p.msg || 'Generation failed');
+    } catch (e) {
+      if (!(e instanceof TypeError) || ++fails > 40) throw e;
+    }
+  }
+  const s = await api('GET', `/api/story/${deckId}/${category}?no_generate=true${langQ ? '&' + langQ : ''}`);
+  if (!s || !s.sentences) throw new Error('Story was not generated');
+}
+
 // Regenerate a deck's story in the BACKGROUND: instead of a blocking full-screen
 // loader, show a small persistent banner and let the user keep reviewing. When
 // the new story is ready the banner turns into a clickable "open for review".
@@ -19037,7 +19133,16 @@ async function _doRegenStoryForDeckList(deckId, topic, maxHsk, model, grammarFoc
   }
 
   try {
-    await api('POST', `/api/story/${deckId}/${category}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles });
+    const langQ = _langQ();   // the run's language, even if the tab changes meanwhile
+    try {
+      await api('POST', `/api/story/${deckId}/${category}/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles });
+    } catch (e) {
+      // The phone put the app to sleep and the request died ("Load failed") —
+      // the server keeps generating on its own. Wait for it instead of
+      // reporting a failure that did not happen.
+      if (!(e instanceof TypeError)) throw e;
+      await _waitForServerStoryRun(deckId, category, langQ);
+    }
     // Warm the audio cache in the background so review starts fast; don't block
     // the "ready" banner on it.
     _preloadWithProgress(deckId, category, () => {}).catch(() => {});
