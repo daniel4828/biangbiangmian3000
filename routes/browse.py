@@ -43,6 +43,13 @@ def get_word_detail(word_id: int):
                 if word.get("conjugations"):
                     _add_conjugation_patterns(word)
                     # Rote Punkte (#1537) setzt database._completed_conjugations
+        elif word.get("form_lemma"):
+            # Formkarten („referirse · Presente“, note_type grammar) tragen das
+            # Etikett des Grundverbs — sonst fehlt es genau bei den
+            # unregelmäßigen Verben (#1630).
+            regularity = verb_slots.verb_regularity(word["form_lemma"], word.get("lang"))
+            if regularity:
+                word["verb_regularity"] = regularity
     return word
 
 
