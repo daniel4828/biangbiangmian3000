@@ -335,9 +335,10 @@ def _generate_and_import_word(word_zh: str, lang: str, deck_id: int,
         database.stage_word_in_saved(
             entry["id"], database.get_or_create_saved_deck(lang))
     form_cards: list[str] = []
-    if lang == "es" and entry:
+    if lang == "es" and entry and not to_list:
         # Irregular tenses of a new verb get their form cards (#1539); they
-        # copy the verb's deck/due, so this comes after the Saved staging.
+        # copy the verb's deck/due. Not for ★ List (#1639): a word parked
+        # there is one row; its form cards appear when it is promoted.
         form_cards = irregular_cards.create_cards_for_verb(entry["id"])
     if result.get("imported") and not to_list:
         # New cards due today must reach queues built earlier (#728).
@@ -946,6 +947,8 @@ def word_to_day(word_id: int, body: dict | None = None):
     daily_deck_id, deck_path = database.get_or_create_daily_deck(target_day, lang)
     leaf_decks = database.get_or_create_category_decks(daily_deck_id, target_day)
     moved = database.reset_word_to_new(word_id, leaf_decks, target_day)
+    if lang == "es":
+        _bring_form_cards(entry, leaf_decks, saved_deck_id, target_day)
     queue_mgr.invalidate()
     return {
         "status": status, "word_zh": entry["word_zh"],
@@ -953,6 +956,18 @@ def word_to_day(word_id: int, body: dict | None = None):
         "cards_moved": moved,
         "reviews_discarded": reps if status == "reset" else 0,
     }
+
+
+def _bring_form_cards(entry: dict, leaf_decks: dict, saved_deck_id: int,
+                      target_day: str) -> None:
+    """A Spanish verb leaving ★ List brings its form cards along (#1539, #1639):
+    first the ones still parked in Saved, then any that do not exist yet — new
+    verbs get no form cards while they sit in the list. The created ones copy
+    the verb's creating card, which has just landed in the Daily deck. Both
+    helpers never raise."""
+    irregular_cards.promote_form_cards(
+        entry["word_zh"], leaf_decks["creating"], saved_deck_id, target_day)
+    irregular_cards.create_cards_for_verb(entry["id"])
 
 
 @router.post("/api/saved/{word_id}/promote")
@@ -980,9 +995,7 @@ def promote_saved(word_id: int, day: str = "today"):
     if not count:
         raise HTTPException(status_code=404, detail="No saved cards found for this word")
     if lang == "es" and entry:
-        # A Spanish verb brings the form cards still parked in Saved (#1539).
-        irregular_cards.promote_form_cards(
-            entry["word_zh"], leaf_decks["creating"], saved_deck_id, target_day)
+        _bring_form_cards(entry, leaf_decks, saved_deck_id, target_day)
     # Session queues are built once per Anki day and kept in memory, so a card
     # that becomes due today after the build would not be served until tomorrow
     # (#728). Landing in a future deck used to make this moot.
