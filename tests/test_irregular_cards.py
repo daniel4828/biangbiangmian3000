@@ -353,6 +353,20 @@ def test_promote_form_cards_with_the_verb(world):
     assert verb["deck_name"] != "Saved" and verb["state"] == "new"
 
 
+def test_new_verb_in_star_list_gets_form_cards_only_on_promote(tmp_db):
+    """#1639: a verb parked in ★ List is one row; its form cards appear when it
+    is promoted to Daily."""
+    saved = database.get_or_create_saved_deck("es")
+    traer = database.insert_word({"word_zh": "traer", "lang": "es"})
+    database.insert_card(traer, "creating", saved, state="suspended")
+    assert database.get_word_by_zh("traer · Presente", "es") is None
+    res = imports_routes.promote_saved(traer)
+    assert res["status"] == "promoted"
+    card = database.live_creating_card(
+        database.get_word_by_zh("traer · Presente", "es")["id"])
+    assert card["deck_name"] != "Saved" and card["state"] == "new"
+
+
 # --- tense-of-the-day gate ------------------------------------------------------------
 
 def test_gate_never_pauses_imperative_participle_gerund(tmp_db):
