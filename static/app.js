@@ -3345,9 +3345,13 @@ function renderBrowseWords(words) {
 async function browseDeleteWord(e, wordId) {
   e.stopPropagation();
   const word = browseWords.find(w => w.id === wordId);
-  const ok = await showConfirm(
-    `Delete "${word ? word.word_zh : wordId}" and all its cards? This cannot be undone.`);
-  if (!ok) return;
+  // ★ List rows (#1637) are a staging area: nothing there has review progress
+  // to lose, so a confirm is just an extra click. Everywhere else it stays.
+  if (!(word && _wordStatus(word) === 'saved')) {
+    const ok = await showConfirm(
+      `Delete "${word ? word.word_zh : wordId}" and all its cards? This cannot be undone.`);
+    if (!ok) return;
+  }
   try {
     await api('DELETE', `/api/word/${wordId}`);
     browseWords = browseWords.filter(w => w.id !== wordId);
