@@ -12381,6 +12381,7 @@ async function _cancelStoryGeneration() {
   if (ctx.isRegen) { _regenCancelRequested = true; _regenBgRequested = false; }
   _stopFakeProgress();
   _stopStoryProgressPoll();
+  if (ctx.isMixed) rootDeckId = null;
   try {
     await api('POST', `/api/story/${ctx.storyDeckId}/${ctx.storyCategory}/cancel${_langQP('?')}`);
   } catch (e) {
@@ -12430,6 +12431,9 @@ function _continueStoryInBackground() {
   }
   _bgLeaveRequested = true;
   _bgStories[_bgActiveResume.key] = _bgActiveResume;
+  // Mixed ("All"/🌐) session: leaving it must not leave rootDeckId set, or the
+  // next single-category session would pick the mixed story by mistake.
+  if (_bgActiveResume.isMixed) rootDeckId = null;
   _bgActiveResume = null;
   _stopFakeProgress();
   _stopStoryProgressPoll();
@@ -12437,6 +12441,10 @@ function _continueStoryInBackground() {
   _ensureBgStoryPoller();
   loadDecks();
 }
+
+// Key of a mixed-session story in _bgStories. The language is part of it: the
+// 🌐 story and each single-language story of "All" are separate generations.
+function _mixedBgKey(id) { return `${id}/unified/${_langQ() || '-'}`; }
 
 // Set while a regenerate started from the review screen finishes in the
 // background. Read once by _doRegenerateStory when its POST resolves: the user
@@ -12473,7 +12481,9 @@ function _ensureBgStoryPoller() {
       const ctx = _bgStories[key];
       let s = null;
       try {
-        s = await api('GET', `/api/story/${ctx.storyDeckId}/${ctx.storyCategory}?no_generate=true${_langQP('&')}`);
+        // A mixed run carries its own lang: the 🌐 flag may be reset by the time we poll.
+        const langQ = ctx.isMixed ? (ctx.langQ ? '&' + ctx.langQ : '') : _langQP('&');
+        s = await api('GET', `/api/story/${ctx.storyDeckId}/${ctx.storyCategory}?no_generate=true${langQ}`);
       } catch (_) { continue; }
       if (s && s.sentences) {            // ready
         delete _bgStories[key];
@@ -12494,6 +12504,19 @@ function _showStoryReadyBanner(ctx) {
 // Resume a session whose background story is now cached → starts instantly.
 function _resumeBackgroundReview(ctx) {
   _storyLoadingSources = ctx.sources || [];   // #929
+  if (ctx.isMixed) {
+    // Mixed session: restore its language scope, then go through the mixed start
+    // path (the story is cached by now, so it starts instantly).
+    _multiLangSession = !!ctx.multi;
+    if (!ctx.multi) _setLangQuiet(ctx.lang);
+    deckId     = ctx.deckId;
+    category   = ctx.category;
+    deckName   = ctx.deckName;
+    rootDeckId = ctx.rootDeckId;
+    quickMode  = false;
+    _doStartReviewMixed(ctx.topic, ctx.maxHsk, ctx.model, ctx.grammarFocus, ctx.grammarPct, ctx.mode, false, ctx.chapterIds, null, ctx.episodeIds, ctx.bookChapterId);
+    return;
+  }
   deckId     = ctx.deckId;
   category   = ctx.category;
   deckName   = ctx.deckName;
@@ -12700,6 +12723,16 @@ async function startReviewMixed(id, name, noStory = false, quick = false) {
   _sessionRatedCount = 0;
   _updateAvgTimeBadge();
   _updateReviewRRBadge(id);
+  // The story for this mixed session is still generating in the background:
+  // re-open it instead of starting a second generation (same as startReview).
+  if (!noStory && !quick) {
+    const bgCtx = _bgStories[_mixedBgKey(id)];
+    if (bgCtx) {
+      delete _bgStories[bgCtx.key];
+      _resumeBackgroundReview(bgCtx);
+      return;
+    }
+  }
   try {
     const todayData = await api('GET', `/api/today-mixed/${id}${_langQP('?')}`);
     if (!todayData.card) {
@@ -12744,16 +12777,34 @@ async function _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPc
     category = todayData.card.category;
 
     if (!noStory) {
-      // Load a single unified story covering all categories (1 AI call instead of 3)
+      // Load a single unified story covering all categories (1 AI call instead of 3).
+      // Same background mechanism as a single category: the loading screen gets
+      // "Continue in background" / Cancel, so the user can browse, chat or leave.
+      const storyUrl = `/api/story/${rootDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId);
+      const bgUrl = storyUrl + (storyUrl.includes('?') ? '&' : '?') + 'background=true';
+      _bgLeaveRequested = false;
+      _bgActiveResume = {
+        key: _mixedBgKey(rootDeckId), isMixed: true,
+        langQ: _langQ(), multi: _multiLangSession, lang: activeLang(),
+        deckId, category, deckName, rootDeckId,
+        storyDeckId: rootDeckId, storyCategory: 'unified',
+        topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId,
+        sources: _storyLoadingSources,
+      };
+      _showLoadingBgButton();
+      let storyData;
       try {
-        story = (mode === 'paste' && articles && articles.length)
-          ? await api('POST', `/api/story/${rootDeckId}/unified/regenerate` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId), { articles })
-          : await api('GET', `/api/story/${rootDeckId}/unified` + _storyParams(topic, maxHsk, model, grammarFocus, grammarPct, mode, chapterIds, episodeIds, bookChapterId));
+        storyData = await _fetchStoryOrNewsRegen(rootDeckId, 'unified', topic, maxHsk, model,
+          grammarFocus, grammarPct, mode, chapterIds, articles, bgUrl, episodeIds, bookChapterId);
       } catch (e) {
         await _startQuickFallback(e.message);
         return;
       }
+      // User clicked "Continue in background" — already back on the deck list.
+      if (storyData === _BG_LEFT) return;
+      _hideLoadingBgButton(); _bgActiveResume = null;
       _stopFakeProgress(); _stopStoryProgressPoll();
+      story = await _resolveStory(storyData, rootDeckId, 'unified', topic, maxHsk, grammarFocus, grammarPct, mode);
       fetch(`/api/preload-session/${rootDeckId}/unified${_langQP('?')}`, { method: 'POST' }).catch(() => {});
     }
 
@@ -12776,6 +12827,7 @@ async function _doStartReviewMixed(topic, maxHsk, model, grammarFocus, grammarPc
     loadCard(todayData.card, todayData.counts);
   } catch (e) {
     _stopFakeProgress(); _stopStoryProgressPoll();
+    _hideLoadingBgButton(); _bgActiveResume = null;
     _showLoadingError('Failed to load session', e.message);
     await new Promise(r => setTimeout(r, 2500));
     showError('Failed to start session: ' + e.message);
