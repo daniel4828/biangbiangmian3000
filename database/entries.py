@@ -433,8 +433,16 @@ def surface_forms(word_id: int | None, word: str, lang: str) -> list[str]:
             forms.extend(f for f in (verb_slots.target_form(lemma, tense, p, lang)
                                      for p in verb_slots.form_card_persons(lemma, tense, lang))
                          if f)
+        elif lang == "es" and word.strip().lower().endswith(("arse", "erse", "irse")):
+            # Story slots generate reflexive forms from the base verb, but the
+            # lexicon may have no surface forms indexed under the reflexive lemma.
+            cfg = verb_slots.config(lang)
+            if cfg:
+                forms.extend(verb_slots.target_form(word, tense, person, lang)
+                             for tense in cfg["tenses"]
+                             for person in cfg["persons"])
     except Exception as e:
-        logger.debug("form-card forms unavailable for %s — %s", word, e)
+        logger.debug("verb slot forms unavailable for %s — %s", word, e)
     return sorted({f for f in forms if f}, key=len, reverse=True)
 
 

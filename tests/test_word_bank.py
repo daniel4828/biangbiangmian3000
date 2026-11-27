@@ -225,3 +225,17 @@ def test_review_sentence_highlight(lang, target, forms, text, highlight):
     assert out.stdout == "<span>" + text.replace(
         highlight, f'<span class="hl">{highlight}</span>', 1,
     ) + "</span>"
+
+
+@pytest.mark.parametrize(("sentence", "answer"), [
+    ("Cada noche, Lucía se acosta temprano.", "se acosta"),
+    ("Lucía se ha acostado temprano.", "se ha acostado"),
+])
+def test_spanish_reflexive_target_without_stored_forms(sentence, answer, monkeypatch):
+    import database
+
+    monkeypatch.setattr("database.entries.get_entry_forms", lambda word_id: {})
+    forms = database.surface_forms(999, "acostarse", "es")
+    order = build_order(sentence, [], "acostarse", forms=forms, lang="es")
+    assert targets(order) == [answer]
+    assert rejoined(order) == sentence

@@ -568,7 +568,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **多词动词短语（#1508）**：`tener prisa`、`irle bien a alguien`、`darse cuenta de algo` 由 `expressions.expression_forms()` 生成表层形：动词按词汇表变位 + 其余词原样；占位词（alguien/algo/qn/qch）连同前面的介词去掉；附着代词挪到动词前（`le va bien`，反身 `se` → me/te/se/nos/os）。并入 `database.surface_forms()`，故事匹配、复习高亮/填空、知识模式都认得 `tengo prisa`。批次里有这类短语时故事提示词多一条规则，否则逐字不变。法语没有词汇表，目前返回空
 - **自反动词已支持**（#1301，`quejarse` 等）：`target_form()` 把代词放到变位形前面（`me quejé`、`me he quejado`）；形态卡（#1296）不收自反动词
 - **匹配规则**：句子含目标形式（词边界、不分大小写）→ 记下 `verb_slot`/`grammar_hint`；AI 写了别的形式但仍能匹配（不定式、`surface_forms`）→ 卡片照收、**不挂标签**（标签会撒谎）。补漏句（`_patch_missing`）同样无槽位
-- **`database.surface_forms()` 对非中文并入 `lexicon.forms_of()`**：AI 生成的 `entry_forms` 不全时，高亮/填空/知识模式匹配照样认得变位形
+- **`database.surface_forms()` 对非中文并入 `lexicon.forms_of()`**：AI 生成的 `entry_forms` 不全时，高亮/填空/知识模式匹配照样认得变位形。西语反身动词也并入造句槽位的 `target_form()`，例如 `acostarse` 在重组题中会遮住 `se acosta`（#1647）
 - **只在 story/qa/expository 三个模式生效**（`ai.generate_story` 的非中文分支）；知识模式和 Again 单句重生成不变，因此那些句子没有标签
 - 复习句高亮（#1643）：非中文卡复用填空的词形匹配，按词边界忽略大小写，保留原句文字并高亮完整词形（如 `Cualquiera`、`aportara`）。
 - 前端：`static/app.js` 的 `_renderGrammarHint()` 填正面 `#grammar-hint` 和背面 `#grammar-hint-back`（只用 `textContent`），每张卡都重置；测试见 `tests/test_verb_slots.py`
