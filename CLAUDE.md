@@ -704,6 +704,7 @@ Leech 中文列表默认按词频排列并显示排名，同时保留其他排�
 - **一次 AI 调用**：`ai.generate_story(lang="multi")`，词表每项带 `[Chinese]`/`[Spanish]`，提示词不可自定义。匹配/补漏/动词槽位/翻译都按**每张卡自己的语言**（`card["word_lang"]`）；中文卡只匹配 CJK 句、其它卡只匹配拉丁字母句
 - **`story_sentences.lang`**（可空，NULL = 故事的 lang）：TTS、分词、`verb_slot_usage` 都按它走，所以多语言故事里练过的西语槽位也计入轮换
 - 只支持 `story`/`qa`/`expository`；Again 单句重生成用卡片自己牌组的语言
+- 复习时顶栏隐藏语言标签（#1424）；跨语言复习使用中性色，卡片语言由面包屑显示（#1645）。
 
 ## Archive：故事与学习会话的回看（#1023）
 

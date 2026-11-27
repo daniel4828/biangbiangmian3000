@@ -1146,14 +1146,7 @@ function showView(name) {
   document.querySelector('main').classList.toggle('review-open', name === 'review');
   const countsRow = document.getElementById('counts-row');
   if (countsRow) countsRow.style.display = name === 'review' ? 'flex' : 'none';
-  // The header always answers "which language am I in" (#896) — the tinted rule
-  // alone (#824) doesn't, and Knowledge/Books/Stats read identically in every
-  // language. Switchable tabs everywhere except review: there the header's right
-  // half is the due counts, and swapping language mid-card is meaningless, so
-  // that view gets a read-only chip naming the current language instead.
-  // Re-render rather than just unhiding — some paths reach these views without
-  // going through renderDecks() (error fallbacks), and the tabs must still show.
-  _renderHeaderLangTabs(name === 'review');
+  _renderHeaderLangTabs();
   _updateBackBtn();
   document.getElementById('header-title').textContent =
     name === 'review'       ? deckName :
@@ -1823,18 +1816,23 @@ const _LANG_TAB_LABELS = { zh: '中文', fr: 'Français', es: 'Español' };
 function _applyLangTheme() {
   const body = document.body;
   if (!body) return;
-  if (_availableLangs.length <= 1) delete body.dataset.lang;
-  else body.dataset.lang = activeLang();
+  if (_availableLangs.length <= 1 || (_currentView === 'review' && _multiLangSession)) {
+    delete body.dataset.lang;
+  } else {
+    body.dataset.lang = activeLang();
+  }
 }
 
-function _renderHeaderLangTabs(readOnly = false) {
+function _renderHeaderLangTabs() {
   _applyLangTheme();
   const box = document.getElementById('header-lang-tabs');
   if (!box) return;
-  // Home shows every language as its own deck (#1390) — no tabs there.
-  // Review shows none either: the breadcrumb and the header tint already say
-  // which language the card is in, and the tab could not be clicked anyway.
-  if (_availableLangs.length <= 1 || _currentView === 'decks' || readOnly) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  // Home uses language decks (#1390); review identifies the card by its breadcrumb (#1424).
+  if (_availableLangs.length <= 1 || _currentView === 'decks' || _currentView === 'review') {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
   const cur = activeLang();
   box.innerHTML = _availableLangs.map(l => {
         const label = _LANG_TAB_LABELS[l] || l;
