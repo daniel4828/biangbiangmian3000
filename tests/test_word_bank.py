@@ -197,3 +197,31 @@ def test_fr_no_match_appends_blank():
     order = build_order(zh, [], "la voiture", forms=[], lang="fr")
     assert targets(order) == ["la voiture"]
     assert rejoined(order) == zh + "la voiture"
+
+
+@pytest.mark.parametrize("lang,target,forms,text,highlight", [
+    ("es", "cualquiera", [], "Cualquiera puede llevar flores a la fiesta.", "Cualquiera"),
+    ("es", "aportar", ["aportara"], "Lucía quería que Tomás aportara una canción a la fiesta.", "aportara"),
+    ("fr", "réduire", ["a réduit"], "Elle a réduit le prix.", "a réduit"),
+    ("es", "el", [], "El papel es blanco.", "El"),
+])
+def test_review_sentence_highlight(lang, target, forms, text, highlight):
+    source = APP_JS.read_text(encoding="utf-8")
+    script = (
+        _extract_helpers(source)
+        + "\n" + _extract_fn(source, "function _escHtml(")
+        + "\n" + _extract_fn(source, "function renderSentence(")
+        + "\nconst [lang, card, sentence] = JSON.parse(process.argv[1]);"
+        + "\nconst currentCardLang = () => lang;"
+        + "\nprocess.stdout.write(renderSentence());"
+    )
+    out = subprocess.run(
+        ["node", "-e", script, json.dumps([
+            lang, {"word_zh": target, "word_forms": forms},
+            {"sentence_zh": text},
+        ])],
+        capture_output=True, text=True, check=True,
+    )
+    assert out.stdout == "<span>" + text.replace(
+        highlight, f'<span class="hl">{highlight}</span>', 1,
+    ) + "</span>"

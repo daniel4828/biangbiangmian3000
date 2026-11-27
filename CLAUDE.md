@@ -570,6 +570,7 @@ Browse 的中文 ★ List 新增 `Frequency: most common first`，整词排名�
 - **匹配规则**：句子含目标形式（词边界、不分大小写）→ 记下 `verb_slot`/`grammar_hint`；AI 写了别的形式但仍能匹配（不定式、`surface_forms`）→ 卡片照收、**不挂标签**（标签会撒谎）。补漏句（`_patch_missing`）同样无槽位
 - **`database.surface_forms()` 对非中文并入 `lexicon.forms_of()`**：AI 生成的 `entry_forms` 不全时，高亮/填空/知识模式匹配照样认得变位形
 - **只在 story/qa/expository 三个模式生效**（`ai.generate_story` 的非中文分支）；知识模式和 Again 单句重生成不变，因此那些句子没有标签
+- 复习句高亮（#1643）：非中文卡复用填空的词形匹配，按词边界忽略大小写，保留原句文字并高亮完整词形（如 `Cualquiera`、`aportara`）。
 - 前端：`static/app.js` 的 `_renderGrammarHint()` 填正面 `#grammar-hint` 和背面 `#grammar-hint-back`（只用 `textContent`），每张卡都重置；测试见 `tests/test_verb_slots.py`
 
 ## 西班牙语不规则动词形态卡（#1296）

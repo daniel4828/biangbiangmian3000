@@ -15789,6 +15789,28 @@ function renderSentence() {
   if (!sentence) {
     return `<span class="hl">${card.word_zh}</span>`;
   }
+  const lang = currentCardLang();
+  if (lang !== 'zh') {
+    const text = sentence.sentence_zh;
+    const highlights = resolveTargetSurfaces(text, card.word_zh, card.word_forms, lang)
+      .map(([start, end]) => ({ start, end, cssClass: 'hl' }));
+    for (const word of sentence.words || []) {
+      if (word.word_id === card.word_id || !word.word_zh) continue;
+      for (const [start, end] of resolveTargetSurfaces(text, word.word_zh, word.word_forms, lang)) {
+        if (highlights.some(range => start < range.end && end > range.start)) continue;
+        highlights.push({ start, end, cssClass: 'hl-secondary' });
+      }
+    }
+    highlights.sort((a, b) => a.start - b.start);
+    let html = '';
+    let cursor = 0;
+    for (const { start, end, cssClass } of highlights) {
+      html += _escHtml(text.slice(cursor, start));
+      html += `<span class="${cssClass}">${_escHtml(text.slice(start, end))}</span>`;
+      cursor = end;
+    }
+    return `<span>${html}${_escHtml(text.slice(cursor))}</span>`;
+  }
   let zh = sentence.sentence_zh;
   // Highlight co-occurring vocab words (secondary), then the current card's word (primary)
   const coWords = (sentence.words || []).filter(w => w.word_id !== card.word_id);
