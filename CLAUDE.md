@@ -987,6 +987,7 @@ Daniel 长期把 DeepSeek 聊天当中文词典用，再手工把结果复制进
 - 面板位置（#1528/#1532）：下边缘默认在屏幕高度 1/8（12.5%）处，向上生长，最高到距顶部 12.5%；新问题锚定在消息区顶部，回答从头可读；页面逐个测固定部分上报自然高度（#1526）
 - **位置和大小由 Daniel 在菜单「Fenster…」里自己改（#1534）**：`PanelSettings`（`QuickPanel.swift`）读 `UserDefaults` 的 `panelBottomPercent`/`panelTopPercent`/`panelWidth`/`panelMaxHeight`，空 = 默认，下次打开生效。拖动上边缘同样写 `panelWidth`/`panelMaxHeight`。**他要换数值时提醒他用这个菜单，不必改代码**
 - `/quick`（`static/quick.html`，不加载 `app.js`）是小型多轮聊天：输入框固定在底部、回答在上方、面板向上生长；语言 zh/es/fr 存 `localStorage.quickLang`；「Neu」清空对话
+- 语言下拉菜单（#1649）收起时只显示当前语言；输入框中的 Tab 可继续切换语言。
 - **每次打开都是新对话（#1543）**：`show()` 先调 `window.quickNewChat()` 清空、回调里再显示（避免旧对话闪一下）；菜单勾选项「Beim Öffnen neuer Chat」（`UserDefaults` `newChatOnOpen`，默认开）可关掉
 - **聊天历史（#1584）**：每轮成功后前端把整段对话 PUT 到 `quick_chats` 表（前端持有 turns、服务器只存）；顶栏「Verlauf」/⌘Y 打开列表，点开恢复并可继续聊；恢复时不重跑加词（只显示 `★ 词`）；保存失败只在 `#err` 提示，不打断聊天
 - **恢复上个聊天与回复时输入（#1631）**：输入框内 Shift+Tab 恢复刚离开的对话及草稿；页面重载后从服务器历史恢复最近的一条其他对话。「Neu」仍开启新聊天。回复生成期间可编辑下一问，上一轮结束后再发送；请求失败保留下一问的草稿。

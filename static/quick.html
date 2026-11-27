@@ -29,16 +29,15 @@
     display: flex; flex-direction: column;
   }
   .top { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; flex: none; }
-  .langs { display: flex; gap: .3rem; flex: none; }
   /* #1622: buttons never shrink or wrap (narrow panel squeezed 中文 into two
      lines); the shortcut hint takes the leftover space and truncates. */
-  .langs button, button#new, button#hist, button#addw {
+  #langs, button#new, button#hist, button#addw {
     flex: none; height: 1.9rem; padding: 0 .7rem; font: inherit; font-size: .82rem;
     font-weight: 600; line-height: 1; white-space: nowrap;
     color: var(--muted); background: var(--bg); border: 1px solid var(--line);
     border-radius: 8px; cursor: pointer;
   }
-  .langs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #langs { background: var(--accent); border-color: var(--accent); color: #fff; }
   button#hist { margin-left: .4rem; }
   #history { display: none; }
   #history .empty { color: var(--muted); padding: .6rem .2rem; }
@@ -96,7 +95,7 @@
 <body>
 <div id="main">
   <div class="top">
-    <div class="langs" id="langs"></div>
+    <select id="langs" aria-label="Sprache"></select>
     <button type="button" id="hist">Verlauf</button>
     <button type="button" id="addw" title="Direkt als Karte in die ★ List (⌘↵)">★ Karte</button>
     <button type="button" id="new">Neu</button>
@@ -185,35 +184,32 @@
     lang = l;
     try { localStorage.setItem('quickLang', l); } catch (e) { /* ignore */ }
     post({ type: 'lang', value: l });  // native app keeps a copy (survives a cleared WebKit store)
-    for (const b of langsEl.children) b.classList.toggle('active', b.dataset.lang === l);
+    langsEl.value = l;
   }
-  function renderLangButtons(langs) {
-    langsEl.replaceChildren(...langs.map(l => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.dataset.lang = l;
-      b.textContent = LANG_LABELS[l] || l;
-      b.onclick = () => setLang(l);
-      return b;
-    }));
+  function renderLangOptions(langs) {
+    langsEl.replaceChildren(...langs.map(l => new Option(LANG_LABELS[l] || l, l)));
     if (!langs.includes(lang)) lang = langs.includes('zh') ? 'zh' : langs[0];
     setLang(lang);
   }
+  langsEl.addEventListener('change', () => {
+    setLang(langsEl.value);
+    inputEl.focus();
+  });
   // Native app restores the last used language after load (see QuickPanel.swift).
   window.quickSetLang = l => {
-    if ([...langsEl.children].some(b => b.dataset.lang === l)) setLang(l);
-    else lang = l;  // buttons from /api/langs not there yet; renderLangButtons applies it
+    if ([...langsEl.options].some(option => option.value === l)) setLang(l);
+    else lang = l;  // renderLangOptions applies it when the available languages arrive
   };
   // Tab: next language.
   function cycleLang(step) {
-    const codes = [...langsEl.children].map(b => b.dataset.lang);
+    const codes = [...langsEl.options].map(option => option.value);
     if (!codes.length) return;
     const i = codes.indexOf(lang);
     setLang(codes[(i + step + codes.length) % codes.length]);
   }
-  renderLangButtons(['zh', 'es', 'fr']);
+  renderLangOptions(['zh', 'es', 'fr']);
   api('GET', '/api/langs?available=1').then(l => {
-    if (Array.isArray(l) && l.length) renderLangButtons(l);
+    if (Array.isArray(l) && l.length) renderLangOptions(l);
   }).catch(() => { /* keep the defaults */ });
 
   function autosize() {
@@ -366,7 +362,7 @@
         { role: 'user', content: t.user },
         { role: 'assistant', content: t.history_text || t.reply || '' },
       ]);
-      if ([...langsEl.children].some(b => b.dataset.lang === chat.lang)) setLang(chat.lang);
+      if ([...langsEl.options].some(option => option.value === chat.lang)) setLang(chat.lang);
       msgsEl.replaceChildren();
       anchorEl = null;
       for (const t of turns) {
